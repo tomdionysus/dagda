@@ -293,13 +293,19 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      its duplicate rule (three concurrent duplicates settle only at the
      next merge), and its coordinator's takeover until `acquire` has renew
      and release (requirements 5.4). Dagda holds none of it.
-6. **What Lugh and Lir need beyond Macha.** Domains in full (several,
-   member and blind roles, keys wrapped to node certificates once Dannan
-   step 10 has them, the domain in the AAD for new domains); node-local
-   spaces under `KeyCustody::derive("dagda/node-local/1")`; the
-   Replicated level's per-space k; retained values on Dannan's notify
-   channels; the scope check through `Identity::verify`; binding and
-   no-rollback tests. Gate: each from the stack document's requirements.
+6. **What Lugh and Lir need beyond Macha.** In progress on
+   `feature/domains` (2026-11-04 evening). Now, the parts that need no
+   head: node-local domains under the node's custody
+   (`Identity::derive_local("dagda/node-local/1")`); the X25519 wrap key
+   per node and the wrap/unwrap of a domain key to a member; member and
+   blind roles in the seal and verify paths; layout v19 for new backends
+   with the domain in the AAD (v18 disks unchanged, byte for byte); the
+   scope check at the write floor through `Identity::verify`, principal
+   and prefix carried in `WriteOptions` and the put message; the binding
+   test. With step 4 (heads): the domain catalogue as a head space,
+   node-local spaces, the Replicated level's per-space k, retained values
+   on Dannan's notify channels, the no-rollback test. Gate: each from the
+   stack document's requirements.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
@@ -394,6 +400,19 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
   node, 8 slots, 2 for control) until measured. A tombstone stamped by a
   clock ahead counts as fresh; a delta carrying a record with no key is
   refused; both in Dagda now and in Macha at the port.
+- (the maintainer, 2026-11-04 evening, step 6) **Key wrap**: a node certificate's
+  key is a signing key, so each node derives an X25519 wrap key from its
+  custody (`derive_local("dagda/wrap/1")`), publishes the public half as
+  a Dagda advert signed with its certificate key, and a domain key is
+  sealed to each member under HKDF of the X25519 shared secret with
+  AES-GCM, the domain and member bound in the AAD. **Step 6 now builds
+  everything that needs no head**; the catalogue is a head space at step
+  4. **New domains are layout v19**, a new version with its own readers
+  and the domain in the AAD; v18 state opens and is written as v18,
+  unchanged. **The scope check**: `WriteOptions` carry the principal
+  (default this node) and the prefix (default the domain's name); the
+  put message carries the principal; every storing replica checks
+  through `Identity::verify` before storing and refuses with evidence.
 - **Do not modify `../macha` until told to.**
 
 From `../dannan/TODO/ACTIVE.md`, binding Dagda, not reopened without
