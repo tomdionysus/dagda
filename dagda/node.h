@@ -8,6 +8,7 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -17,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "dagda/contract/reachability.h"
@@ -26,9 +28,11 @@
 #include "dagda/lease/keeper.h"
 #include "dagda/lease/local_records.h"
 #include "dagda/lease/membership.h"
+#include "dagda/ledger/collector.h"
 #include "dagda/ledger/reference_counts.h"
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/retention_ledger.h"
+#include "dagda/ledger/unreferenced_since.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/data_work.h"
@@ -66,6 +70,36 @@ struct AdmissionOptions {
   store::IoReserveOptions io{};
 };
 
+// The node's maintenance (Tom, 2026-11-04 night: maintenance moves into the
+// node): a repair pass and a GC pass, each on its own schedule on the node's
+// steady time (context.time().source()), on one supervised thread. Macha's
+// pass is one loop every `interval` (config.hpp MaintenanceConfig); repair
+// runs every pass, paced inside by its duty share (RepairOptions), and GC
+// runs every pass until its sweep completes with nothing deferred, then
+// rests gc_interval (Macha's no_progress_backoff, the pause after a pass
+// with nothing to do). GC is skipped while foreground or loader work is
+// present (repair's foreground_quiet) and its DATA sweep yields to it.
+struct MaintenanceOptions {
+  // Whether the node runs its maintenance thread. Off, only
+  // run_maintenance_once() runs a pass: a test's deterministic passes.
+  bool automatic = true;
+  std::chrono::milliseconds interval{1000};
+  std::chrono::milliseconds gc_interval{300000};
+  // The collector's budgets and retry window, Macha's defaults. Its
+  // garbage_grace is not read: the wait is the domain's
+  // (NodeOptions::garbage_grace).
+  ledger::CollectorOptions collector;
+};
+
+// What one run_maintenance_once() did: the GC pass's report, or why none
+// ran ("no reachability provider registered ..."; the provider's error),
+// and the repair pass.
+struct MaintenanceReport {
+  std::optional<ledger::PassReport> gc;
+  std::string gc_skipped;
+  store::RepairPass repair;
+};
+
 // What a node runs with: plain values an owner's config reader fills. The
 // node makes them agree where two parts must: the domain seals the pool, the
 // control store, the cache and the state layout and is the store's and the
@@ -80,6 +114,13 @@ struct NodeOptions {
   // StorageKey::derive_v1 of the cluster key. A member's key is required.
   domain::Domain domain = domain::domain_v1_descriptor();
   std::shared_ptr<const domain::StorageKey> key;
+  // The domain's wait (Tom, 2026-11-04 night: settable per domain): an
+  // unreferenced, unclaimed object goes only once this node has seen it so
+  // for this long on its own clock, and a retirement is collectable this
+  // long after it was stamped. Macha's 30 days. Carried here for the node's
+  // one domain until the catalogue (step 4), whose domain descriptor
+  // carries it.
+  std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
   // DATA backends, packing and the durability window.
   store::StoragePoolOptions pool;
   store::ControlStoreOptions control;
@@ -91,6 +132,7 @@ struct NodeOptions {
   store::DistributedStoreOptions store;
   store::AvailabilityOptions availability;
   store::RepairOptions repair;
+  MaintenanceOptions maintenance;
   lease::LeaseOptions leases;
   // How often the node's figures are published to Dannan's Status surface.
   std::chrono::milliseconds status_interval{10000};
@@ -132,10 +174,12 @@ class NodeRefused final : public std::runtime_error {
 // admission first so a waiting request gives up, and releases the locks
 // last.
 //
-// The owner's reachability provider is registered per domain and builds the
-// inventory repair and the survey work from; the collector's pass and the
-// maintenance loop that drives repair stay the owner's (Macha's, at the
-// port).
+// Maintenance is the node's (MaintenanceOptions): the collector and repair
+// run on its maintenance thread, the owner supplying only its reachability
+// provider per domain, from which the collector builds the inventory repair
+// and the survey work from. With no provider registered the collector does
+// nothing and says so in Status (dagda.gc.state); repair still runs on
+// whatever inventory was last published. stop() stops the thread first.
 //
 // Construction and stop() wait on the devices and must not run on one of the
 // io context's threads; everything else is thread-safe unless it says so.
@@ -186,15 +230,26 @@ class Node {
   // until several are unioned (step 6, with the catalogue); registering
   // again replaces it. Throws std::invalid_argument for a domain this node
   // does not hold. The provider outlives the node or is unregistered first.
+  // Both wait for a maintenance pass in progress, so once unregister returns
+  // the node no longer reads the provider.
+  static constexpr dannan::sched::Waits register_waits = ledger::Collector::pass_waits | store::Repair::pass_waits;
   void register_reachability(const domain::DomainId& domain, contract::ReachabilityProvider& provider);
   void unregister_reachability(const domain::DomainId& domain);
   // Builds the inventory from the provider of the node's domain at its
   // current generation and publishes it to the ledger, as the collector
   // does at the start of its pass: what the survey and repair take as
   // referenced. False when no provider is registered. Throws what the
-  // provider throws. Single owner (the owner's maintenance).
-  static constexpr dannan::sched::Waits publish_inventory_waits = contract::ReachabilityProvider::answer_waits;
+  // provider throws. Serialised with the maintenance passes.
+  static constexpr dannan::sched::Waits publish_inventory_waits = contract::ReachabilityProvider::answer_waits | dannan::sched::Waits::locks;
   bool publish_inventory();
+
+  // One GC pass, due whatever the schedule and the node's activity says, and
+  // one repair pass, on the caller's thread: what the maintenance thread
+  // runs, for a test that drives the passes itself (with automatic off) or
+  // an owner that wants a pass now. Serialised with the thread's passes.
+  // Throws nothing: a provider's error is the report's gc_skipped.
+  static constexpr dannan::sched::Waits run_maintenance_waits = register_waits | dannan::sched::Waits::locks;
+  MaintenanceReport run_maintenance_once();
 
   // Publishes the node's figures to context.status() now (the names are
   // listed in node.cpp, every one under "dagda."). Waits on the stores'
@@ -203,11 +258,33 @@ class Node {
 
  private:
   struct StatusTimer;
+  // The GC figures Status shows (dagda.gc.*).
+  struct GcFigures {
+    uint64_t passes = 0;
+    uint64_t skipped = 0;
+    uint64_t failures = 0;
+    uint64_t inventories = 0;
+    uint64_t released_data = 0;
+    uint64_t released_control = 0;
+    uint64_t removed_control = 0;
+    uint64_t examined = 0;
+    uint64_t reclaimed_bytes = 0;
+    uint64_t pruned = 0;
+    std::string state = "not yet run";
+    std::string data_gate = "none";
+  };
 
   void open();
   void step(std::string_view what);
   void ready(const std::string& plane);
   void arm_status();
+  void maintenance_loop(std::stop_token stop);
+  void stop_maintenance();
+  // One GC pass on the provider registered now. `forced`: due whatever the
+  // node's activity. Whether the collector is settled: its sweep complete
+  // with nothing deferred, or nothing to run.
+  bool gc_pass_locked(bool forced, MaintenanceReport& report) DANNAN_REQUIRES(_maintenance_mutex);
+  bool higher_class_active() const;
 
   dannan::Context& _context;
   NodeOptions _options;
@@ -239,8 +316,27 @@ class Node {
   // The status timer's hold on the node: cleared, under its lock, at stop.
   std::shared_ptr<StatusTimer> _status;
 
+  // Lock order: _maintenance_mutex, then _providers_mutex, then
+  // _gc_figures_mutex. A pass holds _maintenance_mutex across the devices
+  // and the provider.
   mutable dannan::contract::Mutex _providers_mutex;
   std::map<domain::DomainId, contract::ReachabilityProvider*> _providers DANNAN_GUARDED_BY(_providers_mutex);
+
+  dannan::contract::IoMutex _maintenance_mutex;
+  std::unique_ptr<ledger::UnreferencedSince> _data_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
+  std::unique_ptr<ledger::UnreferencedSince> _control_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
+  // The collector over the provider it was made for, remade when another is
+  // registered.
+  std::unique_ptr<ledger::Collector> _collector DANNAN_GUARDED_BY(_maintenance_mutex);
+  contract::ReachabilityProvider* _collector_provider DANNAN_GUARDED_BY(_maintenance_mutex) = nullptr;
+
+  mutable dannan::contract::Mutex _gc_figures_mutex;
+  GcFigures _gc_figures DANNAN_GUARDED_BY(_gc_figures_mutex);
+
+  // Guards nothing; the maintenance thread waits on it.
+  std::mutex _maintenance_wait;
+  std::condition_variable_any _maintenance_wake;
+  std::jthread _maintenance;
 };
 
 }  // namespace dagda

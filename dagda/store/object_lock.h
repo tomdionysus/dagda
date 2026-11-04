@@ -7,9 +7,12 @@
 
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
+#include <vector>
 
 #include "dagda/store/object_id.h"
 #include "dannan/contract/thread_safety.h"
@@ -52,6 +55,43 @@ class ObjectLocks {
   static constexpr size_t sweep_above = 4096;
   mutable dannan::contract::Mutex _map_mutex;
   mutable std::map<ObjectId, std::weak_ptr<dannan::contract::IoMutex>> _mutexes DANNAN_GUARDED_BY(_map_mutex);
+};
+
+// One node's guard over each object's claims against its copy: a claim's
+// presence check and its journal write, and an instant delete's release, its
+// check that no claim remains and its delete, each hold the object's guard,
+// so no claim lands between a delete's check and its delete. Striped by the
+// id's first byte; a batch takes its stripes in ascending order, so two
+// batches never deadlock. Holders wait on the state and DATA devices.
+// Thread-safe.
+class ClaimLocks {
+ public:
+  static constexpr size_t stripes = 64;
+
+  class Guard {
+   public:
+    Guard(Guard&&) noexcept = default;
+    Guard(const Guard&) = delete;
+    Guard& operator=(const Guard&) = delete;
+
+   private:
+    friend class ClaimLocks;
+    Guard() = default;
+    std::vector<std::unique_lock<std::mutex>> _held;
+  };
+
+  // Every stripe `ids` fall in, held until the guard goes.
+  Guard lock(std::span<const ObjectId> ids) DANNAN_EXCLUDES(dannan::contract::no_io) {
+    std::array<bool, stripes> wanted{};
+    for (const auto& id : ids) wanted[id.bytes[0] % stripes] = true;
+    Guard guard;
+    for (size_t stripe = 0; stripe < stripes; ++stripe)
+      if (wanted[stripe]) guard._held.emplace_back(_stripes[stripe].native());
+    return guard;
+  }
+
+ private:
+  std::array<dannan::contract::IoMutex, stripes> _stripes;
 };
 
 }  // namespace dagda::store

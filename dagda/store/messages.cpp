@@ -7,6 +7,9 @@
 
 #include "dagda/store/messages.h"
 
+#include <algorithm>
+#include <cstdint>
+
 namespace dagda::store::message {
 namespace {
 
@@ -43,6 +46,10 @@ void register_types(dannan::Routes& routes) {
   routes.add(delete_object, {"dagda.delete_object", Lanes::control, Frames::not_control});
   routes.add(have_valid_objects, {"dagda.have_valid_objects", Lanes::control, Frames::not_control});
   routes.add(trie_diff, {"dagda.trie_diff", Lanes::control, Frames::any});
+  // A delete journals claims and unlinks files, never reads an object: the
+  // control lane, any class but control.
+  routes.add(remove_objects, {"dagda.remove_objects", Lanes::control, Frames::not_control});
+  routes.add(remove_objects_reply, {"dagda.remove_objects_reply", Lanes::control, Frames::any});
   routes.add(bool_reply, {"dagda.bool_reply", Lanes::both, Frames::any});
   routes.add(object_reply, {"dagda.object_reply", Lanes::data, Frames::any});
   routes.add(control_object_reply, {"dagda.control_object_reply", Lanes::control, Frames::any});
@@ -264,6 +271,94 @@ RetainRequest decode_retain(std::span<const uint8_t> payload) {
   out.ids.reserve(count);
   for (uint32_t i = 0; i < count; ++i) out.ids.push_back(read_id(reader));
   if (reader.remaining()) out.principal = decode_principal(reader);
+  reader.finish();
+  return out;
+}
+
+Bytes encode_remove(const RemoveRequest& request) {
+  Writer writer;
+  writer.u32(static_cast<uint32_t>(request.observed.size()));
+  for (const auto& [node, sequence] : request.observed) {
+    writer.fixed(node.bytes);
+    writer.u64(sequence);
+  }
+  writer.u32(static_cast<uint32_t>(request.ids.size()));
+  for (const auto& id : request.ids) writer.fixed(id.bytes);
+  encode_principal(writer, request.writer);
+  return writer.take();
+}
+
+RemoveRequest decode_remove(std::span<const uint8_t> payload) {
+  Reader reader(payload);
+  RemoveRequest out;
+  const auto clocks = reader.u32();
+  if (clocks > max_remove_batch) throw DecodeError("too many observed clock entries");
+  for (uint32_t i = 0; i < clocks; ++i) {
+    contract::NodeId node{reader.fixed<16>()};
+    const auto sequence = reader.u64();
+    if (node == contract::NodeId{} || !sequence || !out.observed.emplace(node, sequence).second) throw DecodeError("bad observed clock entry");
+  }
+  const auto count = reader.u32();
+  if (!count || count > max_remove_batch) throw DecodeError("invalid remove object count");
+  if (reader.remaining() < static_cast<size_t>(count) * 32) throw DecodeError("remove batch size does not match its count");
+  out.ids.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) out.ids.push_back(read_id(reader));
+  out.writer = decode_principal(reader);
+  reader.finish();
+  return out;
+}
+
+Bytes encode_removal(const ReplicaRemoval& removal) {
+  Writer writer;
+  writer.u8(removal.refused ? 1 : 0);
+  if (removal.refused) {
+    writer.u64(removal.scope_generation);
+    writer.string(removal.why);
+    return writer.take();
+  }
+  writer.u32(static_cast<uint32_t>(removal.objects.size()));
+  for (const auto& object : removal.objects) {
+    writer.fixed(object.id.bytes);
+    writer.u8(static_cast<uint8_t>(object.state));
+    writer.u16(static_cast<uint16_t>(std::min<size_t>(object.claims.size(), UINT16_MAX)));
+    for (size_t i = 0; i < object.claims.size() && i < UINT16_MAX; ++i) {
+      writer.fixed(object.claims[i].origin.bytes);
+      writer.u64(object.claims[i].sequence);
+    }
+  }
+  return writer.take();
+}
+
+ReplicaRemoval decode_removal(std::span<const uint8_t> payload) {
+  Reader reader(payload);
+  ReplicaRemoval out;
+  const auto refused = reader.u8();
+  if (refused > 1) throw DecodeError("invalid removal flag");
+  if (refused) {
+    out.refused = true;
+    out.scope_generation = reader.u64();
+    out.why = reader.string(4096);
+    reader.finish();
+    return out;
+  }
+  const auto count = reader.u32();
+  if (count > max_remove_batch) throw DecodeError("too many removal answers");
+  out.objects.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    RemovedObject object;
+    object.id = read_id(reader);
+    const auto state = reader.u8();
+    if (state > static_cast<uint8_t>(RemoveState::kept_referenced)) throw DecodeError("invalid removal state");
+    object.state = static_cast<RemoveState>(state);
+    const auto claims = reader.u16();
+    for (uint16_t c = 0; c < claims; ++c) {
+      contract::RetentionDot dot;
+      dot.origin.bytes = reader.fixed<16>();
+      dot.sequence = reader.u64();
+      object.claims.push_back(dot);
+    }
+    out.objects.push_back(std::move(object));
+  }
   reader.finish();
   return out;
 }

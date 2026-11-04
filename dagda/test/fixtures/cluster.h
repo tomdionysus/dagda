@@ -110,6 +110,18 @@ struct ClusterNodeOptions {
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
   store::RepairOptions repair;
+  // The node's maintenance (step 7b). Off here unless a case turns it on:
+  // the cases drive their passes through run_maintenance_once(), so each
+  // pass happens where the case says.
+  dagda::MaintenanceOptions maintenance = [] {
+    dagda::MaintenanceOptions out;
+    out.automatic = false;
+    return out;
+  }();
+  // The node's domain's wait, and the clock the node dates its files and
+  // sightings by (a stepped one, for a case that waits out a grace).
+  std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
+  const dannan::contract::WallClock* wall = nullptr;
   // Step 7a's node cases: a node with no key custody (refused), and another
   // node's Dagda state or DATA backend in place of this node's own.
   bool custody = true;
@@ -175,6 +187,9 @@ class ClusterNode {
   ledger::RetentionLedger& ledger() { return _dagda->ledger(); }
   store::AvailabilityService& availability() { return _dagda->availability(); }
   store::Repair& repair() { return _dagda->repair(); }
+  // One GC pass and one repair pass, as the node's maintenance thread runs
+  // them.
+  dagda::MaintenanceReport run_maintenance_once() { return _dagda->run_maintenance_once(); }
   // Publishes the inventory `provider` answers now, through the node's
   // registered provider, as the node's collector would: what the survey and
   // repair take as referenced.
@@ -379,6 +394,9 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.store.admission_wait = _options.admission_wait;
   out.availability = _options.availability;
   out.repair = _options.repair;
+  out.maintenance = _options.maintenance;
+  out.garbage_grace = _options.garbage_grace;
+  if (_options.wall) out.wall = _options.wall;
   out.status_interval = std::chrono::milliseconds(200);
   out.trace = _options.trace;
   // In front of the server: count, then let the test answer instead.

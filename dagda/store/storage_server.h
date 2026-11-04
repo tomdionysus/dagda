@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "dagda/contract/claim_store.h"
+#include "dagda/contract/object_ledger.h"
 #include "dagda/domain/domain.h"
 #include "dagda/ledger/trie_union.h"
 #include "dagda/store/data_work.h"
@@ -71,7 +72,10 @@ struct StorageServerAdmission {
 // prefix the request carries (messages.h, WritePrincipal) or, for one that
 // carries none, the sending node under the domain's name; a refusal is 403
 // scope_refused with the source's reason and generation, and stores
-// nothing.
+// nothing. An instant delete (remove_objects, step 7b) is checked the same
+// way under the writer it carries; a refusal is the reply's own evidence
+// (remove_objects_reply, refused, with the source's reason and generation),
+// and changes nothing.
 //
 // Admission (step 3b): a request that reads or writes the DATA device holds
 // DATA credit for its class and a DATA slot of the device reserve across the
@@ -101,6 +105,9 @@ class StorageServer {
     contract::ClaimStore& claims;
     // A delete removes the object here too, when given.
     PersistentBlockCache* cache = nullptr;
+    // The ledger whose published inventory an instant delete checks: an
+    // object it refers to is kept. None: no inventory.
+    const contract::ObjectLedger* ledger = nullptr;
   };
 
   StorageServer(dannan::Context& context, Stores stores, StorageServerOptions options = {}, StorageServerAdmission admission = {});
@@ -134,6 +141,7 @@ class StorageServer {
   LocalStore& _control;
   contract::ClaimStore& _claims;
   PersistentBlockCache* const _cache;
+  const contract::ObjectLedger* const _ledger;
   const StorageServerOptions _options;
   const StorageServerAdmission _admission;
   const dannan::status::ScopedLogger _logger;

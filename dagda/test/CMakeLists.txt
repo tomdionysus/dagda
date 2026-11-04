@@ -41,6 +41,7 @@ add_executable(dagda_tests
   ledger_unreferenced_since_test.cpp
   migrate_legacy_v18_test.cpp
   migrate_migrate_test.cpp
+  node_maintenance_test.cpp
   node_test.cpp
   store_control_store_test.cpp
   store_data_work_test.cpp
@@ -58,6 +59,7 @@ add_executable(dagda_tests
   store_object_id_test.cpp
   store_persistent_cache_test.cpp
   store_presence_index_test.cpp
+  store_remove_test.cpp
   store_repair_test.cpp
   store_replica_selector_test.cpp
   store_scope_test.cpp

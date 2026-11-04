@@ -170,6 +170,41 @@ TEST(LedgerRetention, AClaimFromAnUnseenBranchSurvivesAPartition) {
   EXPECT_FALSE(reopened.retained(data, object));
 }
 
+// Step 7b, the instant delete's release: on the objects named, and only
+// those, it takes exactly what release_unreferenced's rule takes (a claim
+// the clock dominates; never one from an origin it has not seen or a later
+// sequence), journals the same frame, survives a restart, and suppresses a
+// late replay of what it released.
+TEST(LedgerRetention, ARemovesReleaseTakesOnlyWhatItsClockDominatesOnTheObjectsNamed) {
+  dannan::test::TempDir t;
+  const auto state = t.path() / "state";
+  const auto here = NodeId::random();
+  const auto away = NodeId::random();
+  const auto named = id(1);
+  const auto other = id(2);
+  {
+    auto retention = open_store(state);
+    retention.retain(data, named, {here, 2});
+    retention.retain(data, named, {away, 5});
+    retention.retain(data, other, {here, 1});
+    EXPECT_EQ(retention.release_observed(data, {named, named}, RetentionClock{{here, 2}, {away, 4}}), 1u);
+    EXPECT_EQ(retention.claims(data, named).adds, (std::map<NodeId, uint64_t>{{away, 5}}));
+    EXPECT_TRUE(retention.retained(data, other)) << "an object not named keeps its claims";
+    // Nothing for an empty clock, an empty list, or a class with no claim.
+    EXPECT_EQ(retention.release_observed(data, {named}, RetentionClock{}), 0u);
+    EXPECT_EQ(retention.release_observed(data, {}, RetentionClock{{away, 9}}), 0u);
+    EXPECT_EQ(retention.release_observed(control, {named}, RetentionClock{{away, 9}}), 0u);
+    // A late add the release saw is refused.
+    retention.retain(data, named, {here, 2});
+    EXPECT_EQ(retention.claims(data, named).adds, (std::map<NodeId, uint64_t>{{away, 5}}));
+  }
+  auto reopened = open_store(state);
+  EXPECT_EQ(reopened.claims(data, named).adds, (std::map<NodeId, uint64_t>{{away, 5}}));
+  EXPECT_TRUE(reopened.retained(data, other));
+  EXPECT_EQ(reopened.release_observed(data, {named}, RetentionClock{{away, 5}}), 1u);
+  EXPECT_FALSE(reopened.retained(data, named));
+}
+
 // Macha: test_retention_prune_cursor_cannot_starve_later_tombstones.
 TEST(LedgerRetention, ThePruneCursorCannotStarveLaterTombstones) {
   dannan::test::TempDir t;

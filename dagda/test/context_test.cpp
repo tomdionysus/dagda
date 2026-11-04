@@ -147,7 +147,21 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
   const auto second_claim = a.api().claims().retain(contract::RetentionClass::data, {blocking.id}, {a.id(), 2}, {}, deadline);
   EXPECT_TRUE(second_claim.finished) << second_claim.why;
 
+  // The instant delete (step 7b): a's claim, observed, goes, and with it
+  // every copy, the answer on the caller's strand; the blocking form waits
+  // on the same completion.
+  const auto removed = on_strand<RemoveEvidence>(strand, [&](boost::asio::any_io_executor executor, Context::Objects::RemoveDone done) {
+    a.api().objects().remove({id}, {{a.id(), 1}}, {}, deadline, executor, std::move(done));
+  });
+  EXPECT_TRUE(removed.finished) << removed.why;
+  EXPECT_EQ(removed.state(a.id(), id), RemoveState::removed);
+  EXPECT_EQ(removed.state(b.id(), id), RemoveState::removed);
+  const auto blocking_removed = b.api().objects().remove({blocking.id}, {{a.id(), 2}}, {}, deadline);
+  EXPECT_EQ(blocking_removed.removed(), 2u);
+  EXPECT_FALSE(a.api().objects().has(blocking.id));
+
   // Arguments a contract refuses: no deadline, a dot with no sequence.
+  EXPECT_THROW(a.api().objects().remove({id}, {}, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().objects().read(id, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().claims().retain(contract::RetentionClass::data, {id}, {a.id(), 0}, {}, deadline), std::invalid_argument);
 }

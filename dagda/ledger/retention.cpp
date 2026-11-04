@@ -54,6 +54,15 @@ std::vector<ObjectId> sorted_unique(std::vector<ObjectId> ids) {
   return ids;
 }
 
+// A release clock as it is journalled: entries with no node or no sequence
+// say nothing and are left out.
+RetentionClock journalled_clock(const RetentionClock& observed) {
+  RetentionClock out;
+  for (const auto& [node, sequence] : observed)
+    if (node != NodeId{} && sequence) out[node] = sequence;
+  return out;
+}
+
 }  // namespace
 
 namespace retention_format {
@@ -380,9 +389,7 @@ std::optional<ObjectId> RetentionStore::next_retained(RetentionClass type, std::
 
 size_t RetentionStore::release_unreferenced(RetentionClass type, const contract::IdLookup& live, const RetentionClock& observed, size_t operation_budget) {
   if (!operation_budget || observed.empty()) return 0;
-  RetentionClock encoded_clock;
-  for (const auto& [node, sequence] : observed)
-    if (node != NodeId{} && sequence) encoded_clock[node] = sequence;
+  const auto encoded_clock = journalled_clock(observed);
   if (encoded_clock.empty()) return 0;
 
   Lock lock(_mutex);
@@ -405,6 +412,24 @@ size_t RetentionStore::release_unreferenced(RetentionClass type, const contract:
   _journal.append(retention_format::encode_release(type, encoded_clock, candidates));
   const auto released = apply_release_locked(type, encoded_clock, std::move(candidates));
   checkpoint_if_due_locked();
+  return released;
+}
+
+size_t RetentionStore::release_observed(RetentionClass type, const std::vector<ObjectId>& input, const RetentionClock& observed) {
+  const auto encoded_clock = journalled_clock(observed);
+  if (encoded_clock.empty() || input.empty()) return 0;
+  const auto ids = sorted_unique(input);
+  // The collector's release, frame and rule, on the objects named rather
+  // than on a walk's stretch.
+  Lock lock(_mutex);
+  size_t released = 0;
+  for (size_t begin = 0; begin < ids.size(); begin += retain_ids_per_frame) {
+    const auto end = std::min(ids.size(), begin + retain_ids_per_frame);
+    std::vector<ObjectId> part(ids.begin() + static_cast<std::ptrdiff_t>(begin), ids.begin() + static_cast<std::ptrdiff_t>(end));
+    _journal.append(retention_format::encode_release(type, encoded_clock, part));
+    released += apply_release_locked(type, encoded_clock, std::move(part));
+    checkpoint_if_due_locked();
+  }
   return released;
 }
 

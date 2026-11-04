@@ -7,6 +7,8 @@
 
 #include "dagda/node.h"
 
+#include <algorithm>
+#include <functional>
 #include <stdexcept>
 #include <utility>
 
@@ -196,8 +198,8 @@ void Node::open() {
   step("open distributed-store");
   auto store_options = _options.store;
   store_options.domain = _options.domain;
-  _store = std::make_unique<store::DistributedStore>(_context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get()},
-                                                     store_options);
+  _store = std::make_unique<store::DistributedStore>(
+      _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get()}, store_options);
 
   step("open availability");
   _availability = std::make_unique<store::AvailabilityService>(_context, *_ledger, _options.availability);
@@ -211,7 +213,7 @@ void Node::open() {
   auto server = _options.server;
   server.extent_size = store_options.extent_size;
   server.domain = _options.domain;
-  _server = std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get()}, server,
+  _server = std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get()}, server,
                                                    store::StorageServerAdmission{_credit.get(), _io.get()});
   if (_options.front) {
     // The server outlives its routes: its destructor unbinds them, waiting
@@ -234,13 +236,33 @@ void Node::open() {
     dannan::contract::Lock held(_status->mutex);
     _status->node = this;
   }
+  // The collector's sightings, Macha's files (requirement L22); the thread
+  // last, once everything it reaches is open.
+  step("open maintenance");
+  {
+    dannan::contract::Lock held(_maintenance_mutex);
+    _data_sightings = std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-data.bin", _context.logger("dagda.gc"));
+    _control_sightings = std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _context.logger("dagda.gc"));
+  }
   publish_status();
   arm_status();
+  if (_options.maintenance.automatic)
+    _maintenance = std::jthread([this](std::stop_token stop) { _context.threads().loop("dagda.maintenance", stop, [this, stop] { maintenance_loop(stop); }); });
   _logger.info("node open: domain " + _options.domain.name + " (" + domain::to_string(_options.domain.id) + "), " + std::to_string(_data->online_backends()) +
                " backends online, used " + std::to_string(_data->used()) + " of " + std::to_string(_data->limit()));
 }
 
 void Node::stop() {
+  // The maintenance thread first: nothing it reaches has gone yet.
+  stop_maintenance();
+  {
+    dannan::contract::Lock lock(_maintenance_mutex);
+    _collector.reset();
+    _collector_provider = nullptr;
+    if (_data_sightings || _control_sightings) step("stop maintenance");
+    _data_sightings.reset();
+    _control_sightings.reset();
+  }
   if (_status) {
     dannan::contract::Lock lock(_status->mutex);
     _status->node = nullptr;
@@ -292,16 +314,24 @@ void Node::arm_status() {
 
 void Node::register_reachability(const domain::DomainId& domain, contract::ReachabilityProvider& provider) {
   if (domain != _options.domain.id) throw std::invalid_argument("this node does not hold domain " + domain::to_string(domain));
+  // After a pass in progress; the collector is made again for this provider.
+  dannan::contract::Lock maintenance(_maintenance_mutex);
+  _collector.reset();
+  _collector_provider = nullptr;
   dannan::contract::Lock lock(_providers_mutex);
   _providers[domain] = &provider;
 }
 
 void Node::unregister_reachability(const domain::DomainId& domain) {
+  dannan::contract::Lock maintenance(_maintenance_mutex);
+  _collector.reset();
+  _collector_provider = nullptr;
   dannan::contract::Lock lock(_providers_mutex);
   _providers.erase(domain);
 }
 
 bool Node::publish_inventory() {
+  dannan::contract::Lock maintenance(_maintenance_mutex);
   contract::ReachabilityProvider* provider = nullptr;
   {
     dannan::contract::Lock lock(_providers_mutex);
@@ -314,6 +344,133 @@ bool Node::publish_inventory() {
   return true;
 }
 
+// ---- Maintenance ------------------------------------------------------------
+
+bool Node::higher_class_active() const {
+  auto& activity = _context.activity();
+  const auto quiet = _options.repair.foreground_quiet;
+  return activity.recently_active(dannan::sched::WorkClass::foreground, quiet) || activity.recently_active(dannan::sched::WorkClass::loader, quiet);
+}
+
+bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
+  contract::ReachabilityProvider* provider = nullptr;
+  {
+    dannan::contract::Lock lock(_providers_mutex);
+    const auto found = _providers.find(_options.domain.id);
+    if (found != _providers.end()) provider = found->second;
+  }
+  const auto note = [&](const std::function<void(GcFigures&)>& change) {
+    dannan::contract::Lock lock(_gc_figures_mutex);
+    change(_gc_figures);
+  };
+  if (!provider) {
+    // Nothing destructive without the owner's word on what is referenced.
+    _collector.reset();
+    _collector_provider = nullptr;
+    report.gc_skipped = "no reachability provider registered for domain " + domain::to_string(_options.domain.id) + ": the collector removes nothing";
+    note([&](GcFigures& figures) {
+      ++figures.skipped;
+      figures.state = report.gc_skipped;
+    });
+    return true;
+  }
+  if (!_collector || _collector_provider != provider) {
+    auto options = _options.maintenance.collector;
+    options.garbage_grace = _options.garbage_grace;
+    _collector = std::make_unique<ledger::Collector>(
+        *_ledger, *provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
+        ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), _context.time().source(), *_options.wall}, _cache.get());
+    _collector_provider = provider;
+  }
+  const bool busy = !forced && higher_class_active();
+  ledger::PassDue due;
+  due.garbage_due = !busy;
+  due.gc_due = !busy;
+  due.busy = busy;
+  if (!forced) due.should_yield = [this] { return higher_class_active(); };
+  try {
+    report.gc = _collector->pass(due);
+  } catch (const std::exception& error) {
+    report.gc_skipped = std::string("the reachability provider could not answer: ") + error.what();
+    _logger.debug("garbage collection: " + report.gc_skipped);
+    note([&](GcFigures& figures) {
+      ++figures.failures;
+      figures.state = report.gc_skipped;
+    });
+    return false;
+  }
+  const auto& pass = *report.gc;
+  note([&](GcFigures& figures) {
+    ++figures.passes;
+    figures.inventories += pass.rebuilt_inventory ? 1 : 0;
+    figures.released_data += pass.released_data;
+    figures.released_control += pass.released_control;
+    figures.removed_control += pass.removed_control;
+    figures.examined += pass.swept_data.objects;
+    figures.reclaimed_bytes += pass.swept_data.bytes;
+    figures.pruned += pass.pruned_data + pass.pruned_control;
+    figures.state = busy ? "busy: foreground or loader work present" : "ran";
+    figures.data_gate = !pass.data ? "not reached" : pass.data->permitted ? "open" : pass.data->reason;
+  });
+  // Settled: the sweep went all the way round with nothing left waiting.
+  return !busy && !pass.rebuilt_inventory && pass.data && pass.data->permitted && pass.swept_data.complete && !pass.swept_data.deferred &&
+         !pass.swept_data.yielded;
+}
+
+MaintenanceReport Node::run_maintenance_once() {
+  MaintenanceReport report;
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_repair) return report;
+  (void)gc_pass_locked(true, report);
+  try {
+    report.repair = _repair->pass();
+  } catch (const std::exception& error) {
+    _logger.debug(std::string("repair pass: ") + error.what());
+  }
+  return report;
+}
+
+void Node::maintenance_loop(std::stop_token stop) {
+  const auto& time = _context.time().source();
+  const auto interval = std::max(_options.maintenance.interval, std::chrono::milliseconds(1));
+  const auto gc_interval = std::max(_options.maintenance.gc_interval, interval);
+  auto next_repair = time.now();
+  auto next_gc = next_repair;
+  while (!stop.stop_requested()) {
+    const auto now = time.now();
+    {
+      dannan::contract::Lock lock(_maintenance_mutex);
+      if (now >= next_gc) {
+        MaintenanceReport report;
+        next_gc = now + (gc_pass_locked(false, report) ? gc_interval : interval);
+      }
+      if (now >= next_repair) {
+        try {
+          (void)_repair->pass();
+        } catch (const std::exception& error) {
+          _logger.debug(std::string("repair pass: ") + error.what());
+        }
+        next_repair = now + interval;
+      }
+    }
+    // Waits in real time for at most an interval, then reads the node's time
+    // again: a stepped clock moved meanwhile is seen within an interval.
+    const auto after = time.now();
+    const auto due = std::min(next_gc, next_repair);
+    if (due <= after) continue;
+    const auto wait = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(due - after) + std::chrono::milliseconds(1), interval);
+    std::unique_lock lock(_maintenance_wait);
+    _maintenance_wake.wait_for(lock, stop, wait, [] { return false; });
+  }
+}
+
+void Node::stop_maintenance() {
+  if (!_maintenance.joinable()) return;
+  _maintenance.request_stop();
+  _maintenance_wake.notify_all();
+  _maintenance.join();
+}
+
 // Every figure is under "dagda.":
 //   context_version; domain, domain.name, domain.role;
 //   storage.used, storage.limit, storage.backends_online, storage.degraded,
@@ -324,6 +481,12 @@ bool Node::publish_inventory() {
 //   repair.local_drops, repair.bytes, repair.unsourceable,
 //   repair.local_unreadable; repair.gate.ran, repair.gate.share,
 //   repair.gate.quiescent, repair.gate.credit, repair.gate.last;
+//   maintenance.automatic; gc.provider, gc.grace_ms, gc.passes, gc.skipped
+//   (no provider), gc.failures (the provider could not answer),
+//   gc.inventories, gc.released_data, gc.released_control,
+//   gc.removed_control, gc.examined, gc.reclaimed_bytes, gc.pruned, gc.state
+//   (what the last pass came to, in words), gc.data_gate (open, or why
+//   shut);
 //   prompt.queued, prompt.copies, prompt.failures, prompt.skipped_no_room,
 //   prompt.dropped;
 //   and with admission: admission.credit_used, admission.device_pressured,
@@ -370,6 +533,34 @@ void Node::publish_status() {
   put("repair.gate.quiescent", u64(gates.quiescent));
   put("repair.gate.credit", u64(gates.credit));
   put("repair.gate.last", std::string(gates.last ? gate_name(*gates.last) : "none"));
+
+  bool provider = false;
+  {
+    dannan::contract::Lock lock(_providers_mutex);
+    provider = _providers.contains(_options.domain.id);
+  }
+  GcFigures gc;
+  {
+    dannan::contract::Lock lock(_gc_figures_mutex);
+    gc = _gc_figures;
+  }
+  put("maintenance.automatic", _options.maintenance.automatic);
+  put("gc.provider", provider);
+  put("gc.grace_ms", u64(static_cast<uint64_t>(_options.garbage_grace.count())));
+  put("gc.passes", u64(gc.passes));
+  put("gc.skipped", u64(gc.skipped));
+  put("gc.failures", u64(gc.failures));
+  put("gc.inventories", u64(gc.inventories));
+  put("gc.released_data", u64(gc.released_data));
+  put("gc.released_control", u64(gc.released_control));
+  put("gc.removed_control", u64(gc.removed_control));
+  put("gc.examined", u64(gc.examined));
+  put("gc.reclaimed_bytes", u64(gc.reclaimed_bytes));
+  put("gc.pruned", u64(gc.pruned));
+  put("gc.state", provider || gc.state != "not yet run"
+                      ? gc.state
+                      : "no reachability provider registered for domain " + domain::to_string(_options.domain.id) + ": the collector removes nothing");
+  put("gc.data_gate", gc.data_gate);
 
   const auto prompt = _store->prompt_replication_stats();
   put("prompt.queued", u64(prompt.queued));
