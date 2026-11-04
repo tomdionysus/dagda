@@ -667,6 +667,133 @@ TEST(MigrateState, ARunReportsItsProgressAndRate) {
   EXPECT_GE(lines, 4);
 }
 
+// Forward and back leaves every object and marker as Macha wrote it, byte for
+// byte. The ledgers are re-sealed, not restored, so forward again proves they
+// hold what they held.
+TEST(MigrateBack, ThereAndBackLeavesTheObjectsAndMarkersAsTheyWere) {
+  StoreBed bed;
+  V18State v18(bed);
+  const auto sightings = v18.state / "retention" / "unreferenced-data.bin";
+  const auto plain = ledger::encode_unreferenced_since({{v18.loose[2].first, 1'000}});
+  legacy::write_file(sightings, plain);
+  const auto store_files = [&] {
+    auto digest = v18.digest();
+    std::erase_if(digest, [&](const auto& entry) {
+      const auto text = entry.first.string();
+      return text.find("/ledger/") != std::string::npos || text.find("/ledger-") != std::string::npos || text.find("claims.log") != std::string::npos ||
+             text.find(".lock") != std::string::npos;
+    });
+    return digest;
+  };
+  const auto before = store_files();
+  (void)v18.migrate();
+  EXPECT_NE(store_files(), before);
+  MigrationOptions options;
+  options.cache = v18.cache;
+  const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+  EXPECT_TRUE(report.reverse);
+  EXPECT_EQ(report.loose_migrated, 8u);
+  EXPECT_EQ(report.pack_records_migrated, 5u);
+  EXPECT_EQ(report.ledgers_migrated, 8u);
+  EXPECT_EQ(report.markers_rewritten, 3u);
+  EXPECT_NE(report.summary().find("back to layout v18"), std::string::npos);
+  EXPECT_EQ(store_files(), before);
+  EXPECT_EQ(hex(legacy::read_file(loose_path(v18.backend / "objects", v18.known))), loose_v18_hex);
+  // Done already: every record looked at, nothing moved.
+  const auto again = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+  EXPECT_EQ(again.loose_migrated + again.pack_records_migrated + again.ledgers_migrated + again.markers_rewritten, 0u);
+  EXPECT_EQ(again.loose_already, 8u);
+  EXPECT_EQ(store_files(), before);
+  // The disk is v18 to the forward run in every part, ledgers included.
+  const auto forward = v18.migrate();
+  EXPECT_EQ(forward.loose_migrated, 8u);
+  EXPECT_EQ(forward.ledgers_migrated, 8u);
+  expect_v19_opens(bed, v18);
+}
+
+// An end part-way, in either direction, is finished going back.
+TEST(MigrateBack, ARunThatStoppedIsFinishedByASecondRun) {
+  struct Stop {};
+  const auto stopping_after = [](size_t steps, size_t& seen) {
+    return [steps, &seen](const MigrationReport&) {
+      if (++seen == steps) throw Stop{};
+    };
+  };
+  {
+    // Forward stopped among its records: the state marker is still v18.
+    StoreBed bed;
+    V18State v18(bed);
+    const auto backend_marker = read_text(v18.backend / ".macha.backend");
+    size_t seen = 0;
+    MigrationOptions options;
+    options.after_step = stopping_after(3, seen);
+    EXPECT_THROW((void)v18.migrate(options), Stop);
+    EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    MigrationOptions back;
+    back.cache = v18.cache;
+    const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), back);
+    EXPECT_EQ(report.loose_migrated, 3u);
+    EXPECT_EQ(report.loose_already, 5u);
+    EXPECT_EQ(read_text(v18.backend / ".macha.backend"), backend_marker);
+    EXPECT_EQ(hex(legacy::read_file(loose_path(v18.backend / "objects", v18.known))), loose_v18_hex);
+    EXPECT_EQ(v18.migrate().loose_migrated, 8u);
+    expect_v19_opens(bed, v18);
+  }
+  {
+    // Back stopped among its records: the markers are still v19.
+    StoreBed bed;
+    V18State v18(bed);
+    (void)v18.migrate();
+    size_t seen = 0;
+    MigrationOptions options;
+    options.cache = v18.cache;
+    options.after_step = stopping_after(3, seen);
+    EXPECT_THROW((void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options), Stop);
+    EXPECT_NE(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    options.after_step = {};
+    const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+    EXPECT_EQ(report.loose_already, 3u);
+    EXPECT_EQ(report.loose_migrated, 5u);
+    EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    EXPECT_EQ(v18.migrate().loose_migrated, 8u);
+    expect_v19_opens(bed, v18);
+  }
+}
+
+// The wrong key, a dry run, another node's id and a running node change nothing.
+TEST(MigrateBack, RefusalsAndADryRunWriteNothing) {
+  StoreBed bed;
+  V18State v18(bed);
+  (void)v18.migrate();
+  const auto before = v18.digest();
+  MigrationOptions options;
+  options.cache = v18.cache;
+  const auto wrong = cluster_key_from(bed.dir.path() / "wrong.key", "another cluster\n");
+  const auto refused = [&](const std::function<void()>& run, std::string_view expect) {
+    try {
+      run();
+      ADD_FAILURE() << "not refused";
+    } catch (const MigrationRefused& error) {
+      EXPECT_NE(std::string(error.what()).find(expect), std::string::npos) << error.what();
+    }
+    EXPECT_EQ(v18.digest(), before);
+  };
+  refused([&] { (void)migrate_state_back(v18.state, {v18.backend}, wrong, v18.custody(), options); }, "wrong cluster key");
+  auto other = options;
+  other.node = filled(0x01);
+  refused([&] { (void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), other); }, "belongs to node");
+  {
+    store::StorageLock held(v18.backend);
+    refused([&] { (void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options); }, "is in use");
+  }
+  auto dry = options;
+  dry.dry_run = true;
+  const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), dry);
+  EXPECT_EQ(report.loose_migrated, 8u);
+  EXPECT_EQ(report.bytes_written, 0u);
+  EXPECT_EQ(v18.digest(), before);
+}
+
 // A dry run classifies and counts as a run would and writes nothing.
 TEST(MigrateState, ADryRunWritesNothing) {
   StoreBed bed;
@@ -974,6 +1101,18 @@ TEST(MigrateTool, DagdaMigrateRunsTheMigration) {
     const auto [code, output] = run(common, "again.log");
     EXPECT_EQ(code, std::optional<int>(0));
     EXPECT_NE(output.find("nothing to do"), std::string::npos) << output;
+  }
+  {
+    // Back, then forward again.
+    auto back = common;
+    back.emplace_back("--reverse");
+    const auto [code, output] = run(back, "back.log");
+    EXPECT_EQ(code, std::optional<int>(0)) << read_text(bed.dir.path() / "back.log");
+    EXPECT_NE(output.find("back to layout v18"), std::string::npos) << output;
+    EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    const auto [forward_code, forward] = run(common, "forward.log");
+    EXPECT_EQ(forward_code, std::optional<int>(0)) << read_text(bed.dir.path() / "forward.log");
+    EXPECT_NE(forward.find("loose objects: 8 migrated"), std::string::npos) << forward;
   }
   expect_v19_opens(bed, v18);
 }

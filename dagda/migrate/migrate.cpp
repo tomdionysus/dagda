@@ -179,27 +179,45 @@ Ledger migrate_trie(const std::filesystem::path& dir, std::shared_ptr<const doma
 // A sightings file (`retention/unreferenced-*.bin`): v18 wrote the table in
 // the clear; v19 seals it under the node-local key. Rewritten whole through
 // a sibling and a rename, as a journal is.
-Ledger migrate_sightings(const std::filesystem::path& path, const domain::StorageKey& to, MigrationReport& report, const MigrationOptions& options) {
+Ledger migrate_sightings(const std::filesystem::path& path, const domain::StorageKey& from, const domain::StorageKey& to, MigrationReport& report,
+                         const MigrationOptions& options) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return Ledger::empty;
   const store::Bytes bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   if (bytes.empty()) return Ledger::empty;
-  try {
-    (void)ledger::open_unreferenced_since(to, bytes);
-    return Ledger::already;
-  } catch (const std::exception&) {
-  }
+  const auto refused = [&]() -> MigrationRefused {
+    return MigrationRefused("sightings file " + path.string() + " is neither v18's table nor sealed under the node-local key: damaged, or another node's");
+  };
   std::map<store::ObjectId, uint64_t> table;
-  try {
-    table = ledger::decode_unreferenced_since(bytes);
-  } catch (const std::exception&) {
-    throw MigrationRefused("sightings file " + path.string() + " is neither v18's table nor sealed under the node-local key: damaged, or another node's");
+  if (options.reverse) {
+    // Back to the clear: sealed is what moves, a table that decodes is done.
+    try {
+      table = ledger::open_unreferenced_since(from, bytes);
+    } catch (const std::exception&) {
+      try {
+        (void)ledger::decode_unreferenced_since(bytes);
+        return Ledger::already;
+      } catch (const std::exception&) {
+        throw refused();
+      }
+    }
+  } else {
+    try {
+      (void)ledger::open_unreferenced_since(to, bytes);
+      return Ledger::already;
+    } catch (const std::exception&) {
+    }
+    try {
+      table = ledger::decode_unreferenced_since(bytes);
+    } catch (const std::exception&) {
+      throw refused();
+    }
   }
   report.bytes_read += bytes.size();
   if (options.dry_run) return Ledger::migrated;
-  const auto sealed = ledger::seal_unreferenced_since(to, table);
-  dannan::identity::durable_replace_file(path, std::string_view(reinterpret_cast<const char*>(sealed.data()), sealed.size()));
-  report.bytes_written += sealed.size();
+  const auto written = options.reverse ? ledger::encode_unreferenced_since(table) : ledger::seal_unreferenced_since(to, table);
+  dannan::identity::durable_replace_file(path, std::string_view(reinterpret_cast<const char*>(written.data()), written.size()));
+  report.bytes_written += written.size();
   return Ledger::migrated;
 }
 
@@ -263,7 +281,7 @@ void migrate_ledgers(const std::filesystem::path& state, std::shared_ptr<const d
     if (outcome == Ledger::migrated) step(options, report);
   }
   for (const auto& path : ledgers.sightings) {
-    const auto outcome = migrate_sightings(path, *to, report, options);
+    const auto outcome = migrate_sightings(path, *from, *to, report, options);
     count(outcome, report);
     say(options, "ledger " + path.string() + ": " + (outcome == Ledger::migrated ? "sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
     if (outcome == Ledger::migrated) step(options, report);
@@ -300,6 +318,31 @@ void check_retention(const std::filesystem::path& state, const domain::StorageKe
 std::array<uint8_t, 16> derive_v19_tag(const TagDeriver& deriver, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 16> tag,
                                        uint64_t ciphertext_size) {
   return deriver.derive(tag, associated_data_v18(id), to.associated_data(id), ciphertext_size);
+}
+
+// The tag in the run's direction.
+std::array<uint8_t, 16> moved_tag(const TagDeriver& deriver, const store::SealingScheme& v19, const ObjectId& id, std::span<const uint8_t, 16> tag,
+                                  uint64_t ciphertext_size, bool reverse) {
+  if (!reverse) return derive_v19_tag(deriver, v19, id, tag, ciphertext_size);
+  return deriver.derive(tag, v19.associated_data(id), associated_data_v18(id), ciphertext_size);
+}
+
+// What a record is, trying first what the run expects to move, so a record
+// not yet moved is opened once.
+RecordLayout classify(const domain::StorageKey& key, const store::SealingScheme& v19, const ObjectId& id, std::span<const uint8_t, 12> nonce,
+                      std::span<const uint8_t, 16> tag, std::span<const uint8_t> ciphertext, uint64_t plain_size, bool reverse) {
+  if (!reverse) return record_layout(key, v19, id, nonce, tag, ciphertext, plain_size);
+  try {
+    (void)store::open_object(key, v19, id, nonce, tag, ciphertext, plain_size);
+    return RecordLayout::v19;
+  } catch (const std::exception&) {
+  }
+  try {
+    (void)open_object_v18(key, id, nonce, tag, ciphertext, plain_size);
+    return RecordLayout::v18;
+  } catch (const std::exception&) {
+  }
+  return RecordLayout::neither;
 }
 
 // A line every so many records: on a 4 TB disk the operator sees it moving.
@@ -396,18 +439,18 @@ void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, c
     unreadable(report, proved, report.loose_unreadable, file.string() + ": " + error.what());
     return;
   }
-  const auto layout = record_layout(key, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size);
+  const auto layout = classify(key, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size, options.reverse);
   if (layout == RecordLayout::neither) {
     unreadable(report, proved, report.loose_unreadable, file.string() + ": opens under neither layout");
     return;
   }
   proved = true;
-  if (layout == RecordLayout::v19) {
+  if (layout == (options.reverse ? RecordLayout::v18 : RecordLayout::v19)) {
     ++report.loose_already;
     return;
   }
   if (!options.dry_run) {
-    const auto tag = derive_v19_tag(deriver ? *deriver : TagDeriver(key), to, id, loose.tag, loose.ciphertext.size());
+    const auto tag = moved_tag(deriver ? *deriver : TagDeriver(key), to, id, loose.tag, loose.ciphertext.size(), options.reverse);
     Fd fd(file, O_RDWR);
     write_at(fd.get(), tag, loose_tag_offset, file);
     sync_fd(fd.get(), file);
@@ -465,19 +508,19 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
     }
     const auto payload = read_at(fd.get(), static_cast<size_t>(header->payload_size), offset + pack_header_size);
     if (!payload) throw std::runtime_error("cannot read " + pack.string());
-    const auto layout = record_layout(key, to, header->id, header->nonce, header->tag, *payload, header->plain_size);
+    const auto layout = classify(key, to, header->id, header->nonce, header->tag, *payload, header->plain_size, options.reverse);
     if (layout == RecordLayout::neither) {
       unreadable(report, proved, report.pack_records_unreadable, pack.string() + " record " + store::to_string(header->id) + " at " + std::to_string(offset));
     } else {
       proved = true;
-      if (layout == RecordLayout::v19) {
+      if (layout == (options.reverse ? RecordLayout::v18 : RecordLayout::v19)) {
         ++report.pack_records_already;
       } else {
         // The tag and the checksum after it, one write: a header is whole
         // or it is not, and the store's recovery tells.
         if (!options.dry_run) {
           auto rewritten = *header;
-          rewritten.tag = derive_v19_tag(*deriver, to, header->id, header->tag, payload->size());
+          rewritten.tag = moved_tag(*deriver, to, header->id, header->tag, payload->size(), options.reverse);
           const auto encoded = encode_pack_header(rewritten);
           write_at(fd.get(), std::span<const uint8_t>(encoded).subspan(pack_tag_offset), offset + pack_tag_offset, pack);
           report.bytes_written += encoded.size() - pack_tag_offset;
@@ -508,12 +551,14 @@ std::string MigrationReport::summary() const {
     return out.str();
   }
   if (dry_run) out << "dry run: nothing written\n";
-  out << "loose objects: " << loose_migrated << " migrated, " << loose_already << " v19 already, " << loose_unreadable << " unreadable\n";
-  out << "pack records: " << pack_records_migrated << " migrated, " << pack_records_already << " v19 already, " << pack_records_unreadable << " unreadable, "
+  if (reverse) out << "back to layout v18\n";
+  const char* done = reverse ? " v18 already, " : " v19 already, ";
+  out << "loose objects: " << loose_migrated << " migrated, " << loose_already << done << loose_unreadable << " unreadable\n";
+  out << "pack records: " << pack_records_migrated << " migrated, " << pack_records_already << done << pack_records_unreadable << " unreadable, "
       << pack_records_unsealed << " unsealed (touches and tombstones), in " << packs << " packs; " << pack_regions_skipped << " damaged spans skipped, "
       << pack_tail_bytes << " torn tail bytes left\n";
-  out << "ledgers: " << ledgers_migrated << " re-sealed under the node-local key, " << ledgers_already << " already, " << ledgers_empty << " empty; "
-      << ledger_tail_bytes_dropped << " torn tail bytes dropped\n";
+  out << "ledgers: " << ledgers_migrated << (reverse ? " re-sealed under the domain key, " : " re-sealed under the node-local key, ") << ledgers_already
+      << " already, " << ledgers_empty << " empty; " << ledger_tail_bytes_dropped << " torn tail bytes dropped\n";
   out << "markers rewritten: " << markers_rewritten << "\n";
   out << "bytes read: " << bytes_read << ", written: " << bytes_written << "\n";
   for (const auto& what : unreadable) out << "left as it was: " << what << "\n";
@@ -647,6 +692,146 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
       if (const auto v18 = parse_backend_marker_v18(read_text(mirror))) rewrite(mirror, v19_marker_for(*v18, *domain_key, to));
   }
   rewrite(layout_marker, store::state_layout_marker(to) + "\n");
+  say(options, report.summary());
+  return report;
+}
+
+MigrationReport migrate_state_back(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends,
+                                   const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody, const MigrationOptions& given) {
+  MigrationOptions options = given;
+  options.reverse = true;
+  MigrationReport report;
+  report.dry_run = options.dry_run;
+  report.reverse = true;
+  const store::SealingScheme v19 = store::SealingScheme::v19(domain::domain_v1);
+  const auto domain_key = std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_v1(cluster));
+  const auto node_local = std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_node_local(custody));
+
+  std::error_code ec;
+  if (!std::filesystem::is_directory(state, ec)) throw MigrationRefused("state " + state.string() + " is not a directory");
+  const auto layout_marker = state / "storage-layout";
+  if (!std::filesystem::exists(layout_marker)) throw MigrationRefused("state " + state.string() + " has no storage-layout marker: not a Dagda or Macha state");
+  // Either marker: a forward run that crashed left a v18 marker over records
+  // already v19, and this finishes going back from it. Every record is looked
+  // at, so a disk already all v18 is reported as such.
+  const auto layout = read_text(layout_marker);
+  if (layout != store::state_layout_marker(v19) && layout != state_layout_v18)
+    throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor domain v1's v19; only Macha's domain goes back");
+
+  const auto v18_marker = [](const dannan::identity::NodeId& node, const dannan::identity::NodeId& token) {
+    return std::string(backend_marker_v18) + " " + dannan::identity::to_string(node) + " " + dannan::identity::to_string(token) + "\n";
+  };
+  // A v19 marker of domain v1: its node, its token, and the key proved by its
+  // check, before any write.
+  const auto parse_v19 = [&](const std::string& text, const std::filesystem::path& where) -> std::optional<BackendMarkerV18> {
+    std::vector<std::string> fields;
+    std::istringstream in(text);
+    for (std::string field; in >> field;) fields.push_back(field);
+    if (fields.size() != 5 || fields[0] != store::backend_marker_v19) return std::nullopt;
+    if (fields[3] != domain::to_string(v19.domain)) throw MigrationRefused(where.string() + " is domain " + fields[3] + ": only Macha's domain goes back");
+    const auto node = dannan::identity::NodeId::parse(fields[1]);
+    const auto token = dannan::identity::NodeId::parse(fields[2]);
+    if (!node || !token) return std::nullopt;
+    if (fields[4] != store::backend_key_check(*domain_key, v19.domain, *token))
+      throw MigrationRefused(where.string() + " does not match the key: wrong cluster key, or another cluster's disk");
+    return BackendMarkerV18{*node, *token};
+  };
+
+  struct BackendFound {
+    std::filesystem::path path;
+    BackendMarkerV18 marker;
+    bool v18 = false;
+  };
+  std::vector<BackendFound> found;
+  for (const auto& backend : backends) {
+    if (!std::filesystem::is_directory(backend, ec)) throw MigrationRefused("backend " + backend.string() + " is not a directory");
+    const auto marker = backend / store::backend_marker_name;
+    if (!std::filesystem::exists(marker))
+      throw MigrationRefused("backend " + backend.string() + " has no " + std::string(store::backend_marker_name) + " marker");
+    const auto text = read_text(marker);
+    if (const auto v18 = parse_backend_marker_v18(text)) {
+      found.push_back({backend, *v18, true});
+    } else if (const auto parsed = parse_v19(text, marker)) {
+      found.push_back({backend, *parsed, false});
+    } else {
+      throw MigrationRefused("backend " + backend.string() + " marker is \"" + text + "\": neither layout v18 nor domain v1's v19");
+    }
+  }
+  const auto control = options.control.empty() ? state / "metadata-objects" : options.control;
+  const bool have_control = std::filesystem::is_directory(control, ec);
+  const bool have_cache = !options.cache.empty() && std::filesystem::is_directory(options.cache, ec);
+
+  std::vector<std::unique_ptr<store::StorageLock>> locks;
+  const auto lock = [&](const std::filesystem::path& root) {
+    try {
+      locks.push_back(std::make_unique<store::StorageLock>(root));
+    } catch (const std::exception& error) {
+      throw MigrationRefused(root.string() + " is in use (is the node running?): " + error.what());
+    }
+  };
+  lock(state);
+  for (const auto& backend : found) lock(backend.path);
+  if (have_control) lock(control);
+  if (have_cache) lock(options.cache);
+
+  if (options.node) {
+    for (const auto& backend : found) {
+      if (backend.marker.node != *options.node)
+        throw MigrationRefused("backend " + backend.path.string() + " belongs to node " + dannan::identity::to_string(backend.marker.node) +
+                               " but this node is " + dannan::identity::to_string(*options.node) + ": run with the --node-state whose node-id the disks carry");
+    }
+  }
+  const TagDeriver deriver(*domain_key);
+  bool proved = false;
+  {
+    MigrationOptions quiet;
+    quiet.dry_run = true;
+    quiet.reverse = true;
+    MigrationReport scratch;
+    MigrationOptions probe = quiet;
+    probe.probe_only = true;
+    for (const auto& backend : found) migrate_objects(backend.path, *domain_key, deriver, v19, scratch, proved, probe);
+    if (have_control) migrate_objects(control, *domain_key, deriver, v19, scratch, proved, probe);
+    if (have_cache) migrate_objects(options.cache, *domain_key, deriver, v19, scratch, proved, probe);
+    migrate_ledgers(state, node_local, domain_key, scratch, quiet);
+  }
+  for (const auto& backend : found) {
+    say(options, "backend " + backend.path.string());
+    migrate_objects(backend.path, *domain_key, deriver, v19, report, proved, options);
+  }
+  if (have_control) {
+    say(options, "control store " + control.string());
+    migrate_objects(control, *domain_key, deriver, v19, report, proved, options);
+  }
+  if (have_cache) {
+    say(options, "cache " + options.cache.string());
+    migrate_objects(options.cache, *domain_key, deriver, v19, report, proved, options);
+  }
+  migrate_ledgers(state, node_local, domain_key, report, options);
+
+  // Markers last, as going forward: a disk is v19 until everything is v18.
+  const auto rewrite = [&](const std::filesystem::path& path, const std::string& text) {
+    if (!options.dry_run) dannan::identity::durable_replace_file(path, text);
+    ++report.markers_rewritten;
+    report.bytes_written += options.dry_run ? 0 : text.size();
+    say(options, "marker " + path.string());
+    step(options, report);
+  };
+  for (const auto& backend : found)
+    if (!backend.v18) rewrite(backend.path / store::backend_marker_name, v18_marker(backend.marker.node, backend.marker.token));
+  const auto identities = state / "backend-identities";
+  if (std::filesystem::is_directory(identities, ec)) {
+    std::vector<std::filesystem::path> mirrors;
+    for (const auto& entry : std::filesystem::directory_iterator(identities, ec))
+      if (entry.is_regular_file() && entry.path().extension() == ".id") mirrors.push_back(entry.path());
+    std::sort(mirrors.begin(), mirrors.end());
+    for (const auto& mirror : mirrors) {
+      const auto text = read_text(mirror);
+      if (parse_backend_marker_v18(text)) continue;
+      if (const auto parsed = parse_v19(text, mirror)) rewrite(mirror, v18_marker(parsed->node, parsed->token));
+    }
+  }
+  if (layout != state_layout_v18) rewrite(layout_marker, std::string(state_layout_v18) + "\n");
   say(options, report.summary());
   return report;
 }
