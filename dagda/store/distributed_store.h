@@ -158,6 +158,13 @@ struct WriteOptions {
   std::string prefix;
 };
 
+// What Macha's put forms write when the caller names no level.
+inline WriteOptions persisted_write() {
+  WriteOptions out;
+  out.level = Durability::persisted;
+  return out;
+}
+
 // An object as read, and the memory its bytes hold (a reply's retained
 // frame) until the last reader lets it go.
 struct ObjectBuffer {
@@ -398,13 +405,20 @@ class DistributedStore final : public ControlObjectSource {
   void write(const ObjectId& id, Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done);
   // Macha's forms: the id-returning ones throw StorageUnavailable when the
   // write landed nowhere (or std::runtime_error when cancelled); the bool
-  // ones return whether it landed anywhere.
-  ObjectId put(std::span<const uint8_t> data, WriteOptions options = {});
-  bool put(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options = {});
-  ObjectId put_deferred(std::span<const uint8_t> data, WriteOptions options = {});
+  // ones return whether it landed anywhere. Named no level they are persisted,
+  // as Macha's return on one copy with the rest owed; write() and the Context
+  // keep replicated.
+  ObjectId put(std::span<const uint8_t> data, WriteOptions options = persisted_write());
+  bool put(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options = persisted_write());
+  ObjectId put_deferred(std::span<const uint8_t> data, WriteOptions options = persisted_write());
   // Durable here and returned at once, the further copies owed to prompt
   // replication; as put() on a node that hosts no extents.
   bool put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+  // Written here and made durable by a later wait() on the evidence's ticket
+  // (Macha's put_deferred_here, whose batch the ticket replaces), the further
+  // copies owed to prompt replication; on a node that hosts no extents, or
+  // that refuses it, the first copy goes to the next in placement order.
+  WriteEvidence put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
 
   // Tickets. status() waits on nothing: nothing for a ticket forgotten.
   // wait() completes when the ticket settles or at the deadline, whichever

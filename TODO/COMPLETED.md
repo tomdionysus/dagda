@@ -3,6 +3,13 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: M4, Macha's write forms (`feature/port-respec`)
+
+`put`, `put_deferred` and `put_here` are persisted when the caller names no level,
+returning on one copy with the rest owed; `write()` and the Context stay replicated
+(k 2, the maintainer's). `put_deferred_here` added, its ticket in place of Macha's batch. The
+local barrier's deadline waits on the maintainer's ruling in Macha. Gate: `dagda_tests` 411.
+
 ## 2026-11-04 night: matching Macha's fixed shapes (`feature/port-respec`)
 
 Under the maintainer's ruling that the libraries match Macha's fixed behaviour (Macha
