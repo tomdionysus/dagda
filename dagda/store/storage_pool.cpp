@@ -1128,9 +1128,10 @@ StoragePool::MaintenanceResult StoragePool::gc_step(const contract::IdLookup& li
     }
 
     try {
-      // Checked again just before the irreversible delete: a commit may claim
-      // the object after this slice took its inventory but before it reached
-      // the object.
+      // Checked again just before the irreversible delete, under the
+      // object's claim guard: a claim may land after this slice took its
+      // inventory, but not between this check and the delete.
+      const auto guard = _claim_locks.lock(std::span<const ObjectId>(&id, 1));
       if (claimed && claimed(id)) continue;
       // Age is the orphan grace for DATA no committed reference reached yet.
       // A put of an object already held refreshes it, so a new write cannot
