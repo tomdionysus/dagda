@@ -25,6 +25,17 @@ projects, with recommendations for Tom.
 
 ## Dannan, as Dagda finds it (from the Dannan session, 2026-11-03 night)
 
+**Dannan 0.3.0 is cut** (annotated tag on `main`, `277adab`, 2026-11-04;
+ASan/UBSan and TSan clean, 408 tests each) **and Dagda pins it**
+(`find_package(dannan 0.3 CONFIG)`, `feature/dannan-0.3`). Everything
+below noted "untagged" is in it: the identity step (certificates as wire
+v2, revocation, `dannan-ca`, the scope seam), `contract::Unlocked`, the
+deadline that cancels a call (the race in `5f14127` fixed in `8b65dd1`,
+inside the tag), `Time::source()` and `executor()`, `sched::DutyShare`,
+`NodeEvents::membership` and `Nodes::absent_since`. Dagda's file-local
+stand-ins are gone with the repin; `TimedLock` is not in 0.3.0, so the
+TODO in `store/storage_pool.h` stays.
+
 - Dannan is on `feature/wire-v1` (head `d9b023b`): wire v1, level 0 and
   `dannan::Context` (`dannan/context.h`, context version 1), not yet
   merged to `develop`. Gate there: `dannan_tests` 323, `dagda_tests` 1.
@@ -374,6 +385,15 @@ Tom's, to the Dagda session, 2026-11-03 night:
   keeps the library clear. The general machinery Macha's ingest drives
   stays: the `loader` work class (Dannan's), deferred writes and their
   tickets, the DATA credit arbiter and the device reserve.
+- (Tom, 2026-11-04 evening, the seven open items) Merge the step
+  branches to `develop` first, then repin to Dannan 0.3.0 with the
+  stand-ins replaced, then step 6 without waiting on Macha. The control
+  store's free-space reserve is configurable with a 256 MiB default. A
+  missing retention marker over non-empty claims refuses to open and says
+  why. The device reserve is configurable, defaults as they are (one per
+  node, 8 slots, 2 for control) until measured. A tombstone stamped by a
+  clock ahead counts as fresh; a delta carrying a record with no key is
+  refused; both in Dagda now and in Macha at the port.
 - **Do not modify `../macha` until told to.**
 
 From `../dannan/TODO/ACTIVE.md`, binding Dagda, not reopened without
@@ -394,60 +414,31 @@ asking:
 
 ## Waiting on Tom
 
-Open, none blocking (each has a default that keeps Macha's behaviour):
+Nothing open. The seven items of 2026-11-04 were all answered that evening
+(see Decisions, "Tom, 2026-11-04 evening"); the five that need code are
+work items below, in order, before step 6:
 
-1. **The control store's free-space reserve** defaults to Macha's 0. A
-   figure above 0 keeps CONTROL writable after DATA's reserve stops DATA
-   writes on a shared filesystem. Recommended: a small reserve (for
-   example 256 MiB).
-2. **A missing `retention/ledger` marker over non-empty claims tries**:
-   Macha rebuilds both tries empty and replays the journal, so every
-   checkpointed claim is lost (`retention.cpp:383-400`, `:457-458` at
-   develop; shown by reading, not by a test). Dagda does the same for
-   now. Recommended: refuse to open and say why (discipline 3), since a
-   lost claim lets GC remove what someone still needs.
-3. **Dannan 0.3.0**: Dannan's identity step, `contract::Unlocked` and the
-   helpers Dagda asked for are on its `develop`, untagged. Dagda moves its
-   pin when Tom cuts 0.3.0 (Dagda's scope check and domains need it from
-   step 6).
+1. **Control store free-space reserve**: configurable, default 256 MiB
+   (was Macha's 0).
+2. **A missing `retention/ledger` marker over non-empty claims tries**
+   (`retention.cpp:383-400`, `:457-458` at Macha develop): refuse to open
+   and say why, instead of rebuilding both tries empty and losing every
+   checkpointed claim.
+3. **The device reserve**: configurable; defaults stay one per node, 8
+   operations in flight, 2 kept for control work, until measured on fi-1.
+4. **A tombstone stamped by a clock ahead**: `expired` counts a future
+   stamp as fresh (enables
+   `LeaseClaimedCollection.DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow`);
+   Macha the same at the port (8b).
+5. **A delta adding a record with no key**: refused at decode (enables
+   `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses`); Macha's DLT9
+   the same at the port.
 
-4. **The device reserve's figures and scope** (step 3b): one reserve per
-   node over every device its stores use, 8 operations in flight of
-   which 2 are kept for control work. Recommended: keep these until
-   measured on fi-1 under an import, then make the reserve per device
-   only if a node's state path and DATA backends are on different
-   disks there (Dagda cannot tell which share a device today).
-5. **A tombstone stamped by a clock ahead** (step 5): Macha's sweep
-   computes `now - removed > grace` on unsigned milliseconds
-   (`torrent_coordinator.cpp:1066-1068`), and the template's `expired`
-   keeps it, so a tombstone from a node whose clock is ahead wraps and is
-   erased at once, and a branch that missed the removal can bring the
-   record back. Proven in Dagda (`LeaseClaimedCollection.
-   DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow` fails when run).
-   Recommended: count a future stamp as fresh, in Dagda now and in Macha
-   at the port (8b); it changes the answer only for a clock-ahead
-   tombstone.
-6. **A delta adding a record with no id** (step 5): Macha's DLT9 decoder
-   accepts it (`metadata.cpp:1735-1740`) where the snapshot decoder
-   refuses it (`:873`), and the template's delta form keeps that, so a
-   head that applies it writes a snapshot it cannot read back. Proven
-   (`LeaseClaimedCollection.AnUnkeyedRecordFromADeltaPoisonsTheSnapshot`;
-   `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses` fails when
-   run). Recommended: refuse it in both; no valid bytes change.
-7. **Merging the step branches to `develop`.** Steps 1 to 3 and 5 are
-   stacked branches (`feature/local-store` → `feature/ledger` →
-   `feature/distributed-store` → `feature/leases`), each green. Step 1's
-   gate cannot close until the Macha session's fixture exists, which
-   follows Macha's tree-native merge. Recommended: merge them to
-   `develop` now, each with its gate as it stands, and close step 1's
-   fixture gate as a follow-up when the fixture arrives.
-
-**What blocks further work** (needs Tom):
-- Step 4 (heads), and with it node-local spaces, retained values and
-  `dagda::Context` (steps 6 and 7), wait on Macha's tree-native branch
-  merging (its order is the operator's).
-- Domains with node certificates and the scope check (step 6) need
-  Dannan 0.3.0 (item 3).
+**What blocks further work** (needs Macha):
+- Step 4 (heads), and with it retained values and the heads part of
+  `dagda::Context` (step 7), wait on Macha's tree-native branch merging
+  (its order is the operator's). Step 6 does not wait: Dannan 0.3.0 is
+  pinned.
 
 Decided by the Dagda session under the rules (step 5): a lease's
 `scope` is the head space its record lives in (plan 163); three

@@ -3,6 +3,33 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: the repin to Dannan 0.3.0 (`feature/dannan-0.3`)
+
+Branched from `develop` after steps 1 to 3 and 5 merged there (`5aa4d23`).
+Dannan 0.3.0 (`277adab`) installed into `build/deps/prefix`; the pin and the
+bootstrap in `CONTRIBUTING.md` moved to 0.3. The library compiled against
+it unchanged; only the membership test's fake `Nodes` needed the new pure
+virtual. Then each stand-in went, one commit each:
+
+- `lease/membership`: `RosterMembership` no longer watches the roster to
+  time a node's absence; it asks `Nodes::absent_since`, which is from when
+  the roster last heard of the node (about `dead_after` earlier than the
+  watch's "left") and survives a restart. A node the roster does not know
+  is still absent from the first look. Its test is rewritten for it.
+- `store/local_store.cpp`: Dannan's `contract::Unlocked`.
+- `store/repair`: Dannan's `sched::DutyShare` (`may_start`, `started`,
+  `should_yield`, `finished`); `RepairOptions` weights are `uint32_t` as
+  Dannan's are, and its `time` option is gone.
+- `store/distributed_store`, `store/availability`: the executor and the
+  clock come from `context.time()`; the `executor` constructor argument and
+  the `time` options are gone. The survey re-asks peers on
+  `NodeEvents::membership` instead of `topology`, so an advert no longer
+  triggers one. `call_horizon` stays as the bound on a copy in flight past
+  the write; Dannan now cancels the call at it, which is what the option
+  always meant.
+- Not replaced: `TimedLock` (`store/storage_pool.h`) is not in 0.3.0.
+- Gate: `dagda_tests` 317 passing, 3 disabled, unchanged.
+
 ## 2026-11-04: ingest removed (`feature/leases`)
 
 Tom: "Dagda doesn't need ingest, that will be handled by macha. Remove
