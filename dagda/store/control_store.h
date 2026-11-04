@@ -27,11 +27,12 @@ struct ControlStoreOptions {
   // Ceiling for content-addressed control objects (namespace nodes,
   // catalogue shards, tombstone batches).
   uint64_t limit = 4ULL * 1024 * 1024 * 1024;
-  // Free space kept on the filesystem. Macha keeps none (local_state.cpp:134),
-  // which section 7 of the requirements lists as not to be reproduced: set it
-  // and a CONTROL put stops before the device is full. Zero, Macha's, by
-  // default.
-  uint64_t reserve_free = 0;
+  // Free space kept on the filesystem, so a CONTROL put stops before the
+  // device is full and CONTROL stays writable after DATA's reserve has
+  // stopped DATA on a shared filesystem. Macha keeps none
+  // (local_state.cpp:134), which section 7 of the requirements lists as not
+  // to be reproduced; 256 MiB by default (Tom, 2026-11-04), configurable.
+  uint64_t reserve_free = 256ULL * 1024 * 1024;
   size_t pack_threshold = 1024 * 1024;
   size_t pack_target_size = 64 * 1024 * 1024;
 };
