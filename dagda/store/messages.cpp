@@ -37,11 +37,19 @@ void register_types(dannan::Routes& routes) {
   routes.add(have_objects, {"dagda.have_objects", Lanes::control, Frames::any});
   routes.add(have_control_objects, {"dagda.have_control_objects", Lanes::control, Frames::control_only});
   routes.add(durability_covered, {"dagda.durability_covered", Lanes::data, Frames::not_control});
+  // Repair's: a validated presence and a delete each take DATA credit on the
+  // peer, so never the control frame; a trie question reads only the state
+  // device.
+  routes.add(delete_object, {"dagda.delete_object", Lanes::control, Frames::not_control});
+  routes.add(have_valid_objects, {"dagda.have_valid_objects", Lanes::control, Frames::not_control});
+  routes.add(trie_diff, {"dagda.trie_diff", Lanes::control, Frames::any});
   routes.add(bool_reply, {"dagda.bool_reply", Lanes::both, Frames::any});
   routes.add(object_reply, {"dagda.object_reply", Lanes::data, Frames::any});
   routes.add(control_object_reply, {"dagda.control_object_reply", Lanes::control, Frames::any});
   routes.add(have_objects_reply, {"dagda.have_objects_reply", Lanes::control, Frames::any});
   routes.add(have_control_objects_reply, {"dagda.have_control_objects_reply", Lanes::control, Frames::any});
+  routes.add(have_valid_objects_reply, {"dagda.have_valid_objects_reply", Lanes::control, Frames::any});
+  routes.add(trie_diff_reply, {"dagda.trie_diff_reply", Lanes::control, Frames::any});
 }
 
 Bytes encode_id(const ObjectId& id) {
@@ -115,6 +123,26 @@ std::vector<bool> decode_presence(std::span<const uint8_t> payload, size_t expec
   std::vector<bool> out;
   out.reserve(expected);
   for (size_t i = 0; i < expected; ++i) out.push_back(reader.u8() != 0);
+  reader.finish();
+  return out;
+}
+
+Bytes encode_validity(const std::vector<Validity>& answers) {
+  Writer writer;
+  writer.u32(static_cast<uint32_t>(answers.size()));
+  for (const auto answer : answers) writer.u8(static_cast<uint8_t>(answer));
+  return writer.take();
+}
+
+std::vector<Validity> decode_validity(std::span<const uint8_t> payload, size_t expected) {
+  Reader reader(payload);
+  if (reader.u32() != expected) throw DecodeError("validated presence reply count mismatch");
+  std::vector<Validity> out;
+  out.reserve(expected);
+  for (size_t i = 0; i < expected; ++i) {
+    const auto held = reader.u8();
+    out.push_back(held == 1 ? Validity::intact : held == 0 ? Validity::absent : Validity::cannot_say);
+  }
   reader.finish();
   return out;
 }

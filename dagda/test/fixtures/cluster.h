@@ -26,16 +26,23 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "dagda/contract/reachability.h"
+#include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/ledger/retention.h"
+#include "dagda/ledger/retention_ledger.h"
+#include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
+#include "dagda/store/data_work.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/store/placement.h"
+#include "dagda/store/repair.h"
 #include "dagda/store/storage_pool.h"
 #include "dagda/store/storage_server.h"
 #include "dagda/test/fixtures/ledger.h"
@@ -72,11 +79,27 @@ struct ClusterIo {
 struct ClusterNodeOptions {
   uint64_t limit = 64ULL * 1024 * 1024;
   bool hosts_extents = true;
+  // A DATA backend configured though the node hosts no extents: a node that
+  // stopped hosting keeps its disk, and drains it through repair.
+  bool keeps_backend = false;
   bool packed = false;
   std::chrono::milliseconds durability_window{20};
   std::string failure_domain;
   store::CacheOptions cache;
   store::DistributedStoreOptions store;
+  // The node's admission (Macha's data_inflight_bytes and its reserve, its
+  // background concurrency and no-progress deadline), and its device
+  // reserve; with `admission` off it admits everything.
+  bool admission = true;
+  uint64_t data_inflight_bytes = 128ULL * 1024 * 1024;
+  uint64_t foreground_reserve_bytes = 32ULL * 1024 * 1024;
+  uint64_t background_concurrency = 4;
+  std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
+  store::IoReserveOptions io;
+  std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
+  // The survey's and repair's, with each trie question bounded short.
+  store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
+  store::RepairOptions repair;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -118,8 +141,22 @@ class ClusterNode {
   store::LocalStore& control() { return *_control; }
   store::PersistentBlockCache& cache() { return *_cache; }
   ledger::RetentionStore& claims() { return *_claims; }
+  // Null when the node runs without admission.
+  store::DataResourceArbiter* credit() { return _credit.get(); }
+  store::IoReserve* io() { return _io.get(); }
+  ledger::RetentionLedger& ledger() { return *_ledger; }
+  store::AvailabilityService& availability() { return *_availability; }
+  store::Repair& repair() { return *_repair; }
+  // Publishes the inventory `provider` answers now, as the node's collector
+  // would: what the survey and repair take as referenced.
+  void publish_inventory(contract::ReachabilityProvider& provider) {
+    ledger::NodeHorizonBuilder builder(provider, context().logger("dagda.horizon"));
+    _ledger->publish(builder.inventory());
+  }
   std::filesystem::path backend() const { return _dir / "data"; }
   ClusterNodeOptions& options() { return _options; }
+  // What the node logged, every level.
+  RecordingSink& log() { return *_sink; }
 
   // Requests of the store's types this node was asked, and the hook in
   // front of its server.
@@ -127,6 +164,12 @@ class ClusterNode {
     dannan::contract::Lock lock(_mutex);
     const auto found = _calls.find(type);
     return found == _calls.end() ? 0 : found->second;
+  }
+  // The classes requests of `type` arrived in.
+  std::set<dannan::sched::FrameType> frames_of(dannan::net::MessageType type) const {
+    dannan::contract::Lock lock(_mutex);
+    const auto found = _frames.find(type);
+    return found == _frames.end() ? std::set<dannan::sched::FrameType>{} : found->second;
   }
   void interpose(Interpose hook) {
     dannan::contract::Lock lock(_mutex);
@@ -147,10 +190,16 @@ class ClusterNode {
   std::unique_ptr<store::LocalStore> _control;
   std::unique_ptr<store::PersistentBlockCache> _cache;
   std::unique_ptr<ledger::RetentionStore> _claims;
+  std::unique_ptr<store::DataResourceArbiter> _credit;
+  std::unique_ptr<store::IoReserve> _io;
+  std::unique_ptr<ledger::RetentionLedger> _ledger;
   std::unique_ptr<store::StorageServer> _server;
   std::unique_ptr<store::DistributedStore> _store;
+  std::unique_ptr<store::AvailabilityService> _availability;
+  std::unique_ptr<store::Repair> _repair;
   mutable dannan::contract::Mutex _mutex;
   std::map<dannan::net::MessageType, size_t> _calls DANNAN_GUARDED_BY(_mutex);
+  std::map<dannan::net::MessageType, std::set<dannan::sched::FrameType>> _frames DANNAN_GUARDED_BY(_mutex);
   Interpose _interpose DANNAN_GUARDED_BY(_mutex);
 };
 
@@ -295,7 +344,7 @@ inline void ClusterNode::start() {
                                              dannan::contract::steady_time_source(),
                                              dannan::contract::system_wall_clock()};
   store::StoragePoolOptions pool;
-  if (_options.hosts_extents) {
+  if (_options.hosts_extents || _options.keeps_backend) {
     std::filesystem::create_directories(backend());
     pool.backends.push_back({backend(), _options.limit, 0});
   }
@@ -308,38 +357,63 @@ inline void ClusterNode::start() {
   _control = store::open_control_store(_dir / "state", {}, key, services);
   _cache = std::make_unique<store::PersistentBlockCache>(_options.cache, key, services);
   _claims = std::make_unique<ledger::RetentionStore>(_dir / "state", key, context.logger("dagda.claims"));
+  _ledger = std::make_unique<ledger::RetentionLedger>(*_claims, *_data, *_control);
+  if (_options.admission) {
+    const auto quiet = _options.repair.foreground_quiet;
+    _credit = std::make_unique<store::DataResourceArbiter>(
+        _options.data_inflight_bytes, _options.foreground_reserve_bytes, _options.background_concurrency, _options.no_progress,
+        [&context, quiet] { return context.activity().recently_active(dannan::sched::WorkClass::foreground, quiet); }, context.logger("dagda.credit"));
+    _credit->observe_device(&_data->service_monitor(), 1);
+    _io = std::make_unique<store::IoReserve>(_options.io);
+  }
 
   store::StorageServerOptions server;
   server.extent_size = _options.store.extent_size;
   server.hosts_extents = _options.hosts_extents;
   server.refresh_interval = std::chrono::milliseconds(500);
-  _server = std::make_unique<store::StorageServer>(context, store::StorageServer::Stores{*_data, *_control, *_claims}, server);
+  server.admission_wait = _options.admission_wait;
+  _server = std::make_unique<store::StorageServer>(context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get()}, server,
+                                                   store::StorageServerAdmission{_credit.get(), _io.get()});
   // In front of the server: count, then let the test answer instead.
-  for (const auto type :
-       {store::message::have_object, store::message::get_object, store::message::put_object, store::message::get_control_object,
-        store::message::put_control_object, store::message::put_object_deferred, store::message::object_durability_barrier, store::message::retain_objects,
-        store::message::have_objects, store::message::have_control_objects, store::message::durability_covered})
+  for (const auto type : store::StorageServer::served())
     context.routes().bind(type, [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request) {
       Interpose hook;
       {
         dannan::contract::Lock lock(_mutex);
         ++_calls[request.type];
+        _frames[request.type].insert(frame);
         hook = _interpose;
       }
       if (hook)
         if (auto answer = hook(request.type, peer, request)) return std::move(*answer);
       return _server->handle(peer, frame, request);
     });
-  _store = std::make_unique<store::DistributedStore>(context, _cluster.io().context.get_executor(),
-                                                     store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims}, _options.store);
+  auto store_options = _options.store;
+  store_options.admission_wait = _options.admission_wait;
+  _store =
+      std::make_unique<store::DistributedStore>(context, _cluster.io().context.get_executor(),
+                                                store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get()}, store_options);
+  _availability = std::make_unique<store::AvailabilityService>(context, *_ledger, _options.availability);
+  auto repair = _options.repair;
+  repair.extent_size = _options.store.extent_size;
+  _repair = std::make_unique<store::Repair>(context, *_store, *_availability, *_ledger, repair);
   _node->start();
 }
 
 inline void ClusterNode::stop() {
   if (!_node) return;
+  // Admission first: a request waiting for it gives up rather than hold the
+  // server's unbinding.
+  if (_credit) _credit->stop();
+  if (_io) _io->stop();
+  _repair.reset();
+  _availability.reset();
   _store.reset();
   _server.reset();
   _node->stop();
+  _ledger.reset();
+  _io.reset();
+  _credit.reset();
   _claims.reset();
   _cache.reset();
   _control.reset();

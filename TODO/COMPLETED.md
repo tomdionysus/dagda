@@ -3,6 +3,171 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 3b, repair by diff and admission (`feature/distributed-store`)
+
+- Moved and adapted (namespace `dagda::store` unless said): `data_work`
+  (`DataWorkContext`, `DataResourceArbiter`, `DataResourceStats`: Macha
+  `cluster/data_work.hpp`), `ledger/availability` (`dagda::ledger`:
+  `AvailabilitySurvey`, `PeerDiff`, `PeerLacks`, `survey_by_diff`,
+  `keep_unavailable`: Macha `ledger/availability.*`), `availability`
+  (`AvailabilityService`: Macha `service/availability_service.cpp`
+  without its path table), `repair` (`Repair`: the repair stage of
+  Macha's pass, `service/maintenance.cpp:309-313`, `:674-852`), and in
+  `DistributedStore` repair by diff (`repair_step`, `RepairLists`,
+  `RepairResult`, `RepairDiagnostics`: `distributed_store.cpp:2324-3087`),
+  `ensure_local`, `replicate_all`, `erase_all`, `valid_on`; in
+  `StorageServer`, `have_valid_objects`, `delete_object`, the trie
+  questions and each route's admission. Requirements L7 to L11, L23's
+  restorer, S20, S30, section 7 item 4.
+- Repair by diff, as built: the survey publishes, from the inventory the
+  collector built from the owner's `ReachabilityProvider`, what this node
+  lacks (the inventory joined against its held union), each extent-hosting
+  peer's lacks and what no reachable node holds, by `trie_diff` rounds
+  against the one snapshot the peer's root question pinned (four pins,
+  two minutes; 503 `holdings_seeding`, 410 `snapshot_gone`, 413
+  `prefix_too_large`). A step pushes only from lacks every hosting peer
+  answered for this inventory: an object every owner holds settles with no
+  call, a peer the diff did not ask is neither keeper nor destination,
+  sends go out together (8 objects, two extents) at speculative priority
+  and are paid for by credit, and the local copy of an object this node
+  does not own goes once every owner holds it and nothing here claims it.
+  It pulls from what this node lacks, cache first, passing what nobody
+  holds, retrying what nobody could settle (1 s doubling to 10 min, all due
+  when the reachable set changes). No cursor walk, `repair_position`
+  file or `have_*` probe (Tom, 2026-11-04). `Repair::pass` runs the
+  survey, the claim walks with a restorer that spends network credit, and
+  one step, paced by a duty share (95:5, 25 ms turns) against this node's
+  foreground and loader work and a peer's foreground traffic in its
+  telemetry, never stopped; quiet after a pass with nothing to do until an
+  event or new lists.
+- Rebalancing across nodes: Macha has none beyond repair; its push and
+  local drop are it (`ANodeThatStopsHostingDrainsThroughRepair`). The
+  pool's local rebalance moved in 1d.
+- Repair reports into tickets: `WriteEvidence::complete` (no member
+  pending, those owed to repair included) and `ReplicaEvidence::repaired`
+  (acknowledged after the write returned); `wait_complete` completes when
+  the ticket is complete or at its deadline, posted to the caller's
+  executor. Repair's pushes and pulls, prompt replication and a durable
+  member's catch-up acknowledge the member in every kept ticket naming
+  the object; a ticket that settled at its level reports again when its
+  last pending copy lands. `wait` and `settled` keep 3a's meaning.
+- The reserve, as built: `IoReserve` counts device operations in flight
+  on the node (default 8), of which DATA work may hold at most
+  `slots - control_reserve` (default 6) and control work any free one;
+  while control work waits, DATA admission is closed. DATA work holds DATA
+  credit and a DATA slot across one device operation, never across a
+  peer's answer; CONTROL objects, CONTROL presence and claims hold a
+  control slot and never DATA credit (law 1). The bound: a control
+  operation never waits for a slot behind DATA and shares the device with
+  at most the DATA share's operations. Proven by
+  `ALoaderSaturatingDataLeavesControlWithinABound` (8 loader threads on a
+  4-slot, 2-reserve node, DATA held to its 2 slots and waiting; 20 CONTROL
+  writes with their claims and 20 DATA claims, each under 2 s, with no
+  control wait at all) and by `WithoutTheReserveControlQueuesBehindData`
+  (the same saturation with no reserve holds a commit back).
+- Admission of each served request (Macha's per-route leases): reads and
+  writes of DATA wait for credit and a slot up to `admission_wait`; a
+  full-read probe, a validated presence or a delete tries once and is
+  refused 503 `storage_busy`; a DATA read in the control frame is refused
+  400. The store's own device work (the write path's local copy, reads,
+  opportunistic copies, prompt replication, repair) is admitted the same
+  way.
+- Messages (Dagda's, 512 plus protocol 23's): `delete_object` 525,
+  `have_valid_objects` 559, `trie_diff` 561, replies 635 and 637.
+  `replicate_all` is a function over `put_object`, not a message. Lanes
+  as protocol 23 (CONTROL); a validated presence and a delete never in the
+  control frame (they take DATA credit), a trie question in any.
+  Payloads byte for byte, pinned by known answers computed outside both
+  codebases (hashlib, struct): the validated presence request and reply
+  (any byte but 0 and 1 reads as "cannot say", as Macha's reader does),
+  the delete, a root trie question. No difference from Macha found.
+- Changed from Macha, none on the wire's payloads: repair is diff only;
+  credit waits always have a deadline (a zero no-progress window is
+  refused); the arbiter logs outside its lock; repair's lists are held by
+  `shared_ptr` (below); the server pins the pool's union, not the ledger
+  service's.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest on
+  3a's cluster, every assertion kept where it applies; where Macha
+  asserted a probe, the case asserts none is made, and where it walked the
+  store, the lists a survey gives are handed in:
+  `test_rpc_cluster.cpp` `test_repair_push_probes_by_window_and_sends_together`
+  (Dannan's server runs at most its DATA workers less the foreground
+  reserve at once, 6 of the 8 sent together),
+  `test_a_long_push_pass_does_not_hold_back_the_pull`,
+  `test_repair_push_sends_nothing_to_a_peer_that_cannot_say`,
+  `test_repair_pushes_past_a_peer_with_no_room`,
+  `test_repair_pushes_from_what_peers_hold_without_asking`,
+  `test_repair_pushes_only_what_the_list_names`,
+  `test_repair_probes_without_credit_and_transfers_only_with_it`,
+  `test_repair_pass_keeps_its_place_across_live_sets_and_restarts` (not
+  its restart half: `repair_position`),
+  `test_repair_bandwidth_estimate_ignores_small_transfers`,
+  `test_repair_decides_already_held_without_reading_the_extent`,
+  `test_repair_keeps_a_pull_that_was_in_flight_when_its_turn_ended`,
+  `test_repair_is_paced_not_stopped_while_higher_classes_stay_busy`,
+  `test_retained_missing_copy_repairs_without_namespace_reachability`,
+  `test_held_retention_claims_cost_repair_no_credit`,
+  `test_storage_data_credit_reserves_viewer_headroom_and_control` (the
+  CONTROL request is `have_control_objects`: ping is Dannan's),
+  `test_data_credit_wait_gives_up_when_nothing_is_moving`,
+  `test_data_credit_wait_survives_genuine_contention`, repair's last step
+  of `test_store_heals_a_bad_local_copy_from_a_peer`, the DATA credit half
+  of `test_store_control_objects_take_no_data_credit_and_commit_alone`;
+  `test_storage_v18.cpp` `test_repair_passes_unavailable_and_counts_unsourceable_objects`,
+  `test_a_busy_peer_still_says_what_it_does_not_hold`,
+  `test_min_write_floor_publishes_then_repair_converges_to_r2` (VALIDATION
+  "Placement and the write floor"),
+  `test_nodes_replicating_to_each_other_do_not_hold_their_slots_across_the_peer`,
+  `test_repair_keeps_a_copy_it_has_nowhere_to_send`,
+  `test_node_that_stops_hosting_drains_through_repair`;
+  `test_storage_metadata.cpp` `test_repair_step_is_bounded_and_yields`;
+  `test_io_pressure.cpp`'s seven arbiter cases; `test_availability.cpp`
+  `test_a_survey_a_peer_could_not_finish_keeps_what_was_unavailable`,
+  `test_the_survey_by_diff_finds_what_no_node_holds`,
+  `test_what_this_node_lacks_is_the_referenced_set_less_every_disk`, and
+  the survey's assertions of `test_what_only_a_host_out_of_reach_holds_is_unavailable`,
+  `test_two_nodes_survey_what_neither_holds`,
+  `test_a_disk_coming_back_is_surveyed_without_a_namespace_change` (their
+  path tables and files API are Macha's).
+- New: repair converging after a partition heals, by diff, with no probe
+  and no walk; a ticket reporting the copy repair made; the reserve's
+  bound under a saturating loader, and its unit cases (control admitted
+  while DATA saturates, none without a reserve, a waiting control request
+  served before DATA, stop); the survey through a test provider (and
+  nothing before an inventory); a trie question naming a pinned snapshot
+  (410, 413); a credit deadline on stepped time; the payload known
+  answers and registrations.
+- Not moved: `test_a_delete_is_reclaimed_while_a_node_is_away` (a whole
+  node's pass over the FS), `test_replication_policy_change_on_restart`
+  (settings reload, with Context v1), the heavy
+  `test_retain_data_batches_a_large_publication_within_bounded_time`,
+  the path-table cases of `test_availability.cpp` (Macha's).
+- Findings:
+  - This session's own, proven and fixed: repair compared its lists by
+    raw address, and a list freed and the next made at its address was
+    taken for the old one, so a new survey's lacks were ignored (18 of 60
+    runs of the link-estimate case before; 0 of 120 after). Repair and
+    `Repair`'s quiet state now hold the lists by `shared_ptr`.
+  - In Macha, shown by reading, not by a test, not fixed (Macha is not
+    touched): `repair_step` keys its lists' identity on `data()`
+    (`distributed_store.cpp:2444-2494`), and maintenance refills
+    `push_list` and `pull_list` in place (`maintenance.cpp:740-773`), so a
+    changed list in the same buffer is not seen as a change: a pass a list
+    changed under can be reported complete and repair go quiet until the
+    next event. Dagda's lists are immutable snapshots held by pointer.
+- Gate: warnings as errors; `dagda_tests` 284 and 1 disabled (236
+  before). The 48 new cases and the store's 17 (whose paths admission
+  now touches) ran 200 times each (four processes of 50): 12,998 of
+  13,000 passing. The two failures were one race in the pacing case's
+  test (credit banked while waiting for a peer's telemetry brought the
+  copy back before any pass was turned away); it now waits to see the
+  share refuse a pass first, and the revised case then passed 200 of 200.
+  Before the list-identity fix above, the link-estimate case failed 18 of
+  60 runs; after it, 0 of 120.
+- Dannan: nothing after 0.2.0 is used. Request: a duty-cycle share by
+  weight in `sched/` (Macha's `WeightedLoaderService`), file-local in
+  `store/repair.cpp` with `TODO(Dannan: ...)` until then.
+
 ## 2026-11-04: step 3a, the write and read paths on Dannan (`feature/distributed-store`)
 
 - Moved and adapted into `dagda/store/` (namespace `dagda::store`):

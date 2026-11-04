@@ -23,11 +23,15 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include "dagda/contract/claim_store.h"
+#include "dagda/contract/horizon.h"
+#include "dagda/ledger/availability.h"
 #include "dagda/store/control_objects.h"
+#include "dagda/store/data_work.h"
 #include "dagda/store/durability_ticket.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/object_id.h"
@@ -83,6 +87,9 @@ struct ReplicaEvidence {
   std::string why;
   // A deferred write's place on that node, for its barrier.
   std::optional<DurabilityTicket> durability;
+  // Acknowledged after the write returned, by repair, prompt replication or
+  // a returning member's catch-up: what the ticket reported again.
+  bool repaired = false;
 };
 
 // A write's handle, outliving the call: status() and wait() read it.
@@ -108,6 +115,11 @@ struct WriteEvidence {
   bool settled = false;
   // Nothing acknowledged and nothing pending: the write landed nowhere.
   bool lost = false;
+  // No node is pending at all, those owed to repair included: every copy
+  // the set is owed has landed (or was refused). A settled ticket may still
+  // be incomplete; it reports again when the last pending member's copy
+  // lands, for as long as it is kept.
+  bool complete = false;
   std::vector<ReplicaEvidence> replicas;
   Ticket ticket;
 
@@ -205,6 +217,62 @@ struct DistributedStoreOptions {
   size_t local_copy_bytes = 256 * 1024 * 1024;
   // The clock for retries and ticket ages; null is the node's.
   const dannan::contract::TimeSource* time = nullptr;
+  // How long work on this node's devices waits for its admission (DATA
+  // credit, a device slot) when its caller named no deadline: background
+  // work, repair and opportunistic copies.
+  std::chrono::milliseconds admission_wait{30000};
+  // Repair's decision trace (each copy pushed, pull and local drop, in
+  // decision order), for tests: kind "repair" and the decision.
+  std::function<void(std::string_view kind, std::string_view detail)> repair_trace;
+};
+
+// What one repair step works from: the availability survey's lists, never a
+// walk of the store or a probe of a peer (repair is diff only, Tom,
+// 2026-11-04).
+struct RepairLists {
+  // What is referenced, at its generation. Without one repair does nothing.
+  std::shared_ptr<const contract::InventoryHorizon> inventory;
+  // What is referenced and this node lacks, sorted: what the pull considers.
+  std::shared_ptr<const std::vector<ObjectId>> pull;
+  // Per peer, what it lacks of what this node holds: what the push sends,
+  // and only when every hosting peer answered for this inventory.
+  std::shared_ptr<const ledger::PeerLacks> lacks;
+  // Held by no reachable node: passed without asking anyone.
+  std::function<bool(const ObjectId&)> unavailable;
+};
+
+// What a repair step did (Macha's RepairResult).
+struct RepairResult {
+  uint64_t bytes_transferred = 0;
+  size_t push_examined = 0;
+  size_t pull_examined = 0;
+  size_t remote_operations = 0;
+  // Objects this step wanted to pull and no peer would supply.
+  size_t pull_unsourceable = 0;
+  // A whole pass ended, and nothing it passed changed under it.
+  bool complete = true;
+  bool yielded = false;
+  // The step stopped at an object needing a transfer the byte budget could
+  // not cover; that object is the first of the next step.
+  bool credit_limited = false;
+};
+
+// Repair's progress and silent failures since start (Macha's
+// RepairDiagnostics, without the pass's gates, which are the driver's).
+struct RepairDiagnostics {
+  // Pull: an object this node should own that no peer would supply. Push:
+  // a listed local object that would not read back.
+  uint64_t pull_unsourceable = 0;
+  uint64_t local_unreadable = 0;
+  std::vector<ObjectId> unsourceable_sample;
+  uint64_t push_examined = 0;
+  uint64_t pull_examined = 0;
+  uint64_t bytes_transferred = 0;
+  uint64_t passes_completed = 0;
+  bool push_phase_complete = false;
+  uint64_t copies_pushed = 0;
+  uint64_t copies_pulled = 0;
+  uint64_t local_drops = 0;
 };
 
 // The distributed store (requirements S22 to S29; Macha's
@@ -236,9 +304,22 @@ struct DistributedStoreOptions {
 // metadata_write_copies nodes local first then nearest, fetched from any
 // peer at speculative priority without DATA credit.
 //
-// Left for step 3b: the availability survey and repair by diff, the DATA
-// credit arbiter and the control reserve of device I/O, rebalancing across
-// nodes. Nothing here waits for DATA credit.
+// Repair (requirements L9 to L11; Macha's distributed_store.cpp:2421-3087,
+// diff only): one bounded step at a time from the survey's lists. The push
+// sends what each peer is known to lack to the owners that lack it,
+// pipelined, at speculative priority, and drops this node's own copy of an
+// object it does not own once every owner holds it and nothing here claims
+// it: that is how objects move between nodes as placement changes (Macha has
+// no other cluster rebalance). The pull fetches what this node should own
+// and lacks, from the cache first, passing over what no reachable node
+// holds. Credit pays for bytes moved, never for finding out; a step yields
+// at operation boundaries and keeps what is in flight. Every copy repair
+// lands reaches the tickets that name its node pending.
+//
+// Admission: work on this node's devices holds DATA credit and a DATA slot
+// of the device reserve across the device operation, never across a peer's
+// answer; CONTROL objects and claims hold a control slot and never DATA
+// credit (law 1).
 //
 // Every call that waits on a peer takes a deadline. The blocking forms wait
 // on the network and the devices and must not run on one of the io
@@ -255,6 +336,9 @@ class DistributedStore final : public ControlObjectSource {
     LocalStore& control;
     PersistentBlockCache& cache;
     contract::ClaimStore& claims;
+    // The node's DATA credit and device reserve; null admits everything.
+    DataResourceArbiter* credit = nullptr;
+    IoReserve* io = nullptr;
   };
 
   struct PromptReplicationStats {
@@ -294,6 +378,11 @@ class DistributedStore final : public ControlObjectSource {
   std::optional<WriteEvidence> status(Ticket ticket) const;
   void wait(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
   std::optional<WriteEvidence> wait(Ticket ticket, std::chrono::milliseconds deadline);
+  // As wait(), but until no member is pending at all (WriteEvidence::
+  // complete): the report a ticket makes again once repair or prompt
+  // replication has landed the last copy it was owed.
+  void wait_complete(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
+  std::optional<WriteEvidence> wait_complete(Ticket ticket, std::chrono::milliseconds deadline);
 
   // Reads.
   ReadResult read(const ObjectId& id, ReadOptions options = {});
@@ -316,6 +405,25 @@ class DistributedStore final : public ControlObjectSource {
   // The replication set over every hosting node known, dead ones included.
   std::vector<dannan::membership::NodeRecord> replication_set(const ObjectId& id) const;
   bool has_on(const dannan::membership::NodeRecord& target, const ObjectId& id);
+  // Whether `target` holds each object in a copy that reads back intact
+  // (have_valid_objects, at most 16 ids a request); an id it could not say
+  // for now is left out.
+  std::map<ObjectId, bool> valid_on(const dannan::membership::NodeRecord& target, const std::vector<ObjectId>& ids);
+  // Puts the object on every hosting node present; how many took it.
+  size_t replicate_all(const ObjectId& id, std::span<const uint8_t> data, bool foreground = false);
+  // Removes the object from every node present that does not claim it
+  // (delete_object), and from this node's cache.
+  void erase_all(const ObjectId& id);
+  // Makes a DATA object local: held and valid, else from the cache, else
+  // fetched. The claim walk's restorer.
+  bool ensure_local(const ObjectId& id, bool foreground = false);
+
+  // One repair step: at most `operation_budget` calls (zero: no bound) and
+  // `byte_budget` bytes moved. Single owner.
+  RepairResult repair_step(const RepairLists& lists, uint64_t byte_budget, size_t operation_budget, const std::function<bool()>& should_yield = {});
+  RepairDiagnostics repair_diagnostics() const;
+  // The link's estimated rate, from transfers of half an extent or more.
+  double estimated_network_bps() const { return _network_bps.load(std::memory_order_relaxed); }
 
   // Claims. retain_data claims each object on up to write_copies nodes that
   // hold it, the presence asked in batches; it returns, sorted, the objects
@@ -341,6 +449,7 @@ class DistributedStore final : public ControlObjectSource {
   struct WriteRun;
   struct SharedFetch;
   struct Job;
+  struct RepairState;
 
   WriteEvidence run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into = {});
   std::shared_ptr<TicketRecord> new_ticket(const ObjectId& id, Durability level, bool deferred);
@@ -358,6 +467,16 @@ class DistributedStore final : public ControlObjectSource {
   void on_roster(const dannan::RosterChange& change);
   void catch_up(const ObjectId& id, const dannan::membership::NodeRecord& node);
   void run_barriers(const std::shared_ptr<TicketRecord>& record, std::chrono::milliseconds deadline);
+  void wait_until(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
+
+  // Admission for this node's devices: DATA credit and a DATA slot, waited
+  // for up to `wait`; a control slot.
+  std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::chrono::milliseconds wait,
+                                          std::atomic_bool* cancelled = nullptr) const;
+  std::optional<IoReserve::Slot> admit_control() const;
+  void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);
+  void trace_repair(const std::string& detail) const;
+  void note_unsourceable(const ObjectId& id);
 
   bool put_on(const dannan::membership::NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame);
   ReadResult read_impl(const ObjectId& id, const ReadOptions& options);
@@ -391,8 +510,14 @@ class DistributedStore final : public ControlObjectSource {
   const dannan::identity::NodeId _self;
   const dannan::status::ScopedLogger _logger;
   const dannan::status::NodeEvents::Kind _storage_event;
+  DataResourceArbiter* const _credit;
+  IoReserve* const _io;
   ControlObjectFetch _control_fetch;
   ReplicaSelector _selector;
+  std::atomic<double> _network_bps{0.0};
+  // Repair's cursors and counters: the step's single owner's, the counters
+  // read by anyone.
+  std::unique_ptr<RepairState> _repair;
   // What completions and timers reach after the store has gone: they hold it
   // weakly.
   std::shared_ptr<Shared> _shared;

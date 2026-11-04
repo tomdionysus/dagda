@@ -35,6 +35,7 @@ using dannan::net::MessageType;
 inline constexpr MessageType have_object{515};
 inline constexpr MessageType get_object{516};
 inline constexpr MessageType put_object{517};
+inline constexpr MessageType delete_object{525};
 inline constexpr MessageType get_control_object{531};
 inline constexpr MessageType put_control_object{532};
 inline constexpr MessageType put_object_deferred{534};
@@ -42,6 +43,9 @@ inline constexpr MessageType object_durability_barrier{535};
 inline constexpr MessageType retain_objects{544};
 inline constexpr MessageType have_objects{552};
 inline constexpr MessageType have_control_objects{557};
+inline constexpr MessageType have_valid_objects{559};
+// A question to the peer's held trie (ledger/trie_diff.h's encodings).
+inline constexpr MessageType trie_diff{561};
 // Dagda's own, with no protocol-23 number: whether a durability ticket's
 // generation is durable now, answered without waiting (a ticket's status, as
 // object_durability_barrier is its wait). The request is a ticket in its
@@ -54,19 +58,24 @@ inline constexpr MessageType object_reply{616};
 inline constexpr MessageType control_object_reply{619};
 inline constexpr MessageType have_objects_reply{630};
 inline constexpr MessageType have_control_objects_reply{633};
+inline constexpr MessageType have_valid_objects_reply{635};
+inline constexpr MessageType trie_diff_reply{637};
 
 // Bounds every handler checks, Macha's (storage_server.cpp, net.hpp).
 inline constexpr size_t max_object_bytes = 128ULL * 1024 * 1024;
 inline constexpr uint32_t max_presence_batch = 200000;
 inline constexpr uint32_t max_barrier_probe = 4096;
 inline constexpr uint32_t max_retain_batch = 1000000;
+// Each id of have_valid_objects is a full read on the peer, so a request is
+// bounded to one handler-sized job (Macha's have_valid_objects_max).
+inline constexpr uint32_t max_valid_batch = 16;
 
 // Registers every store type's wire rules (not their handlers) on `routes`.
 // Before the node starts: Dannan refuses registration after. Throws as
 // Routes::add does.
 void register_types(dannan::Routes& routes);
 
-// have_object, get_object, get_control_object: the id.
+// have_object, get_object, get_control_object, delete_object: the id.
 Bytes encode_id(const ObjectId& id);
 ObjectId decode_id(std::span<const uint8_t> payload);
 
@@ -93,6 +102,14 @@ std::vector<ObjectId> decode_ids(std::span<const uint8_t> payload, uint32_t maxi
 // each. Throws dannan::net::DecodeError unless it answers `expected` ids.
 Bytes encode_presence(const std::vector<bool>& present);
 std::vector<bool> decode_presence(std::span<const uint8_t> payload, size_t expected);
+
+// have_valid_objects_reply: u32 count, then a byte each: 1 held and read
+// back intact, 0 not held, 2 cannot say now. Any other byte reads as
+// cannot say, as Macha reads it. Throws dannan::net::DecodeError unless it
+// answers `expected` ids. The request is encode_ids, at most max_valid_batch.
+enum class Validity : uint8_t { absent = 0, intact = 1, cannot_say = 2 };
+Bytes encode_validity(const std::vector<Validity>& answers);
+std::vector<Validity> decode_validity(std::span<const uint8_t> payload, size_t expected);
 
 // put_object_deferred's reply: the ticket. durability_covered's request is
 // the same bytes.
