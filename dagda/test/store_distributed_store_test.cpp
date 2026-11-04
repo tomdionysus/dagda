@@ -990,5 +990,41 @@ TEST(DistributedStore, AReadNamesTheNodeThatServedIt) {
   EXPECT_EQ(local.served_by, peer.id());
 }
 
+// Macha's forms return on one copy where write() and the Context seek two: a
+// peer that never answers does not hold them up.
+TEST(StoreDistributedStore, MachasFormsAreOneCopyWithTheRestOwed) {
+  EXPECT_EQ(WriteOptions{}.level, Durability::replicated);
+  EXPECT_EQ(persisted_write().level, Durability::persisted);
+  dannan::test::Gate gate;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  peer.interpose([&gate](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::put_object || seen == message::put_object_deferred) gate.enter_and_wait();
+    return std::nullopt;
+  });
+  const auto bytes = pattern(32 * 1024, 41);
+  auto put = std::async(std::launch::async, [&] { return writer.store().put(object_id(bytes), bytes); });
+  const bool returned = put.wait_for(10s) == std::future_status::ready;
+  const auto deferred_bytes = pattern(32 * 1024, 42);
+  auto deferred = std::async(std::launch::async, [&] { return writer.store().put_deferred_here(object_id(deferred_bytes), deferred_bytes); });
+  const bool deferred_returned = deferred.wait_for(10s) == std::future_status::ready;
+  gate.open();
+  EXPECT_TRUE(returned);
+  EXPECT_TRUE(put.get());
+  EXPECT_TRUE(deferred_returned);
+  const auto evidence = deferred.get();
+  EXPECT_TRUE(evidence.deferred);
+  EXPECT_EQ(evidence.level, Durability::persisted);
+  ASSERT_TRUE(writer.data().has(object_id(deferred_bytes)));
+  const auto settled = writer.store().wait(evidence.ticket, 10s);
+  ASSERT_TRUE(settled.has_value());
+  EXPECT_GE(settled->holders(), 1u);
+  // The rest is owed, and arrives.
+  EXPECT_TRUE(wait_until([&] { return peer.data().has(object_id(bytes)) && peer.data().has(object_id(deferred_bytes)); }));
+}
+
 }  // namespace
 }  // namespace dagda::store
