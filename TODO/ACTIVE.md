@@ -305,6 +305,26 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    maintenance on a blind pool, node-local spaces, the Replicated level's
    per-space k, retained values on Dannan's notify channels, the
    no-rollback test. Gate: each from the stack document's requirements.
+6b. **One layout, and the migration of Macha's disks** (the maintainer, 2026-11-04
+   night; `feature/one-layout`). The store knows layout v19 only: every
+   backend, the control store, the cache and the state layout carry the
+   domain, v1 (Macha's) included; every object's AAD binds the domain;
+   every node's ledgers (held tries, journals, retention claims,
+   reference counts, the cache's index) are sealed under the node-local
+   key, so a blind node needs nothing it does not have. The v18 readers
+   move into `dagda/migrate/` and the tool `tools/dagda_migrate.cpp`
+   (`dagda-migrate`), which migrates a node's state and backends in
+   place: an object's v19 ciphertext under the same key and nonce is its
+   v18 ciphertext (only the GCM tag differs), so each loose object and
+   pack record has its 16-byte tag rewritten in place and nothing is
+   copied; the ledgers are re-sealed file by file under the node-local
+   key; markers and the state layout are rewritten last; a crash leaves
+   a disk the tool resumes (each record is v18 or v19, told by which AAD
+   authenticates it). Peak extra space: one ledger file. The key probe
+   at activate. Gate: the v18 known-answer bytes, now the migration's
+   tests, migrate to the v19 known answers; a Macha v18 state directory
+   from the Macha session, migrated, opens and reads back every object
+   and claim; `dagda_tests` loses the v18 store cases only, each named.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
@@ -369,8 +389,9 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
 - **Move the store code** from Macha into Dagda and generalise it in
   place, bearing in mind it runs on Dannan: Macha's transport, crypto,
   durable files, logging and time give way to Dannan's as it arrives.
-- **Formats stay compatible**, "because they work": layout v18 and the
-  store encodings, byte for byte. Small values must be handled well too.
+- ~~**Formats stay compatible**, "because they work": layout v18 and the
+  store encodings, byte for byte.~~ Superseded 2026-11-04 night (below:
+  one layout, v18 migrated in place). Small values must be handled well.
 - **Header tagline: "Dagda - The Store".**
 - **Every write carries a durability level** chosen by the caller
   (2026-11-03, refined 2026-11-04): Ephemeral (in memory, queued, best
@@ -407,11 +428,24 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
   AES-GCM, the domain and member bound in the AAD. **Step 6 now builds
   everything that needs no head**; the catalogue is a head space at step
   4. **New domains are layout v19**, a new version with its own readers
-  and the domain in the AAD; v18 state opens and is written as v18,
-  unchanged. **The scope check**: `WriteOptions` carry the principal
+  and the domain in the AAD (v18 was to stay; superseded the same night,
+  next bullet). **The scope check**: `WriteOptions` carry the principal
   (default this node) and the prefix (default the domain's name); the
   put message carries the principal; every storing replica checks
   through `Identity::verify` before storing and refuses with evidence.
+- (the maintainer, 2026-11-04 night) **"We don't need backward compatibility":
+  drop v18 entirely.** One layout, v19, for every domain, Macha's
+  included: the domain in every AAD, the node-local key over every node's
+  own ledgers, the v18 readers out of the store (they live only in the
+  migration tool) and their known-answer tests with them (the maintainer's
+  instruction, not a regression: the count is recorded). **There MUST be
+  a working migration tool that does not need 2x the storage**: Macha's
+  disks are migrated in place, resumable after a crash, and the Macha
+  session's real v18 state directory is its gate. The CONTROL offer check
+  under the node principal stays. A member probes its key at activate
+  before trusting a blind-adopted backend. The store encodings (packs,
+  the tree forms, the Merkle tree) are free to change where a step has
+  reason; Macha's bytes bind nothing any more.
 - **Do not modify `../macha` until told to.**
 
 From `../dannan/TODO/ACTIVE.md`, binding Dagda, not reopened without
@@ -455,7 +489,8 @@ depend on which record kept the key.
 
 Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store",
 Dagda's own version number from `0.1.0` pinning a Dannan tag, Dannan
-0.2.0, free message registration from 512, byte-for-byte compatibility.
+0.2.0, free message registration from 512, byte-for-byte compatibility
+(superseded 2026-11-04 night: one layout, migrated in place).
 Decided by the Dagda session under the rules: the store's layout marker
 is Dagda's; the gates' and observations' "catalogue" wording stays as
 Macha's until Macha no longer reads it (its Status must stay

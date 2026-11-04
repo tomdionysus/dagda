@@ -24,10 +24,10 @@ each would get it a little wrong.
 
 Dagda is Macha's store taken out and generalised, so that it is written once:
 
-- **It is Macha's.** The on-disk layout and the store encodings are kept byte for byte,
-  because they work; Macha is ported onto Dagda with no loss of function, gated by
-  named tests, and Dagda handles the small values of the other systems as well as
-  Macha's media extents.
+- **It is Macha's.** Macha is ported onto Dagda with no loss of function, gated by
+  named tests; its existing disks are migrated in place by a tool that needs no extra
+  storage; and Dagda handles the small values of the other systems as well as Macha's
+  media extents.
 - **It runs on Dannan.** Transport, node identity, crypto, secure memory, durable files,
   logging, time and the thread-safety contracts are Dannan's. Dagda writes none of its
   own, so there is one copy of each in the stack.
@@ -178,12 +178,13 @@ Macha needs of Dagda, requirement by requirement:
 ## Status
 
 Version 0.1.0 in progress, on Dannan 0.3.0. Built and tested: the local store and its
-formats (Macha's, byte for byte), the pool, the CONTROL store and the cache; the ledger
-and the collector; the distributed store on Dannan with durability levels, evidence,
-tickets, availability and repair; leases and claimed collections. Next: domains in
-full with node certificates and the scope check, node-local spaces, heads once Macha's
-tree-native format has merged, the `dagda::Context` contract, and then Macha's port.
-Every step ends green in `dagda_tests`, with sanitizers before a release.
+formats, the pool, the CONTROL store and the cache; the ledger and the collector; the
+distributed store on Dannan with durability levels, evidence, tickets, availability and
+repair; leases and claimed collections; domains with node-local keys, wrapped domain
+keys, member and blind roles, and the scope check at the write floor. Next: one layout
+for every domain with the in-place migration of Macha's disks, node-local spaces, heads
+once Macha's tree-native format has merged, the `dagda::Context` contract, and then
+Macha's port. Every step ends green in `dagda_tests`, with sanitizers before a release.
 
 ## Licence
 
