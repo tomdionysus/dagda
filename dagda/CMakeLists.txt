@@ -38,6 +38,7 @@ add_library(dagda SHARED
   ledger/unreferenced_since.cpp
   migrate/legacy_v18.cpp
   migrate/migrate.cpp
+  migrate/retag.cpp
   store/availability.cpp
   store/control_objects.cpp
   store/control_store.cpp

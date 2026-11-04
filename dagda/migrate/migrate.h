@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "dagda/domain/storage_key.h"
+#include "dagda/migrate/retag.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/sealing.h"
 #include "dannan/identity/cluster_key.h"
@@ -52,6 +54,10 @@
 // - The backend markers, their mirrors under the state and the state
 //   layout marker are rewritten last, so a disk is v18 until everything on
 //   it is v19.
+//
+// The tag is derived, not sealed again (migrate/retag.h): a record is opened
+// once, under v18, which is what lists a damaged one, and the v19 tag follows
+// from the v18 tag without another pass over the object.
 //
 // A crash leaves each record v18 or v19 (told by which associated data
 // authenticates it) and each ledger file under the old key or the new (told
@@ -120,6 +126,9 @@ struct MigrationReport {
   uint64_t bytes_written = 0;
   // Records left as they were, by file and id, with why.
   std::vector<std::string> unreadable;
+  // Records looked at, and when the run began: the progress lines' rate.
+  uint64_t records_seen = 0;
+  std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 
   // One line a figure, for the tool's output.
   std::string summary() const;
@@ -141,6 +150,9 @@ struct MigrationOptions {
   // Stop at the first record that opens: the key proved and no more read.
   // With dry_run, what a run does before its first write.
   bool probe_only = false;
+  // A progress line (records, bytes read, the rate) every so many records.
+  // Zero: none.
+  uint64_t progress_every = 4096;
   // Progress, a line at a time; nothing: silent.
   std::function<void(std::string_view)> say{};
   // Called after every record, ledger and marker written, with the report
@@ -166,8 +178,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
 // the caller's: `proved` says a record has opened under the key, so writes
 // may begin. Only `dry_run` and `after_step` of the options are read.
 void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, const domain::StorageKey& key, const store::SealingScheme& to,
-                        MigrationReport& report, bool& proved, const MigrationOptions& options);
+                        MigrationReport& report, bool& proved, const MigrationOptions& options, const TagDeriver* deriver = nullptr);
 void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report, bool& proved,
-                       const MigrationOptions& options);
+                       const MigrationOptions& options, const TagDeriver* deriver = nullptr);
 
 }  // namespace dagda::migrate

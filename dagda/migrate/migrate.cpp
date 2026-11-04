@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -25,6 +26,7 @@
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
 #include "dagda/migrate/legacy_v18.h"
+#include "dagda/migrate/retag.h"
 #include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/state_layout.h"
@@ -295,8 +297,27 @@ void check_retention(const std::filesystem::path& state, const domain::StorageKe
 
 // ---- objects ------------------------------------------------------------------
 
-void migrate_objects(const std::filesystem::path& root, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report, bool& proved,
-                     const MigrationOptions& options) {
+std::array<uint8_t, 16> derive_v19_tag(const TagDeriver& deriver, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 16> tag,
+                                       uint64_t ciphertext_size) {
+  return deriver.derive(tag, associated_data_v18(id), to.associated_data(id), ciphertext_size);
+}
+
+// A line every so many records: on a 4 TB disk the operator sees it moving.
+// The clock is only ever printed.
+void progress(MigrationReport& report, const MigrationOptions& options) {
+  ++report.records_seen;
+  if (!options.say || !options.progress_every || report.records_seen % options.progress_every != 0) return;
+  const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - report.started).count();
+  constexpr double mib = 1024.0 * 1024.0;
+  const auto read = static_cast<double>(report.bytes_read) / mib;
+  std::ostringstream out;
+  out << "progress: " << report.records_seen << " records, " << static_cast<uint64_t>(read) << " MiB read, "
+      << static_cast<uint64_t>(seconds > 0 ? read / seconds : 0) << " MiB/s";
+  options.say(out.str());
+}
+
+void migrate_objects(const std::filesystem::path& root, const domain::StorageKey& key, const TagDeriver& deriver, const store::SealingScheme& to,
+                     MigrationReport& report, bool& proved, const MigrationOptions& options) {
   std::error_code ec;
   const auto objects = root / "objects";
   std::vector<std::pair<std::filesystem::path, ObjectId>> loose;
@@ -310,7 +331,7 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
   std::sort(loose.begin(), loose.end());
   for (const auto& [file, id] : loose) {
     if (options.probe_only && proved) return;
-    migrate_loose_file(file, id, key, to, report, proved, options);
+    migrate_loose_file(file, id, key, to, report, proved, options, &deriver);
   }
 
   const auto packs = root / "packs";
@@ -325,7 +346,7 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
   std::sort(files.begin(), files.end());
   for (const auto& [sequence, pack] : files) {
     if (options.probe_only && proved) return;
-    migrate_pack_file(pack, key, to, report, proved, options);
+    migrate_pack_file(pack, key, to, report, proved, options, &deriver);
   }
 }
 
@@ -339,14 +360,16 @@ std::string v19_marker_for(const BackendMarkerV18& old, const domain::StorageKey
 
 RecordLayout record_layout(const domain::StorageKey& key, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                            std::span<const uint8_t, 16> tag, std::span<const uint8_t> ciphertext, uint64_t plain_size) {
-  try {
-    (void)store::open_object(key, to, id, nonce, tag, ciphertext, plain_size);
-    return RecordLayout::v19;
-  } catch (const std::exception&) {
-  }
+  // v18 first: a record not yet migrated is opened once, and only what a
+  // resumed run already did pays for a second attempt.
   try {
     (void)open_object_v18(key, id, nonce, tag, ciphertext, plain_size);
     return RecordLayout::v18;
+  } catch (const std::exception&) {
+  }
+  try {
+    (void)store::open_object(key, to, id, nonce, tag, ciphertext, plain_size);
+    return RecordLayout::v19;
   } catch (const std::exception&) {
   }
   return RecordLayout::neither;
@@ -354,15 +377,12 @@ RecordLayout record_layout(const domain::StorageKey& key, const store::SealingSc
 
 std::array<uint8_t, 16> migrated_tag(const domain::StorageKey& key, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                                      std::span<const uint8_t, 16> tag, std::span<const uint8_t> ciphertext, uint64_t plain_size) {
-  const auto plain = open_object_v18(key, id, nonce, tag, ciphertext, plain_size);
-  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), nonce, plain, to.associated_data(id));
-  if (sealed.ciphertext.size() != ciphertext.size() || !std::equal(sealed.ciphertext.begin(), sealed.ciphertext.end(), ciphertext.begin()))
-    throw std::runtime_error("the ciphertext changed under the same key and nonce: the cipher is not AES-GCM");
-  return sealed.tag;
+  (void)open_object_v18(key, id, nonce, tag, ciphertext, plain_size);
+  return derive_v19_tag(TagDeriver(key), to, id, tag, ciphertext.size());
 }
 
 void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, const domain::StorageKey& key, const store::SealingScheme& to,
-                        MigrationReport& report, bool& proved, const MigrationOptions& options) {
+                        MigrationReport& report, bool& proved, const MigrationOptions& options, const TagDeriver* deriver) {
   const auto bytes = read_file(file);
   report.bytes_read += bytes.size();
   if (bytes.empty()) {
@@ -386,27 +406,33 @@ void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, c
     ++report.loose_already;
     return;
   }
-  const auto tag = migrated_tag(key, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size);
   if (!options.dry_run) {
+    const auto tag = derive_v19_tag(deriver ? *deriver : TagDeriver(key), to, id, loose.tag, loose.ciphertext.size());
     Fd fd(file, O_RDWR);
     write_at(fd.get(), tag, loose_tag_offset, file);
     sync_fd(fd.get(), file);
     report.bytes_written += tag.size();
   }
   ++report.loose_migrated;
+  progress(report, options);
   step(options, report);
 }
 
 void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report, bool& proved,
-                       const MigrationOptions& options) {
+                       const MigrationOptions& options, const TagDeriver* deriver) {
   ++report.packs;
   Fd fd(pack, options.dry_run ? O_RDONLY : O_RDWR);
   struct stat st{};
   if (::fstat(fd.get(), &st) != 0 || st.st_size < 0) throw std::runtime_error("cannot stat " + pack.string() + ": " + std::strerror(errno));
   const auto file_size = static_cast<uint64_t>(st.st_size);
-  report.bytes_read += file_size;
+  std::optional<TagDeriver> own;
+  if (!deriver && !options.dry_run) deriver = &own.emplace(key);
   uint64_t offset = 0;
-  bool written = false;
+  // Written and not yet on the device. A record is whole v18 or whole v19
+  // either way, so a crash costs only the re-doing; the last sync is before
+  // the markers can follow.
+  uint64_t unsynced = 0;
+  constexpr uint64_t sync_every = 256;
   while (offset < file_size) {
     if (file_size - offset < pack_header_size) {
       report.pack_tail_bytes += file_size - offset;
@@ -447,27 +473,32 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
       if (layout == RecordLayout::v19) {
         ++report.pack_records_already;
       } else {
-        auto rewritten = *header;
-        rewritten.tag = migrated_tag(key, to, header->id, header->nonce, header->tag, *payload, header->plain_size);
-        const auto encoded = encode_pack_header(rewritten);
         // The tag and the checksum after it, one write: a header is whole
         // or it is not, and the store's recovery tells.
         if (!options.dry_run) {
+          auto rewritten = *header;
+          rewritten.tag = derive_v19_tag(*deriver, to, header->id, header->tag, payload->size());
+          const auto encoded = encode_pack_header(rewritten);
           write_at(fd.get(), std::span<const uint8_t>(encoded).subspan(pack_tag_offset), offset + pack_tag_offset, pack);
-          written = true;
           report.bytes_written += encoded.size() - pack_tag_offset;
+          ++unsynced;
         }
         ++report.pack_records_migrated;
-        // Reported once the record is on the device, where a test may end
-        // the process; the pack's sync follows the last record.
-        if (written) sync_fd(fd.get(), pack);
+        // Reported once the record is on the device where a test may end the
+        // process.
+        if (unsynced && (options.after_step || unsynced >= sync_every)) {
+          sync_fd(fd.get(), pack);
+          unsynced = 0;
+        }
         step(options, report);
       }
     }
     if (options.probe_only && proved) return;
     offset += total;
+    report.bytes_read += total;
+    progress(report, options);
   }
-  (void)written;
+  if (unsynced) sync_fd(fd.get(), pack);
 }
 
 std::string MigrationReport::summary() const {
@@ -560,6 +591,7 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
                                ": the node would refuse the disk. Run with the --node-state whose node-id is the one Macha's state holds");
     }
   }
+  const TagDeriver deriver(*domain_key);
   bool proved = false;
   {
     MigrationOptions quiet;
@@ -567,9 +599,9 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     MigrationReport scratch;
     MigrationOptions probe = quiet;
     probe.probe_only = true;
-    for (const auto& backend : found) migrate_objects(backend.path, *domain_key, to, scratch, proved, probe);
-    if (have_control) migrate_objects(control, *domain_key, to, scratch, proved, probe);
-    if (have_cache) migrate_objects(options.cache, *domain_key, to, scratch, proved, probe);
+    for (const auto& backend : found) migrate_objects(backend.path, *domain_key, deriver, to, scratch, proved, probe);
+    if (have_control) migrate_objects(control, *domain_key, deriver, to, scratch, proved, probe);
+    if (have_cache) migrate_objects(options.cache, *domain_key, deriver, to, scratch, proved, probe);
     check_retention(state, *domain_key, *node_local);
     migrate_ledgers(state, domain_key, node_local, scratch, quiet);
   }
@@ -578,15 +610,15 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   // tree of loose files and packs.
   for (const auto& backend : found) {
     say(options, "backend " + backend.path.string());
-    migrate_objects(backend.path, *domain_key, to, report, proved, options);
+    migrate_objects(backend.path, *domain_key, deriver, to, report, proved, options);
   }
   if (have_control) {
     say(options, "control store " + control.string());
-    migrate_objects(control, *domain_key, to, report, proved, options);
+    migrate_objects(control, *domain_key, deriver, to, report, proved, options);
   }
   if (have_cache) {
     say(options, "cache " + options.cache.string());
-    migrate_objects(options.cache, *domain_key, to, report, proved, options);
+    migrate_objects(options.cache, *domain_key, deriver, to, report, proved, options);
   }
 
   // Then every ledger: the held tries, the claims and their tries, the
