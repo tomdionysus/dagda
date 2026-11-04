@@ -37,6 +37,7 @@
 #include "dagda/version.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/key_custody.h"
+#include "dannan/identity/node_identity.h"
 
 namespace {
 
@@ -120,6 +121,10 @@ int main(int argc, char** argv) {
     if (arguments.options.contains("control")) options.control = arguments.options.at("control");
     if (arguments.options.contains("cache")) options.cache = arguments.options.at("cache");
     options.dry_run = arguments.dry_run;
+    // Read, never made: load_or_create would mint an id no disk carries.
+    if (!std::filesystem::exists(node_state / "node-id"))
+      throw std::runtime_error("no node-id in " + node_state.string() + ": --node-state is the directory holding the id the node's disks carry");
+    options.node = dannan::identity::load_or_create_node_id(node_state);
     options.say = [](std::string_view line) { std::cout << line << (line.ends_with('\n') ? "" : "\n") << std::flush; };
     std::vector<std::filesystem::path> backends(arguments.backends.begin(), arguments.backends.end());
     const auto report = dagda::migrate::migrate_state(state, backends, cluster, custody, options);

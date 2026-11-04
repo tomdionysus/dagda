@@ -27,8 +27,13 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
 - `--state`: Dagda's state directory (the `storage-layout` marker, the
   ledgers, the control store under `metadata-objects`).
 - `--node-state`: Dannan's state directory, where the node's key custody
-  lives (`identity/custody`). The node must have custody: the ledgers are
-  sealed under the key derived from it and under nothing else.
+  lives (`identity/custody`) and its `node-id`. The node must have custody:
+  the ledgers are sealed under the key derived from it and under nothing
+  else. It must also hold the id the disks carry: a migrated marker keeps
+  the node id it was written with and a pool refuses another node's disk,
+  so a backend naming another id is refused before anything is written.
+  Either use Macha's state directory as Dannan's, or copy its `node-id`
+  there first.
 - `--cluster-key`: the cluster key file, which gives domain v1's storage
   key, exactly as Macha derived it. Objects are not re-encrypted.
 - `KEY` opens the custody, as `dannan-node` takes it: `--passphrase-env VAR`
@@ -41,6 +46,15 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
 - `--cache DIR`: the persistent cache's path, if the node keeps one.
 - `--dry-run`: classify and report; write nothing. The refusals are the
   same as a real run's.
+
+Every refusal comes before the first write: the node id, the key (proved
+on the first record that opens), a retention checkpoint from before the
+claims ledger or claims with no `ledger` marker, and every ledger probed.
+The tool reads only the ledgers it knows by name: `ledger/control`,
+`ledger/data-*`, `ledger/referenced/{extents,nodes}`,
+`retention/{claims.log,ledger-data,ledger-control}` and the two
+`retention/unreferenced-*.bin`. Everything else under the state is left
+byte for byte, `metadata/` among it until heads define it.
 
 Exit code 0 means the state is v19 (migrated now, or already); 1 means
 refused or failed, with the reason on standard error; 2 is a usage error.

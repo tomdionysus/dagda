@@ -77,6 +77,10 @@ Bytes encode_prune(RetentionClass, std::span<const ObjectId>);
 
 }  // namespace retention_format
 
+// Whether `root` (<state>/retention) holds a checkpoint from before the claims
+// ledger, which RetentionStore refuses to open without its ledger marker.
+bool retention_holds_unmoved_checkpoint(const std::filesystem::path& root);
+
 // Durable local evidence of which objects this node has promised to keep
 // (requirements L12, L13): the claims as an observed-remove set per object
 // and class. For each object and origin only the highest undominated add

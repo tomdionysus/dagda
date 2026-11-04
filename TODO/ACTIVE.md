@@ -401,6 +401,80 @@ Settled with it (the maintainer, 2026-11-04):
   threshold, backend limits). Step 1's code can move before its fixture
   exists; its gate cannot close until it does.
 
+## The port respec (from the Macha session's audit, 2026-11-04 night)
+
+The maintainer's instruction, relayed by the Macha session: Macha is the source of
+truth for the port; where Dagda differs from Macha's behaviour, Dagda
+changes. The evidence is
+`../macha/TODO/2026-11-04-dannan-dagda-port-evaluation.md` (sections 4,
+5.1, 5.3). Each item below was checked against the code here and in Macha.
+
+Order: M2, M3, M4, M8, M9, M6, M5, M10; M1 when Macha merges.
+
+Done so far: M2's ledgers by name, every refusal before the first write,
+and the node id rule (`dagda_tests` 392). The Macha session accepted the
+yield-rule dispute and M2's narrowing, and M9's vectors are at
+`../macha/build/macha-fixtures/placement/placement-vectors.json`. With heads
+also come head repair (`maintenance.cpp:1137`, paced, runs when busy) and
+history truncation (`:1146`, gated on `!busy`).
+
+- **M1. Heads** (step 4), with the `metadata` plane, the cache seed,
+  `ordered` registration, lease records in a head with renew and release,
+  the reference-count diff seam, commit and verify cost baselines. Waits on
+  Macha's tree-native merge.
+- **M2. `dagda-migrate`.** Confirmed: `is_trie_dir` (`migrate.cpp:220`)
+  matches `<state>/metadata/`, which holds `journal.log`
+  (`../macha/src/metadata/metadata.cpp:2336`), and the refusal comes after
+  the objects (`:533` before `:549`). To do:
+  - ledgers walked by name only, never by what a directory holds;
+  - every refusal before the first write: ledgers probed first, an
+    unmarked legacy checkpoint refused (the rule of `retention.cpp:304`;
+    with the `ledger` marker they are removed at open, so only unmarked
+    ones refuse), the node id checked;
+  - the node id: a marker keeps Macha's id (`:310-312`) and the pool
+    refuses another's (`storage_pool.cpp:289`), so the tool compares it
+    with `--node-state`'s and refuses before writing; stated in
+    `docs/migration.md`;
+  - the cost: a record opened once, under v18, and the v19 tag derived
+    from the old tag with no second pass (see below); progress and rate;
+  - a test over a real Macha state directory once the Macha session cuts
+    one, and a synthetic `metadata/` in the fixture now;
+  - the reverse, v19 to v18 (Waiting on the maintainer).
+  The tag: GHASH is linear and the ciphertext's terms depend only on their
+  distance from the end, so two AADs over one ciphertext differ only in
+  their AAD and length blocks. new tag = old tag xor delta, where delta
+  needs H, the AADs and the ciphertext's block count: no ciphertext.
+- **M3. Maintenance parity.** `Node` adds DATA pack compaction, local
+  rebalance, scrub, ledger verify and `compact_if_needed(4096)`, on
+  Macha's schedule; the pool's pieces exist (`storage_pool.h:230-253`).
+  The yield rule stays as it is, because it is Macha's: disputed, below.
+- **M4. Write semantics.** `put`, `put_deferred` and `put_here` take
+  `persisted` when the caller names none; `Context` keeps naming the level.
+  `put_deferred_here` added. A deadline on `StoragePool::durability_barrier`.
+- **M5. Settings reload through the node**, and
+  `test_replication_policy_change_on_restart` moved.
+- **M6. The last survey persisted** (`availability/last-survey.bin`) and
+  re-asked on a peer's advert changes.
+- **M7. Torrent-request known answers.** Held for the maintainer: Waiting on the maintainer.
+- **M8. The claims guard bounded.** Confirmed
+  (`storage_server.cpp:316-324`): stripes released between sub-batches,
+  and `test_retain_data_batches_a_large_publication_within_bounded_time`
+  moved.
+- **M9. An R>1 placement known answer** against Macha's
+  `capacity_placement_nodes` with failure domains.
+- **M10. Scale and platform.** A trie of 1 million ids, 100,000 objects
+  across packs; a Linux run with `syncfs`; sanitizers before `0.1.0`.
+
+**Disputed with the Macha session:** "a pass is not skipped while loader
+work is present" is not Macha's behaviour. `busy` includes the loader
+(`../macha/src/service/maintenance.cpp:417-425`, law 3), and GC,
+rebalance, retention compaction, pack compaction and scrub are all gated
+on `!busy` (`:871`, `:1099`, `:1127`, `:1156`, `:1161`, `:1240`). Only
+repair and the ledger verify are paced instead (`:430-431`, `:1209`).
+`Node::higher_class_active` (`node.cpp:355`) is that rule. The audit's line
+citations for scrub and verify are also swapped (scrub is `:1165`, verify
+`:1214`).
+
 ## What step 4 waits on (the Macha session, 2026-11-04)
 
 Macha's `feature/tree-native-namespace` is green at `b080c38`, no merge
@@ -432,6 +506,14 @@ Steps 5 and the parts of 6 that need no heads go first.
   document, "Waiting on the maintainer" 1).
 
 ## Decisions
+
+(the maintainer, 2026-11-04 night, relayed by the Macha session) **A genuine Macha
+defect is fixed in Macha first, and the libraries match Macha's fixed
+behaviour.** Dagda's fixes to the five LocalStore races, the claim
+check-then-delete windows and the repair list identity stand, and Macha
+adopts them. No further deviation on the grounds of a Macha defect without
+sending it to the Macha session first. Where a fix changes a format or an
+answer, the maintainer rules on it in Macha and Dagda takes the result.
 
 The maintainer's, to the Dagda session, 2026-11-03 night:
 
@@ -529,7 +611,17 @@ asking:
 
 ## Waiting on the maintainer
 
-Nothing open. The seven items of 2026-11-04 were all answered that evening
+From the port respec (2026-11-04 night), recommendations in the session:
+
+1. M7: the torrent-request known answers against "no ingest, torrent or
+   import code, in the library or its tests" (Decisions, 2026-11-04).
+2. M2: does the reverse migration gate the first real migration
+   (the audit's own question 3)?
+3. M2: whether a migration reads every byte, or derives tags without
+   reading and leaves rot to the scrub.
+4. M10: which Linux machine runs the tests.
+
+Earlier: the seven items of 2026-11-04 were all answered that evening
 (see Decisions, "the maintainer, 2026-11-04 evening") and done the same evening
 (`COMPLETED.md`, "the decided fixes"): the control store's 256 MiB
 reserve, the refused missing marker, the fresh future tombstone and the
