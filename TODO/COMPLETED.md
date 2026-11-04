@@ -3,6 +3,28 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: the decided fixes (`feature/decided-fixes`)
+
+The maintainer's answers to the seven open items (Decisions, "2026-11-04 evening"),
+the five that needed code, one commit each:
+
+- `store/control_store.h`: `ControlStoreOptions::reserve_free` defaults to
+  256 MiB (was Macha's 0); the defaults test says so.
+- `ledger/retention.cpp` `load()`: tries that hold claims under no
+  `retention/ledger` marker are refused with a reason, nothing on disk
+  changed; `LedgerRetention.ClaimsWithNoMarkerAreRefusedNotRebuiltEmpty`
+  (restore the marker and the claims are there).
+- `lease/claimed_collection.h`: `expired` treats a stamp from a clock ahead
+  as fresh (`now > removed` before the unsigned difference);
+  `decode_delta` refuses a record with no key, as the snapshot decoder
+  does. The two disabled cases are enabled and the "poisons the snapshot"
+  case now shows the record never reaches the head.
+- The device reserve needed no code: `IoReserveOptions{slots 8,
+  control_reserve 2}`, one per node, is the configurable form; the
+  operator's path to it is step 7's node options.
+- Gate: `dagda_tests` 320 passing, 1 disabled (was 317 and 3: two enabled,
+  one added).
+
 ## 2026-11-04: the repin to Dannan 0.3.0 (`feature/dannan-0.3`)
 
 Branched from `develop` after steps 1 to 3 and 5 merged there (`5aa4d23`).

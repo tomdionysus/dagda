@@ -415,24 +415,13 @@ asking:
 ## Waiting on the maintainer
 
 Nothing open. The seven items of 2026-11-04 were all answered that evening
-(see Decisions, "the maintainer, 2026-11-04 evening"); the five that need code are
-work items below, in order, before step 6:
-
-1. **Control store free-space reserve**: configurable, default 256 MiB
-   (was Macha's 0).
-2. **A missing `retention/ledger` marker over non-empty claims tries**
-   (`retention.cpp:383-400`, `:457-458` at Macha develop): refuse to open
-   and say why, instead of rebuilding both tries empty and losing every
-   checkpointed claim.
-3. **The device reserve**: configurable; defaults stay one per node, 8
-   operations in flight, 2 kept for control work, until measured on fi-1.
-4. **A tombstone stamped by a clock ahead**: `expired` counts a future
-   stamp as fresh (enables
-   `LeaseClaimedCollection.DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow`);
-   Macha the same at the port (8b).
-5. **A delta adding a record with no key**: refused at decode (enables
-   `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses`); Macha's DLT9
-   the same at the port.
+(see Decisions, "the maintainer, 2026-11-04 evening") and done the same evening
+(`COMPLETED.md`, "the decided fixes"): the control store's 256 MiB
+reserve, the refused missing marker, the fresh future tombstone and the
+refused unkeyed delta record. The device reserve was already
+`IoReserveOptions` with those defaults; an operator reaches it through the
+node's options at step 7. For Macha at the port (8b): the tombstone and
+the unkeyed-record fixes, the same.
 
 **What blocks further work** (needs Macha):
 - Step 4 (heads), and with it retained values and the heads part of
