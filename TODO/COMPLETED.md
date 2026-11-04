@@ -3,6 +3,100 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 1c, the local store (`feature/local-store`)
+
+- Moved and adapted into `dagda/store/` (namespace `dagda::store`):
+  `local_store` (`LocalStore`, `LocalStoreOptions`, `LocalStoreMode`,
+  `LocalStoreDiagnostics`, `StorageLock`), `local_store_files` (the device
+  seam), `local_format` (layout v18's loose header, pack record, accounting
+  slot and names, pure), `object_lock` (`ObjectLock`, `ObjectLocks`: Dagda's
+  own, as decided), `write_behind`; and `dagda/contract/object_store.h`
+  (`dagda::contract::ObjectStore`, `HeldView`, `HeldIdentity`). Loose files
+  above the threshold, packs at or below it, the scan at start, torn-tail
+  truncation, damaged spans skipped and counted, copy-on-write compaction,
+  tombstones and touch records, A/B accounting, `has()` from the index or
+  the held ledger, the ledger kept current, durability through the
+  `DurabilityDomain` (mutations reported, generations awaited), startup
+  progress ticked by the scan (requirements S1-S9, S16-S18, L3).
+- Runs on Dannan: `SupervisedThreads`, `Observations`, `StartupProgress`,
+  a `ScopedLogger`, an injected `TimeSource` (the default domain's window)
+  and `WallClock` (pack record times, loose modification times, ages), the
+  domain's `StorageKey`. Options are a plain struct with Macha's defaults
+  (packs at or below 1 MiB, 64 MiB targets); `loose_only(limit)` is Macha's
+  second constructor. No Macha `Config`.
+- Byte compatibility: every format is Macha's, pinned by known answers
+  computed outside both codebases (hashlib over 1a's pinned sealing, under
+  1a's known-answer key): a whole loose file; put, touch and tombstone
+  record headers; an accounting slot. Files Macha wrote (a loose object; a
+  pack with a put, a touch, then a tombstone) open here, and the store
+  writes Macha's touch and tombstone records exactly and Macha's put and
+  loose layouts with fresh nonces (`store_local_format_test.cpp`).
+- Changed from Macha, none on disk: the held ledger is made before the scan
+  thread starts (Macha starts the scan, which reads the ledger pointer, then
+  assigns it: a race); option errors are `std::invalid_argument`; a packed
+  object that fails to open throws 1a's `ObjectIntegrityError` ("object
+  integrity failure", Macha "packed object integrity failure"); `own_syncs`
+  in the diagnostics counts the store's own fsyncs; descriptors are
+  close-on-exec.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest,
+  every assertion kept: `test_storage_v18.cpp`
+  (`test_packs_store_compact_and_survive_restart`,
+  `test_pack_recovery_settles_each_kind_of_damage`,
+  `test_held_device_io_blocks_only_its_own_object`,
+  `test_presence_is_known_without_reading_objects`, the `LocalStore` block of
+  `test_admission_respects_reserve_and_capacity`); `test_storage_metadata.cpp`
+  `test_local_store`; the four `test_object_ledger.cpp` cases 1b left;
+  `test_presence.cpp` (`test_has_answers_a_put_in_progress_without_waiting_for_it`,
+  `test_a_put_that_fails_midway_is_never_present`,
+  `test_has_does_not_consult_the_device_after_warm_up`,
+  `test_presence_is_exact_across_a_restart`); `test_invariants.cpp`
+  (`test_authoritative_deferred_generation_batches_stable_storage_barriers`,
+  `test_accounting_dirty_marker_is_process_session_scoped`,
+  `test_clean_accounting_checkpoint_is_trusted_with_packs`,
+  `test_unclean_accounting_recovery_establishes_durable_baseline`,
+  `test_restart_durable_reaffirmation_requires_no_new_barrier`,
+  `test_authoritative_delete_is_lazy_durability`,
+  `test_local_store_barrier_remembers_complete_physical_cut`,
+  `test_durability_domain_group_commits_independent_publications`,
+  `test_immediate_reaffirmation_flushes_provisional_generation`). Macha
+  counted fsync and syncfs by interposing them, Linux only, so eight of
+  these were skipped off Linux; here they run everywhere, a syncfs being
+  one of the domain's barriers and Macha's fsyncs the store's
+  `own_syncs`. Batch windows run on stepped time. Crash matrix rows for the
+  local store: "Pack tail torn", "DATA accounting dirty", "GC unlink lost"
+  (moved), and "Pack compaction after replacement install but before old
+  deletion" (new: Macha has no case).
+- New: S1's hash mismatch, S3's option checks, the limit half of S9, ages
+  on the wall clock, `list()`, the write-behind window, and the small-values
+  case: 10,000 objects of 100 to 1,000 bytes (5.5 MB) all in one pack,
+  written with `put_deferred` and one barrier in 1.0 to 1.5 s, reopened in
+  about 30 ms, every object read back in about 250 ms (this Mac, Release).
+- Not moved: the `StoragePool` and placement blocks of
+  `test_admission_respects_reserve_and_capacity`, the pool cases of
+  `test_presence.cpp`, `test_baseline_data_store_has` and the rebalance case
+  of `test_invariants.cpp` (1d, with the pool); `load_or_create_node_id`
+  (the node id is Dannan's).
+- Findings:
+  - Dannan's secure memory is not inherited by a fork (`VM_INHERIT_NONE`,
+    `MADV_DONTFORK`), so a forked child holding the parent's `StorageKey`
+    faults on it, even to free it. Macha's fork cases kept the key in
+    ordinary memory; here the child derives its own.
+  - `test_verification_resumes_after_a_restart` is racy in Macha too: the
+    ledger writes `seeded` just before it answers, so a check begun
+    between is a no-op. Seen once in about forty runs under load; the case
+    now also waits for the store's own answer.
+  - A small put costs about 100 to 150 us here: a `statfs` for the reserve
+    and an open, append and close of the pack per record, each kept as
+    Macha has them. Keeping the active pack open and checking free space
+    less often are the obvious savings; not made, to keep 1c Macha's.
+- Gate: warnings as errors; `dagda_tests` 108 and 1 disabled (67 before).
+  The 40 new store cases other than the small-values timing ran 200 times
+  each (four processes of 50 repeats), all passing, after the ledger
+  wait above and a fix to the new compaction case (it read `used` before
+  its reconciling scan had finished; 400 further runs of it clean).
+- Asked of Dannan: a scoped unlock beside `Lock` (`Unlocked`, file-local in
+  `local_store.cpp` until then). No Dannan symbol after 0.2.0 is used.
+
 ## 2026-11-04: step 1b, the held trie (`feature/local-store`)
 
 - Moved and adapted into `dagda/ledger/` (namespace `dagda::ledger`):

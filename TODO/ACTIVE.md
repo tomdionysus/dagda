@@ -67,6 +67,15 @@ projects, with recommendations for the maintainer.
 - `Identity::durability_epoch` is a random 128-bit id per process: it
   tells a restart from a reconnect but is not ordered. Dagda persists its
   own counter for anything that needs order across restarts.
+- Dannan's identity step is done (`09a525f`, merged to its `develop`;
+  design `../dannan/TODO/2026-11-04-identity.md`; untagged, 0.3.0 waits
+  on the maintainer). For Dagda: the scope check is
+  `context.identity().verify(contract::Principal{kind, id}, prefix)`
+  returning `contract::ScopeDecision {allowed, generation, why}`, never
+  waiting, with the no-source default Dagda proposed; domain keys wrap to
+  `identity().certificate()` and `Established::peer_certificate`;
+  `identity().sign(message)`; `derive_local(label)` unchanged;
+  `Identity::revoke` and `revocations()`. Used from step 6.
 - After 0.2.0, on Dannan's `feature/wire-v1` (`f32053e`), Dagda's three
   requests from 1a: `status::set_thread_name` (and supervised threads
   named after their name), `status::resident_bytes()` and
@@ -114,7 +123,8 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    - ~~**1b**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 67).
      The held trie (`ledger/`: object trie, held ledger, trie
      union), which `LocalStore` keeps.
-   - **1c** `LocalStore`: loose files and packs, torn tails, compaction,
+   - ~~**1c**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 108).
+     `LocalStore`: loose files and packs, torn tails, compaction,
      tombstones; write-behind.
    - **1d** `StoragePool`, I/O pressure, `unreferenced_since`, the
      CONTROL store, the persistent cache without its metadata seed
