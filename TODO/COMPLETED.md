@@ -3,6 +3,30 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: M2, `dagda-migrate` for a real Macha node (`feature/port-respec`)
+
+From the Macha session's audit (`ACTIVE.md`, "The port respec"). Gate:
+`dagda_tests` 399 passing, 1 disabled (was 389; 10 added).
+
+- Ledgers are found by name, Macha's and the node's: `metadata/` and all else
+  under the state are left byte for byte. The fixture's reference counts moved
+  to `ledger/referenced`, their real path.
+- Every refusal comes before the first write: the node id, the key (a probe
+  that stops at the first record that opens), retention the store would
+  refuse, and every ledger. `MigrateState.ALedgerUnderNeitherKeyIsRefusedAndTheStateStaysV18`
+  used to pin the old order, with the objects moved first, and now pins this.
+- The tool reads `<node-state>/node-id`, never creates it, and refuses a backend
+  naming another id. `docs/migration.md` says so.
+- The v19 tag is derived from the v18 tag (`migrate/retag.h`) through only
+  Dannan's AES-GCM, with a hash-key known answer from the GCM specification. A
+  fresh record is opened once instead of about four times; a dry run derives no
+  tag. Pack syncs are batched, and a line reports progress and rate.
+- `migrate_state_back` and `--reverse`: there and back leaves every object and
+  marker byte for byte, and crashes are finished from either direction.
+
+Not proven: no run on a real Macha state, none by Macha itself over a reversed
+disk, nothing measured at scale, and a dry run still reads every byte.
+
 ## 2026-11-04 night: two cleanups and the stale text (`feature/tidy`)
 
 Nothing waits on Macha here. `MaintenanceOptions::collector` is now

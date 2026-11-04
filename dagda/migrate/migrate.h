@@ -126,6 +126,8 @@ struct MigrationReport {
   uint64_t bytes_written = 0;
   // Records left as they were, by file and id, with why.
   std::vector<std::string> unreadable;
+  // The run went back to v18.
+  bool reverse = false;
   // Records looked at, and when the run began: the progress lines' rate.
   uint64_t records_seen = 0;
   std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
@@ -147,6 +149,9 @@ struct MigrationOptions {
   // node's disk, so a v18 marker naming another is refused here, before any
   // write. Nothing: not checked.
   std::optional<dannan::identity::NodeId> node{};
+  // The run goes from v19 to v18. Set by migrate_state_back; read by the
+  // record functions.
+  bool reverse = false;
   // Stop at the first record that opens: the key proved and no more read.
   // With dry_run, what a run does before its first write.
   bool probe_only = false;
@@ -170,6 +175,17 @@ struct MigrationOptions {
 // owner.
 MigrationReport migrate_state(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends,
                               const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody, const MigrationOptions& options = {});
+
+// The way back, so a node can return to Macha 0.92.x: the same derivation and
+// order the other way (v19 tags to v18, ledgers to the domain key, sightings to
+// the clear, markers last), under the same rules: no second copy, every refusal
+// before the first write, a crash finished by a second run. Only domain v1, and
+// it accepts a v18 marker too, so a forward run that crashed can be taken back.
+// Objects are byte for byte as Macha wrote them; a ledger holds what it held,
+// sealed under a fresh nonce. Waits on the devices; single owner.
+MigrationReport migrate_state_back(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends,
+                                   const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody,
+                                   const MigrationOptions& options = {});
 
 // One loose file: its tag rewritten if the record is v18, counted if v19 or
 // unreadable. One pack: each put record likewise, the pack's checksummed

@@ -10,7 +10,7 @@
 // is the only way a v18 disk becomes v19: the store refuses one at open.
 //
 //   dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY
-//                 [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run]
+//                 [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run] [--reverse]
 //   dagda-migrate --version
 //
 // --state is Dagda's state directory (the storage-layout marker, the
@@ -21,7 +21,8 @@
 // --cache the persistent cache's path, if the node has one. KEY opens the
 // node's custody: --passphrase-env VAR (the passphrase in that environment
 // variable) or --credential NAME [--credentials-dir DIR], as dannan-node
-// takes it. --dry-run classifies and reports without writing.
+// takes it. --dry-run classifies and reports without writing. --reverse goes
+// back from v19 to v18, so the node can return to Macha 0.92.x.
 //
 // Exit 0 when the state is v19 (migrated now, or already); 1 when refused
 // or failed, the reason on stderr; 2 for a usage error.
@@ -45,6 +46,7 @@ struct Arguments {
   std::map<std::string, std::string> options;
   std::vector<std::string> backends;
   bool dry_run = false;
+  bool reverse = false;
   bool version = false;
 };
 
@@ -58,6 +60,10 @@ Arguments parse(int argc, char** argv) {
     }
     if (option == "--dry-run") {
       out.dry_run = true;
+      continue;
+    }
+    if (option == "--reverse") {
+      out.reverse = true;
       continue;
     }
     if (option.rfind("--", 0) != 0 || i + 1 >= argc) throw std::invalid_argument("expected --option value, at " + option);
@@ -94,7 +100,7 @@ dannan::identity::KeySource key_source(const Arguments& arguments) {
 
 constexpr const char* usage =
     "usage: dagda-migrate --state DIR --node-state DIR --cluster-key FILE (--passphrase-env VAR | --credential NAME [--credentials-dir DIR])\n"
-    "                     [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run]\n"
+    "                     [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run] [--reverse]\n"
     "       dagda-migrate --version\n";
 
 }  // namespace
@@ -127,7 +133,8 @@ int main(int argc, char** argv) {
     options.node = dannan::identity::load_or_create_node_id(node_state);
     options.say = [](std::string_view line) { std::cout << line << (line.ends_with('\n') ? "" : "\n") << std::flush; };
     std::vector<std::filesystem::path> backends(arguments.backends.begin(), arguments.backends.end());
-    const auto report = dagda::migrate::migrate_state(state, backends, cluster, custody, options);
+    const auto report = arguments.reverse ? dagda::migrate::migrate_state_back(state, backends, cluster, custody, options)
+                                          : dagda::migrate::migrate_state(state, backends, cluster, custody, options);
     (void)report;
     return 0;
   } catch (const std::invalid_argument& error) {

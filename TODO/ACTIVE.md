@@ -411,8 +411,9 @@ changes. The evidence is
 
 Order: M2, M3, M4, M8, M9, M6, M5, M10; M1 when Macha merges.
 
-Done so far: M2's ledgers by name, every refusal before the first write,
-and the node id rule (`dagda_tests` 392). The Macha session accepted the
+Done so far: M2 but for the real state directory, which the Macha session
+cuts after its merge (`dagda_tests` 399; `COMPLETED.md`). Not measured at
+scale: each loose object still takes one fsync, about 1 million on live-a. The Macha session accepted the
 yield-rule dispute and M2's narrowing, and M9's vectors are at
 `../macha/build/macha-fixtures/placement/placement-vectors.json`. With heads
 also come head repair (`maintenance.cpp:1137`, paced, runs when busy) and
