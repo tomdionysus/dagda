@@ -84,6 +84,13 @@ projects, with recommendations for the maintainer.
   injected time source (`dannan/status/observation.h`). Dagda moves its
   pin from 0.2.0 to that commit, or to Dannan's next tag, when a step
   first uses them.
+- On Dannan's `develop` (`a26a210`), untagged, Dagda's two requests from
+  3a: a `Routes::call` past its deadline is cancelled through its handle,
+  its reply slot freed and a late reply dropped (`5f14127`), so the
+  store's 120 s `call_horizon` goes at the repin; and
+  `context.time().source()` / `context.time().executor()` (`7c1501e`),
+  so the store takes its clock and executor from the Context instead of
+  beside it.
 - `contract::Unlocked` (Dannan `35d14e0`, develop `b24db75`): a scoped
   unlock of a held `contract::Lock`, annotated. Dagda's file-local copy
   in `store/local_store.cpp` is replaced by it at the repin to 0.3.0.
@@ -191,34 +198,40 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      tickets that outlive the call, spill past stalled peers and prompt
      replication, reads local then cache then latency-ordered remote,
      CONTROL objects offered and claimed, DATA claims.
-   - **3b** Repair and admission: the availability survey and repair by
-     diff over the network (`have_valid_objects`, `trie_diff`,
-     `delete_object` and `replicate_all` with it), the DATA credit
-     arbiter with the control reserve of device I/O (section 7), the
-     I/O admission of each served request, rebalancing across nodes.
-     What 3a left of its moved cases: repair's last step of
-     `test_store_heals_a_bad_local_copy_from_a_peer`,
-     `test_min_write_floor_publishes_then_repair_converges_to_r2`, and the
-     DATA credit half of
-     `test_store_control_objects_take_no_data_credit_and_commit_alone`.
-     **Repair reports into tickets** (decided by the Dagda session from
-     The maintainer's approved design, requirements section 8 item 1(f): a ticket
-     "reports once more when the last pending node acknowledges"): 3a
-     settles a persisted or replicated ticket at its level and names the
-     members it never tried "pending, owed to repair"; when repair or
-     prompt replication lands a copy on such a member, the ticket records
-     it and reports again once none is pending, for as long as the ticket
-     is kept (`max_tickets`).
+   - ~~**3b**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 284).
+     Repair and admission: the availability survey and repair by diff
+     over the network (trie questions against one pinned snapshot; no
+     cursor walk, `repair_position` file or `have_*` probe), the claim
+     walk's restorer with its network credit, repair paced by a duty
+     share and never stopped, repair reporting into tickets
+     (`WriteEvidence::complete`, `wait_complete`), the DATA credit
+     arbiter and the device I/O reserve for control work (section 7),
+     the admission of each served request, `have_valid_objects`,
+     `delete_object`, `trie_diff`, `replicate_all`. Rebalancing across
+     nodes is repair's push and local drop: Macha has no other.
 
-   The whole of step 3: Placement through
+   ~~The whole of step 3~~, done 2026-11-04: Placement through
    Dannan's functions (owner salts, capacity adverts); the write path
    with the four durability levels and evidence by node id; the read
    path (local, cache, latency-ordered remote); CONTROL objects; the
    storage server as Dagda message types from 512; repair by diff only;
-   tickets that outlive the call. Gate: the store cases of
-   `test_rpc_cluster`, `test_availability`, `test_io_pressure`,
-   VALIDATION "Placement and the write floor", "Class separation", on
-   Dannan's in-process cluster.
+   tickets that outlive the call. Gate met for what is the store's: the
+   store cases of `test_rpc_cluster`, `test_availability` (its survey;
+   the path table is Macha's), `test_io_pressure` (all 13), VALIDATION
+   "Placement and the write floor" and "Class separation", on in-process
+   Dannan clusters. What remains, none of it the store's code:
+   - Not moved, each Macha's or another step's: `test_rpc_cluster`'s
+     `test_a_delete_is_reclaimed_while_a_node_is_away` (a whole node's
+     pass over the FS's namespace) and `test_replication_policy_change_on_restart`
+     (settings reload, section 7 item 2, with Context v1, step 7);
+     `test_storage_v18`'s heavy `test_retain_data_batches_a_large_publication_within_bounded_time`.
+   - The rest of Macha's maintenance pass (when GC is due, its quiet
+     windows, the DATA sweep's `should_yield` from the activity clocks):
+     Macha's loop at the port (8a) calls `Repair::pass` and
+     `Collector::pass`; Dagda has the steps, not the loop.
+   - Dannan: a duty-cycle share by weight in `sched/` (Repair's is
+     file-local, `TODO(Dannan: ...)` in `store/repair.cpp`).
+
 4. **Heads** (`heads/`), in sessions. The commit DAG made opaque (codec,
    merge, provider supplied by the owner); acceptance by durability
    level; head sets, dots, truncation; the reconciler with the common
@@ -345,6 +358,13 @@ Open, none blocking (each has a default that keeps Macha's behaviour):
    helpers Dagda asked for are on its `develop`, untagged. Dagda moves its
    pin when the maintainer cuts 0.3.0 (Dagda's scope check and domains need it from
    step 6).
+
+4. **The device reserve's figures and scope** (step 3b): one reserve per
+   node over every device its stores use, 8 operations in flight of
+   which 2 are kept for control work. Recommended: keep these until
+   measured on fi-1 under an import, then make the reserve per device
+   only if a node's state path and DATA backends are on different
+   disks there (Dagda cannot tell which share a device today).
 
 Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store",
 Dagda's own version number from `0.1.0` pinning a Dannan tag, Dannan

@@ -75,8 +75,8 @@ struct DiskServiceSample {
 // What it does not give, and section 7 of the requirements asks for: a
 // reserve of device I/O for control work (state journals, claims, head
 // commits), so a loader cannot delay a commit or a health answer. That is the
-// admission side's, the DATA credit arbiter, which moves at step 3; this
-// monitor is its input, kept as Macha has it.
+// admission side's (data_work.h: the DATA credit arbiter, which this monitor
+// feeds, and the device reserve); the monitor is kept as Macha has it.
 class DiskServiceMonitor {
  public:
   using Thresholds = DiskServiceThresholds;

@@ -306,8 +306,8 @@ TEST(DistributedStore, ConcurrentReadersShareOneFetchAndBuffer) {
 // test_store_heals_a_bad_local_copy_from_a_peer: a corrupt local copy (it
 // fails authentication) is never served: the read comes from a peer and the
 // fetched bytes replace it, as they do a copy that is gone. Unread, scrub
-// finds a corrupt copy and discards it. (Macha's last step, repair restoring
-// it, is step 3b's.)
+// finds a corrupt copy and discards it, and repair restores it from what
+// this node lacks.
 TEST(DistributedStore, HealsABadLocalCopyFromAPeer) {
   Cluster cluster;
   auto& reader = cluster.add("reader", options(2));
@@ -336,6 +336,13 @@ TEST(DistributedStore, HealsABadLocalCopyFromAPeer) {
   test::corrupt_object(reader.backend(), id);
   (void)data.scrub_step(128ULL * 1024 * 1024, 256);
   EXPECT_FALSE(data.has(id));
+  const std::vector<ObjectId> live{id};
+  const RepairLists lists{std::make_shared<const contract::InventoryHorizon>(1, true, live, std::vector<ObjectId>{}, std::vector<contract::Garbage>{}),
+                          std::make_shared<const std::vector<ObjectId>>(live),
+                          {},
+                          {}};
+  for (int step = 0; step < 4 && !data.has(id); ++step) (void)reader.store().repair_step(lists, 128ULL * 1024 * 1024, 0);
+  EXPECT_EQ(data.get(id), bytes);
 }
 
 // test_store_runtime_cache_keeps_a_playback_fetch: a persistent cache
@@ -367,23 +374,47 @@ TEST(DistributedStore, ARuntimeCacheKeepsAPlaybackFetch) {
   EXPECT_EQ(peer.calls_of(message::get_object), gets);
 }
 
-// test_store_control_objects_take_no_data_credit_and_commit_alone, the
-// store's half: a CONTROL object already local is found at once, asking no
-// peer. (The DATA credit held across it is step 3b's arbiter; the
-// namespace node store is Macha's FS.)
+// test_store_control_objects_take_no_data_credit_and_commit_alone: the
+// control store is not on the DATA device: finding a local CONTROL object
+// never waits for DATA credit, here with every byte of background credit
+// and every DATA slot of the device held, and asks no peer. (The namespace
+// node store is Macha's FS.)
 TEST(DistributedStore, ALocalControlObjectIsFoundWithoutAskingAnyone) {
   Cluster cluster;
-  auto& node = cluster.add("solo", options(1));
+  auto node_options = options(1);
+  const uint64_t extent = node_options.store.extent_size;
+  node_options.data_inflight_bytes = 2 * extent;
+  node_options.foreground_reserve_bytes = extent;
+  node_options.background_concurrency = 1;
+  auto& node = cluster.add("solo", node_options);
   auto& peer = cluster.add("peer", options(1));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto bytes = pattern(18 * 1024, 91);
   const auto id = object_id(bytes);
   ASSERT_TRUE(node.control().put(id, bytes));
+  auto held = node.credit()->acquire(DataWorkContext(FrameType::loader, extent), extent);
+  ASSERT_TRUE(held.has_value());
+  std::vector<IoReserve::Slot> slots;
+  for (size_t i = 0; i < node.io()->data_share(); ++i) slots.push_back(std::move(*node.io()->try_data(DataWorkContext(FrameType::loader, extent))));
   auto found = std::async(std::launch::async, [&] { return node.store().ensure_control_local(id); });
-  ASSERT_EQ(found.wait_for(2s), std::future_status::ready);
+  const bool prompt = found.wait_for(2s) == std::future_status::ready;
+  // Lets a regressed build finish rather than hang the suite.
+  held.reset();
+  slots.clear();
+  EXPECT_TRUE(prompt);
   EXPECT_TRUE(found.get());
   EXPECT_EQ(peer.calls_of(message::get_control_object), 0u);
+  // A commit's CONTROL write and claim on this node alone, with DATA held
+  // again: control work takes no DATA credit.
+  held = node.credit()->acquire(DataWorkContext(FrameType::loader, extent), extent);
+  ASSERT_TRUE(held.has_value());
+  const auto credit_before = node.credit()->stats();
+  EXPECT_TRUE(node.store().retain_control({id}, contract::RetentionDot{node.id(), 1}, DistributedStore::ClaimScope::here));
+  EXPECT_TRUE(node.claims().retained(contract::RetentionClass::control, id));
+  const auto credit_after = node.credit()->stats();
+  EXPECT_EQ(credit_after.loader_admissions + credit_after.speculative_admissions + credit_after.foreground_admissions,
+            credit_before.loader_admissions + credit_before.speculative_admissions + credit_before.foreground_admissions);
 }
 
 // ---- Moved from Macha's test_storage_v18.cpp --------------------------------

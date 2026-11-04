@@ -11,11 +11,17 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
+#include <vector>
 
 #include "dagda/contract/claim_store.h"
+#include "dagda/ledger/trie_union.h"
+#include "dagda/store/data_work.h"
 #include "dagda/store/local_store.h"
+#include "dagda/store/persistent_cache.h"
 #include "dagda/store/storage_pool.h"
 #include "dannan/context.h"
 #include "dannan/contract/thread_safety.h"
@@ -23,7 +29,7 @@
 
 namespace dagda::store {
 
-// Macha's figures for the serving side, with its defaults.
+// Macha's figures for the serving side, with its defaults, and Dagda's.
 struct StorageServerOptions {
   // The largest DATA object a peer may put (Macha's extent_size); larger is
   // refused 413.
@@ -33,18 +39,43 @@ struct StorageServerOptions {
   bool hosts_extents = true;
   // How often the pool is refreshed and its figures advertised.
   std::chrono::milliseconds refresh_interval{10000};
+  // How long a served request waits for its admission (DATA credit, a
+  // device slot) before it is refused 503 storage_busy. Macha's waited for
+  // the arbiter's no-progress window; every wait here has a deadline.
+  std::chrono::milliseconds admission_wait{30000};
+};
+
+// What a served request is admitted by: the node's DATA credit arbiter and
+// its device I/O reserve. Either may be absent (a node or test that admits
+// everything); both outlive the server.
+struct StorageServerAdmission {
+  DataResourceArbiter* credit = nullptr;
+  IoReserve* io = nullptr;
 };
 
 // The serving side of this node's stores (requirement S30; Macha's
 // cluster/storage_server.cpp): answers peers' DATA and CONTROL object
-// requests (presence, reads, writes, durability tickets and claims) as
+// requests (presence, validated presence, reads, writes, deletes, durability
+// tickets and claims) and their questions to this node's held trie, as
 // Dagda's routes on Dannan (messages.h), with protocol 23's payloads, and
 // keeps the store's adverts current: the pool's limit as its capacity, what
 // it holds, and whether it hosts extents.
 //
-// Not moved here (step 3b): have_valid_objects and trie_diff (repair's
-// presence and the diff), delete_object, and the DATA credit arbiter's
-// admission of each request; nothing here waits for DATA credit.
+// Admission (step 3b): a request that reads or writes the DATA device holds
+// DATA credit for its class and a DATA slot of the device reserve across the
+// device operation, as Macha's handlers held their lease; one on the CONTROL
+// store or the claims (put_control_object, get_control_object,
+// have_control_objects, retain_objects) holds a control slot and never DATA
+// credit (law 1). A trie question reads the state device only and takes
+// neither. Waits are bounded by admission_wait; a probe that must not wait
+// (have_object, have_valid_objects, delete_object) tries once.
+//
+// The trie questions (requirement L7): a root question pins the node's
+// current held union under its hash, at most four, each dropped two minutes
+// after it was last asked about; later questions name it. 503
+// holdings_seeding while a disk is being seeded, 410 snapshot_gone for a
+// snapshot no longer pinned, 413 prefix_too_large for a records question
+// past a leaf.
 //
 // The types must be registered (message::register_types) before the node
 // starts; the server binds its handlers on construction and unbinds them,
@@ -56,9 +87,11 @@ class StorageServer {
     StoragePool& data;
     LocalStore& control;
     contract::ClaimStore& claims;
+    // A delete removes the object here too, when given.
+    PersistentBlockCache* cache = nullptr;
   };
 
-  StorageServer(dannan::Context& context, Stores stores, StorageServerOptions options = {});
+  StorageServer(dannan::Context& context, Stores stores, StorageServerOptions options = {}, StorageServerAdmission admission = {});
   ~StorageServer();
   StorageServer(const StorageServer&) = delete;
   StorageServer& operator=(const StorageServer&) = delete;
@@ -72,16 +105,36 @@ class StorageServer {
   // that bound its own handler in front of the server's (a test's fault).
   dannan::net::Handled handle(const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request);
 
+  // The messages the server answers, for a wrapper that binds in front.
+  static const std::vector<dannan::net::MessageType>& served();
+
  private:
+  std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, bool wait);
+  std::optional<IoReserve::Slot> admit_control();
+  dannan::net::Handled answer_trie(const dannan::net::Message& request);
   void refresh_loop(std::stop_token stop);
 
   dannan::Context& _context;
   StoragePool& _data;
   LocalStore& _control;
   contract::ClaimStore& _claims;
+  PersistentBlockCache* const _cache;
   const StorageServerOptions _options;
+  const StorageServerAdmission _admission;
   const dannan::status::ScopedLogger _logger;
   const dannan::status::NodeEvents::Kind _storage_event;
+
+  // The held unions pinned for peers' diffs, newest last.
+  struct Pinned {
+    dannan::identity::Hash256 hash{};
+    std::shared_ptr<const ledger::TrieUnion> trie;
+    std::chrono::steady_clock::time_point used{};
+  };
+  static constexpr size_t pinned_max = 4;
+  static constexpr std::chrono::minutes pinned_for{2};
+  dannan::contract::Mutex _pins_mutex;
+  std::vector<Pinned> _pins DANNAN_GUARDED_BY(_pins_mutex);
+
   // Guards nothing; the refresher waits on it.
   std::mutex _refresh_mutex;
   std::condition_variable_any _refresh_wake;

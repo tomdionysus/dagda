@@ -14,19 +14,28 @@
 // test_a_device_far_slower_than_it_should_be_is_noticed,
 // test_the_single_sample_trip_scales_with_the_operation,
 // test_a_read_is_measured_with_the_bytes_it_returned,
-// test_maintenance_reads_are_part_of_the_service_time_they_spend. The other
-// seven cases there are the DATA credit arbiter's (cluster/data_work.hpp),
-// which moves at step 3. Macha's process logger is the monitor's own scoped
-// logger.
+// test_maintenance_reads_are_part_of_the_service_time_they_spend, and, with
+// the DATA credit arbiter (cluster/data_work.hpp, step 3b), its seven:
+// test_a_viewer_is_never_refused_because_the_disk_is_slow,
+// test_the_loader_runs_freely_under_pressure_with_no_viewer,
+// test_the_loader_yields_to_a_viewer_on_a_slow_device,
+// test_a_viewer_between_two_extents_is_still_a_viewer,
+// test_background_work_always_drains_on_a_pressured_device,
+// test_control_cannot_enter_the_data_arbiter_at_all,
+// test_with_no_device_admission_is_exactly_what_it_was. Macha's process
+// logger is the monitor's own scoped logger; its viewer is Dannan's
+// foreground class.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <string_view>
 #include <vector>
 
+#include "dagda/store/data_work.h"
 #include "dagda/store/io_pressure.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/storage_pool.h"
@@ -36,6 +45,7 @@ namespace dagda::store {
 namespace {
 
 using namespace std::chrono_literals;
+using dannan::sched::FrameType;
 using test::pattern;
 using test::RecordingSink;
 using test::StoreBed;
@@ -222,6 +232,182 @@ TEST(StoreIoPressure, TheTimerMeasuresOnTheInjectedTime) {
   EXPECT_TRUE(monitor.pressured());
   // A null monitor measures nothing.
   DiskServiceTimer idle(nullptr, 4096, time);
+}
+
+// ---- The DATA credit arbiter ------------------------------------------------
+
+DataWorkContext work(const DataResourceArbiter& arbiter, FrameType frame) { return DataWorkContext(frame, 0, arbiter.now() + 2s); }
+
+// Macha: test_a_viewer_is_never_refused_because_the_disk_is_slow. Pressure
+// may only refuse work nobody is waiting for.
+TEST(StoreIoPressure, AForegroundRequestIsNeverRefusedBecauseTheDiskIsSlow) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms);
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  std::vector<DataResourceArbiter::Lease> foreground;
+  for (int i = 0; i < 3; ++i) {
+    auto lease = arbiter.try_acquire(work(arbiter, FrameType::foreground), 1024 * 1024);
+    ASSERT_TRUE(lease.has_value());
+    foreground.push_back(std::move(*lease));
+  }
+  const auto read_ahead = arbiter.try_acquire(work(arbiter, FrameType::read_ahead), 1024 * 1024);
+  EXPECT_TRUE(read_ahead.has_value());
+
+  const auto stats = arbiter.stats();
+  EXPECT_TRUE(stats.device_pressured);
+  EXPECT_GT(stats.device_service_us, 50000u);
+  EXPECT_EQ(stats.pressure_refusals, 0u);
+}
+
+// Macha: test_the_loader_runs_freely_under_pressure_with_no_viewer. Law 3:
+// the loader waits only if it would make a foreground user wait.
+TEST(StoreIoPressure, TheLoaderRunsFreelyUnderPressureWithNoForegroundUser) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms, [] { return false; });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  std::vector<DataResourceArbiter::Lease> loaders;
+  for (int i = 0; i < 4; ++i) {
+    auto lease = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+    ASSERT_TRUE(lease.has_value());
+    loaders.push_back(std::move(*lease));
+  }
+  EXPECT_EQ(arbiter.stats().pressure_refusals, 0u);
+
+  // Speculative work, below the loader, still stands aside.
+  const auto speculative = arbiter.try_acquire(work(arbiter, FrameType::speculative), 1024 * 1024);
+  EXPECT_FALSE(speculative.has_value());
+  // Refusals are counted so the throttle's cost is visible.
+  EXPECT_EQ(arbiter.stats().pressure_refusals, 1u);
+}
+
+// Macha: test_the_loader_yields_to_a_viewer_on_a_slow_device. With a
+// foreground user present the loader yields to a trickle, not a stop.
+TEST(StoreIoPressure, TheLoaderYieldsToAForegroundUserOnASlowDevice) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms, [] { return false; });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  // A foreground request holding credit is a foreground user present.
+  auto foreground = arbiter.try_acquire(work(arbiter, FrameType::foreground), 1024 * 1024);
+  ASSERT_TRUE(foreground.has_value());
+
+  auto first = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  ASSERT_TRUE(first.has_value());
+  const auto second = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  EXPECT_FALSE(second.has_value());
+  EXPECT_EQ(arbiter.stats().pressure_refusals, 1u);
+
+  // Releasing the trickle lease lets the next unit of loader work through.
+  first.reset();
+  const auto next = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  EXPECT_TRUE(next.has_value());
+
+  auto another = arbiter.try_acquire(work(arbiter, FrameType::read_ahead), 1024 * 1024);
+  EXPECT_TRUE(another.has_value());
+
+  // With the user gone, the loader gets its concurrency back on the still
+  // slow device.
+  foreground.reset();
+  another.reset();
+  const auto unblocked = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  EXPECT_TRUE(unblocked.has_value());
+}
+
+// Macha: test_a_viewer_between_two_extents_is_still_a_viewer. Playback holds
+// no credit between extents, so presence comes from the activity signal the
+// arbiter is given, not from held credit.
+TEST(StoreIoPressure, AForegroundUserBetweenTwoExtentsIsStillPresent) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  std::atomic_bool watching{true};
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms, [&] { return watching.load(); });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  // No foreground credit is held, yet the loader still yields to its trickle.
+  const auto first = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  ASSERT_TRUE(first.has_value());
+  const auto second = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  EXPECT_FALSE(second.has_value());
+
+  // A foreground request arriving mid-gap is still never refused.
+  auto foreground = arbiter.try_acquire(work(arbiter, FrameType::foreground), 1024 * 1024);
+  EXPECT_TRUE(foreground.has_value());
+
+  // Once the stream has stopped, the loader takes the disk back.
+  watching = false;
+  foreground.reset();
+  const auto resumed = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  EXPECT_TRUE(resumed.has_value());
+}
+
+// Macha: test_background_work_always_drains_on_a_pressured_device. Law 4:
+// min_background always admits one lease when nothing is active, so
+// background work keeps feeding the monitor and the average can fall.
+TEST(StoreIoPressure, BackgroundWorkAlwaysDrainsOnAPressuredDevice) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms, [] { return true; });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 200; ++i) monitor.note(30000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  // Under sustained overload with a foreground user present, the trickle
+  // still turns over one lease at a time.
+  for (int i = 0; i < 50; ++i) {
+    const auto lease = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+    ASSERT_TRUE(lease.has_value());
+  }
+
+  // A recovered device releases pressure.
+  for (int i = 0; i < 100; ++i) monitor.note(80ms, 4 * 1024 * 1024);
+  EXPECT_FALSE(monitor.pressured());
+  std::vector<DataResourceArbiter::Lease> loaders;
+  for (int i = 0; i < 4; ++i) {
+    auto lease = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+    ASSERT_TRUE(lease.has_value());
+    loaders.push_back(std::move(*lease));
+  }
+}
+
+// Macha: test_control_cannot_enter_the_data_arbiter_at_all. Law 1: control
+// work never enters the DATA arbiter: a DATA work context for it throws, and
+// so does asking the arbiter or the device's DATA share in its name.
+TEST(StoreIoPressure, ControlCannotEnterTheDataArbiterAtAll) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms);
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  EXPECT_THROW(DataWorkContext{FrameType::control}, std::invalid_argument);
+  IoReserve io;
+  EXPECT_THROW(admit_data(&arbiter, &io, FrameType::control, 4096, 100ms), std::invalid_argument);
+  EXPECT_THROW(admit_data(nullptr, nullptr, FrameType::control, 4096, 100ms), std::invalid_argument);
+  EXPECT_EQ(arbiter.stats().used_bytes, 0u);
+}
+
+// Macha: test_with_no_device_admission_is_exactly_what_it_was. Without an
+// observed device, pressure never refuses anything.
+TEST(StoreIoPressure, WithNoDeviceAdmissionIsExactlyWhatItWas) {
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 500ms);
+  std::vector<DataResourceArbiter::Lease> loaders;
+  for (int i = 0; i < 6; ++i) {
+    auto lease = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+    ASSERT_TRUE(lease.has_value());
+    loaders.push_back(std::move(*lease));
+  }
+  const auto stats = arbiter.stats();
+  EXPECT_FALSE(stats.device_pressured);
+  EXPECT_EQ(stats.device_service_us, 0u);
+  EXPECT_EQ(stats.pressure_refusals, 0u);
 }
 
 }  // namespace

@@ -12,6 +12,7 @@ add_library(dagda SHARED
   contract/gates.cpp
   contract/horizon.cpp
   domain/storage_key.cpp
+  ledger/availability.cpp
   ledger/claim_walk.cpp
   ledger/collector.cpp
   ledger/held_ledger.cpp
@@ -24,8 +25,10 @@ add_library(dagda SHARED
   ledger/trie_diff.cpp
   ledger/trie_union.cpp
   ledger/unreferenced_since.cpp
+  store/availability.cpp
   store/control_objects.cpp
   store/control_store.cpp
+  store/data_work.cpp
   store/distributed_store.cpp
   store/durability_domain.cpp
   store/durability_ticket.cpp
@@ -38,6 +41,7 @@ add_library(dagda SHARED
   store/persistent_cache.cpp
   store/placement.cpp
   store/presence_index.cpp
+  store/repair.cpp
   store/replica_selector.cpp
   store/sealing.cpp
   store/state_layout.cpp

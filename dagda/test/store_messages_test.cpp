@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "dagda/ledger/trie_diff.h"
 #include "dagda/store/messages.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/routes.h"
@@ -152,6 +153,34 @@ TEST(StoreMessages, AClaimIsClassDotThenIds) {
   EXPECT_THROW(decode_retain(bad_class), dannan::net::DecodeError);
 }
 
+// Repair's messages (step 3b). have_valid_objects: the presence request's
+// bytes, at most 16 ids; its reply a count then a byte each, 1 intact, 0
+// absent, 2 cannot say (and any other byte read as cannot say, as Macha's
+// reader does). delete_object: the id. trie_diff: ledger/trie_diff's
+// question, here a root question (kind 0, trie 0, a zero hash, no
+// prefixes).
+TEST(StoreMessages, RepairsMessagesAreProtocol23s) {
+  const std::vector<ObjectId> ids{id_a, id_b};
+  const auto request =
+      "00000002f110686f239efc75e4b3d14dbfd31600eaa4de19089d633bbea49bfec8740ac799f12af7fc1e445f724cbb357fb31cfd220ff639ad9380b4fd0d6a5d8435f8e6";
+  EXPECT_EQ(hex(encode_ids(ids)), request);
+  EXPECT_EQ(decode_ids(unhex(request), max_valid_batch), ids);
+  std::vector<ObjectId> seventeen(17, id_a);
+  EXPECT_THROW(decode_ids(encode_ids(seventeen), max_valid_batch), dannan::net::DecodeError);
+
+  const std::vector<Validity> answers{Validity::intact, Validity::absent, Validity::cannot_say};
+  EXPECT_EQ(hex(encode_validity(answers)), "00000003010002");
+  EXPECT_EQ(decode_validity(unhex("00000003010002"), 3), answers);
+  EXPECT_EQ(decode_validity(unhex("0000000107"), 1), std::vector<Validity>{Validity::cannot_say});
+  EXPECT_THROW(decode_validity(unhex("00000003010002"), 2), dannan::net::DecodeError);
+  EXPECT_THROW(decode_validity(unhex("000000030100"), 3), dannan::net::DecodeError);
+
+  EXPECT_EQ(hex(encode_id(id_a)), "f110686f239efc75e4b3d14dbfd31600eaa4de19089d633bbea49bfec8740ac7");
+
+  ledger::TrieQuestion root;
+  EXPECT_EQ(hex(ledger::encode_trie_question(root)), "0000" + std::string(64, '0') + "00000000");
+}
+
 // Dagda's numbers: 512 plus protocol 23's, all of them user types, none of
 // them two things.
 TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
@@ -170,6 +199,11 @@ TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
   EXPECT_EQ(static_cast<uint16_t>(control_object_reply), 512 + 107);
   EXPECT_EQ(static_cast<uint16_t>(have_objects_reply), 512 + 118);
   EXPECT_EQ(static_cast<uint16_t>(have_control_objects_reply), 512 + 121);
+  EXPECT_EQ(static_cast<uint16_t>(delete_object), 512 + 13);
+  EXPECT_EQ(static_cast<uint16_t>(have_valid_objects), 512 + 47);
+  EXPECT_EQ(static_cast<uint16_t>(trie_diff), 512 + 49);
+  EXPECT_EQ(static_cast<uint16_t>(have_valid_objects_reply), 512 + 123);
+  EXPECT_EQ(static_cast<uint16_t>(trie_diff_reply), 512 + 125);
 
   // Registered on a table as Dannan's node registers them, with the lanes
   // protocol 23 gave each.
@@ -209,6 +243,16 @@ TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
     EXPECT_TRUE(table.allowed(type, Lane::control, FrameType::speculative)) << table.name(type);
     EXPECT_FALSE(table.allowed(type, Lane::data, FrameType::speculative)) << table.name(type);
   }
+  // Repair's: a validated presence and a delete take DATA credit on the
+  // peer, so never in the control frame; a trie question in any class.
+  for (const auto type : {delete_object, have_valid_objects}) {
+    EXPECT_TRUE(table.allowed(type, Lane::control, FrameType::speculative)) << table.name(type);
+    EXPECT_FALSE(table.allowed(type, Lane::control, FrameType::control)) << table.name(type);
+    EXPECT_FALSE(table.allowed(type, Lane::data, FrameType::speculative)) << table.name(type);
+  }
+  EXPECT_TRUE(table.allowed(trie_diff, Lane::control, FrameType::speculative));
+  EXPECT_TRUE(table.allowed(trie_diff, Lane::control, FrameType::control));
+  EXPECT_FALSE(table.allowed(trie_diff, Lane::data, FrameType::speculative));
   EXPECT_TRUE(table.allowed(have_control_objects, Lane::control, FrameType::control));
   EXPECT_FALSE(table.allowed(have_control_objects, Lane::control, FrameType::speculative));
   EXPECT_TRUE(table.allowed(object_reply, Lane::data, FrameType::foreground));

@@ -210,3 +210,17 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 | `ledger/node_horizon_builder.{hpp,cpp}`, `contract/horizon_builder.hpp` | `dagda/ledger/node_horizon_builder.{h,cpp}` over `contract::ReachabilityProvider` (`dagda/contract/reachability.h`) |
 | `service/claim_walk.{hpp,cpp}` | `dagda/ledger/claim_walk.{h,cpp}` |
 | `service/maintenance.cpp:620-660`, `:866-1071`; `CatalogueManager::control_gc_step` (`catalogue.cpp:2355-2433`) | `dagda/ledger/collector.{h,cpp}` (`Collector`); the catalogue's root epoch is the provider's `ControlEpoch` |
+
+## The pieces moved in step 3b
+
+| Macha | Dagda |
+|---|---|
+| `cluster/data_work.hpp` (`DataWorkContext`, `DataResourceArbiter`, `DataResourceStats`) | `dagda/store/data_work.{h,cpp}`: "viewer" is Dannan's foreground class; the work context is Dannan's `sched::WorkContext` with a deadline on the injected time; every wait has a deadline (the no-progress window may not be zero); the abandoned-wait warning goes to an optional scoped logger, outside the lock. New beside it: `IoReserve`, the device I/O reserve for control work (section 7 item 4), and `admit_data` / `admit_control` |
+| `fuse/fuse_frontend.hpp` `WeightedLoaderService` (repair's share, `service/maintenance.cpp:309-313`) | **missing in Dannan (request)**: generic scheduling. File-local in `dagda/store/repair.cpp` (`Repair::Share`) with a `TODO(Dannan: ...)` until Dannan's `sched/` has one |
+| `NodeRuntime::peer_viewers_active` (`cluster/cluster.cpp:717`) | Dannan's telemetry (`Context::telemetry().views`, per-class traffic), read in `Repair` |
+| `ledger/availability.{hpp,cpp}` (`AvailabilitySurvey`, `PeerDiff`, `survey_by_diff`, `keep_unavailable`) | `dagda/ledger/availability.{h,cpp}`; `PeerLacks` moved in from the service |
+| `service/availability_service.{hpp,cpp}` without its path table (`RemoteTrie`, `refresh`, `answer_trie`) | `dagda/store/availability.{h,cpp}` (`AvailabilityService`); the trie questions are answered by the storage server, which pins the pool's held union. The path table, `fill_path_table`, `update_path_table` and `availability/last-survey.bin` are Macha's (its namespace) |
+| `cluster/distributed_store.cpp:2083-2095`, `:2291-2311`, `:2260-2284`, `:2324-3087` (`replicate_all`, `erase_all`, `ensure_local`, `repair_step` diff only) | `DistributedStore` (`dagda/store/distributed_store.{h,cpp}`); the cursor walks, `repair_position`, `validated_presence` as a probe and the `have_object` fallback are not moved (the maintainer, 2026-11-04) |
+| `service/maintenance.cpp:674-852` (the repair stage: survey, claim walks with a credited restorer, the repair step, its gates) | `dagda/store/repair.{h,cpp}` (`Repair::pass`) |
+| `cluster/storage_server.cpp` `have_valid_objects`, `delete_object` and each route's admission | `dagda/store/storage_server.{h,cpp}` |
+

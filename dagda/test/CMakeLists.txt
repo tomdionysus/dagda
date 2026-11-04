@@ -18,6 +18,7 @@ add_executable(dagda_tests
   contract_gates_test.cpp
   contract_include_direction_test.cpp
   domain_storage_key_test.cpp
+  ledger_availability_test.cpp
   ledger_claim_walk_test.cpp
   ledger_collector_test.cpp
   ledger_held_ledger_test.cpp
@@ -30,6 +31,7 @@ add_executable(dagda_tests
   ledger_trie_union_test.cpp
   ledger_unreferenced_since_test.cpp
   store_control_store_test.cpp
+  store_data_work_test.cpp
   store_distributed_store_test.cpp
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
@@ -43,6 +45,7 @@ add_executable(dagda_tests
   store_object_id_test.cpp
   store_persistent_cache_test.cpp
   store_presence_index_test.cpp
+  store_repair_test.cpp
   store_replica_selector_test.cpp
   store_sealing_test.cpp
   store_state_layout_test.cpp
