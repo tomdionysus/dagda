@@ -77,8 +77,9 @@ projects, with recommendations for Tom.
 - Store messages keep Macha's payload encodings inside Dannan's wire v1
   framing, under Dagda's numbers from 512 (Tom's format decision, as the
   Dannan session reads it too).
-- Dannan's `dagda/` stub (version stub and one test) goes from Dannan's
-  tree when this project has what it needs from it.
+- Dannan's `dagda/` stub is gone (Dannan `b8483e2`, merged to its
+  `develop`): Dannan defines no `dagda` target, and its gate is
+  `dannan_tests` alone.
 
 ## The plan (approved by Tom, 2026-11-04)
 
@@ -92,7 +93,25 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
 0. ~~**Skeleton.**~~ Done 2026-11-04 on `feature/skeleton`: links
    Dannan 0.2.0 by `find_package`, `dagda_tests` 3 (`COMPLETED.md`).
    `--version` arrives with Dagda's first tool.
-1. **Local store** (`store/`, `domain/` v1). `LocalStore`, loose files
+1. **Local store** (`store/`, `domain/` v1), on `feature/local-store`,
+   in four sessions, because `LocalStore` keeps the held trie and the
+   pool and cache reach into config, placement and metadata:
+   - ~~**1a**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 37).
+     Foundations and sealing: Macha's foundations mapped onto
+     Dannan's (codec, crypto, logging, durable files, thread safety,
+     observation, work classes), with byte compatibility checked where a
+     format depends on them; object ids, the storage key derived from the
+     cluster key, sealing with the id as AAD; the presence index; the
+     durability domain and tickets.
+   - **1b** The held trie (`ledger/`: object trie, held ledger, trie
+     union), which `LocalStore` keeps.
+   - **1c** `LocalStore`: loose files and packs, torn tails, compaction,
+     tombstones; write-behind.
+   - **1d** `StoragePool`, I/O pressure, `unreferenced_since`, the
+     CONTROL store, the persistent cache without its metadata seed
+     (that waits for heads, step 4).
+
+   The whole of step 1: `LocalStore`, loose files
    and packs, torn-tail truncation and compaction, `DurabilityDomain`
    generations and tickets, `StoragePool` over several backends with
    capacity ranking, the separate CONTROL store, the persistent cache;

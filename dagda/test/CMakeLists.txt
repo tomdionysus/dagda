@@ -15,5 +15,11 @@ target_compile_definitions(dagda_test_fixtures INTERFACE DANNAN_TEST_TEMP_ROOT="
 
 add_executable(dagda_tests
   version_test.cpp
+  domain_storage_key_test.cpp
+  store_durability_domain_test.cpp
+  store_durability_ticket_test.cpp
+  store_object_id_test.cpp
+  store_presence_index_test.cpp
+  store_sealing_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)

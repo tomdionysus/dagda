@@ -9,6 +9,12 @@
 # Dannan; Dannan never includes anything from here.
 add_library(dagda SHARED
   version.cpp
+  domain/storage_key.cpp
+  store/durability_domain.cpp
+  store/durability_ticket.cpp
+  store/object_id.cpp
+  store/presence_index.cpp
+  store/sealing.cpp
 )
 add_library(dagda::dagda ALIAS dagda)
 target_include_directories(dagda
