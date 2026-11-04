@@ -65,13 +65,14 @@ TEST(StoreControlStore, AControlWriteIsNotBlockedByDataExhaustion) {
 
 // Macha's local state's placement and defaults: <state>/metadata-objects
 // unless a path is given, a held ledger at <state>/ledger/control, 4 GiB,
-// and objects at or below 1 MiB packed.
+// and objects at or below 1 MiB packed; and, over Macha, a 256 MiB
+// free-space reserve (the maintainer, 2026-11-04).
 TEST(StoreControlStore, TheControlStoreTakesMachasPlaceAndDefaults) {
   StoreBed bed;
   const auto state = bed.dir.path() / "state";
   const ControlStoreOptions defaults;
   EXPECT_EQ(defaults.limit, 4ULL * 1024 * 1024 * 1024);
-  EXPECT_EQ(defaults.reserve_free, 0u);
+  EXPECT_EQ(defaults.reserve_free, 256ULL * 1024 * 1024);
   EXPECT_EQ(control_store_path(state, defaults), state / "metadata-objects");
   EXPECT_EQ(ledger_cache_share(default_ledger_cache_bytes, LedgerShare::control_held), 4ULL * 1024 * 1024);
   EXPECT_EQ(ledger_cache_share(default_ledger_cache_bytes, LedgerShare::claims), 24ULL * 1024 * 1024);
