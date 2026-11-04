@@ -8,100 +8,12 @@
 #include "dagda/store/repair.h"
 
 #include <algorithm>
-#include <stdexcept>
 
 #include "dannan/contract/thread_safety.h"
 
 namespace dagda::store {
 
-using dannan::contract::Lock;
 using dannan::contract::TimePoint;
-
-// The duty share between repair and the classes above it (Macha's
-// WeightedLoaderService, fuse/fuse_frontend.hpp:69-194): with no higher
-// class present repair always runs; with one present a turn of `slice`
-// earns a cooldown of weight times the turn. Both weights are at least one:
-// repair is paced, never stopped.
-// TODO(Dannan: a duty-cycle share by weight, Macha's WeightedLoaderService):
-// generic scheduling, which Macha's FUSE loader uses too; here, file-local,
-// until Dannan's sched/ has one.
-class Repair::Share {
- public:
-  Share(size_t foreground_weight, size_t repair_weight, std::chrono::milliseconds slice)
-      : _foreground_weight(foreground_weight), _repair_weight(repair_weight), _slice(slice) {
-    if (!_foreground_weight || !_repair_weight) throw std::invalid_argument("repair share weights must be at least 1");
-  }
-
-  bool can_start(TimePoint now, bool busy) {
-    Lock lock(_mutex);
-    if (!busy) {
-      reset_locked();
-      return true;
-    }
-    if (now < _not_before) return false;
-    return !_burst_started || now < _slice_deadline;
-  }
-
-  void started(TimePoint now, bool busy) {
-    Lock lock(_mutex);
-    ++_active;
-    if (!busy) {
-      reset_locked();
-      return;
-    }
-    if (!_burst_started) {
-      _burst_started = now;
-      _slice_deadline = now + _slice;
-    }
-  }
-
-  bool should_yield(TimePoint now, bool busy) {
-    Lock lock(_mutex);
-    if (!busy) {
-      reset_locked();
-      return false;
-    }
-    // A higher class arriving mid-turn ends it at the next boundary.
-    if (!_burst_started) {
-      _burst_started = now;
-      _slice_deadline = now;
-      return true;
-    }
-    return now >= _slice_deadline;
-  }
-
-  void finished(TimePoint now, bool busy) {
-    Lock lock(_mutex);
-    if (_active) --_active;
-    if (!busy) {
-      reset_locked();
-      return;
-    }
-    if (_active || !_burst_started) return;
-    const auto active = std::max(std::chrono::duration_cast<std::chrono::milliseconds>(now - *_burst_started), std::chrono::milliseconds(1));
-    const auto ratio = static_cast<long double>(_foreground_weight) / static_cast<long double>(_repair_weight);
-    const auto capped = std::min<long double>(static_cast<long double>(active.count()) * ratio, 24.0L * 60.0L * 60.0L * 1000.0L);
-    _not_before = now + std::chrono::milliseconds(static_cast<int64_t>(capped));
-    _burst_started.reset();
-    _slice_deadline = {};
-  }
-
- private:
-  void reset_locked() DANNAN_REQUIRES(_mutex) {
-    _burst_started.reset();
-    _slice_deadline = {};
-    _not_before = {};
-  }
-
-  const size_t _foreground_weight;
-  const size_t _repair_weight;
-  const std::chrono::milliseconds _slice;
-  dannan::contract::Mutex _mutex;
-  std::optional<TimePoint> _burst_started DANNAN_GUARDED_BY(_mutex);
-  TimePoint _slice_deadline DANNAN_GUARDED_BY(_mutex){};
-  TimePoint _not_before DANNAN_GUARDED_BY(_mutex){};
-  size_t _active DANNAN_GUARDED_BY(_mutex) = 0;
-};
 
 // The claim walk's restorer: presence costs nothing, and only a missing
 // claimed object, which may be fetched, needs an extent of credit.
@@ -128,8 +40,8 @@ Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilitySe
       _availability(availability),
       _ledger(ledger),
       _options(options),
-      _time(options.time ? *options.time : dannan::contract::steady_time_source()),
-      _share(std::make_unique<Share>(options.foreground_weight, options.repair_weight, options.slice)),
+      _time(context.time().source()),
+      _share(options.foreground_weight, options.repair_weight, options.slice),
       _data_walk(contract::RetentionClass::data, &context.observations()),
       _control_walk(contract::RetentionClass::control, &context.observations()) {}
 
@@ -218,16 +130,16 @@ RepairPass Repair::pass() {
     }
     _quiescent = false;
   }
-  if (!_share->can_start(now, busy)) {
+  if (!_share.may_start(now, busy)) {
     note(RepairGate::share);
     return out;
   }
-  _share->started(now, busy);
+  _share.started(now, busy);
   // A throw from either stage must still close the turn, or the share counts
-  // it active for ever and never computes another cooldown.
+  // it active for ever and never computes another rest.
   struct Turn {
     Repair& repair;
-    ~Turn() { repair._share->finished(repair._time.now(), repair.higher_class_active()); }
+    ~Turn() { repair._share.finished(repair._time.now(), repair.higher_class_active()); }
   } turn{*this};
 
   const auto extent = std::max<uint64_t>(1, _options.extent_size);
@@ -242,7 +154,7 @@ RepairPass Repair::pass() {
   }
 
   out.step = _store.repair_step(lists, static_cast<uint64_t>(_credit), _options.operation_budget,
-                                [this] { return _share->should_yield(_time.now(), higher_class_active()); });
+                                [this] { return _share.should_yield(_time.now(), higher_class_active()); });
   _credit = std::max(0.0, _credit - static_cast<double>(out.step.bytes_transferred));
   if (out.step.credit_limited) {
     // The credit accrued by the next pass covers the next extent.

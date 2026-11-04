@@ -20,17 +20,19 @@
 #include "dagda/store/distributed_store.h"
 #include "dannan/context.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/sched/duty_share.h"
 
 namespace dagda::store {
 
 // Macha's maintenance figures that pace repair (config.hpp
 // MaintenanceConfig), with its defaults.
 struct RepairOptions {
-  // Repair shares time with every higher class by weight: while foreground
-  // or loader work is present, a turn of `slice` earns a cooldown of
-  // foreground_weight / repair_weight times the turn. Both at least 1.
-  size_t foreground_weight = 95;
-  size_t repair_weight = 5;
+  // Repair shares time with every higher class by weight (Dannan's
+  // DutyShare): while foreground or loader work is present, a turn of
+  // `slice` earns a rest of foreground_weight / repair_weight times the
+  // turn. Both at least 1.
+  uint32_t foreground_weight = 95;
+  uint32_t repair_weight = 5;
   std::chrono::milliseconds slice{25};
   // A class counts as present this long after its last activity.
   std::chrono::milliseconds foreground_quiet{2000};
@@ -47,8 +49,6 @@ struct RepairOptions {
   // Calls one step may make.
   size_t operation_budget = 16;
   size_t extent_size = 16 * 1024 * 1024;
-  // The clock the share and the credit run on; null is the steady clock.
-  const dannan::contract::TimeSource* time = nullptr;
 };
 
 // Why a pass's repair did or did not run: it ran; a higher class held it to
@@ -100,7 +100,6 @@ class Repair {
   RepairGates gates() const;
 
  private:
-  class Share;
   class Restorer;
   bool higher_class_active() const;
   // A peer's telemetry shows foreground traffic now.
@@ -112,7 +111,8 @@ class Repair {
   contract::ObjectLedger& _ledger;
   const RepairOptions _options;
   const dannan::contract::TimeSource& _time;
-  std::unique_ptr<Share> _share;
+  // Repair's duty share against the classes above it.
+  dannan::sched::DutyShare _share;
   ledger::ClaimWalk _data_walk;
   ledger::ClaimWalk _control_walk;
   double _credit = 0.0;
