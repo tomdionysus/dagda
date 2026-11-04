@@ -357,6 +357,19 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    version check, its Heads, Retained and node-local spaces added at
    step 4 before the version is frozen. The "0.18" wording in
    `store/state_layout.cpp` reworded.
+7b. **Maintenance in the node, the per-domain wait, the instant delete**
+   (the maintainer, 2026-11-04 night; `feature/maintenance`). The collector and the
+   maintenance loop (GC and repair passes on the node's timer) move into
+   `dagda::Node`, the owner supplying only its `ReachabilityProvider`.
+   The collector's grace (30 days, Macha's) becomes a per-domain setting.
+   An instant delete in the Context: `remove(ids, observed clock,
+   WriteScope)`, scope-checked like a write; each replica releases only
+   the claims the caller's observed clock dominates, and removes the
+   object at once when no claim remains and the current inventory does
+   not refer to it; otherwise it stays, and the evidence names, node by
+   node, what was removed and what claim kept the rest. Readiness: Dannan
+   `f3d5456` adds `Readiness::declare` (untagged); at the next tag Dagda
+   declares its own planes and drops `readiness_planes()`.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
@@ -482,6 +495,13 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
   The store encodings (packs,
   the tree forms, the Merkle tree) are free to change where a step has
   reason; Macha's bytes bind nothing any more.
+- (the maintainer, 2026-11-04 night) **Claims and space.** Claims stay released by
+  the collector against the owner's head (safe across a partition: a
+  release covers only writes the head has seen). Added: **an instant
+  delete**, safe because a replica releases only the claims the caller's
+  observed clock dominates and keeps any other; and **the collector's
+  wait settable per domain**. **Maintenance moves into the node now**
+  (the collector and the GC and repair loop), not left to each owner.
 - **Do not modify `../macha` until told to.**
 
 From `../dannan/TODO/ACTIVE.md`, binding Dagda, not reopened without
