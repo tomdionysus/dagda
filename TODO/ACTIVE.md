@@ -301,12 +301,27 @@ asking:
 
 ## Waiting on Tom
 
-1. Dagda's plan: the order of step 7's pieces (`domain/`, `store/`,
-   `ledger/`, `heads/`, `lease/`, `dagda::Context`) and the first step.
-2. ~~The header block's second line.~~ Settled: "Dagda - The Store".
-3. Versioning: Dannan's plan had one number for both libraries in one
-   repository. As separate repositories, Dagda presumably takes its own
-   number from `0.1.0`, pinning a Dannan tag.
-4. ~~Dannan's next tag and an install/export target.~~ Settled: 0.2.0.
-5. ~~Message number blocks.~~ Settled: free registration from 512.
-6. ~~Grandfathering.~~ Settled: compatible, byte for byte (Decisions).
+Open, none blocking (each has a default that keeps Macha's behaviour):
+
+1. **The control store's free-space reserve** defaults to Macha's 0. A
+   figure above 0 keeps CONTROL writable after DATA's reserve stops DATA
+   writes on a shared filesystem. Recommended: a small reserve (for
+   example 256 MiB).
+2. **A missing `retention/ledger` marker over non-empty claims tries**:
+   Macha rebuilds both tries empty and replays the journal, so every
+   checkpointed claim is lost (`retention.cpp:383-400`, `:457-458` at
+   develop; shown by reading, not by a test). Dagda does the same for
+   now. Recommended: refuse to open and say why (discipline 3), since a
+   lost claim lets GC remove what someone still needs.
+3. **Dannan 0.3.0**: Dannan's identity step, `contract::Unlocked` and the
+   helpers Dagda asked for are on its `develop`, untagged. Dagda moves its
+   pin when Tom cuts 0.3.0 (Dagda's scope check and domains need it from
+   step 6).
+
+Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store",
+Dagda's own version number from `0.1.0` pinning a Dannan tag, Dannan
+0.2.0, free message registration from 512, byte-for-byte compatibility.
+Decided by the Dagda session under the rules: the store's layout marker
+is Dagda's; the gates' and observations' "catalogue" wording stays as
+Macha's until Macha no longer reads it (its Status must stay
+byte-identical through the port).
