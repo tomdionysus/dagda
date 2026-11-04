@@ -101,8 +101,8 @@ WrappedKey decode_wrapped_key(std::span<const uint8_t> bytes);
 // The advert: the public half, a signature by the node's certificate key
 // over wrap_label || node id || public half, and the node's certificate
 // (DER), by which a peer checks the signer. The certificate travels in the
-// advert because Dannan 0.3.0 exposes no peer's certificate through the
-// Context or the roster.
+// advert because one advert goes to every node, including those that have
+// never met this one, for which Nodes::certificate has nothing.
 struct WrapAdvert {
   std::array<uint8_t, 32> public_key{};
   Bytes signature;

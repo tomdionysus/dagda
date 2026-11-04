@@ -12,9 +12,10 @@ node's dead second grace setting is gone and the wait is only
 `NodeOptions::garbage_grace`, the domain's. `store::WritePrincipal`
 defaults its comparison on Dannan 0.4.0's `Principal::operator==`. The
 README names Dannan 0.4.1 and the current status; `ACTIVE.md`'s header
-says where things stand. Still to adopt with the next domain work:
-`Nodes::certificate` and `Identity::ca_certificate`, to shrink the wrap
-advert. Gate: `dagda_tests` 389 passing, 1 disabled, unchanged.
+says where things stand. Not adopted: `Nodes::certificate` and
+`Identity::ca_certificate` for the wrap advert, which is one gossiped
+value and cannot drop its certificate per peer; decided with the domain
+catalogue (`ACTIVE.md`). Gate: `dagda_tests` 389 passing, 1 disabled, unchanged.
 
 ## 2026-11-04 night: Dannan 0.4.1, the node declares its planes (`feature/declare-planes`)
 

@@ -542,9 +542,16 @@ the unkeyed-record fixes, the same.
 - Step 4 (heads), and with it retained values and the heads part of
   `dagda::Context` (step 7), wait on Macha's tree-native branch merging
   (its order is the operator's). The parts of steps 6 and 7 that need
-  no head are done; the wrap advert drops the certificate DER for peers
-  met by certificate (Dannan 0.4.0's `Nodes::certificate`) with the next
-  domain work.
+  no head are done.
+
+**For the domain catalogue (step 6, with heads):** whether the wrap advert
+keeps its certificate. An advert is one gossiped value, so it cannot carry
+the certificate for some peers and not others. Either it stays and a
+verifier prefers the certificate Dannan's `Nodes::certificate` proved, or
+it goes and a verifier that has never met the peer calls it first.
+Nothing outside the tests verifies an advert until the catalogue does, so
+this is decided with that caller, with the certificate's real size in
+gossip in hand. Recommended then: keep it, prefer the proved one.
 
 Decided by the Dagda session under the rules (step 5): a lease's
 `scope` is the head space its record lives in (plan 163); three
