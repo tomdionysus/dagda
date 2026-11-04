@@ -25,8 +25,8 @@ projects, with recommendations for Tom.
 
 ## Dannan, as Dagda finds it (from the Dannan session, 2026-11-03 night)
 
-**For the repin to 0.4.0** (Dannan `develop` `57ebdb2`, untagged; 0.4.0
-when Tom cuts it): step 6's three requests are in. `identity::
+**Dannan 0.4.0 is cut and pinned** (`d657a9b`, 2026-11-04 night;
+`COMPLETED.md`). Its additions for Dagda: step 6's three requests are in. `identity::
 x25519_public(private)` (`fba0977`) replaces `x25519_shared(private, 9)`
 in `domain/wrap`. `context.nodes().certificate(node)` (`45477bb`), the
 certificate a peer proved in its latest v2 handshake with this node,
