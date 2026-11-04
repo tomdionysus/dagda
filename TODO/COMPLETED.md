@@ -3,6 +3,153 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 5, leases and the claimed collection (`feature/leases`)
+
+Branched from `feature/distributed-store` at `ce7617c`; step 4 (heads) is
+not done and waits on Macha's tree-native merge, so this step builds the
+data types and the lease logic a head space will carry, and no head.
+
+- New in `dagda/lease/` (namespace `dagda::lease`), from Macha's
+  `torrent/torrent_request.cpp:36-52`, `:163-244` and
+  `torrent/torrent_coordinator.cpp:837-1100` (develop `5a06d3c`),
+  generalised; nothing there names a torrent (a test enforces it):
+  - `lease.h`: `Lease {holder, epoch, since_unix_ms}`, `beats` (higher
+    epoch, then earlier claim, then lower node id), `merge` (also over
+    `optional`), its codec (Macha's claim bytes: holder, epoch, since; an
+    optional one behind a 0/1 flag). Requirement E2.
+  - `claimed_collection.h`: `ClaimedCollection<Traits>`, header-only. The
+    owner's traits give the record (totally ordered), its key, its field
+    groups (`field_group(clock, take)`, each with its own clock: Tom,
+    2026-11-04; helpers `written(ms, node)` and `dominating(flag, ms,
+    node)` for a dominating cancel), the record's lease and tombstone, the
+    duplicate rule (`duplicate_key`, `keeps`, `lose`), the record and key
+    codec, `max_records` and `retention`. A record merges from the greater
+    record, each group taken whole from the greater clock (equal clocks:
+    the greater record), the lease by the lease order, the tombstone max.
+    `merge(base?, left, right)` is the three-way merge over the key set
+    (a null base is an empty one: Tom, 2026-11-04), then the duplicate
+    rule. `encode`/`decode` are the snapshot section (u32 count, records),
+    `diff`/`encode(Delta)`/`decode_delta`/`apply` the delta section (u32
+    and records written, u32 and keys erased), with Macha's decode bounds;
+    `expired(now)` the tombstones past the window; `join(record)` an
+    owner's write. Requirements E1, E3 (the window), E4, E5 (the hook), E6.
+  - `lease_table.h`: `LeaseEntry {name, lease, removed}` and `LeaseTable`,
+    the template's second instance: named leases as a lease space will
+    carry them. Dagda's own format (format byte 1, name, optional lease,
+    tombstone), pinned.
+  - `membership.h`: the injected `Membership` (`self`, `absent_since`,
+    `active`) and `RosterMembership` over Dannan 0.2.0's `Nodes::active()`
+    and `Nodes::watch()` on an injected `TimeSource`: absent from the
+    watch's `left`, or for a node never seen from the first look; seen
+    again, a member at once.
+  - `keeper.h`: `LeaseKeeper` (`decide`, `vacant`, `standing`, `next`,
+    `acquire`) with `LeaseOptions` (absence 10 min, rank step 30 s:
+    Macha's). A lease holds while its holder is a member; once absent for
+    the window it is taken at epoch + 1 ({self, epoch + 1, wall now});
+    a taker the owner ranks r waits r steps; a holder whose record shows
+    another holder, or a higher epoch not its own, stands down.
+    `acquire(records, scope, name, deadline, executor, done)` decides on
+    the record held, joins its claim when it may take, and reports the
+    record as it then stands (`held`, `taken`, `held_elsewhere`,
+    `waiting`, `lost`, `failed`, with why), posted to the caller's
+    executor. Requirements E7, E8 (`next`).
+  - `fence.h`: the epoch fence (new; requirement E9): `fence(record,
+    epoch)` and `EpochFence` (`admit`, `observe`, `highest`) per lease
+    name, refusing an action under a lower epoch, with evidence (admitted,
+    the highest known, why).
+- **The step-4 seam.** (1) `LeaseRecords` (`keeper.h`): `read(scope,
+  name)` and `join(scope, name, lease, deadline, executor, done)`; step 4
+  implements it over a head space holding a `LeaseTable` (`scope` names
+  the space), and until then the tests' `MemoryLeaseRecords` does, with
+  `reconcile` standing in for the heads' merge. (2) A head's codec and
+  merge call the collection's: snapshot section, delta section, and
+  `merge(base?, a, b)` with the common ancestor when the reconciler holds
+  it. For Macha the collection stays inside its head blob at the SM16,
+  SM17 and SM19 position and in DLT9 (requirements 5.4). (3) A receiver
+  raises its fence from merged records with `EpochFence::observe`.
+- `TorrentRequest` is the first instantiation, in the tests
+  (`dagda/test/fixtures/torrent_request.{h,cpp}`): Macha's record with
+  `TorrentClaim` as `Lease` (same members in the same order, so the
+  record's order and bytes are Macha's), its three groups, its codec (the
+  claim written by the lease's codec), its duplicate rule, 65,536 records,
+  8,192-byte text, 7 days. `TorrentOwner` is the records-and-leases part of
+  Macha's coordinator over the lease keeper: adds, intent, claims,
+  takeover after absence, standing down, pins, completion removal, and the
+  lowest member's sweep.
+- Bytes, pinned by known answers computed outside both codebases (Python
+  `struct` and `hashlib`, from the layout of `torrent_request.cpp:89-120`,
+  `metadata.cpp:856-876` and `:1499-1507`; the merged records written out
+  by hand from the rules): Macha's own round-trip record in full; the
+  lease alone; a merged set of five (a cancel against a later pause, a
+  takeover, a tombstone against a newer pause, two adds of one torrent) as
+  SM16/17/19 carry it (1,536 bytes, SHA-256 pinned); the DLT9 section from
+  one side to that set (1,256 bytes) and a sweep's; a lease entry. No
+  difference from Macha found. The fixture comparison (the Macha session's
+  SM16/17/19 and DLT9 bytes) waits for that fixture, cut after Macha's
+  tree-native merge.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest:
+  `test_storage_metadata.cpp` `test_torrent_requests_join_without_conflicts`
+  (every assertion), `test_torrent_requests_ride_the_snapshot_and_its_deltas`
+  (the section's round trip, the delta's upsert, update and erasure, a
+  quiet change, the reconciliation join); `test_hydration_catalogue.cpp`
+  `test_torrent_requests_belong_to_the_cluster_and_are_driven_by_their_owner`
+  (through `TorrentOwner` on stepped time: adds waiting for a capable node,
+  the duplicate add refused naming the holder, pause, remove-after,
+  clear, add paused, resume, unknown ids; claim at epoch 1 and the job
+  under the request's id, pause and resume applied, clear refused while
+  running, cancel recorded, clear; removal after completion at a delay of
+  0; the absent owner's claim kept for ten minutes and taken at epoch 2
+  with `phase_epoch` 2; pins; the newer claim let go, from a member here,
+  as on stepped time Macha's `gone` is past the window). No other Macha
+  case touches torrent requests' records (`test_rpc_cluster.cpp`
+  `test_torrent_listing_is_served_from_memory_never_a_survey` and
+  `test_hydration_catalogue.cpp` `test_the_torrent_plugin_restores_its_jobs_and_runs_them_through_the_engine`
+  are Macha's API and engine).
+- Waiting for step 4: of the snapshot case, the magics (`DHTMETB5`,
+  `DHTMETB6`, `DHTMETB4`, `DHTMDLT9`, and not DLT9 for a quiet delta), the
+  whole snapshot's round trip and its return to the pre-request encoding,
+  and `merge_metadata_heads`' `conflicts_created == 0`; of the coordinator
+  case, the records living in a head (`mutate_delta` is a join into this
+  node's copy). Not moved, Macha's own and its gate: the HTTP bodies and
+  status fields, the engine's job states and the migration of a local job
+  into a request, ingest sources, search.
+- New: the lease order and its join; the lease and entry bytes; the table
+  as a claimed collection; the record merge a join over 40 versions (all
+  triples); the collection merge commutative, idempotent and associative
+  over 200 rounds of three branches, with a base and without; takeover
+  not a millisecond before the window, a holder never seen, rank waits;
+  a holder that returns standing down and fenced; `acquire`'s outcomes and
+  the executor rule; eight concurrent takers leaving one standing; one
+  keeper from eight threads; the fence (lower refused, equal admitted,
+  observe, concurrent senders); membership from the roster; the 7-day
+  sweep by the lowest member.
+- Findings, none fixed (none blocks this step; answers kept identical to
+  Macha's):
+  - In Macha too: the sweep computes `now - removed > grace` on unsigned
+    milliseconds (`torrent_coordinator.cpp:1066-1068`), so a tombstone
+    stamped by a node whose clock is ahead wraps and is erased at once,
+    and a branch that missed the removal can bring the request back.
+    Proven by `DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow`.
+  - In Macha too: DLT9's decoder accepts a request with no id
+    (`metadata.cpp:1735-1740`) that the snapshot decoder refuses (`:873`),
+    so a head that applies such a delta encodes a snapshot it cannot read
+    back. Proven by `AnUnkeyedRecordFromADeltaPoisonsTheSnapshot`; the
+    refusal it should make is `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses`.
+  - In Macha too: with three concurrent adds of one torrent the collection
+    merge is not associative: the third is cancelled by whichever beat it
+    first, so its cancel stamp and error text depend on merge order, and
+    replicas differ until they merge each other's result
+    (`ThreeConcurrentAddsSettleOnlyAtTheNextMerge`). The law holds for two
+    and over heads closed under the rule; the template's header says a
+    new owner's `lose` should not depend on the keeper.
+- Gate: warnings as errors; `dagda_tests` 322 and 3 disabled (284 and 1
+  before; the two new disabled cases are the findings above). The 38 new
+  cases ran 200 times each (four processes of 50): 7,600 of 7,600 passing.
+- Dannan: nothing after 0.2.0 is used. Request: a node's absence on the
+  steady clock from `Nodes` (a `RosterChange`'s time or
+  `Nodes::absent_since`), marked `TODO(Dannan: absence on the roster)` in
+  `lease/membership.h`; `RosterMembership` rebuilds it from `watch()`.
+
 ## 2026-11-04: step 3b, repair by diff and admission (`feature/distributed-store`)
 
 - Moved and adapted (namespace `dagda::store` unless said): `data_work`
