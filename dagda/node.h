@@ -35,6 +35,7 @@
 #include "dagda/ledger/unreferenced_since.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
+#include "dagda/store/cpu_pacing.h"
 #include "dagda/store/data_work.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/local_store.h"
@@ -73,6 +74,16 @@ struct AdmissionOptions {
 // rests gc_interval (Macha's no_progress_backoff, the pause after a pass
 // with nothing to do). GC is skipped while foreground or loader work is
 // present (repair's foreground_quiet) and its DATA sweep yields to it.
+//
+// After them each pass runs Macha's local stages in its order: rebalance onto
+// the preferred backend, the claims' compaction past 4096 records, DATA pack
+// compaction of one victim per backend, the scrub when its campaign is due,
+// and the held ledgers' verify. All but the verify are skipped while
+// foreground or loader work is present, and rebalance and scrub also yield to
+// it within their slice. The verify is paced, never stopped: 4 directories a
+// second, 0.25 when busy, a pass then a day's rest. Rebalance and scrub spend
+// byte credit: the link's rate times the fraction below, shrunk by the rest of
+// the process's CPU, banked to five seconds of the link or an extent.
 struct MaintenanceOptions {
   // Whether the node runs its maintenance thread. Off, only
   // run_maintenance_once() runs a pass: a test's deterministic passes.
@@ -82,7 +93,36 @@ struct MaintenanceOptions {
   // The collector's budgets and retry window, Macha's defaults. The wait is
   // the domain's (NodeOptions::garbage_grace).
   ledger::CollectorBudgets collector;
+  // Rebalance's and scrub's share of the link, idle and busy.
+  double idle_bandwidth_fraction = 0.10;
+  double busy_bandwidth_fraction = 0.0;
+  // Of that, the scrub's; zero: no scrub.
+  double scrub_fraction = 0.02;
+  // A full scrub's period. The next due date is kept at
+  // <state>/maintenance/scrub.next, Macha's file, so neither a restart nor the
+  // migration postpones it.
+  std::chrono::milliseconds scrub_interval{std::chrono::hours(24 * 30)};
+  double cpu_target = 0.10;
+  store::CpuSource cpu = store::system_cpu_sample;
 };
+
+// What one pass of the local stages did. A `_ran` is false when its gate held
+// it: activity, credit, the schedule or having nothing left to do.
+struct LocalStages {
+  bool rebalance_ran = false;
+  store::StoragePool::MaintenanceResult rebalance;
+  bool retention_ran = false;
+  bool retention_compacted = false;
+  bool packs_ran = false;
+  size_t packs_compacted = 0;
+  bool scrub_ran = false;
+  store::StoragePool::MaintenanceResult scrub;
+  bool verify_ran = false;
+  store::LocalStore::VerifyResult verify;
+};
+
+// The verify's credit in directories after `seconds` more (Macha's rate).
+inline double ledger_verify_credit(double credit, double seconds, bool busy) noexcept { return std::min(256.0, credit + seconds * (busy ? 0.25 : 4.0)); }
 
 // What one run_maintenance_once() did: the GC pass's report, or why none
 // ran ("no reachability provider registered ..."; the provider's error),
@@ -91,6 +131,7 @@ struct MaintenanceReport {
   std::optional<ledger::PassReport> gc;
   std::string gc_skipped;
   store::RepairPass repair;
+  LocalStages local;
 };
 
 // What a node runs with: plain values an owner's config reader fills. The
@@ -242,7 +283,13 @@ class Node {
   // an owner that wants a pass now. Serialised with the thread's passes.
   // Throws nothing: a provider's error is the report's gc_skipped.
   static constexpr dannan::sched::Waits run_maintenance_waits = register_waits | dannan::sched::Waits::locks;
+  // The local stages are due as well, with full credit and a whole verify pass,
+  // though the scrub still only when its campaign is and the verify not during
+  // its day's rest.
   MaintenanceReport run_maintenance_once();
+  // One pass of the local stages as the thread runs them: credit earned since
+  // the last, and held by activity. Serialised with the thread's passes.
+  LocalStages run_local_stages();
 
   // Publishes the node's figures to context.status() now (the names are
   // listed in node.cpp, every one under "dagda."). Waits on the stores'
@@ -267,6 +314,22 @@ class Node {
     std::string data_gate = "none";
   };
 
+  // The local stages' figures Status shows (dagda.maintenance.*).
+  struct LocalFigures {
+    uint64_t rebalance_objects = 0;
+    uint64_t rebalance_bytes = 0;
+    uint64_t retention_compactions = 0;
+    uint64_t packs_compacted = 0;
+    uint64_t scrub_objects = 0;
+    uint64_t scrub_bytes = 0;
+    uint64_t scrub_campaigns = 0;
+    uint64_t scrub_due_unix_ms = 0;
+    uint64_t verify_directories = 0;
+    uint64_t verify_recorded = 0;
+    uint64_t verify_lost = 0;
+    uint64_t verify_passes = 0;
+  };
+
   void open();
   void step(std::string_view what);
   void ready(const std::string& plane);
@@ -278,6 +341,10 @@ class Node {
   // with nothing deferred, or nothing to run.
   bool gc_pass_locked(bool forced, MaintenanceReport& report) DANNAN_REQUIRES(_maintenance_mutex);
   bool higher_class_active() const;
+  // The local stages, in Macha's order. `forced` as run_maintenance_once says.
+  // Throws nothing: a failed stage is logged and the next pass tries again.
+  LocalStages local_stages_locked(bool forced, std::stop_token stop) DANNAN_REQUIRES(_maintenance_mutex);
+  void persist_scrub_due() DANNAN_REQUIRES(_maintenance_mutex);
 
   dannan::Context& _context;
   NodeOptions _options;
@@ -325,6 +392,19 @@ class Node {
 
   mutable dannan::contract::Mutex _gc_figures_mutex;
   GcFigures _gc_figures DANNAN_GUARDED_BY(_gc_figures_mutex);
+  LocalFigures _local_figures DANNAN_GUARDED_BY(_gc_figures_mutex);
+
+  // The local stages' pacing.
+  std::optional<store::CpuPacer> _local_cpu DANNAN_GUARDED_BY(_maintenance_mutex);
+  std::optional<dannan::contract::TimePoint> _local_at DANNAN_GUARDED_BY(_maintenance_mutex);
+  double _local_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
+  double _scrub_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
+  uint64_t _scrub_due_unix_ms DANNAN_GUARDED_BY(_maintenance_mutex) = 0;
+  // Rebalance found nothing to do at this event count, and waits for another.
+  std::optional<uint64_t> _local_quiescent_events DANNAN_GUARDED_BY(_maintenance_mutex);
+  double _verify_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
+  std::optional<dannan::contract::TimePoint> _verify_at DANNAN_GUARDED_BY(_maintenance_mutex);
+  dannan::contract::TimePoint _verify_due DANNAN_GUARDED_BY(_maintenance_mutex){};
 
   // Guards nothing; the maintenance thread waits on it.
   std::mutex _maintenance_wait;

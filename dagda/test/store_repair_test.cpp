@@ -636,6 +636,10 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
     return wait_until(
         [&] {
           (void)s2.run_maintenance_once();
+          // A second repair pass straight after: a whole node pass now runs
+          // the local stages too, which can outlast a rest, and the share is
+          // seen refusing only a pass made within one.
+          (void)s2.repair().pass();
           return s2.data().valid(id);
         },
         10s);

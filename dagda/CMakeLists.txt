@@ -42,6 +42,7 @@ add_library(dagda SHARED
   store/availability.cpp
   store/control_objects.cpp
   store/control_store.cpp
+  store/cpu_pacing.cpp
   store/data_work.cpp
   store/distributed_store.cpp
   store/durability_domain.cpp

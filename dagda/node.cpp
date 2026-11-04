@@ -8,6 +8,8 @@
 #include "dagda/node.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -17,6 +19,7 @@
 #include "dagda/store/messages.h"
 #include "dagda/store/sealing.h"
 #include "dagda/store/state_layout.h"
+#include "dannan/identity/durable_file.h"
 
 namespace dagda {
 
@@ -249,6 +252,20 @@ void Node::open() {
         std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-data.bin", _node_local, _context.logger("dagda.gc"));
     _control_sightings =
         std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _node_local, _context.logger("dagda.gc"));
+    _local_cpu.emplace(_options.maintenance.cpu);
+    // The scrub's next campaign: kept across a restart, and from a date
+    // Macha's maintenance left. A schedule that cannot be read starts afresh.
+    {
+      std::ifstream in(_options.state / "maintenance" / "scrub.next");
+      uint64_t due = 0;
+      if (in >> due && due) _scrub_due_unix_ms = due;
+    }
+    if (!_scrub_due_unix_ms) {
+      _scrub_due_unix_ms = _options.wall->unix_ms() + static_cast<uint64_t>(std::max<int64_t>(1, _options.maintenance.scrub_interval.count()));
+      persist_scrub_due();
+    }
+    dannan::contract::Lock figures(_gc_figures_mutex);
+    _local_figures.scrub_due_unix_ms = _scrub_due_unix_ms;
   }
   publish_status();
   arm_status();
@@ -424,6 +441,134 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
          !pass.swept_data.yielded;
 }
 
+void Node::persist_scrub_due() {
+  // A hint for neighbourliness: failing to keep it stops nothing, and this
+  // process still honours the date it holds.
+  try {
+    const auto dir = _options.state / "maintenance";
+    std::filesystem::create_directories(dir);
+    dannan::identity::durable_replace_file(dir / "scrub.next", std::to_string(_scrub_due_unix_ms) + "\n");
+  } catch (const std::exception& error) {
+    _logger.debug(std::string("scrub schedule not kept: ") + error.what());
+  }
+}
+
+LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
+  LocalStages out;
+  const auto now = _context.time().source().now();
+  const double seconds = _local_at ? std::max(0.0, std::chrono::duration<double>(now - *_local_at).count()) : 0.0;
+  _local_at = now;
+  const bool busy = !forced && higher_class_active();
+  const auto& policy = _options.maintenance;
+
+  double bandwidth = _store->estimated_network_bps();
+  if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.repair.initial_bandwidth);
+  if (_options.repair.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.repair.max_bandwidth));
+  const double rate = bandwidth * (busy ? policy.busy_bandwidth_fraction : policy.idle_bandwidth_fraction) * _local_cpu->scale(seconds, policy.cpu_target);
+  const double extent = static_cast<double>(_options.store.extent_size);
+  const double burst = std::max(extent, bandwidth * 5.0);
+  _local_credit = forced ? burst : std::min(burst, _local_credit + rate * seconds);
+  const auto wall_ms = _options.wall->unix_ms();
+  const bool scrub_due = policy.scrub_fraction > 0.0 && wall_ms >= _scrub_due_unix_ms;
+  // Outside a campaign nothing is banked, so a due date is not a burst.
+  if (!scrub_due)
+    _scrub_credit = 0.0;
+  else
+    _scrub_credit = forced ? burst : std::min(burst, _scrub_credit + rate * policy.scrub_fraction * seconds);
+
+  const auto should_yield = [this, forced, stop] { return stop.stop_requested() || (!forced && higher_class_active()); };
+  LocalFigures added;
+  try {
+    const auto events = _context.events().total();
+    if (_local_quiescent_events && *_local_quiescent_events != events) _local_quiescent_events.reset();
+    if (!busy && !_local_quiescent_events && _local_credit >= extent) {
+      out.rebalance_ran = true;
+      out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, should_yield);
+      if (out.rebalance.bytes) _local_credit = std::max(0.0, _local_credit - static_cast<double>(out.rebalance.bytes));
+      added.rebalance_objects = out.rebalance.objects;
+      added.rebalance_bytes = out.rebalance.bytes;
+      if (!out.rebalance.yielded && out.rebalance.complete && !out.rebalance.bytes) {
+        _local_credit = 0.0;
+        _local_quiescent_events = events;
+      }
+    }
+    // Only here, so a foreground claim never pays for the rewrite.
+    if (!busy) {
+      out.retention_ran = true;
+      out.retention_compacted = _claims->compact_if_needed(4096);
+      added.retention_compactions = out.retention_compacted ? 1 : 0;
+      out.packs_ran = true;
+      out.packs_compacted = _data->compact_packs(stop);
+      added.packs_compacted = out.packs_compacted;
+    }
+    if (!busy && scrub_due && _scrub_credit >= extent) {
+      out.scrub_ran = true;
+      out.scrub = _data->scrub_step(static_cast<uint64_t>(_scrub_credit), 64, should_yield);
+      added.scrub_objects = out.scrub.objects;
+      added.scrub_bytes = out.scrub.bytes;
+      if (out.scrub.bytes) _scrub_credit = std::max(0.0, _scrub_credit - static_cast<double>(out.scrub.bytes));
+      if (!out.scrub.yielded && out.scrub.complete) {
+        _scrub_credit = 0.0;
+        _scrub_due_unix_ms = wall_ms + static_cast<uint64_t>(std::max<int64_t>(1, policy.scrub_interval.count()));
+        persist_scrub_due();
+        added.scrub_campaigns = 1;
+      }
+    }
+    if (now >= _verify_due) {
+      const double since = _verify_at ? std::max(0.0, std::chrono::duration<double>(now - *_verify_at).count()) : 1.0;
+      _verify_at = now;
+      _verify_credit = forced ? 65536.0 : ledger_verify_credit(_verify_credit, since, busy);
+      const auto directories = static_cast<size_t>(_verify_credit);
+      if (directories) {
+        _verify_credit -= static_cast<double>(directories);
+        out.verify_ran = true;
+        const auto data = _data->verify_step(directories);
+        const auto control = _control->verify_step(directories);
+        out.verify.directories = data.directories + control.directories;
+        out.verify.recorded = data.recorded + control.recorded;
+        out.verify.lost = data.lost + control.lost;
+        out.verify.complete = data.complete && control.complete;
+        added.verify_directories = directories;
+        added.verify_recorded = out.verify.recorded;
+        added.verify_lost = out.verify.lost;
+        auto& observations = _context.observations();
+        observations.add("ledger.verify.directories", directories);
+        observations.add("ledger.verify.recorded", out.verify.recorded);
+        observations.add("ledger.verify.lost", out.verify.lost);
+        if (out.verify.complete) {
+          _verify_due = now + std::chrono::hours(24);
+          _verify_at.reset();
+          added.verify_passes = 1;
+          _logger.info("storage held ledgers verified against the disk");
+        }
+      }
+    }
+  } catch (const std::exception& error) {
+    _logger.debug(std::string("local maintenance: ") + error.what());
+  }
+  dannan::contract::Lock lock(_gc_figures_mutex);
+  auto& figures = _local_figures;
+  figures.rebalance_objects += added.rebalance_objects;
+  figures.rebalance_bytes += added.rebalance_bytes;
+  figures.retention_compactions += added.retention_compactions;
+  figures.packs_compacted += added.packs_compacted;
+  figures.scrub_objects += added.scrub_objects;
+  figures.scrub_bytes += added.scrub_bytes;
+  figures.scrub_campaigns += added.scrub_campaigns;
+  figures.scrub_due_unix_ms = _scrub_due_unix_ms;
+  figures.verify_directories += added.verify_directories;
+  figures.verify_recorded += added.verify_recorded;
+  figures.verify_lost += added.verify_lost;
+  figures.verify_passes += added.verify_passes;
+  return out;
+}
+
+LocalStages Node::run_local_stages() {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_repair) return {};
+  return local_stages_locked(false, {});
+}
+
 MaintenanceReport Node::run_maintenance_once() {
   MaintenanceReport report;
   dannan::contract::Lock lock(_maintenance_mutex);
@@ -434,6 +579,7 @@ MaintenanceReport Node::run_maintenance_once() {
   } catch (const std::exception& error) {
     _logger.debug(std::string("repair pass: ") + error.what());
   }
+  report.local = local_stages_locked(true, {});
   return report;
 }
 
@@ -457,6 +603,7 @@ void Node::maintenance_loop(std::stop_token stop) {
         } catch (const std::exception& error) {
           _logger.debug(std::string("repair pass: ") + error.what());
         }
+        (void)local_stages_locked(false, stop);
         next_repair = now + interval;
       }
     }
@@ -488,7 +635,13 @@ void Node::stop_maintenance() {
 //   repair.local_drops, repair.bytes, repair.unsourceable,
 //   repair.local_unreadable; repair.gate.ran, repair.gate.share,
 //   repair.gate.quiescent, repair.gate.credit, repair.gate.last;
-//   maintenance.automatic; gc.provider, gc.grace_ms, gc.passes, gc.skipped
+//   maintenance.automatic; maintenance.rebalance_objects,
+//   maintenance.rebalance_bytes, maintenance.retention_compactions,
+//   maintenance.packs_compacted, maintenance.scrub_objects,
+//   maintenance.scrub_bytes, maintenance.scrub_campaigns,
+//   maintenance.scrub_due_unix_ms, maintenance.verify_directories,
+//   maintenance.verify_recorded, maintenance.verify_lost,
+//   maintenance.verify_passes; gc.provider, gc.grace_ms, gc.passes, gc.skipped
 //   (no provider), gc.failures (the provider could not answer),
 //   gc.inventories, gc.released_data, gc.released_control,
 //   gc.removed_control, gc.examined, gc.reclaimed_bytes, gc.pruned, gc.state
@@ -547,11 +700,25 @@ void Node::publish_status() {
     provider = _providers.contains(_options.domain.id);
   }
   GcFigures gc;
+  LocalFigures local;
   {
     dannan::contract::Lock lock(_gc_figures_mutex);
     gc = _gc_figures;
+    local = _local_figures;
   }
   put("maintenance.automatic", _options.maintenance.automatic);
+  put("maintenance.rebalance_objects", u64(local.rebalance_objects));
+  put("maintenance.rebalance_bytes", u64(local.rebalance_bytes));
+  put("maintenance.retention_compactions", u64(local.retention_compactions));
+  put("maintenance.packs_compacted", u64(local.packs_compacted));
+  put("maintenance.scrub_objects", u64(local.scrub_objects));
+  put("maintenance.scrub_bytes", u64(local.scrub_bytes));
+  put("maintenance.scrub_campaigns", u64(local.scrub_campaigns));
+  put("maintenance.scrub_due_unix_ms", u64(local.scrub_due_unix_ms));
+  put("maintenance.verify_directories", u64(local.verify_directories));
+  put("maintenance.verify_recorded", u64(local.verify_recorded));
+  put("maintenance.verify_lost", u64(local.verify_lost));
+  put("maintenance.verify_passes", u64(local.verify_passes));
   put("gc.provider", provider);
   put("gc.grace_ms", u64(static_cast<uint64_t>(_options.garbage_grace.count())));
   put("gc.passes", u64(gc.passes));

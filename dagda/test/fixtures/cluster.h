@@ -93,6 +93,10 @@ struct ClusterNodeOptions {
   // stopped hosting keeps its disk, and drains it through repair.
   bool keeps_backend = false;
   bool packed = false;
+  size_t pack_target_size = 0;
+  // More DATA backends beside the node's first, by path; a case adds one to
+  // what a restart opens.
+  std::vector<std::filesystem::path> more_backends;
   std::chrono::milliseconds durability_window{20};
   std::string failure_domain;
   store::CacheOptions cache;
@@ -109,13 +113,20 @@ struct ClusterNodeOptions {
   std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
-  store::RepairOptions repair;
+  store::RepairOptions repair = [] {
+    store::RepairOptions out;
+    out.cpu = {};
+    return out;
+  }();
   // The node's maintenance (step 7b). Off here unless a case turns it on:
   // the cases drive their passes through run_maintenance_once(), so each
   // pass happens where the case says.
   dagda::MaintenanceOptions maintenance = [] {
     dagda::MaintenanceOptions out;
     out.automatic = false;
+    // Real CPU has no place in a pass a case steps: a case that wants the
+    // pacing supplies a source.
+    out.cpu = {};
     return out;
   }();
   // The node's domain's wait, and the clock the node dates its files and
@@ -196,6 +207,7 @@ class ClusterNode {
     _dagda->publish_inventory();
     _dagda->unregister_reachability(domain::domain_v1);
   }
+  void add_backend(const std::filesystem::path& path) { _options.more_backends.push_back(path); }
   std::filesystem::path backend() const { return _options.data.empty() ? _dir / "data" : _options.data; }
   std::filesystem::path state() const { return _options.state.empty() ? _dir / "state" : _options.state; }
   ClusterNodeOptions& options() { return _options; }
@@ -369,9 +381,13 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.key = known_answer_key();
   if (_options.hosts_extents || _options.keeps_backend) out.pool.backends.push_back({backend(), _options.limit, 0});
   out.pool.durability_batch_window = _options.durability_window;
+  for (const auto& more : _options.more_backends) out.pool.backends.push_back({more, _options.limit, 0});
   if (!_options.packed) {
     out.pool.pack_threshold = 0;
     out.pool.pack_target_size = 0;
+  } else if (_options.pack_target_size) {
+    out.pool.pack_threshold = _options.pack_target_size;
+    out.pool.pack_target_size = _options.pack_target_size;
   }
   out.cache = _options.cache;
   if (_options.admission) {
