@@ -28,22 +28,8 @@ namespace {
 
 using dannan::contract::Lock;
 using dannan::contract::Mutex;
+using dannan::contract::Unlocked;
 using namespace local_format;
-
-// Releases a held Mutex through the caller's Lock for its scope and retakes
-// it on exit, unwinding included. Generic, so asked of Dannan as a scoped
-// unlock beside Lock (contract/thread_safety.h); file-local until it lands,
-// as it was in Macha.
-class DANNAN_SCOPED_CAPABILITY Unlocked {
- public:
-  Unlocked(Lock& lock, [[maybe_unused]] Mutex& mutex) DANNAN_RELEASE(mutex) : _lock(lock) { _lock.unlock(); }
-  ~Unlocked() DANNAN_RELEASE() { _lock.lock(); }
-  Unlocked(const Unlocked&) = delete;
-  Unlocked& operator=(const Unlocked&) = delete;
-
- private:
-  Lock& _lock;
-};
 
 void write_all_at(int fd, std::span<const uint8_t> data, uint64_t offset) {
   size_t done = 0;
