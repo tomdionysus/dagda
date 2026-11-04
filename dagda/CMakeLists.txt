@@ -9,6 +9,8 @@
 # Dannan; Dannan never includes anything from here.
 add_library(dagda SHARED
   version.cpp
+  context.cpp
+  node.cpp
   contract/gates.cpp
   contract/horizon.cpp
   domain/domain.cpp
@@ -19,6 +21,7 @@ add_library(dagda SHARED
   lease/keeper.cpp
   lease/lease.cpp
   lease/lease_table.cpp
+  lease/local_records.cpp
   lease/membership.cpp
   ledger/availability.cpp
   ledger/claim_walk.cpp

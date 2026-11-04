@@ -10,9 +10,16 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "dagda/store/local_store.h"
 #include "dannan/identity/durable_file.h"
 
 namespace dagda::store {
+
+namespace {
+
+constexpr const char* not_dagda_v19 = "not a Dagda v19 state";
+
+}  // namespace
 
 std::string state_layout_marker(const SealingScheme& sealing) { return std::string(state_layout_v19) + " " + domain::to_string(sealing.domain); }
 
@@ -32,12 +39,14 @@ void open_state_layout(const std::filesystem::path& state, const SealingScheme& 
     if (value == expected) return;
     if (value == "macha-state-layout-v18") throw std::runtime_error("state " + state.string() + " is " + migrate_first(state));
     if (value.starts_with(state_layout_v19)) throw std::runtime_error("state is layout v19 of another domain (" + value + "); this store is " + expected);
-    throw std::runtime_error("incompatible Macha storage layout; 0.18 requires a fresh namespace");
+    throw std::runtime_error("state " + state.string() + " is marked \"" + value + "\", which is " + not_dagda_v19 +
+                             ": the store opens layout v19 alone, dagda-migrate moves Macha's v18 to it, and any other layout needs an empty state directory");
   }
-  // No migration path: an older layout is refused, not reinterpreted.
+  // Unmarked: never read as v19. Only an empty directory is begun.
   for (const auto& entry : std::filesystem::directory_iterator(state)) {
-    if (entry.path().filename() == ".macha.lock") continue;
-    throw std::runtime_error("existing unversioned Macha state detected; 0.18 requires a fresh namespace");
+    if (entry.path().filename() == storage_lock_name) continue;
+    throw std::runtime_error("state " + state.string() + " holds files and no storage-layout marker, so it is " + not_dagda_v19 +
+                             ": the store begins only in an empty state directory");
   }
   dannan::identity::durable_replace_file(marker, expected + "\n");
 }

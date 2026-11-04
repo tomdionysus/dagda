@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -43,7 +44,9 @@
 namespace dagda::store {
 
 // An exclusive lock on a store's root (`.macha.lock`, by flock), so two
-// processes never open one store. Throws std::runtime_error if it is held.
+// processes, or two nodes in one, never open one store. Throws
+// std::runtime_error if it is held.
+inline constexpr std::string_view storage_lock_name = ".macha.lock";
 class StorageLock {
  public:
   explicit StorageLock(const std::filesystem::path& root);

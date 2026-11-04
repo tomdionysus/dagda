@@ -82,6 +82,12 @@ std::string backend_key_check(const domain::StorageKey& key, const domain::Domai
 std::string backend_marker_text(const SealingScheme& sealing, const dannan::identity::NodeId& node, const dannan::identity::NodeId& token,
                                 const std::string& check);
 std::filesystem::path backend_identity_path(const std::filesystem::path& state, const std::filesystem::path& backend);
+// The refusal of a backend whose marker is layout v18 (Macha's), naming
+// dagda-migrate and the state path; nothing for any other backend, marked or
+// not. A node checks every backend before it opens the pool, so a v18 disk
+// stops the node rather than leaving one backend offline. Waits on the
+// device; thread-safe.
+std::optional<std::string> backend_refusal_v18(const std::filesystem::path& state, const std::filesystem::path& backend);
 
 // A durability ticket naming another process, or a domain or backend
 // incarnation that is gone: it satisfies nothing here (protocol 23 answers

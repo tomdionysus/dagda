@@ -3,6 +3,62 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: step 7a, the node, everything but heads (`feature/node`)
+
+Gate: `dagda_tests` 376 passing, 1 disabled (was 367 and 1; 9 added, none
+dropped); the node, context and cluster cases rerun 3 times.
+
+- `dagda/node.{h,cpp}`: `dagda::Node(dannan::Context&, NodeOptions)`, the
+  assembly. Opens in order: message types; the state lock, the v18 backend
+  check and the state layout; locks on the backends, control and cache
+  roots; the node-local and wrap keys; the pool, admission, the control
+  store, the cache, the claims and ledger, the reference counts, the
+  distributed store, availability, repair, the storage server. Stops
+  admission first, then the reverse, locks last. Refuses with a reason (and
+  marks readiness failed): another Dannan Context version, types already
+  registered or the Dannan node started, a held lock, a v18 state or
+  backend (naming `dagda-migrate --state <path>`, nothing changed), no
+  custody, an undeclared readiness plane, a blind domain or a missing key.
+  `register_reachability` and `publish_inventory` (C3), `publish_status`
+  (C4: `dagda.storage.*`, `control.*`, `cache.*`, `references.*`,
+  `repair.*`, `repair.gate.*`, `prompt.*`, `admission.*`, the context
+  version and domain), readiness planes `data_storage`, `control_storage`,
+  `cache`, `retention`; the wrap key advertised at open; the lease keeper
+  over `RosterMembership`.
+- `dagda/context.{h,cpp}`: `dagda::Context`, `context_version = 1`,
+  `check_version`/`require_version`. Domains (`list`, `describe`: the
+  node's one domain), Objects (`write`, `read`, `has`), Claims (`retain`
+  with a `WriteScope`, `retained`; no release call: claims go only by the
+  collector against the owner's horizon, as in Macha), Leases (`acquire`,
+  `read`, `standing`), Tickets (`status`, `wait`, `wait_complete`); every
+  completion on the caller's executor; the blocking forms wait on them.
+  Heads, Retained and node-local spaces join at step 4; v1 is frozen then.
+- `dagda/lease/local_records`: `LocalLeaseRecords`, in memory per node
+  until heads exist, lost on restart (the header says so).
+- `store/distributed_store`: an async `retain` returning `RetainOutcome`.
+  `store/storage_pool`: `backend_refusal_v18`; an empty backend is adopted
+  with the node's lock file in it. `store/state_layout`: Macha's "0.18
+  requires a fresh namespace" now says what Dagda means.
+- `test/fixtures/cluster.h`: every cluster node is a `dannan::Node` with a
+  `dagda::Node` on it, so every cluster test runs through the node.
+  README's "Link it" shows `Node` and `Context`.
+- Tests: `node_test` (7: order on fresh and reopened state, v18 refused
+  with digests unchanged, no custody, the lock against a second node and
+  against the migration, types registered before start, Status and
+  readiness, undeclared planes), `context_test` (2: the version check;
+  every noun completes on the caller's strand on two nodes).
+- Findings: `StorageLock` (`store/local_store.cpp:87`) duplicates
+  Dannan's `identity::StateLock` (rule 3); `migrate_state` answers "already
+  v19" before taking a lock (harmless: it writes nothing);
+  `StoreLayoutV19.ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked` failed 5
+  of 10 runs on the agent's machine before 7a, passed 20 of 20 on review:
+  a race to pin.
+- For Tom: readiness planes are fixed at Dannan's node construction, so
+  the owner lists `dagda::readiness_planes()` in `NodeConfig::planes`
+  (recommended: ask Dannan for `Readiness::declare` before start). The
+  collector and the maintenance loop stay the owner's until a second owner
+  needs them.
+
 ## 2026-11-04 night: step 6b, one layout and the migration (`feature/one-layout`)
 
 Tom: "We don't need backward compatibility": one layout, v19, for every

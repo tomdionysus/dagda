@@ -25,6 +25,21 @@ projects, with recommendations for Tom.
 
 ## Dannan, as Dagda finds it (from the Dannan session, 2026-11-03 night)
 
+**For the repin to 0.4.0** (Dannan `develop` `57ebdb2`, untagged; 0.4.0
+when Tom cuts it): step 6's three requests are in. `identity::
+x25519_public(private)` (`fba0977`) replaces `x25519_shared(private, 9)`
+in `domain/wrap`. `context.nodes().certificate(node)` (`45477bb`), the
+certificate a peer proved in its latest v2 handshake with this node,
+checked against the CA, empty for a peer never met by certificate, met
+only by cluster key, or revoked since; and `context.identity().
+ca_certificate()`: the wrap advert drops the certificate DER for peers met
+by certificate, keeping it as the fallback for a peer never talked to (or
+a call first, which establishes the session). `contract::Principal` has
+`operator==` (`fcd1a6f`). Also there: `dannan::config` (`e375b08`, the
+shared settings reader on yaml-cpp, linked privately), for a Dagda node
+binary that takes a config file; `dannan::encoding` percent-encoding.
+Dannan's gate 422.
+
 **Dannan 0.3.0 is cut** (annotated tag on `main`, `277adab`, 2026-11-04;
 ASan/UBSan and TSan clean, 408 tests each) **and Dagda pins it**
 (`find_package(dannan 0.3 CONFIG)`, `feature/dannan-0.3`). Everything
@@ -328,8 +343,8 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    tests, migrate to the v19 known answers; a Macha v18 state directory
    from the Macha session, migrated, opens and reads back every object
    and claim; `dagda_tests` loses the v18 store cases only, each named.
-7a. **The node, everything but heads** (2026-11-04 night,
-   `feature/node`). `dagda::Node`: opens a node's store from its
+7a. ~~**The node, everything but heads**~~ Done 2026-11-04 night on
+   `feature/node` (`COMPLETED.md`; `dagda_tests` 376 and 1 disabled). `dagda::Node`: opens a node's store from its
    `dannan::Context` and config (the state layout, the DATA pool, the
    control store, the cache, the claims, reference counts, the
    distributed store, availability, repair, the storage server), taking

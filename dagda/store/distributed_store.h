@@ -187,6 +187,17 @@ struct ReadResult {
   FetchAnswer answer = FetchAnswer::try_later;
 };
 
+// What an asynchronous claim came to. `ran`: it ran to its end, and then
+// for DATA `unheld` names, sorted, the objects no node present holds, and
+// for CONTROL `held_here` says whether the local claim held. Otherwise `why`
+// says what stopped it, and nothing is known to be claimed.
+struct RetainOutcome {
+  bool ran = false;
+  std::vector<ObjectId> unheld;
+  bool held_here = false;
+  std::string why;
+};
+
 // What a CONTROL offer did: `held_by` counts the nodes that hold every object
 // afterwards, the offering node included.
 struct ControlOffer {
@@ -348,6 +359,7 @@ class DistributedStore final : public ControlObjectSource {
  public:
   using WriteDone = std::function<void(WriteEvidence)>;
   using ReadDone = std::function<void(ReadResult)>;
+  using RetainDone = std::function<void(RetainOutcome)>;
   enum class ClaimScope { everywhere, here, every_node };
 
   struct Stores {
@@ -453,6 +465,11 @@ class DistributedStore final : public ControlObjectSource {
   std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, const WriteScope& writer = {});
   bool retain_control(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, ClaimScope scope = ClaimScope::everywhere,
                       const WriteScope& writer = {});
+  // Either claim, run on the store's workers and its outcome posted to
+  // `executor`, never inline. `scope` is read for CONTROL only. Waits on
+  // what the blocking form waits on, each peer within control_call.
+  void retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer, ClaimScope scope,
+              boost::asio::any_io_executor executor, RetainDone done);
   // Offers CONTROL objects this node holds to every other node present: each
   // is asked what it lacks and sent only that, at speculative priority.
   ControlOffer offer_control(const std::vector<ObjectId>& ids);

@@ -1,0 +1,199 @@
+//
+// Dagda - The Store
+//
+// Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+// Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+//
+
+#include "dagda/context.h"
+
+#include <algorithm>
+#include <atomic>
+#include <boost/asio/post.hpp>
+#include <future>
+#include <memory>
+#include <utility>
+
+#include "dagda/node.h"
+
+namespace dagda {
+
+namespace {
+
+// A blocking form waits this much past its deadline before it calls the
+// completion lost: the completion is due by the deadline, so the margin only
+// covers the executor.
+constexpr std::chrono::milliseconds completion_margin{5000};
+
+void check_deadline(std::chrono::milliseconds deadline) {
+  if (deadline.count() <= 0) throw std::invalid_argument("a deadline must be positive");
+}
+
+// Starts the asynchronous form on the node's executor and waits for its
+// completion: the blocking forms are this and nothing else.
+template <class T, class Start>
+T await(Node& node, std::chrono::milliseconds deadline, Start start) {
+  auto promise = std::make_shared<std::promise<T>>();
+  auto future = promise->get_future();
+  start(node.dannan().time().executor(), [promise](T value) { promise->set_value(std::move(value)); });
+  if (future.wait_for(deadline + completion_margin) != std::future_status::ready)
+    throw std::runtime_error("the store's completion did not arrive by its deadline");
+  return future.get();
+}
+
+std::optional<WriteEvidence> known(WriteEvidence evidence) {
+  if (!evidence.ticket.valid()) return std::nullopt;
+  return evidence;
+}
+
+}  // namespace
+
+// ---- Version ----------------------------------------------------------------
+
+Context::Context(Node& node) : _domains(node), _objects(node), _claims(node), _leases(node), _tickets(node) {}
+
+uint32_t Context::version() const noexcept { return context_version; }
+
+VersionCheck Context::check_version(uint32_t built_against) const noexcept {
+  VersionCheck out;
+  out.built_against = built_against;
+  out.served = context_version;
+  out.accepted = built_against == context_version;
+  if (!out.accepted)
+    out.why = "dagda::Context version " + std::to_string(built_against) + " was asked for and this library serves version " + std::to_string(context_version) +
+              ": rebuild the hosted system against this Dagda";
+  return out;
+}
+
+void Context::require_version(uint32_t built_against) const {
+  const auto check = check_version(built_against);
+  if (!check.accepted) throw ContextVersionMismatch(check.why);
+}
+
+// ---- Domains ----------------------------------------------------------------
+
+std::vector<domain::Domain> Context::Domains::list() const { return {_node.options().domain}; }
+
+std::optional<domain::Domain> Context::Domains::describe(const domain::DomainId& id) const {
+  if (id != _node.options().domain.id) return std::nullopt;
+  return _node.options().domain;
+}
+
+// ---- Objects ----------------------------------------------------------------
+
+void Context::Objects::write(store::Bytes data, WriteOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                             WriteDone done) {
+  check_deadline(deadline);
+  options.deadline = deadline;
+  const auto id = store::object_id(data);
+  _node.store().write(id, std::move(data), std::move(options), std::move(executor), std::move(done));
+}
+
+WriteEvidence Context::Objects::write(std::span<const uint8_t> data, WriteOptions options, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<WriteEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, WriteDone done) {
+    write(store::Bytes(data.begin(), data.end()), options, deadline, std::move(executor), std::move(done));
+  });
+}
+
+void Context::Objects::read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ReadDone done) {
+  check_deadline(deadline);
+  options.deadline = deadline;
+  _node.store().read(id, std::move(options), std::move(executor), std::move(done));
+}
+
+ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<ReadResult>(_node, deadline,
+                           [&](boost::asio::any_io_executor executor, ReadDone done) { read(id, options, deadline, std::move(executor), std::move(done)); });
+}
+
+bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
+
+// ---- Claims -----------------------------------------------------------------
+
+void Context::Claims::retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer,
+                             std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Done done, Scope scope) {
+  check_deadline(deadline);
+  if (dot.sequence == 0 || dot.origin == contract::NodeId{}) throw std::invalid_argument("a claim's dot needs an origin and a sequence");
+  ClaimEvidence base;
+  base.type = type;
+  base.sought = ids.size();
+  // Whichever comes first, the claim's end or the deadline, answers; the
+  // other is dropped.
+  auto answered = std::make_shared<std::atomic<bool>>(false);
+  auto shared_done = std::make_shared<Done>(std::move(done));
+  _node.dannan().time().after(deadline, [answered, shared_done, base, executor] {
+    if (answered->exchange(true)) return;
+    auto evidence = base;
+    evidence.why = "the deadline passed with the claim still running; it may yet land, and claiming again is harmless";
+    boost::asio::post(executor, [shared_done, evidence = std::move(evidence)] { (*shared_done)(evidence); });
+  });
+  _node.store().retain(type, std::move(ids), dot, std::move(writer), scope, std::move(executor), [answered, shared_done, base](store::RetainOutcome outcome) {
+    if (answered->exchange(true)) return;
+    auto evidence = base;
+    evidence.finished = outcome.ran;
+    evidence.unheld = std::move(outcome.unheld);
+    evidence.held_here = outcome.held_here;
+    evidence.why = std::move(outcome.why);
+    (*shared_done)(std::move(evidence));
+  });
+}
+
+ClaimEvidence Context::Claims::retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer,
+                                      std::chrono::milliseconds deadline, Scope scope) {
+  check_deadline(deadline);
+  return await<ClaimEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, Done done) {
+    retain(type, std::move(ids), dot, std::move(writer), deadline, std::move(executor), std::move(done), scope);
+  });
+}
+
+bool Context::Claims::retained(contract::RetentionClass type, const ObjectId& id) const { return _node.claims().retained(type, id); }
+
+// ---- Leases -----------------------------------------------------------------
+
+void Context::Leases::acquire(const std::string& scope, const std::string& name, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                              Done done, size_t rank) {
+  check_deadline(deadline);
+  _node.lease_keeper().acquire(_node.lease_records(), scope, name, deadline, std::move(executor), std::move(done), rank);
+}
+
+lease::Acquisition Context::Leases::acquire(const std::string& scope, const std::string& name, std::chrono::milliseconds deadline, size_t rank) {
+  check_deadline(deadline);
+  return await<lease::Acquisition>(
+      _node, deadline, [&](boost::asio::any_io_executor executor, Done done) { acquire(scope, name, deadline, std::move(executor), std::move(done), rank); });
+}
+
+std::optional<lease::Lease> Context::Leases::read(const std::string& scope, const std::string& name) const { return _node.lease_records().read(scope, name); }
+
+lease::Standing Context::Leases::standing(const std::string& scope, const std::string& name, const lease::Lease& mine) const {
+  return _node.lease_keeper().standing(mine, _node.lease_records().read(scope, name));
+}
+
+// ---- Tickets ----------------------------------------------------------------
+
+std::optional<WriteEvidence> Context::Tickets::status(Ticket ticket) const { return _node.store().status(ticket); }
+
+void Context::Tickets::wait(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Done done) {
+  check_deadline(deadline);
+  _node.store().wait(ticket, deadline, std::move(executor), [done = std::move(done)](WriteEvidence evidence) { done(known(std::move(evidence))); });
+}
+
+std::optional<WriteEvidence> Context::Tickets::wait(Ticket ticket, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<std::optional<WriteEvidence>>(
+      _node, deadline, [&](boost::asio::any_io_executor executor, Done done) { wait(ticket, deadline, std::move(executor), std::move(done)); });
+}
+
+void Context::Tickets::wait_complete(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Done done) {
+  check_deadline(deadline);
+  _node.store().wait_complete(ticket, deadline, std::move(executor), [done = std::move(done)](WriteEvidence evidence) { done(known(std::move(evidence))); });
+}
+
+std::optional<WriteEvidence> Context::Tickets::wait_complete(Ticket ticket, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<std::optional<WriteEvidence>>(
+      _node, deadline, [&](boost::asio::any_io_executor executor, Done done) { wait_complete(ticket, deadline, std::move(executor), std::move(done)); });
+}
+
+}  // namespace dagda

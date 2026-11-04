@@ -44,7 +44,12 @@ std::string refusal(const std::filesystem::path& state) {
   return {};
 }
 
-bool refused_for_a_fresh_namespace(const std::filesystem::path& state) { return refusal(state).find("fresh namespace") != std::string::npos; }
+// Macha's assertion was its "fresh namespace" wording; Dagda's says the state
+// is not a v19 one and names the path (step 7a).
+bool refused_for_a_fresh_namespace(const std::filesystem::path& state) {
+  const auto why = refusal(state);
+  return why.find("not a Dagda v19 state") != std::string::npos && why.find(state.string()) != std::string::npos;
+}
 
 // Macha: test_unversioned_state_is_refused, its state half. A state
 // directory holding an older layout's files and no marker is refused, and
