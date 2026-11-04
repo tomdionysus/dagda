@@ -469,25 +469,28 @@ TEST(LeaseClaimedCollection, ATombstoneExpiresStrictlyPastItsRetention) {
   EXPECT_EQ(head.expired(1'000 + window + 1), std::vector<std::string>{"t1"});
 }
 
-// Finding (Macha too, its tombstone sweep, by reading): the window is
-// computed as `now - removed > retention` on unsigned milliseconds, so a
-// tombstone stamped by a node whose clock is ahead of the sweeper's wraps
-// round and expires at once, letting a branch that missed the removal bring
-// the record back. Kept as Macha has it for identical answers; disabled
-// until Tom decides (this is what it should do).
-TEST(LeaseClaimedCollection, DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow) {
+// Finding (Macha, its tombstone sweep, by reading): the window was computed
+// as `now - removed > retention` on unsigned milliseconds, so a tombstone
+// stamped by a node whose clock is ahead of the sweeper's wrapped round and
+// expired at once, letting a branch that missed the removal bring the record
+// back. Decided (Tom, 2026-11-04): a future stamp is fresh; Macha the same
+// at the port.
+TEST(LeaseClaimedCollection, ATombstoneFromAClockAheadIsKeptItsWindow) {
   auto removed = task("t1", "s", 100);
   removed.removed_unix_ms = 2'000'000;
   const auto head = collection_of({removed});
   EXPECT_TRUE(head.expired(1'000'000).empty());
+  EXPECT_TRUE(head.expired(2'000'000).empty());
+  const uint64_t window = std::chrono::milliseconds(TaskTraits::retention).count();
+  EXPECT_EQ(head.expired(2'000'000 + window + 1), std::vector<std::string>{"t1"});
 }
 
-// Finding (Macha too, by reading: its snapshot refuses a record with no key,
-// its delta accepts one): a delta can install a record the snapshot decoder
-// refuses, so a head that applied it encodes a snapshot it cannot read back.
-// Kept as Macha has it for identical answers; disabled until Tom decides
-// (this is what it should do).
-TEST(LeaseClaimedCollection, DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses) {
+// Finding (Macha, by reading: its snapshot refuses a record with no key, its
+// delta accepts one): a delta could install a record the snapshot decoder
+// refuses, so a head that applied it encoded a snapshot it could not read
+// back. Decided (Tom, 2026-11-04): the delta refuses it too; Macha's DLT9
+// the same at the port.
+TEST(LeaseClaimedCollection, ADeltaCannotInstallARecordTheSnapshotRefuses) {
   Writer delta;
   delta.u32(1);
   TaskTraits::encode(delta, task("", "s", 100));
@@ -495,17 +498,21 @@ TEST(LeaseClaimedCollection, DISABLED_ADeltaCannotInstallARecordTheSnapshotRefus
   EXPECT_THROW(decoded_delta(delta.data()), DecodeError);
 }
 
-// What a head that took that delta holds today: it encodes, and its own
-// bytes are refused.
-TEST(LeaseClaimedCollection, AnUnkeyedRecordFromADeltaPoisonsTheSnapshot) {
+// So a head that took every delta the decoder passed always reads its own
+// snapshot back: the unkeyed record never reaches it.
+TEST(LeaseClaimedCollection, AnUnkeyedRecordFromADeltaNeverReachesTheSnapshot) {
   Writer delta;
   delta.u32(1);
   TaskTraits::encode(delta, task("", "s", 100));
   delta.u32(0);
   Tasks head;
-  head.apply(decoded_delta(delta.data()));
+  head.join(task("t1", "s", 100));
+  try {
+    head.apply(decoded_delta(delta.data()));
+  } catch (const DecodeError&) {
+  }
   EXPECT_EQ(head.size(), 1u);
-  EXPECT_THROW(decoded(encoded(head)), DecodeError);
+  EXPECT_EQ(decoded(encoded(head)), head);
 }
 
 }  // namespace
