@@ -1,10 +1,13 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-03, night. The repository has had `git init` and
-holds no commits. Dagda's plan is not set: steps 7 and 8 of
-`../dannan/TODO/ACTIVE.md` moved here (the maintainer, 2026-11-03 night: "Dagda is
-its own project, with its own agent") and wait on the maintainer for their order
-and first step. `COMPLETED.md` is the record once there is one.
+Last updated: 2026-11-04, night. `develop` is pushed to
+`git@github.com:tomdionysus/dagda.git`, on Dannan 0.4.1, gate
+`dagda_tests` 389 (1 disabled). Steps 1 to 3, 5, the parts of 6 and 7
+that need no heads, 6b (`dagda-migrate`) and 7b (maintenance in the node,
+the instant delete) are done (`COMPLETED.md`). What remains waits on
+Macha: step 4 (heads) on its tree-native merge, which completes and
+freezes `dagda::Context` v1; 6b's gate on the Macha session's v18
+fixture; step 8 (the port) on the maintainer.
 
 Dagda's specification is
 [`2026-11-03-macha-store-requirements.md`](2026-11-03-macha-store-requirements.md):
@@ -25,7 +28,11 @@ projects, with recommendations for the maintainer.
 
 ## Dannan, as Dagda finds it (from the Dannan session, 2026-11-03 night)
 
-**Dannan 0.4.0 is cut and pinned** (`d657a9b`, 2026-11-04 night;
+**Dannan 0.4.1 is pinned** (2026-11-04 night): `Readiness::declare`, so
+`dagda::Node` declares its own planes at open. `Principal::operator==`
+is adopted (`WritePrincipal` defaults its comparison).
+
+**Dannan 0.4.0 is cut** (`d657a9b`, 2026-11-04 night;
 `COMPLETED.md`). Its additions for Dagda: step 6's three requests are in. `identity::
 x25519_public(private)` (`fba0977`) replaces `x25519_shared(private, 9)`
 in `domain/wrap`. `context.nodes().certificate(node)` (`45477bb`), the
@@ -534,8 +541,10 @@ the unkeyed-record fixes, the same.
 **What blocks further work** (needs Macha):
 - Step 4 (heads), and with it retained values and the heads part of
   `dagda::Context` (step 7), wait on Macha's tree-native branch merging
-  (its order is the operator's). Step 6 does not wait: Dannan 0.3.0 is
-  pinned.
+  (its order is the operator's). The parts of steps 6 and 7 that need
+  no head are done; the wrap advert drops the certificate DER for peers
+  met by certificate (Dannan 0.4.0's `Nodes::certificate`) with the next
+  domain work.
 
 Decided by the Dagda session under the rules (step 5): a lease's
 `scope` is the head space its record lives in (plan 163); three
