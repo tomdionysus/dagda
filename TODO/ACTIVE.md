@@ -84,6 +84,10 @@ projects, with recommendations for Tom.
   injected time source (`dannan/status/observation.h`). Dagda moves its
   pin from 0.2.0 to that commit, or to Dannan's next tag, when a step
   first uses them.
+- `contract::Unlocked` (Dannan `35d14e0`, develop `b24db75`): a scoped
+  unlock of a held `contract::Lock`, annotated. Dagda's file-local copy
+  in `store/local_store.cpp` is replaced by it at the repin to 0.3.0.
+  `secure_memory.h` now says secure memory is not inherited across fork.
 - Notify channels have landed (`dannan/net/fanout.h`,
   `Context::channels()`, `2f16981`). Retained is Dagda's own: `retain()`
   on a notify channel plus a Dagda head; Dannan declares no seam for it.
@@ -126,9 +130,32 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    - ~~**1c**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 108).
      `LocalStore`: loose files and packs, torn tails, compaction,
      tombstones; write-behind.
-   - **1d** `StoragePool`, I/O pressure, `unreferenced_since`, the
-     CONTROL store, the persistent cache without its metadata seed
-     (that waits for heads, step 4).
+   - ~~**1d**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 145).
+     `StoragePool`, I/O pressure, `unreferenced_since` (in `ledger/`),
+     the CONTROL store, the persistent cache without its metadata seed
+     (`with_seed` is where step 4 attaches it).
+
+   What remains of step 1's gate, all of it outside the code moved:
+   - **The Macha fixture**: a state directory opened with `has` and
+     `get` true for every object. Waits on the Macha session's step-1
+     fixture (`build/macha-fixtures/step1-*/`), cut after Macha's
+     tree-native branch merges. Run it through `StoragePool`, the control
+     store and the cache, with the README's packing threshold and backend
+     limits as the options.
+   - **"Refusing unversioned storage"**, its state half: a non-empty
+     state directory without `storage-layout` (`macha-state-layout-v18`,
+     Macha `cluster/node_identity.cpp:15-40`) refused. The backend half
+     is in (`ANonEmptyUnversionedBackendIsRefused`). The state marker is
+     Dagda's (decided by the Dagda session under the stack rules: Dannan
+     stores nothing for anyone, and the marker names the store's layout):
+     it lives in Dagda's state directory with Macha's bytes, and moves
+     with the step 2 session.
+   - **For Tom, not blocking**: the control store's free-space reserve
+     defaults to Macha's 0. A figure above 0 would keep CONTROL writable
+     after DATA's reserve stops DATA writes on a shared filesystem.
+   - `test_storage_v18`'s remaining cases are distributed (step 3), and
+     the crash matrix's remaining rows are the FS's, the metadata's
+     (step 4) and the catalogue's.
 
    The whole of step 1: `LocalStore`, loose files
    and packs, torn-tail truncation and compaction, `DurabilityDomain`

@@ -125,7 +125,7 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 |---|---|
 | `set_thread_name` | **missing in Dannan (request)**. Macha names the domain's worker `macha-durable`; Dagda's worker is unnamed until Dannan has it |
 | `process_resident_bytes` | Dannan has it privately (`status/telemetry.cpp:100`, `resident_bytes`); **request** to export it |
-| `thread_cpu_time_ns`, `ThreadCpuReporter`, `DiagnosticLock`, `TimedLock`, `elapsed_ms` | **missing in Dannan (request)** if Dagda keeps the storage pool's `TimedLock` (`storage_pool.cpp:88`) in 1d; otherwise a plain `Lock` |
+| `thread_cpu_time_ns`, `ThreadCpuReporter`, `DiagnosticLock`, `TimedLock`, `elapsed_ms` | **missing in Dannan (request)**. 1d: the storage pool's `TimedLock` (`storage_pool.cpp:88`, `:300`) is a plain `Lock` with a `TODO(Dannan: TimedLock)` beside it (`dagda/store/storage_pool.h`) |
 
 ### `src/supervised.hpp`
 
@@ -182,4 +182,16 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 | `write_behind.{hpp,cpp}` | `dagda/store/write_behind.{h,cpp}` |
 | `contract/object_store.hpp` (`HeldIdentity`, `HeldView`, `ObjectStore`) | `dagda/contract/object_store.h` (`dagda::contract`) |
 | `load_or_create_node_id` | not moved: the node id is Dannan's (`identity/node_identity.h`) |
+
+## The store pieces moved in 1d
+
+| Macha | Dagda |
+|---|---|
+| `storage/storage_pool.{hpp,cpp}` (`StoragePool`) | `dagda/store/storage_pool.{h,cpp}`: takes the node id and the process's durability epoch, the domain's `StorageKey` and `LocalStore::Services` instead of process globals; `put_deferred` returns 1a's `DurabilityTicket` (Macha's token plus the epoch its server added), and a ticket from another epoch throws `StaleDurabilityTicket`; `StorageBackendConfig`, `StoragePackingConfig`, `ledger_cache` become `StorageBackendOptions` and `StoragePoolOptions`; `is_retained` is the named seam `ClaimCheck`; `degraded()` added (section 7) |
+| `cluster/placement.cpp` `capacity_placement_nodes` as the pool calls it (one copy) | Dannan's `placement::by_capacity` under the store's `data_scheme()` (`dagda/store/placement.{h,cpp}`): Macha's salts `macha/data-fallback/v7` and `macha/data-extra-domain/v7`, capacity in the advert `dagda/capacity`. For one copy both compute SHA-256(the id's first four bytes, salt, token) and sort by -ln(u)/capacity, ties to the lower id: identical, pinned by known answers (`RanksBackendsAsMachaDoes`) |
+| `storage/io_pressure.hpp` (`DiskServiceMonitor`, `DiskServiceTimer`) | `dagda/store/io_pressure.{h,cpp}`: the monitor logs through its own `ScopedLogger`; the timer reads the injected `TimeSource` |
+| `storage/unreferenced_since.{hpp,cpp}` | `dagda/ledger/unreferenced_since.{h,cpp}` (`dagda::ledger`: requirement L22 is the ledger's, and step 2's sweeps use it); the file's bytes pinned (`TheFileIsLayoutV18s`) |
+| `contract/id_lookup.hpp` (`IdLookup`) | `dagda/contract/id_lookup.h` (`dagda::contract`) |
+| `cluster/local_state.cpp:134-142` (the control store) | `dagda/store/control_store.{h,cpp}`: `ControlStoreOptions` (Macha's `metadata_store`), `open_control_store`; `ledger_cache_share` (`local_state.cpp:29-50`) in `dagda/store/local_store.h` |
+| `storage/persistent_cache.{hpp,cpp}` without the metadata seed | `dagda/store/persistent_cache.{h,cpp}`: `CacheOptions` (Macha's `CacheConfig`, `prefer_metadata` named `seed`); the seed's reading and writing (`remember_metadata`, `metadata`, `DHTCMET1`) stay for step 4 behind `with_seed` |
 

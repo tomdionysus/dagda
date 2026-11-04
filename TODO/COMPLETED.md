@@ -3,6 +3,137 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 1d, the pool, the CONTROL store and the cache (`feature/local-store`)
+
+- Moved and adapted into `dagda/store/` (namespace `dagda::store`):
+  `storage_pool` (`StoragePool`, `StorageBackendOptions`,
+  `StoragePoolOptions`, `StaleDurabilityTicket`), `io_pressure`
+  (`DiskServiceMonitor`, `DiskServiceTimer`), `persistent_cache`
+  (`PersistentBlockCache`, `CacheOptions`), `control_store`
+  (`ControlStoreOptions`, `open_control_store`: Macha
+  `cluster/local_state.cpp:134-142`), `placement` (the store's
+  `data_scheme()` over Dannan's `placement::by_capacity`); into
+  `dagda/ledger/`: `unreferenced_since` (requirement L22 is the ledger's
+  and step 2's sweeps use it); into `dagda/contract/`: `id_lookup.h`
+  (`IdLookup`). `ledger_cache_share` (`local_state.cpp:29-50`) is in
+  `local_store.h`. Requirements S10 to S12, S14, S15, S18, S19, S21, L4,
+  L21, L22.
+- Runs on Dannan: the pool takes the node id and the process's durability
+  epoch, the domain's `StorageKey` and `LocalStore::Services`
+  (supervised threads, observations, a scoped logger, injected time and
+  wall clock); the I/O monitor logs through its own scoped logger and its
+  timer reads the injected time. Options are plain structs with Macha's
+  defaults (`storage.packing` 1 MiB and 64 MiB, a 500 ms window, the DATA
+  share of a 64 MiB ledger cache; `metadata_store` 4 GiB at
+  `<state>/metadata-objects`; no cache unless a path and blocks are
+  given). No Macha `Config`.
+- Placement: for one copy, Macha's `capacity_placement_nodes` and
+  Dannan's `by_capacity` compute the same thing (SHA-256 of the id's
+  first four bytes, the salt and the backend's token; -ln(u)/capacity,
+  zero capacity weighing 1, ties to the lower id), so the store names
+  Macha's salts (`macha/data-fallback/v7`, `macha/data-extra-domain/v7`)
+  and the capacity advert `dagda/capacity`, and a pool ranks its backends
+  exactly as Macha's did. Pinned by known answers computed outside both
+  codebases at 60 digits (`RanksBackendsAsMachaDoes`).
+- Byte compatibility: the backend marker and its mirror
+  (`macha-backend-v18 <node> <token>\n`, `backend-identities/<sha256 of
+  the path>.id`), the ledger directory `ledger/data-<token>` and a marker
+  Macha wrote are pinned (`TheBackendMarkerIsLayoutV18s`); the sightings
+  file byte for byte (`TheFileIsLayoutV18s`). The backend-identities
+  directory is created 0700 by Dannan's durable file (1a's map).
+- Changed from Macha, none on disk: the pool's tickets carry the epoch and
+  a ticket from another one throws `StaleDurabilityTicket` (Macha checked
+  it in the server); a duplicate backend is `std::invalid_argument`,
+  checked before anything changes (Macha could apply half); `degraded()`
+  says a plane with backends but none online is not ready (section 7);
+  the control store has a `reserve_free` option (section 7), zero
+  (Macha's) by default; the pool's `TimedLock` is a plain `Lock`.
+- The cache's metadata seed: left for step 4. What was left:
+  `remember_metadata(MetadataRecord)` and `metadata()` (Macha
+  `persistent_cache.cpp:325-390`): the file `<cache>/metadata/current.meta`
+  (`DHTCMET1`, nonce, tag, u32-length ciphertext, AAD the magic, under the
+  storage key), written by a temporary and rename without a sync, the
+  last written record's hash kept to skip a rewrite and forgotten on every
+  reconfiguration, read back only while the cache is on and
+  `prefer_metadata` set. The seam is `PersistentBlockCache::with_seed(use)`:
+  it calls `use` with the seed's directory and the cache's `opening` (new
+  on every reconfiguration) under the seed lock reconfigure() takes, and
+  not at all while the cache is off or `CacheOptions::seed` (Macha's
+  `prefer_metadata`) is unset. The six seed assertions of
+  `test_storage_pool_and_persistent_cache` move with it.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest,
+  every assertion kept but the six seed ones above:
+  `test_storage_v18.cpp` (the `StoragePool` and placement blocks of
+  `test_admission_respects_reserve_and_capacity`; the backend half of
+  `test_unversioned_state_is_refused`;
+  `test_metadata_control_store_is_independent_of_data_quota`, store-side);
+  `test_storage_metadata.cpp` `test_storage_pool_and_persistent_cache`;
+  `test_invariants.cpp` (`test_rebalance_reads_nothing_with_one_backend_online`,
+  `test_rebalance_never_deletes_last_valid_copy_for_corrupt_preferred_copy`,
+  `test_storage_pool_tokens_name_physical_domain_and_backend_incarnation`,
+  `test_persistent_cache_is_explicitly_ephemeral`); `test_presence.cpp`
+  (`test_a_backend_offline_and_readopted_leaves_presence_exact`,
+  `test_the_held_identity_names_exactly_what_the_pool_holds`,
+  `test_the_held_identity_is_the_same_on_any_number_of_disks`);
+  `test_baselines.cpp` `test_baseline_data_store_has`;
+  `test_io_pressure.cpp` (the six monitor and pool cases);
+  `test_absent_nodes.cpp` (the six sightings cases). The two Linux-only
+  cases run everywhere (barriers counted on the pool's domains; the
+  cache's lack of syncs shown by no barrier recorded and no accounting
+  file). Crash matrix row "Cache missing/corrupt" (new: Macha names no
+  case).
+- New: the known answers above, the first-ranked backend taking each
+  object, backend identity refusals (another node's disk, the wrong disk,
+  a lost marker), stale tickets and reassertion, the claim seam
+  (`ClaimCheck`: a claimed copy is never swept, and a claim made between
+  the slice's look and its delete stops the delete), the control store's
+  place, defaults and reserve, the timer on stepped time.
+- Not moved: the other seven `test_io_pressure.cpp` cases (the DATA credit
+  arbiter, step 3); `test_absent_nodes.cpp`'s two roster cases (Dannan's);
+  the state half of `test_unversioned_state_is_refused` (Macha's node
+  identity: below); `test_a_full_preferred_node_spills_data_but_not_control`
+  (two nodes, step 3); `test_retention_claim_is_physical_gc_barrier`
+  (claims, step 2); `test_metadata_recovery_cache_seed_is_not_accepted_authority`
+  (heads, step 4).
+- Findings, each in Macha too and fixed here, none on disk:
+  - A lost wakeup: the accounting scan set "complete" (and "failed") and
+    notified without the mutex its waiters check under, so a put or
+    remove could wait for ever on a finished scan
+    (`local_store.cpp`, `mark_scan_failed` and the scan's last block).
+  - A deadlock: put, remove and remove_if_older_than held the object's
+    lock while waiting for the scan, and the scan takes each object's lock
+    as it walks. A cache opened with a corrupt entry, read at once (the
+    read removes it), hung in 13 of 20 runs. They now wait for the scan
+    before taking the object's lock (`await_accounting`).
+  - The held ledger marked itself seeded and then installed what was
+    queued during its build, so in between `has()` and `held_view()` could
+    miss a put that had returned (seen twice in the pool's presence case
+    and the control store's). It now installs first, then marks itself
+    seeded; the files are written in the same order.
+  - Left as Macha has it: compaction's stop callback notifies without the
+    mutex, so a stop requested between a waiter's check and its sleep can
+    be missed until the scan ends (locking there could deadlock when the
+    stop is already requested at construction).
+- Section 7, owed: a reserve of device I/O for control work is the DATA
+  credit arbiter's (step 3), which this monitor feeds; the monitor moved
+  as Macha has it, which by itself reserves nothing.
+- Gate: warnings as errors; `dagda_tests` 145 and 1 disabled (108 before).
+  The 37 new cases other than the has() baseline, with the local store
+  and held ledger suites the fixes touch (other than the small-values
+  timing), 69 cases, ran 200 times each (four processes of 50 repeats):
+  all 13,800 passing, after the three fixes above; before them the
+  cache's corrupt-entry case hung in 13 of 20 runs and the whole binary
+  hung twice in the cache's suite.
+- Dannan: the pool's lock wants `TimedLock` (marked
+  `TODO(Dannan: TimedLock)` in `storage_pool.h`). No Dannan symbol after
+  0.2.0 is used.
+- For Tom: the control store's `reserve_free` default (Macha's 0 or a
+  figure that keeps CONTROL writable past DATA's reserve); and where the
+  state layout marker (`storage-layout`, `macha-state-layout-v18`, Macha
+  `cluster/node_identity.cpp:15-40`) lives, Dagda's state directory or
+  Dannan's node identity, which step 1's "Refusing unversioned storage"
+  needs.
+
 ## 2026-11-04: step 1c, the local store (`feature/local-store`)
 
 - Moved and adapted into `dagda/store/` (namespace `dagda::store`):

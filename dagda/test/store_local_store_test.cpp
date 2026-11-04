@@ -14,9 +14,9 @@
 // test_pack_recovery_settles_each_kind_of_damage,
 // test_held_device_io_blocks_only_its_own_object,
 // test_presence_is_known_without_reading_objects, and the LocalStore block
-// of test_admission_respects_reserve_and_capacity (its StoragePool block
-// moves with the pool in 1d, its placement assertion with placement at step
-// 3); tests/test_storage_metadata.cpp: test_local_store. Macha's cluster key
+// of test_admission_respects_reserve_and_capacity (its StoragePool and
+// placement blocks are in store_storage_pool_test);
+// tests/test_storage_metadata.cpp: test_local_store. Macha's cluster key
 // file becomes domain v1's known-answer key. The bounded waits on futures are
 // a safety net against a hang; "not ready within 20 ms" is Macha's own proof
 // that an operation is held behind another.

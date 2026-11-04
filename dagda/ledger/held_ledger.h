@@ -83,6 +83,8 @@ class HeldLedger {
   void set_verify_next(uint16_t);
 
  private:
+  // Journals and installs what is queued, in order.
+  void install_queued() DANNAN_REQUIRES(_flush_mutex);
   // Journals without the lookup lock: it touches only the trie's journal,
   // never the nodes or cache a lookup reads, and every journal write and
   // install happens under _flush_mutex, in order.
