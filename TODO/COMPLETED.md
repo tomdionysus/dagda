@@ -3,6 +3,81 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 6, domains, the parts that need no head (`feature/domains`)
+
+Branched from `develop` at "Record Tom's step 6 decisions". One commit.
+Gate: `dagda_tests` 347 passing, 1 disabled (was 320 and 1; 27 added,
+none lost); the cluster and crypto cases rerun 8 times, 152 of 152.
+
+- `domain/domain_id.{h,cpp}`: `DomainId` (16 bytes, `parse`,
+  `to_string`); `domain_v1`, fixed, the first 16 bytes of
+  SHA-256("dagda/domain/v1") (named in memory and on the wire only, no
+  v18 byte carries it); `node_local_domain(node)`.
+- `domain/domain.{h,cpp}`: `Role {member, blind}`, `Domain {id, name,
+  role}`; v1 is named "macha", a node-local domain "node-local".
+- `domain/storage_key`: `StorageKey::derive_node_local(Identity&)` from
+  `derive_local("dagda/node-local/1")`; absent without custody.
+- `domain/wrap.{h,cpp}`: `WrapKey` (X25519, derived under "dagda/wrap/1",
+  private half clamped in secure memory; the public half is
+  `x25519_shared(private, base point)`); `WrappedKey` and `wrap`/`unwrap`
+  as decided (HKDF of the shared secret under "dagda/domain-wrap/1",
+  AES-256-GCM, AAD "dagda/wrap/1" || domain || member || wrapper), the
+  unwrapped key landing in secure memory; the codec; `WrapAdvert` under
+  advert key `dagda.wrap`: public half, signature over "dagda/wrap/1" ||
+  node id || public half, and the node's certificate DER (about 600 of the
+  advert's 1 KiB, until Dannan exposes peer certificates);
+  `advertise_wrap_key`, `verify_wrap_advert(peer, CA, now, revocations)`.
+- `store/sealing`: `SealingScheme {layout 18|19, domain}`; v18's AAD is
+  the id alone (Macha's), v19's "dagda/seal/19" || domain || id;
+  `blind_digest` = SHA-256 over nonce, tag and ciphertext.
+- `store/local_store`, `store/storage_pool`: `sealing`, `role` and
+  `ledger_key` options; `put_sealed`/`get_sealed`/`held_digest`; a blind
+  store or pool takes no key and refuses `put`/`get`; sealing moved out of
+  the loose and pack writers so a record sealed elsewhere is stored as it
+  is. The v19 marker "dagda-backend-v19 <node> <token> <domain> <check>",
+  check = HMAC-SHA256(domain key, ...)[:16], so a member without the key is
+  refused at open; a blind pool adopts with check "blind". v18 markers and
+  bytes as before; a disk of the other layout or domain is refused with a
+  reason. `store/state_layout`: "dagda-state-layout-v19 <domain>".
+- `store/messages`: `WritePrincipal {principal, prefix}` appended to
+  `put_object`, `put_object_deferred` and `retain_objects` after protocol
+  23's fields; absent, it is the sending node's own write under the
+  domain's name.
+- `store/distributed_store`, `store/storage_server`: `WriteOptions::
+  principal` and `prefix`; `WriteScope` on `retain_data`/`retain_control`;
+  every storing replica, the local one included, verifies before storing
+  and a refusal is `ReplicaState::refused` with "403 scope_refused: <why>
+  (scope generation N)" in the evidence; the server answers 403 before
+  admission; `put_control_object` is checked under the sender's node
+  principal.
+- `test/fixtures/cluster.h`: every node has custody (a light Argon2id
+  passphrase), a certificate from the cluster's CA over its custody key,
+  `use_cluster_key` kept, and advertises its wrap key at start.
+- New tests: `domain_domain_id_test`, `domain_wrap_test` (known answers:
+  pure-Python X25519 checked against RFC 7748, GCM against the spec's test
+  case 16, HKDF against RFC 5869, computed under `build/kat/`, none in the
+  suite), `domain_cluster_keys_test`, `store_layout_v19_test` (the AAD,
+  the marker's check, the binding: a v19 object moved to another domain or
+  id does not open), `store_scope_test` (no source: node principals write,
+  a directory principal is refused; a source refusing one prefix: refused
+  on every replica with evidence, another prefix lands); cases added to
+  `store_sealing_test` and `store_messages_test`.
+- Blind nodes verify the record is whole and that its ciphertext digest is
+  the one a member bound to the id; they cannot verify the tag, the domain
+  binding or that the bytes open to the id's plaintext. The distributed
+  blind path (sealed bytes on the wire, blind placement) waits on the
+  catalogue (step 4). A blind pool has no maintenance yet: rebalance and
+  scrub use `get` and would throw.
+- Dannan: everything needed existed but three, asked of the Dannan
+  session: an X25519 public-from-private helper; a peer's certificate (or
+  public key) and the CA through the Context; `operator==` on
+  `contract::Principal`.
+- Finding, not fixed: `StoragePool::get` removes a copy that does not
+  open, so a member opening a blind-adopted v19 backend under a wrong key
+  would discard every object it reads (the marker's check protects
+  member-made backends only; the same as a wrong cluster key on v18).
+  Recommended to Tom: a key probe at activate.
+
 ## 2026-11-04: the decided fixes (`feature/decided-fixes`)
 
 Tom's answers to the seven open items (Decisions, "2026-11-04 evening"),

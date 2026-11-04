@@ -293,19 +293,18 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      its duplicate rule (three concurrent duplicates settle only at the
      next merge), and its coordinator's takeover until `acquire` has renew
      and release (requirements 5.4). Dagda holds none of it.
-6. **What Lugh and Lir need beyond Macha.** In progress on
-   `feature/domains` (2026-11-04 evening). Now, the parts that need no
-   head: node-local domains under the node's custody
-   (`Identity::derive_local("dagda/node-local/1")`); the X25519 wrap key
-   per node and the wrap/unwrap of a domain key to a member; member and
-   blind roles in the seal and verify paths; layout v19 for new backends
-   with the domain in the AAD (v18 disks unchanged, byte for byte); the
-   scope check at the write floor through `Identity::verify`, principal
-   and prefix carried in `WriteOptions` and the put message; the binding
-   test. With step 4 (heads): the domain catalogue as a head space,
-   node-local spaces, the Replicated level's per-space k, retained values
-   on Dannan's notify channels, the no-rollback test. Gate: each from the
-   stack document's requirements.
+6. **What Lugh and Lir need beyond Macha.** ~~The parts that need no
+   head~~ Done 2026-11-04 on `feature/domains` (`COMPLETED.md`;
+   `dagda_tests` 347 and 1 disabled): node-local domains under custody,
+   the X25519 wrap key per node and the wrap of a domain key to a member,
+   member and blind roles at the local store and pool, layout v19 for new
+   backends with the domain in the AAD, the scope check at the write
+   floor with principal and prefix in `WriteOptions` and the put message,
+   the binding test. Still to do, with step 4 (heads): the domain
+   catalogue as a head space, blind replicas on the wire and in placement,
+   maintenance on a blind pool, node-local spaces, the Replicated level's
+   per-space k, retained values on Dannan's notify channels, the
+   no-rollback test. Gate: each from the stack document's requirements.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
