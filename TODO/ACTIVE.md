@@ -99,6 +99,12 @@ projects, with recommendations for the maintainer.
   adverts: the survey re-asks on it instead of topology. Hosted event
   kinds now number from `NodeEvents::dannan_kinds`; Dagda names kinds
   through `events().kind(name)`.
+- `Nodes::absent_since(node)` on Dannan's `develop` (`c201b6f`,
+  `a7fdfd0`), untagged: the steady time a node was last heard of, on
+  `context.time().source()`, surviving a restart; empty for self, an
+  active node or an unknown one. "Left" fires about `dead_after` after
+  it. Dagda's `lease/membership` drops its own absence start for it at
+  the repin (its `TODO(Dannan: absence on the roster)`).
 - `contract::Unlocked` (Dannan `35d14e0`, develop `b24db75`): a scoped
   unlock of a held `contract::Lock`, annotated. Dagda's file-local copy
   in `store/local_store.cpp` is replaced by it at the repin to 0.3.0.
