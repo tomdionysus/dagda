@@ -32,12 +32,9 @@
 namespace dagda::ledger {
 
 // Macha's maintenance settings the collector reads (config.hpp
-// MaintenanceConfig), with its defaults.
-struct CollectorOptions {
-  // The absence horizon: an object goes only once this node has seen it
-  // unreferenced and unclaimed for this long, on its own clock, and a
-  // retirement is collectable this long after it was stamped.
-  std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
+// MaintenanceConfig), with its defaults: the node's own budgets, which a
+// node's options carry, and the domain's wait.
+struct CollectorBudgets {
   // DATA no reference has reached yet may be the data half of a publication
   // still in flight: it waits at least this retry window, whatever the grace
   // (Macha's no_progress_backoff).
@@ -48,6 +45,13 @@ struct CollectorOptions {
   size_t prune_budget = 64;
   size_t data_budget = 64;
   size_t control_budget = 32;
+};
+
+struct CollectorOptions : CollectorBudgets {
+  // The absence horizon: an object goes only once this node has seen it
+  // unreferenced and unclaimed for this long, on its own clock, and a
+  // retirement is collectable this long after it was stamped.
+  std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
 };
 
 // What the collector runs on, each one per node and injected.

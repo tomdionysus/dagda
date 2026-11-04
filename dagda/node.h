@@ -79,10 +79,9 @@ struct MaintenanceOptions {
   bool automatic = true;
   std::chrono::milliseconds interval{1000};
   std::chrono::milliseconds gc_interval{300000};
-  // The collector's budgets and retry window, Macha's defaults. Its
-  // garbage_grace is not read: the wait is the domain's
-  // (NodeOptions::garbage_grace).
-  ledger::CollectorOptions collector;
+  // The collector's budgets and retry window, Macha's defaults. The wait is
+  // the domain's (NodeOptions::garbage_grace).
+  ledger::CollectorBudgets collector;
 };
 
 // What one run_maintenance_once() did: the GC pass's report, or why none
