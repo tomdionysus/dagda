@@ -411,8 +411,8 @@ changes. The evidence is
 
 Order: M2, M3, M4, M8, M9, M6, M5, M10; M1 when Macha merges.
 
-Done so far: M3, M4 but for the barrier's deadline (on Macha's list for the maintainer),
-and M2 but for the real state directory, which the Macha
+Done so far: M3, M8, M9, M4 but for the barrier's deadline (on Macha's list for
+The maintainer), and M2 but for the real state directory, which the Macha
 session cuts after its merge (`COMPLETED.md`). Not measured at
 scale: each loose object still takes one fsync, about 1 million on live-a. The Macha session accepted the
 yield-rule dispute and M2's narrowing, and M9's vectors are at
@@ -457,7 +457,8 @@ history truncation (`:1146`, gated on `!busy`).
   `test_replication_policy_change_on_restart` moved.
 - **M6. The last survey persisted** (`availability/last-survey.bin`) and
   re-asked on a peer's advert changes.
-- **M7. Torrent-request known answers.** Held for the maintainer: Waiting on the maintainer.
+- **M7. Torrent-request known answers.** Settled by the maintainer: they stay in Macha's
+  tests; Dagda pins the template on its neutral record.
 - **M8. The claims guard bounded.** Confirmed
   (`storage_server.cpp:316-324`): stripes released between sub-batches,
   and `test_retain_data_batches_a_large_publication_within_bounded_time`
@@ -508,6 +509,17 @@ Steps 5 and the parts of 6 that need no heads go first.
   document, "Waiting on the maintainer" 1).
 
 ## Decisions
+
+(the maintainer, 2026-11-04 night, relayed by the Macha session) Macha's tests keep pinning
+the torrent bytes and are the port gate; Dagda pins only the template on its
+neutral record and holds no torrent code. The reverse migration is kept but gates
+nothing: a node may be migrated before there-and-back is proven. A migration keeps
+its per-record open, so rot is listed; skipping it was not ruled on. The port is
+two cutovers: Macha on Dannan's transport with its own store, a soak, then the disk
+migration. A Macha case whose subject becomes Dagda's may be retired against a named
+`dagda_tests` case, mapped case by case; everything Macha-visible stays. Macha
+0.92.3 has the defect fixes; the tree-native merge and the fixtures follow its two
+open P0s.
 
 (the maintainer, 2026-11-04 night, relayed by the Macha session) **A genuine Macha
 defect is fixed in Macha first, and the libraries match Macha's fixed
@@ -613,15 +625,8 @@ asking:
 
 ## Waiting on the maintainer
 
-From the port respec (2026-11-04 night), recommendations in the session:
-
-1. M7: the torrent-request known answers against "no ingest, torrent or
-   import code, in the library or its tests" (Decisions, 2026-11-04).
-2. M2: does the reverse migration gate the first real migration
-   (the audit's own question 3)?
-3. M2: whether a migration reads every byte, or derives tags without
-   reading and leaves rot to the scrub.
-4. M10: which Linux machine runs the tests.
+From the port respec: M10, which Linux machine runs the tests. Recommended:
+live-b, whose data is replaceable from live-a. Both Pis are live.
 
 Earlier: the seven items of 2026-11-04 were all answered that evening
 (see Decisions, "the maintainer, 2026-11-04 evening") and done the same evening

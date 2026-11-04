@@ -1,0 +1,3297 @@
+# Placement known answers from Macha's capacity_placement_nodes, rendezvous_nodes and
+# placement_logical_capacity at 5776392 (macha/build/macha-fixtures/placement/placement-vectors.json,
+# the Linux reference, long double 113 bits). A mismatch re-homes a disk: never edit by hand.
+case one-node
+node 5b31d2364d354ea44b22ee472a39a6ed 4398046511104 a n0
+logical 1 4398046511104
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 0
+rendezvous 1 0
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 0
+rendezvous 1 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 0
+rendezvous 1 0
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 0
+rendezvous 1 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 0
+rendezvous 1 0
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 0
+rendezvous 1 0
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 0
+rendezvous 1 0
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0
+rendezvous 1 0
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 0
+rendezvous 1 0
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0
+rendezvous 1 0
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 0
+rendezvous 1 0
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 0
+rendezvous 1 0
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 0
+rendezvous 1 0
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 0
+rendezvous 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 0
+rendezvous 1 0
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 0
+rendezvous 1 0
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 0
+rendezvous 1 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 0
+rendezvous 1 0
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 0
+rendezvous 1 0
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 0
+rendezvous 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0
+rendezvous 1 0
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 0
+rendezvous 1 0
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0
+rendezvous 1 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0
+rendezvous 1 0
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 0
+rendezvous 1 0
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0
+rendezvous 1 0
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 0
+rendezvous 1 0
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 0
+rendezvous 1 0
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 0
+rendezvous 1 0
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 0
+rendezvous 1 0
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0
+rendezvous 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 0
+rendezvous 1 0
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 0
+rendezvous 1 0
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 0
+rendezvous 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0
+rendezvous 1 0
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 0
+rendezvous 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 0
+rendezvous 1 0
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 0
+rendezvous 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 0
+rendezvous 1 0
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 0
+rendezvous 1 0
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 0
+rendezvous 1 0
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 0
+rendezvous 1 0
+key 010203
+order 1 0
+rendezvous 1 0
+key deadbeef
+order 1 0
+rendezvous 1 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 0
+rendezvous 1 0
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 0
+rendezvous 1 0
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 0
+rendezvous 1 0
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 0
+rendezvous 1 0
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 0
+rendezvous 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 0
+rendezvous 1 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 0
+rendezvous 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 0
+rendezvous 1 0
+case two-equal-distinct-domains
+node 5b31d2364d354ea44b22ee472a39a6ed 8796093022208 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 8796093022208 b n1
+logical 1 17592186044416
+logical 2 8796093022208
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 010203
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key deadbeef
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+case two-unequal-same-domain
+node 5b31d2364d354ea44b22ee472a39a6ed 9895604649984 - n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 9895604649984 - n1
+logical 1 19791209299968
+logical 2 9895604649984
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 010203
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key deadbeef
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+case three-equal-distinct-domains
+node 5b31d2364d354ea44b22ee472a39a6ed 4398046511104 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 4398046511104 b n1
+node b320b470dbf22ef6e27028b1d4a030f0 4398046511104 c n2
+logical 1 13194139533312
+logical 2 6597069766656
+logical 3 4398046511104
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 1 0 2
+rendezvous 1 1
+order 2 0 1 2
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 2 0 1
+rendezvous 1 1
+order 2 0 1 2
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 0 2 1
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 1 0 2
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 0 1
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 2 1 0
+rendezvous 1 1
+order 2 0 1 2
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0 1 2
+rendezvous 1 1
+order 2 0 1 2
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 2 0 1
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 2 0 1
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 0 1
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 0 2
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 1 2 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 0 2
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 1 0 2
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 0 1 2
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 2 1
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0 1 2
+rendezvous 1 1
+order 2 0 1 2
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0 1 2
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 0 2
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 0 1
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 0 2
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0 1 2
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 1 0 2
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 0 1 2
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 0 1 2
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 0 2 1
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 2 1 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 0 1 2
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 0 1 2
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 2 0 1
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 010203
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key deadbeef
+order 1 1 0 2
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 0 1 2
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 0 2 1
+rendezvous 1 0
+order 2 0 1 2
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 1 2
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 1 0 2
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 2 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 2 0 1
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+case three-unequal-distinct-domains
+node 5b31d2364d354ea44b22ee472a39a6ed 1099511627776 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 2199023255552 b n1
+node b320b470dbf22ef6e27028b1d4a030f0 4398046511104 c n2
+logical 1 7696581394432
+logical 2 3298534883328
+logical 3 1099511627776
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 2 1 0
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 2 1 0
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 2 0 1
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 2 1 0
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0 1 2
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 2 1 0
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 2 0 1
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 0 1
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 2 0
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 1 2 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 0 2
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 2 1 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 2 0 1
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0 2 1
+rendezvous 1 1
+order 2 0 2 1
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0 1 2
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 2 0
+rendezvous 1 0
+order 2 1 2 0
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 2 1
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 2
+order 3 0 1 2
+rendezvous 3 0 2 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 2 1 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0 1 2
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 1 0 2
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 2 1 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 2 0 1
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 1 2 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 2 0 1
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 2 1 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 1 2 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 2 1 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 010203
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key deadbeef
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 2 1 0
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 2 0 1
+rendezvous 1 0
+order 2 0 2 1
+rendezvous 2 0 1
+order 3 0 1 2
+rendezvous 3 0 1 2
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 2 1 0
+rendezvous 1 2
+order 2 0 2 1
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 2 1 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 0
+order 3 0 1 2
+rendezvous 3 2 0 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 2 0 1
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 2 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 2
+order 3 0 1 2
+rendezvous 3 1 2 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 2 0
+rendezvous 1 2
+order 2 1 2 0
+rendezvous 2 2 1
+order 3 0 1 2
+rendezvous 3 2 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 2 1 0
+rendezvous 1 1
+order 2 1 2 0
+rendezvous 2 1 0
+order 3 0 1 2
+rendezvous 3 1 0 2
+case four-two-per-domain
+node 5b31d2364d354ea44b22ee472a39a6ed 2199023255552 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 6597069766656 a n1
+node b320b470dbf22ef6e27028b1d4a030f0 3298534883328 b n2
+node 653b79b712c61174f96c6b853682d3b9 9895604649984 b n3
+logical 1 21990232555520
+logical 2 8796093022208
+logical 3 5497558138880
+logical 4 2199023255552
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 3 1 2 0
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 1
+order 3 1 3 2 0
+rendezvous 3 3 1 0
+order 4 1 3 0 2
+rendezvous 4 3 1 0 2
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 3 2 1 0
+rendezvous 1 1
+order 2 1 3 0 2
+rendezvous 2 1 2
+order 3 1 3 2 0
+rendezvous 3 1 2 3
+order 4 1 3 0 2
+rendezvous 4 1 2 3 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 3 2 0 1
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 1
+order 3 1 3 2 0
+rendezvous 3 3 1 0
+order 4 1 3 0 2
+rendezvous 4 3 1 0 2
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 3 1 0 2
+rendezvous 1 3
+order 2 0 2 1 3
+rendezvous 2 3 1
+order 3 0 2 3 1
+rendezvous 3 3 1 2
+order 4 0 2 3 1
+rendezvous 4 3 1 2 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 2 3 0
+rendezvous 1 0
+order 2 1 2 3 0
+rendezvous 2 0 3
+order 3 1 2 3 0
+rendezvous 3 0 3 1
+order 4 1 2 0 3
+rendezvous 4 0 3 1 2
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 3 1 0
+rendezvous 1 0
+order 2 1 2 0 3
+rendezvous 2 0 3
+order 3 1 2 3 0
+rendezvous 3 0 3 2
+order 4 1 2 0 3
+rendezvous 4 0 3 2 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 1 2 0 3
+rendezvous 1 3
+order 2 0 2 3 1
+rendezvous 2 3 1
+order 3 0 2 1 3
+rendezvous 3 3 1 0
+order 4 0 2 3 1
+rendezvous 4 3 1 0 2
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 3 1 0 2
+rendezvous 1 3
+order 2 1 3 2 0
+rendezvous 2 3 1
+order 3 1 3 2 0
+rendezvous 3 3 1 0
+order 4 1 3 0 2
+rendezvous 4 3 1 0 2
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 2 1 3 0
+rendezvous 1 0
+order 2 1 2 3 0
+rendezvous 2 0 2
+order 3 1 2 3 0
+rendezvous 3 0 2 1
+order 4 1 2 0 3
+rendezvous 4 0 2 1 3
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 2 0 3 1
+rendezvous 1 2
+order 2 1 2 0 3
+rendezvous 2 2 0
+order 3 1 2 3 0
+rendezvous 3 2 0 1
+order 4 1 2 0 3
+rendezvous 4 2 0 1 3
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 3 1 2 0
+rendezvous 1 0
+order 2 1 3 2 0
+rendezvous 2 0 2
+order 3 1 3 2 0
+rendezvous 3 0 2 3
+order 4 1 3 0 2
+rendezvous 4 0 2 3 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 3 0 1
+rendezvous 1 1
+order 2 0 2 3 1
+rendezvous 2 1 3
+order 3 0 2 3 1
+rendezvous 3 1 3 0
+order 4 0 2 3 1
+rendezvous 4 1 3 0 2
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 3 0 2
+rendezvous 1 0
+order 2 1 3 0 2
+rendezvous 2 0 2
+order 3 1 3 2 0
+rendezvous 3 0 2 1
+order 4 1 3 0 2
+rendezvous 4 0 2 1 3
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 3 1 2 0
+rendezvous 1 2
+order 2 1 2 3 0
+rendezvous 2 2 1
+order 3 1 2 3 0
+rendezvous 3 2 1 0
+order 4 1 2 0 3
+rendezvous 4 2 1 0 3
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 3 1 0 2
+rendezvous 1 0
+order 2 1 2 3 0
+rendezvous 2 0 2
+order 3 1 2 3 0
+rendezvous 3 0 2 3
+order 4 1 2 0 3
+rendezvous 4 0 2 3 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 1 2 3 0
+rendezvous 1 0
+order 2 1 3 0 2
+rendezvous 2 0 3
+order 3 1 3 2 0
+rendezvous 3 0 3 1
+order 4 1 3 0 2
+rendezvous 4 0 3 1 2
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 3 1 0 2
+rendezvous 1 1
+order 2 1 3 0 2
+rendezvous 2 1 2
+order 3 1 3 0 2
+rendezvous 3 1 2 3
+order 4 1 3 0 2
+rendezvous 4 1 2 3 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 1 0 3
+rendezvous 1 0
+order 2 1 3 0 2
+rendezvous 2 0 2
+order 3 1 3 2 0
+rendezvous 3 0 2 1
+order 4 1 3 0 2
+rendezvous 4 0 2 1 3
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 1 0 2 3
+rendezvous 1 1
+order 2 1 3 0 2
+rendezvous 2 1 3
+order 3 1 3 2 0
+rendezvous 3 1 3 0
+order 4 1 3 0 2
+rendezvous 4 1 3 0 2
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 1 3 2 0
+rendezvous 1 2
+order 2 1 3 2 0
+rendezvous 2 2 1
+order 3 1 3 0 2
+rendezvous 3 2 1 3
+order 4 1 3 0 2
+rendezvous 4 2 1 3 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 3 0 2 1
+rendezvous 1 0
+order 2 1 3 2 0
+rendezvous 2 0 3
+order 3 1 3 0 2
+rendezvous 3 0 3 1
+order 4 1 3 0 2
+rendezvous 4 0 3 1 2
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 3 1 2 0
+rendezvous 1 3
+order 2 1 3 2 0
+rendezvous 2 3 0
+order 3 1 3 0 2
+rendezvous 3 3 0 2
+order 4 1 3 0 2
+rendezvous 4 3 0 2 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 3 0 1 2
+rendezvous 1 3
+order 2 0 3 1 2
+rendezvous 2 3 1
+order 3 0 3 1 2
+rendezvous 3 3 1 2
+order 4 0 3 2 1
+rendezvous 4 3 1 2 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 3 1 0 2
+rendezvous 1 1
+order 2 1 3 0 2
+rendezvous 2 1 2
+order 3 1 3 0 2
+rendezvous 3 1 2 0
+order 4 1 3 0 2
+rendezvous 4 1 2 0 3
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 3 1 2 0
+rendezvous 1 0
+order 2 1 3 0 2
+rendezvous 2 0 2
+order 3 1 3 2 0
+rendezvous 3 0 2 3
+order 4 1 3 0 2
+rendezvous 4 0 2 3 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 3 0 1 2
+rendezvous 1 2
+order 2 1 3 2 0
+rendezvous 2 2 0
+order 3 1 3 2 0
+rendezvous 3 2 0 3
+order 4 1 3 0 2
+rendezvous 4 2 0 3 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 3 1 0
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 0
+order 3 1 3 2 0
+rendezvous 3 3 0 1
+order 4 1 3 0 2
+rendezvous 4 3 0 1 2
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 3 0 2
+rendezvous 1 0
+order 2 0 3 1 2
+rendezvous 2 0 3
+order 3 0 3 1 2
+rendezvous 3 0 3 1
+order 4 0 3 2 1
+rendezvous 4 0 3 1 2
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 1 3 2 0
+rendezvous 1 0
+order 2 0 2 1 3
+rendezvous 2 0 3
+order 3 0 2 3 1
+rendezvous 3 0 3 2
+order 4 0 2 3 1
+rendezvous 4 0 3 2 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 1 3 2 0
+rendezvous 1 1
+order 2 0 3 2 1
+rendezvous 2 1 2
+order 3 0 3 1 2
+rendezvous 3 1 2 0
+order 4 0 3 2 1
+rendezvous 4 1 2 0 3
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 3 1 0 2
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 1
+order 3 1 3 0 2
+rendezvous 3 3 1 2
+order 4 1 3 0 2
+rendezvous 4 3 1 2 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 1 3 2 0
+rendezvous 1 2
+order 2 1 3 0 2
+rendezvous 2 2 0
+order 3 1 3 0 2
+rendezvous 3 2 0 1
+order 4 1 3 0 2
+rendezvous 4 2 0 1 3
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 3 1 0 2
+rendezvous 1 2
+order 2 1 3 2 0
+rendezvous 2 2 0
+order 3 1 3 2 0
+rendezvous 3 2 0 3
+order 4 1 3 0 2
+rendezvous 4 2 0 3 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 3 2 1 0
+rendezvous 1 2
+order 2 1 3 0 2
+rendezvous 2 2 1
+order 3 1 3 0 2
+rendezvous 3 2 1 0
+order 4 1 3 0 2
+rendezvous 4 2 1 0 3
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 3 0 2 1
+rendezvous 1 3
+order 2 1 3 2 0
+rendezvous 2 3 0
+order 3 1 3 0 2
+rendezvous 3 3 0 2
+order 4 1 3 0 2
+rendezvous 4 3 0 2 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 3 1 0 2
+rendezvous 1 2
+order 2 0 2 3 1
+rendezvous 2 2 1
+order 3 0 2 1 3
+rendezvous 3 2 1 0
+order 4 0 2 3 1
+rendezvous 4 2 1 0 3
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 3 0 2 1
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 0
+order 3 1 3 2 0
+rendezvous 3 3 0 2
+order 4 1 3 0 2
+rendezvous 4 3 0 2 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 2 3 1 0
+rendezvous 1 2
+order 2 1 3 0 2
+rendezvous 2 2 1
+order 3 1 3 2 0
+rendezvous 3 2 1 3
+order 4 1 3 0 2
+rendezvous 4 2 1 3 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 3 1 2 0
+rendezvous 1 0
+order 2 0 2 3 1
+rendezvous 2 0 3
+order 3 0 2 1 3
+rendezvous 3 0 3 1
+order 4 0 2 3 1
+rendezvous 4 0 3 1 2
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 1 3 0 2
+rendezvous 1 3
+order 2 1 3 2 0
+rendezvous 2 3 0
+order 3 1 3 0 2
+rendezvous 3 3 0 1
+order 4 1 3 0 2
+rendezvous 4 3 0 1 2
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 3 1 2 0
+rendezvous 1 3
+order 2 1 2 3 0
+rendezvous 2 3 0
+order 3 1 2 3 0
+rendezvous 3 3 0 2
+order 4 1 2 0 3
+rendezvous 4 3 0 2 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 3 2 1 0
+rendezvous 1 2
+order 2 1 3 0 2
+rendezvous 2 2 0
+order 3 1 3 2 0
+rendezvous 3 2 0 3
+order 4 1 3 0 2
+rendezvous 4 2 0 3 1
+key 010203
+order 1 1 2 3 0
+rendezvous 1 0
+order 2 1 3 0 2
+rendezvous 2 0 3
+order 3 1 3 2 0
+rendezvous 3 0 3 1
+order 4 1 3 0 2
+rendezvous 4 0 3 1 2
+key deadbeef
+order 1 1 3 2 0
+rendezvous 1 1
+order 2 0 2 1 3
+rendezvous 2 1 2
+order 3 0 2 3 1
+rendezvous 3 1 2 0
+order 4 0 2 3 1
+rendezvous 4 1 2 0 3
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 3 1 2 0
+rendezvous 1 3
+order 2 1 3 0 2
+rendezvous 2 3 0
+order 3 1 3 0 2
+rendezvous 3 3 0 1
+order 4 1 3 0 2
+rendezvous 4 3 0 1 2
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 3 2 0 1
+rendezvous 1 0
+order 2 0 2 3 1
+rendezvous 2 0 3
+order 3 0 2 1 3
+rendezvous 3 0 3 1
+order 4 0 2 3 1
+rendezvous 4 0 3 1 2
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 3 1 2 0
+rendezvous 1 2
+order 2 0 3 1 2
+rendezvous 2 2 0
+order 3 0 3 1 2
+rendezvous 3 2 0 3
+order 4 0 3 2 1
+rendezvous 4 2 0 3 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 1 3 0 2
+rendezvous 1 2
+order 2 0 3 2 1
+rendezvous 2 2 0
+order 3 0 3 2 1
+rendezvous 3 2 0 3
+order 4 0 3 2 1
+rendezvous 4 2 0 3 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 3 0 2 1
+rendezvous 1 2
+order 2 1 2 3 0
+rendezvous 2 2 1
+order 3 1 2 3 0
+rendezvous 3 2 1 3
+order 4 1 2 0 3
+rendezvous 4 2 1 3 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 3 2 0
+rendezvous 1 3
+order 2 0 2 1 3
+rendezvous 2 3 1
+order 3 0 2 3 1
+rendezvous 3 3 1 2
+order 4 0 2 3 1
+rendezvous 4 3 1 2 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 3 2 0
+rendezvous 1 3
+order 2 1 2 3 0
+rendezvous 2 3 1
+order 3 1 2 3 0
+rendezvous 3 3 1 2
+order 4 1 2 0 3
+rendezvous 4 3 1 2 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 3 2 1 0
+rendezvous 1 1
+order 2 1 3 2 0
+rendezvous 2 1 3
+order 3 1 3 2 0
+rendezvous 3 1 3 0
+order 4 1 3 0 2
+rendezvous 4 1 3 0 2
+case five-three-domains
+node 5b31d2364d354ea44b22ee472a39a6ed 4398046511104 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 4398046511104 a n1
+node b320b470dbf22ef6e27028b1d4a030f0 8796093022208 b n2
+node 653b79b712c61174f96c6b853682d3b9 1099511627776 c n3
+node 6eeb40de2faf01e362c8931eac589dc8 17592186044416 c n4
+logical 1 36283883716608
+logical 2 17592186044416
+logical 3 8796093022208
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 4 2 1 0 3
+rendezvous 1 3
+order 2 1 4 0 2 3
+rendezvous 2 3 1
+order 3 1 2 4 0 3
+rendezvous 3 3 1 2
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 4 2 0 3 1
+rendezvous 1 4
+order 2 1 4 0 2 3
+rendezvous 2 4 1
+order 3 1 2 4 0 3
+rendezvous 3 4 1 2
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 4 2 0 3 1
+rendezvous 1 3
+order 2 2 3 4 0 1
+rendezvous 2 3 1
+order 3 0 2 3 4 1
+rendezvous 3 3 1 2
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 4 1 2 0 3
+rendezvous 1 3
+order 2 2 4 1 0 3
+rendezvous 2 3 1
+order 3 0 2 4 1 3
+rendezvous 3 3 1 2
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 4 1 2 0 3
+rendezvous 1 0
+order 2 1 4 0 2 3
+rendezvous 2 0 3
+order 3 1 2 4 0 3
+rendezvous 3 0 3 2
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 4 0 3 1
+rendezvous 1 0
+order 2 1 4 0 2 3
+rendezvous 2 0 3
+order 3 1 2 4 0 3
+rendezvous 3 0 3 2
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 2 1 4 0 3
+rendezvous 1 3
+order 2 0 4 2 1 3
+rendezvous 2 3 1
+order 3 0 2 4 1 3
+rendezvous 3 3 1 2
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 4 0 1 3 2
+rendezvous 1 3
+order 2 0 4 1 2 3
+rendezvous 2 3 1
+order 3 0 2 4 1 3
+rendezvous 3 3 1 2
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 4 2 0 1 3
+rendezvous 1 0
+order 2 1 4 2 0 3
+rendezvous 2 0 2
+order 3 1 2 4 0 3
+rendezvous 3 0 2 3
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 2 0 4 1 3
+rendezvous 1 2
+order 2 1 4 0 2 3
+rendezvous 2 2 0
+order 3 1 2 4 0 3
+rendezvous 3 2 0 4
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 2 4 3 0 1
+rendezvous 1 0
+order 2 1 4 2 0 3
+rendezvous 2 0 2
+order 3 1 2 4 0 3
+rendezvous 3 0 2 4
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 4 0 3 1
+rendezvous 1 1
+order 2 2 4 1 0 3
+rendezvous 2 1 3
+order 3 0 2 4 1 3
+rendezvous 3 1 3 2
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 4 0 2 3
+rendezvous 1 0
+order 2 1 4 0 2 3
+rendezvous 2 0 2
+order 3 1 2 4 0 3
+rendezvous 3 0 2 3
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 3 4 1 2 0
+rendezvous 1 2
+order 2 2 4 3 1 0
+rendezvous 2 2 1
+order 3 1 2 4 3 0
+rendezvous 3 2 1 3
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 4 0 3 2
+rendezvous 1 0
+order 2 0 4 2 1 3
+rendezvous 2 0 2
+order 3 0 2 4 1 3
+rendezvous 3 0 2 3
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 2 4 1 0 3
+rendezvous 1 4
+order 2 1 4 0 2 3
+rendezvous 2 4 0
+order 3 1 2 4 0 3
+rendezvous 3 4 0 2
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 4 1 2 0 3
+rendezvous 1 4
+order 2 2 4 3 0 1
+rendezvous 2 4 1
+order 3 1 2 4 3 0
+rendezvous 3 4 1 2
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 1 4 0 3
+rendezvous 1 0
+order 2 0 4 1 2 3
+rendezvous 2 0 2
+order 3 0 2 4 1 3
+rendezvous 3 0 2 3
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 4 0 2 1 3
+rendezvous 1 4
+order 2 1 4 2 0 3
+rendezvous 2 4 1
+order 3 1 2 4 0 3
+rendezvous 3 4 1 2
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 2 4 1 0 3
+rendezvous 1 4
+order 2 0 4 2 1 3
+rendezvous 2 4 2
+order 3 0 2 4 1 3
+rendezvous 3 4 2 1
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 4 2 3 1
+rendezvous 1 0
+order 2 2 4 1 0 3
+rendezvous 2 0 3
+order 3 1 2 4 0 3
+rendezvous 3 0 3 2
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 4 2 1 0 3
+rendezvous 1 4
+order 2 1 4 2 0 3
+rendezvous 2 4 2
+order 3 1 2 4 0 3
+rendezvous 3 4 2 0
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 4 0 3 2 1
+rendezvous 1 3
+order 2 0 4 1 2 3
+rendezvous 2 3 1
+order 3 0 2 4 1 3
+rendezvous 3 3 1 2
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 4 0 3 1 2
+rendezvous 1 1
+order 2 2 4 0 1 3
+rendezvous 2 1 4
+order 3 1 2 4 0 3
+rendezvous 3 1 4 2
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 2 0 3 4
+rendezvous 1 0
+order 2 2 4 0 1 3
+rendezvous 2 0 2
+order 3 1 2 4 0 3
+rendezvous 3 0 2 3
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 4 2 1 3
+rendezvous 1 2
+order 2 1 4 3 2 0
+rendezvous 2 2 3
+order 3 1 2 4 3 0
+rendezvous 3 2 3 0
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 4 0 1 3
+rendezvous 1 3
+order 2 1 4 0 2 3
+rendezvous 2 3 0
+order 3 1 2 4 0 3
+rendezvous 3 3 0 2
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 0 2 4 3
+rendezvous 1 0
+order 2 0 4 2 1 3
+rendezvous 2 0 3
+order 3 0 2 4 1 3
+rendezvous 3 0 3 2
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 4 2 1 0 3
+rendezvous 1 4
+order 2 0 4 2 1 3
+rendezvous 2 4 0
+order 3 0 2 4 1 3
+rendezvous 3 4 0 2
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 4 2 1 0 3
+rendezvous 1 1
+order 2 2 4 0 1 3
+rendezvous 2 1 2
+order 3 0 2 4 1 3
+rendezvous 3 1 2 4
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 4 0 1 2 3
+rendezvous 1 3
+order 2 2 3 4 0 1
+rendezvous 2 3 2
+order 3 0 2 3 4 1
+rendezvous 3 3 2 1
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 4 2 1 0 3
+rendezvous 1 2
+order 2 1 4 2 0 3
+rendezvous 2 2 0
+order 3 1 2 4 0 3
+rendezvous 3 2 0 3
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 4 0 1 2 3
+rendezvous 1 2
+order 2 1 4 2 0 3
+rendezvous 2 2 0
+order 3 1 2 4 0 3
+rendezvous 3 2 0 3
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 2 4 3 1 0
+rendezvous 1 2
+order 2 0 4 2 3 1
+rendezvous 2 2 1
+order 3 0 2 4 3 1
+rendezvous 3 2 1 4
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 2 4 3 1
+rendezvous 1 3
+order 2 0 3 4 2 1
+rendezvous 2 3 2
+order 3 0 2 3 4 1
+rendezvous 3 3 2 0
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 4 0 1 2 3
+rendezvous 1 2
+order 2 0 4 1 2 3
+rendezvous 2 2 4
+order 3 0 2 4 1 3
+rendezvous 3 2 4 1
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 4 0 2 3 1
+rendezvous 1 4
+order 2 2 4 1 0 3
+rendezvous 2 4 2
+order 3 1 2 4 0 3
+rendezvous 3 4 2 0
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 2 4 1 0 3
+rendezvous 1 2
+order 2 2 4 1 0 3
+rendezvous 2 2 3
+order 3 1 2 4 0 3
+rendezvous 3 2 3 1
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 4 3 1 2 0
+rendezvous 1 0
+order 2 0 4 2 1 3
+rendezvous 2 0 3
+order 3 0 2 4 1 3
+rendezvous 3 0 3 2
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 4 2 0 1 3
+rendezvous 1 3
+order 2 1 4 2 0 3
+rendezvous 2 3 0
+order 3 1 2 4 0 3
+rendezvous 3 3 0 2
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 4 2 0 1 3
+rendezvous 1 3
+order 2 1 4 2 3 0
+rendezvous 2 3 2
+order 3 1 2 4 3 0
+rendezvous 3 3 2 0
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 2 4 0 1 3
+rendezvous 1 2
+order 2 2 4 0 1 3
+rendezvous 2 2 0
+order 3 1 2 4 0 3
+rendezvous 3 2 0 3
+key 010203
+order 1 4 2 1 0 3
+rendezvous 1 0
+order 2 1 4 0 2 3
+rendezvous 2 0 4
+order 3 1 2 4 0 3
+rendezvous 3 0 4 2
+key deadbeef
+order 1 4 1 2 0 3
+rendezvous 1 1
+order 2 2 4 1 0 3
+rendezvous 2 1 2
+order 3 0 2 4 1 3
+rendezvous 3 1 2 3
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 4 2 0 1 3
+rendezvous 1 3
+order 2 1 4 0 2 3
+rendezvous 2 3 0
+order 3 1 2 4 0 3
+rendezvous 3 3 0 2
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 2 4 0 3 1
+rendezvous 1 0
+order 2 0 4 2 1 3
+rendezvous 2 0 4
+order 3 0 2 4 1 3
+rendezvous 3 0 4 2
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 4 2 0 1 3
+rendezvous 1 2
+order 2 0 4 1 2 3
+rendezvous 2 2 4
+order 3 0 2 4 1 3
+rendezvous 3 2 4 0
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 4 2 1 0 3
+rendezvous 1 2
+order 2 0 4 2 3 1
+rendezvous 2 2 0
+order 3 0 2 4 3 1
+rendezvous 3 2 0 3
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 4 2 0 1 3
+rendezvous 1 2
+order 2 2 4 1 0 3
+rendezvous 2 2 3
+order 3 1 2 4 0 3
+rendezvous 3 2 3 1
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 4 1 2 0 3
+rendezvous 1 3
+order 2 2 4 0 1 3
+rendezvous 2 3 1
+order 3 0 2 4 1 3
+rendezvous 3 3 1 2
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 4 2 0 3
+rendezvous 1 3
+order 2 2 4 0 1 3
+rendezvous 2 3 2
+order 3 0 2 4 1 3
+rendezvous 3 3 2 1
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 2 4 0 1 3
+rendezvous 1 1
+order 2 2 4 1 3 0
+rendezvous 2 1 3
+order 3 0 2 4 1 3
+rendezvous 3 1 3 2
+case six-no-domains-unequal
+node 5b31d2364d354ea44b22ee472a39a6ed 1099511627776 - n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 2199023255552 - n1
+node b320b470dbf22ef6e27028b1d4a030f0 3298534883328 - n2
+node 653b79b712c61174f96c6b853682d3b9 5497558138880 - n3
+node 6eeb40de2faf01e362c8931eac589dc8 8796093022208 - n4
+node 4f5e48de22d8c50dbd199518a1315f90 14293651161088 - n5
+logical 1 35184372088832
+logical 2 17592186044416
+logical 3 10445360463872
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 5 4 3 2 1 0
+rendezvous 1 3
+order 2 5 3 0 4 2 1
+rendezvous 2 3 1
+order 3 5 3 4 0 2 1
+rendezvous 3 3 1 0
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 5 4 3 2 1 0
+rendezvous 1 4
+order 2 5 4 1 3 2 0
+rendezvous 2 4 5
+order 3 5 3 4 1 2 0
+rendezvous 3 4 5 1
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 3 4 5 2 0 1
+rendezvous 1 3
+order 2 3 1 5 4 0 2
+rendezvous 2 3 1
+order 3 5 4 1 3 0 2
+rendezvous 3 3 1 5
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 5 4 3 1 2 0
+rendezvous 1 3
+order 2 5 2 4 3 1 0
+rendezvous 2 3 4
+order 3 5 4 1 2 3 0
+rendezvous 3 3 4 1
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 5 4 1 2 3 0
+rendezvous 1 0
+order 2 5 3 4 2 0 1
+rendezvous 2 0 3
+order 3 5 3 4 2 0 1
+rendezvous 3 0 3 1
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 5 3 4 1 0
+rendezvous 1 0
+order 2 5 3 0 1 4 2
+rendezvous 2 0 3
+order 3 5 0 4 1 3 2
+rendezvous 3 0 3 2
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 2 1 4 5 0 3
+rendezvous 1 3
+order 2 5 3 0 4 2 1
+rendezvous 2 3 1
+order 3 5 3 4 0 2 1
+rendezvous 3 3 1 4
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 5 3 4 0 1 2
+rendezvous 1 3
+order 2 5 3 4 1 2 0
+rendezvous 2 3 4
+order 3 5 0 4 1 3 2
+rendezvous 3 3 4 1
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 4 5 2 3 1 0
+rendezvous 1 0
+order 2 5 4 2 1 3 0
+rendezvous 2 0 1
+order 3 5 3 4 2 1 0
+rendezvous 3 0 1 2
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 5 2 0 3 4 1
+rendezvous 1 2
+order 2 5 3 4 0 1 2
+rendezvous 2 2 0
+order 3 5 0 4 1 3 2
+rendezvous 3 2 0 5
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 3 5 4 2 1 0
+rendezvous 1 0
+order 2 5 4 1 2 3 0
+rendezvous 2 0 2
+order 3 5 3 4 1 2 0
+rendezvous 3 0 2 4
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 3 5 4 0 1
+rendezvous 1 5
+order 2 5 2 4 3 1 0
+rendezvous 2 5 1
+order 3 5 4 2 3 1 0
+rendezvous 3 5 1 0
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 3 5 4 0 2
+rendezvous 1 0
+order 2 5 4 0 3 1 2
+rendezvous 2 0 2
+order 3 5 3 2 4 0 1
+rendezvous 3 0 2 5
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 5 3 4 1 2 0
+rendezvous 1 2
+order 2 3 1 5 4 2 0
+rendezvous 2 2 1
+order 3 5 4 1 3 2 0
+rendezvous 3 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 3 5 1 4 0 2
+rendezvous 1 0
+order 2 5 3 4 2 1 0
+rendezvous 2 0 5
+order 3 5 3 4 2 1 0
+rendezvous 3 0 5 2
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 5 2 3 4 1 0
+rendezvous 1 4
+order 2 5 4 1 3 2 0
+rendezvous 2 4 0
+order 3 5 3 4 1 2 0
+rendezvous 3 4 0 1
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 5 3 4 1 2 0
+rendezvous 1 4
+order 2 5 2 3 4 0 1
+rendezvous 2 4 1
+order 3 5 4 2 3 0 1
+rendezvous 3 4 1 2
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 5 1 4 0 3
+rendezvous 1 0
+order 2 5 3 4 0 1 2
+rendezvous 2 0 1
+order 3 5 3 4 0 1 2
+rendezvous 3 0 1 2
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 5 4 1 2 0 3
+rendezvous 1 4
+order 2 5 4 1 3 2 0
+rendezvous 2 4 1
+order 3 5 3 4 1 2 0
+rendezvous 3 4 1 5
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 5 2 3 4 1 0
+rendezvous 1 4
+order 2 5 4 1 3 2 0
+rendezvous 2 4 2
+order 3 5 3 4 1 2 0
+rendezvous 3 4 2 3
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 3 5 4 2 0 1
+rendezvous 1 0
+order 2 0 2 5 4 1 3
+rendezvous 2 0 3
+order 3 5 4 1 3 2 0
+rendezvous 3 0 3 1
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 5 4 3 2 1 0
+rendezvous 1 5
+order 2 5 4 1 3 2 0
+rendezvous 2 5 4
+order 3 5 3 4 1 2 0
+rendezvous 3 5 4 3
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 3 4 5 0 2 1
+rendezvous 1 3
+order 2 5 3 4 1 2 0
+rendezvous 2 3 1
+order 3 5 3 4 1 2 0
+rendezvous 3 3 1 2
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 3 5 4 0 1 2
+rendezvous 1 5
+order 2 5 2 4 0 3 1
+rendezvous 2 5 1
+order 3 5 4 2 0 3 1
+rendezvous 3 5 1 0
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 3 1 5 2 4 0
+rendezvous 1 0
+order 2 5 2 4 0 3 1
+rendezvous 2 0 2
+order 3 5 4 2 0 3 1
+rendezvous 3 0 2 3
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 5 3 4 0 2 1
+rendezvous 1 5
+order 2 5 4 3 2 1 0
+rendezvous 2 5 2
+order 3 5 3 4 2 1 0
+rendezvous 3 5 2 3
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 4 5 3 1 0
+rendezvous 1 3
+order 2 5 3 1 2 0 4
+rendezvous 2 3 5
+order 3 5 0 4 1 3 2
+rendezvous 3 3 5 0
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 5 3 1 4 2 0
+rendezvous 1 0
+order 2 5 4 3 2 1 0
+rendezvous 2 0 3
+order 3 5 3 4 2 1 0
+rendezvous 3 0 3 1
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 4 5 3 2 1 0
+rendezvous 1 4
+order 2 5 3 4 2 1 0
+rendezvous 2 4 0
+order 3 5 3 4 2 1 0
+rendezvous 3 4 0 5
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 4 5 3 1 2 0
+rendezvous 1 1
+order 2 5 2 0 4 1 3
+rendezvous 2 1 5
+order 3 5 4 2 0 1 3
+rendezvous 3 1 5 0
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 4 3 5 0 1 2
+rendezvous 1 3
+order 2 5 2 4 3 0 1
+rendezvous 2 3 5
+order 3 5 4 2 3 0 1
+rendezvous 3 3 5 2
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 4 5 3 1 2 0
+rendezvous 1 2
+order 2 5 4 2 0 1 3
+rendezvous 2 2 0
+order 3 5 3 4 2 0 1
+rendezvous 3 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 3 4 1 5 0 2
+rendezvous 1 2
+order 2 5 3 2 0 4 1
+rendezvous 2 2 5
+order 3 5 3 4 2 0 1
+rendezvous 3 2 5 0
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 3 2 4 5 1 0
+rendezvous 1 2
+order 2 5 4 3 0 2 1
+rendezvous 2 2 5
+order 3 5 3 4 0 2 1
+rendezvous 3 2 5 1
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 5 3 2 0 4 1
+rendezvous 1 3
+order 2 5 4 2 3 1 0
+rendezvous 2 3 2
+order 3 5 3 4 2 1 0
+rendezvous 3 3 2 0
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 4 5 3 1 2 0
+rendezvous 1 2
+order 2 5 4 0 3 1 2
+rendezvous 2 2 4
+order 3 5 3 4 0 1 2
+rendezvous 3 2 4 1
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 3 4 5 2 0 1
+rendezvous 1 4
+order 2 5 2 4 3 1 0
+rendezvous 2 4 5
+order 3 5 4 2 3 1 0
+rendezvous 3 4 5 3
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 5 2 3 4 1 0
+rendezvous 1 2
+order 2 3 1 5 4 0 2
+rendezvous 2 2 3
+order 3 5 4 1 3 0 2
+rendezvous 3 2 3 1
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 3 5 4 1 2 0
+rendezvous 1 0
+order 2 5 3 4 0 2 1
+rendezvous 2 0 1
+order 3 5 0 4 3 2 1
+rendezvous 3 0 1 5
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 5 4 3 1 2 0
+rendezvous 1 3
+order 2 5 3 4 2 0 1
+rendezvous 2 3 5
+order 3 5 0 4 2 3 1
+rendezvous 3 3 5 0
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 5 4 3 2 1 0
+rendezvous 1 3
+order 2 5 3 2 4 1 0
+rendezvous 2 3 2
+order 3 5 0 4 3 2 1
+rendezvous 3 3 2 0
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 5 3 2 4 1 0
+rendezvous 1 2
+order 2 3 1 5 4 0 2
+rendezvous 2 2 5
+order 3 5 4 1 3 0 2
+rendezvous 3 2 5 0
+key 010203
+order 1 5 4 1 2 3 0
+rendezvous 1 0
+order 2 5 3 4 1 2 0
+rendezvous 2 0 1
+order 3 5 0 4 3 1 2
+rendezvous 3 0 1 4
+key deadbeef
+order 1 5 4 1 3 2 0
+rendezvous 1 1
+order 2 0 2 5 4 1 3
+rendezvous 2 1 2
+order 3 5 4 1 3 2 0
+rendezvous 3 1 2 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 5 4 3 2 1 0
+rendezvous 1 3
+order 2 5 3 4 0 1 2
+rendezvous 2 3 0
+order 3 5 0 4 1 3 2
+rendezvous 3 3 0 1
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 5 3 4 2 0 1
+rendezvous 1 5
+order 2 5 4 3 2 1 0
+rendezvous 2 5 0
+order 3 5 3 4 2 1 0
+rendezvous 3 5 0 4
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 4 3 5 2 1 0
+rendezvous 1 5
+order 2 5 4 1 2 3 0
+rendezvous 2 5 2
+order 3 5 3 4 1 2 0
+rendezvous 3 5 2 4
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 5 4 3 1 2 0
+rendezvous 1 2
+order 2 5 4 2 3 1 0
+rendezvous 2 2 0
+order 3 5 3 2 4 1 0
+rendezvous 3 2 0 3
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 5 4 3 2 0 1
+rendezvous 1 2
+order 2 5 4 2 1 3 0
+rendezvous 2 2 3
+order 3 5 3 2 4 1 0
+rendezvous 3 2 3 4
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 5 4 1 3 2 0
+rendezvous 1 3
+order 2 5 2 4 0 3 1
+rendezvous 2 3 1
+order 3 5 4 2 0 3 1
+rendezvous 3 3 1 5
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 5 1 4 2 3 0
+rendezvous 1 3
+order 2 5 2 4 3 1 0
+rendezvous 2 3 4
+order 3 5 4 2 3 1 0
+rendezvous 3 3 4 2
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 5 3 2 4 1 0
+rendezvous 1 1
+order 2 3 1 5 4 2 0
+rendezvous 2 1 3
+order 3 5 4 1 3 2 0
+rendezvous 3 1 3 0
+case six-three-domains-with-zero-capacity
+node 5b31d2364d354ea44b22ee472a39a6ed 4398046511104 a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 0 a n1
+node b320b470dbf22ef6e27028b1d4a030f0 4398046511104 b n2
+node 653b79b712c61174f96c6b853682d3b9 4398046511104 b n3
+node 6eeb40de2faf01e362c8931eac589dc8 13194139533312 c n4
+node 4f5e48de22d8c50dbd199518a1315f90 0 c n5
+logical 1 26388279066624
+logical 2 13194139533312
+logical 3 4398046511104
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 4 3 0 2 5 1
+rendezvous 1 3
+order 2 0 4 3 2 5 1
+rendezvous 2 3 1
+order 3 0 3 4 2 5 1
+rendezvous 3 3 1 5
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 4 3 2 0 5 1
+rendezvous 1 4
+order 2 0 4 3 2 1 5
+rendezvous 2 4 1
+order 3 0 3 4 2 1 5
+rendezvous 3 4 1 2
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 3 4 0 2 5 1
+rendezvous 1 3
+order 2 3 4 0 2 5 1
+rendezvous 2 3 1
+order 3 0 3 4 2 5 1
+rendezvous 3 3 1 5
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 4 0 3 2 5 1
+rendezvous 1 3
+order 2 2 4 0 3 5 1
+rendezvous 2 3 4
+order 3 0 2 4 3 5 1
+rendezvous 3 3 4 1
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 4 2 0 3 1 5
+rendezvous 1 0
+order 2 0 4 3 2 5 1
+rendezvous 2 0 3
+order 3 0 2 4 3 5 1
+rendezvous 3 0 3 4
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 2 3 4 0 5 1
+rendezvous 1 0
+order 2 0 4 3 2 5 1
+rendezvous 2 0 3
+order 3 0 2 4 3 5 1
+rendezvous 3 0 3 4
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 2 4 0 3 1 5
+rendezvous 1 3
+order 2 0 4 2 3 1 5
+rendezvous 2 3 1
+order 3 0 2 4 3 1 5
+rendezvous 3 3 1 4
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 4 3 0 2 5 1
+rendezvous 1 3
+order 2 0 4 3 2 1 5
+rendezvous 2 3 4
+order 3 0 2 4 3 1 5
+rendezvous 3 3 4 1
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 4 2 0 3 5 1
+rendezvous 1 0
+order 2 2 4 0 3 1 5
+rendezvous 2 0 2
+order 3 0 2 4 3 1 5
+rendezvous 3 0 2 5
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0 2 3 4 5 1
+rendezvous 1 2
+order 2 0 4 2 3 5 1
+rendezvous 2 2 0
+order 3 0 2 4 3 5 1
+rendezvous 3 2 0 5
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 3 4 2 0 1 5
+rendezvous 1 0
+order 2 0 4 2 3 5 1
+rendezvous 2 0 2
+order 3 0 3 4 2 5 1
+rendezvous 3 0 2 4
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 2 3 4 0 5 1
+rendezvous 1 5
+order 2 2 4 3 0 5 1
+rendezvous 2 5 1
+order 3 0 2 4 3 5 1
+rendezvous 3 5 1 3
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 4 3 0 2 1 5
+rendezvous 1 0
+order 2 2 4 0 3 1 5
+rendezvous 2 0 2
+order 3 0 2 4 3 1 5
+rendezvous 3 0 2 5
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 3 4 2 0 5 1
+rendezvous 1 2
+order 2 2 4 3 0 5 1
+rendezvous 2 2 1
+order 3 0 2 4 3 5 1
+rendezvous 3 2 1 5
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 3 4 0 2 1 5
+rendezvous 1 0
+order 2 0 4 2 3 1 5
+rendezvous 2 0 5
+order 3 0 2 4 3 1 5
+rendezvous 3 0 5 2
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 2 4 0 3 5 1
+rendezvous 1 4
+order 2 0 4 3 2 1 5
+rendezvous 2 4 0
+order 3 0 2 4 3 1 5
+rendezvous 3 4 0 3
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 3 4 0 2 5 1
+rendezvous 1 4
+order 2 3 4 0 2 5 1
+rendezvous 2 4 1
+order 3 0 3 4 2 5 1
+rendezvous 3 4 1 2
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 2 4 0 3 1 5
+rendezvous 1 0
+order 2 0 4 3 2 1 5
+rendezvous 2 0 2
+order 3 0 3 4 2 1 5
+rendezvous 3 0 2 4
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 4 0 2 3 5 1
+rendezvous 1 4
+order 2 3 4 0 2 5 1
+rendezvous 2 4 1
+order 3 0 3 4 2 5 1
+rendezvous 3 4 1 3
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 2 4 3 0 1 5
+rendezvous 1 4
+order 2 0 4 2 3 1 5
+rendezvous 2 4 2
+order 3 0 3 4 2 1 5
+rendezvous 3 4 2 1
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 3 4 2 5 1
+rendezvous 1 0
+order 2 2 4 0 3 5 1
+rendezvous 2 0 3
+order 3 0 2 4 3 5 1
+rendezvous 3 0 3 5
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 4 2 3 0 5 1
+rendezvous 1 5
+order 2 0 4 2 3 1 5
+rendezvous 2 5 3
+order 3 0 3 4 2 1 5
+rendezvous 3 5 3 0
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 3 4 0 2 5 1
+rendezvous 1 3
+order 2 0 4 3 2 1 5
+rendezvous 2 3 1
+order 3 0 3 4 2 1 5
+rendezvous 3 3 1 4
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 3 0 4 2 1 5
+rendezvous 1 5
+order 2 3 4 0 2 5 1
+rendezvous 2 5 1
+order 3 0 3 4 2 5 1
+rendezvous 3 5 1 2
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 3 0 2 4 1 5
+rendezvous 1 0
+order 2 3 4 0 2 5 1
+rendezvous 2 0 2
+order 3 0 3 4 2 5 1
+rendezvous 3 0 2 4
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 4 3 2 5 1
+rendezvous 1 5
+order 2 0 4 3 2 1 5
+rendezvous 2 5 2
+order 3 0 3 4 2 1 5
+rendezvous 3 5 2 0
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 2 4 0 3 1 5
+rendezvous 1 3
+order 2 0 4 2 3 1 5
+rendezvous 2 3 5
+order 3 0 3 4 2 1 5
+rendezvous 3 3 5 0
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 0 3 4 2 1 5
+rendezvous 1 0
+order 2 0 4 2 3 1 5
+rendezvous 2 0 3
+order 3 0 3 4 2 1 5
+rendezvous 3 0 3 5
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 4 2 0 3 1 5
+rendezvous 1 4
+order 2 0 4 2 3 5 1
+rendezvous 2 4 0
+order 3 0 2 4 3 5 1
+rendezvous 3 4 0 3
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 4 2 3 0 1 5
+rendezvous 1 1
+order 2 2 4 0 3 1 5
+rendezvous 2 1 5
+order 3 0 2 4 3 1 5
+rendezvous 3 1 5 2
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 4 3 0 2 1 5
+rendezvous 1 3
+order 2 2 4 3 0 1 5
+rendezvous 2 3 5
+order 3 0 2 4 3 1 5
+rendezvous 3 3 5 1
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 4 0 2 3 1 5
+rendezvous 1 2
+order 2 0 4 2 3 1 5
+rendezvous 2 2 0
+order 3 0 3 4 2 1 5
+rendezvous 3 2 0 5
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 4 0 3 2 1 5
+rendezvous 1 2
+order 2 0 4 3 2 5 1
+rendezvous 2 2 5
+order 3 0 3 4 2 5 1
+rendezvous 3 2 5 0
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 2 3 4 0 1 5
+rendezvous 1 2
+order 2 2 4 3 0 5 1
+rendezvous 2 2 5
+order 3 0 2 4 3 5 1
+rendezvous 3 2 5 1
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 3 2 4 5 1
+rendezvous 1 3
+order 2 0 4 2 3 1 5
+rendezvous 2 3 0
+order 3 0 3 4 2 1 5
+rendezvous 3 3 0 5
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 4 3 0 2 5 1
+rendezvous 1 2
+order 2 0 4 3 2 5 1
+rendezvous 2 2 4
+order 3 0 2 4 3 5 1
+rendezvous 3 2 4 1
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 3 4 0 2 5 1
+rendezvous 1 4
+order 2 3 4 0 2 5 1
+rendezvous 2 4 3
+order 3 0 3 4 2 5 1
+rendezvous 3 4 3 0
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 2 4 3 0 5 1
+rendezvous 1 2
+order 2 2 4 0 3 1 5
+rendezvous 2 2 1
+order 3 0 2 4 3 1 5
+rendezvous 3 2 1 5
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 3 4 2 0 5 1
+rendezvous 1 0
+order 2 0 4 3 2 5 1
+rendezvous 2 0 5
+order 3 0 2 4 3 5 1
+rendezvous 3 0 5 3
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 4 0 2 3 5 1
+rendezvous 1 3
+order 2 0 4 2 3 1 5
+rendezvous 2 3 5
+order 3 0 3 4 2 1 5
+rendezvous 3 3 5 0
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 4 0 2 3 5 1
+rendezvous 1 3
+order 2 0 4 3 2 5 1
+rendezvous 2 3 0
+order 3 0 2 4 3 5 1
+rendezvous 3 3 0 4
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 3 2 4 0 5 1
+rendezvous 1 2
+order 2 2 4 0 3 5 1
+rendezvous 2 2 5
+order 3 0 2 4 3 5 1
+rendezvous 3 2 5 0
+key 010203
+order 1 4 2 0 3 5 1
+rendezvous 1 0
+order 2 0 4 3 2 1 5
+rendezvous 2 0 4
+order 3 0 2 4 3 1 5
+rendezvous 3 0 4 3
+key deadbeef
+order 1 4 3 0 2 1 5
+rendezvous 1 1
+order 2 2 4 3 0 1 5
+rendezvous 2 1 2
+order 3 0 2 4 3 1 5
+rendezvous 3 1 2 4
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 4 0 2 3 5 1
+rendezvous 1 3
+order 2 0 4 2 3 5 1
+rendezvous 2 3 0
+order 3 0 3 4 2 5 1
+rendezvous 3 3 0 5
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 3 4 0 2 5 1
+rendezvous 1 5
+order 2 0 4 2 3 5 1
+rendezvous 2 5 0
+order 3 0 2 4 3 5 1
+rendezvous 3 5 0 3
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 4 3 0 2 1 5
+rendezvous 1 5
+order 2 0 4 2 3 1 5
+rendezvous 2 5 2
+order 3 0 2 4 3 1 5
+rendezvous 3 5 2 0
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 4 0 2 3 5 1
+rendezvous 1 2
+order 2 3 4 2 0 1 5
+rendezvous 2 2 0
+order 3 0 3 4 2 1 5
+rendezvous 3 2 0 4
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 4 0 2 3 5 1
+rendezvous 1 2
+order 2 2 4 0 3 5 1
+rendezvous 2 2 4
+order 3 0 2 4 3 5 1
+rendezvous 3 2 4 1
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 4 2 3 0 5 1
+rendezvous 1 3
+order 2 2 4 0 3 1 5
+rendezvous 2 3 1
+order 3 0 2 4 3 1 5
+rendezvous 3 3 1 5
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 4 2 3 0 5 1
+rendezvous 1 3
+order 2 2 4 3 0 5 1
+rendezvous 2 3 4
+order 3 0 2 4 3 5 1
+rendezvous 3 3 4 1
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 3 2 4 0 5 1
+rendezvous 1 1
+order 2 3 4 2 0 5 1
+rendezvous 2 1 3
+order 3 0 3 4 2 5 1
+rendezvous 3 1 3 4
+case live-cluster-shape
+node 5b31d2364d354ea44b22ee472a39a6ed 8796093022208 site-a n0
+node b8a76f1d66fb9259e1d9d2d3e002cddd 8796093022208 site-b n1
+logical 1 17592186044416
+logical 2 8796093022208
+key 2a49dac7ab2c811d347228cd259fbe1edb776567b8042475457b9b0ca4dec681
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 539800dbe3ba75214a2f47e173684c447b4f30fa3ea588c134cfd006d0557f33
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key e032bd7d17e32ab3ca655e5dff1a2e8a185b640ff5362421900b28df0349af4c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key cf1c3378ce8ddc783c8bdb4e720718632ab0074c1c26b76c84bd3a184728b405
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 24bc1e6c8409952cc16de872360bd51b0c2d163596436bad07e1007f797e9982
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0579c21261582c396e5dfdfbdffbdc863831089451dd3817075dc7502fea3b97
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 20dd3a0375becda308acb9f0f45fbbd26e2262601d5d8aab321631251b8ef492
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 130ba5e3f262b339d9ce6412371bd0f321646f23298a4f42d84a9c4fdf0d93bc
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 5e704cdca82d9115d96147f810d1bf424520403c34d4dcd9527ab3052e4ca847
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 03a2b05b50d3276b34c4b0b914f707b649f19fe89234adb30e3001ed9aa1a166
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b91e5ddd4d61c16ef19c4a37877bb810351560bbd49a685e21fc6ecb8382f05
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key bba10d960aa80bcedc3629a80387943d05ee792ad1f1b49ca37f6360101c3b3a
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 7dbcafefdc25a874f6338db51c11e93160c727bcf1189835d572b823654bbf67
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fde042b8a7d7dd65203f613450d262da102e0ecd2117d2972a21ef11f3d1dc4a
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 2c93ba6a6667625c1fa3521cf46faee7e6e5cf18c94bb2af78c44f8069f08d40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3adde4854a684bd5296e36a33d9513de881e7f5f43afd799c7510aeee2e0a3d2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c9a6b36534ee5ad079afcce6fb1379168e22845a32900121b0ee9b1933e83d0f
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 29548ea4ae1daa35ec959a836f73c6a03fc3170fbe816c1947999ee4ebf0ece2
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 772795d4a4cbdf9c06dc56f033b1fa1a13d4a91c7db47b1113f607b0a04c0eac
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 33a8c3cfb2ab25631569570c1d69fb38d3aea395eca1aa3cacd094ce5825c122
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key d0997640193bf5304bbaf8c70f4fb1d8dbc9aed860ba6cc1a6717aa469db8c89
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3b1787f06beb3f4d205eda913326fe7b208b044b5a2a9791c7aa71e8e617d11c
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 2346c3b1661f2ae2e5d47df4ca2c741a5aa84dab44b3e2a1c8dbe789426cb69c
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bcc4965760fc1bc1354cdcb1ba4b1a4952bb4c4a724ef731cb3b74adb3e82dc3
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c4dc489c0706aaa6cbb6793d2aff10bf1c86949aec067d8da65e3e384fe463ca
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3ea71d3fa58e848a27635d51394b87cc948edd3cdc2a9d6c93b799ef761ecf46
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0cb938201a15785bde9a12ce409a3fc08696d734a3c3f1ffd9dbf7558ce1e3fd
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 46b2f2110991cac322cf8b1ddc5c52da1829dbaf90b2a8847b160076cbf7f0ed
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 22519d1fb4bae9009e0c6f683ed412d80dbff61222c29b81661dd712b62e4cf0
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key c7e487920cef003553cab05da0e4eeedb44989df185af6013bc81596fbc2bc26
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key b1f5b7f905249580f25223f768aebe8c29a9e3d65dc1f9824569af19d36e312e
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 44d81cfb9b4c258ad0d3f1ab15a40a8b7faa87e542530a0c73bae4b875cc892d
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 1b64aa4602c382f86447a197fe18daf45823fd49286590809dbd934be56a2c0b
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 6cf59e3a2e05b3baf7905a8a826b1aa495bef4c0a30d85c6b42f117098edd081
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 342e5a17b7a7c4c63a0efe00e74f18248820cc0edf39e9b5178b1bd2831ba69d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 38b7810971a1aab570df43e70d6ca7de719507aa39d677f6f9083a1e07860df8
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key be5ba2ee5fee480c5f692208eeb3ed005104a52a8181aad29747101486338f15
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key fd47a60f86a7bb5f615f5b1b50b7f16c4de81371ffbd779bfb469e87a234d9ad
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 0a5aab80abac73c15035406ec76b5e70519cc624d549544503c43c47442a6e40
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 02e6553fc9da02af3e7f30fa06c9752c28b73954e46bf5f1a4627b4499fc5c4d
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 0000000000000000000000000000000000000000000000000000000000000000
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 010203
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key deadbeef
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key 000000001cadddfce2321c39e74e049206e5f9b074ff8bff97438b2918b2a4b2
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 3fffffff76c8704b7fada7b076b153249fa40db3cef28b8e8700c280f63eba36
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 400000009019bfb1d3c5885e7f85bbb245156caaf6b8865e69f3d9ed8bf0e48f
+order 1 0 1
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 7fffffffb94776420d2505d1ee3706e67dcbb664c52b5632c5835ae50ea892c7
+order 1 1 0
+rendezvous 1 0
+order 2 0 1
+rendezvous 2 0 1
+key 800000000d5a52bff20b5ba33493240c6bd1b2e125ffadefa6e65fd13904dfa1
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key bfffffff60b5fb9b365928276d4967a68e6c46bd43160db039375372ce9f3065
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key c0000000780fe0a0f5cd7a8bac7c3dbf7bd5ee20d76bf009b0420a0e1d6b58e6
+order 1 1 0
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0
+key ffffffff7cb06df81e701faa81446a7139d262521f11d057c668503a185aece9
+order 1 0 1
+rendezvous 1 1
+order 2 0 1
+rendezvous 2 1 0

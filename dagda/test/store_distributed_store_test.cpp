@@ -1026,5 +1026,74 @@ TEST(StoreDistributedStore, MachasFormsAreOneCopyWithTheRestOwed) {
   EXPECT_TRUE(wait_until([&] { return peer.data().has(object_id(bytes)) && peer.data().has(object_id(deferred_bytes)); }));
 }
 
+// A large publication goes through the guard a part at a time: the first part
+// done, a stripe it used is free while a later part waits for another.
+TEST(StoreClaimLocks, ABatchHoldsOnlyPartOfTheGuardAtATime) {
+  ClaimLocks locks;
+  std::vector<ObjectId> ids;
+  for (uint32_t n = 0; n < 2 * ClaimLocks::batch_ids; ++n) ids.push_back(object_id(test::numbered(n)));
+  const auto in_stripe = [&](size_t stripe) {
+    return *std::find_if(ids.begin(), ids.end(), [&](const ObjectId& id) { return id.bytes[0] % ClaimLocks::stripes == stripe; });
+  };
+  const auto low = in_stripe(0);
+  const auto high = in_stripe(ClaimLocks::stripes - 1);
+  std::atomic<size_t> seen{0};
+  std::atomic<size_t> parts{0};
+  std::optional<ClaimLocks::Guard> held;
+  held.emplace(locks.lock(std::span<const ObjectId>(&high, 1)));
+  auto batch = std::async(std::launch::async, [&] {
+    return locks.in_batches(ids, [&](std::span<const ObjectId> part) {
+      seen += part.size();
+      ++parts;
+      return true;
+    });
+  });
+  ASSERT_TRUE(wait_until([&] { return parts.load() == 1; }));
+  auto through = std::async(std::launch::async, [&] { (void)locks.lock(std::span<const ObjectId>(&low, 1)); });
+  const bool got_through = through.wait_for(10s) == std::future_status::ready;
+  EXPECT_EQ(parts.load(), 1u);
+  held.reset();
+  EXPECT_TRUE(batch.get());
+  through.get();
+  EXPECT_TRUE(got_through);
+  EXPECT_EQ(seen.load(), ids.size());
+  EXPECT_EQ(parts.load(), 2u);
+  // A step that says no stops it.
+  size_t calls = 0;
+  EXPECT_FALSE(locks.in_batches(ids, [&](std::span<const ObjectId>) { return ++calls == 0; }));
+  EXPECT_EQ(calls, 1u);
+}
+
+// Macha's test_retain_data_batches_a_large_publication_within_bounded_time: one
+// publication referencing thousands of extents is checked in batches, never a
+// round trip an extent, and every copy ends up claimed.
+TEST(StoreDistributedStore, RetainDataBatchesALargePublicationWithinBoundedTime) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  constexpr size_t extents = 3000;
+  std::vector<ObjectId> ids;
+  for (size_t i = 0; i < extents; ++i) {
+    auto data = pattern(256, static_cast<uint8_t>(i));
+    data[0] ^= static_cast<uint8_t>(i >> 8);
+    const auto id = object_id(data);
+    ASSERT_TRUE(a.data().put_deferred(id, data));
+    ASSERT_TRUE(b.data().put_deferred(id, data));
+    ids.push_back(id);
+  }
+  const contract::RetentionDot dot{a.id(), 1};
+  const auto started = std::chrono::steady_clock::now();
+  const auto unheld = a.store().retain_data(ids, dot);
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  EXPECT_TRUE(unheld.empty());
+  EXPECT_LT(elapsed, 10s);
+  for (const auto& id : {ids.front(), ids.back()}) {
+    EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, id));
+    EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
+  }
+}
+
 }  // namespace
 }  // namespace dagda::store
