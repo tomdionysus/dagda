@@ -11,8 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <span>
 
+#include "dagda/domain/storage_key.h"
 #include "dagda/store/object_id.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/status/log.h"
@@ -27,10 +29,17 @@ namespace dagda::ledger {
 using store::Bytes;
 using store::ObjectId;
 
-// Layout v18's sightings file (`retention/unreferenced-{data,control}.bin`):
-// u32 schema 1, u64 count, then (id, u64 first sighting in Unix ms) per
-// object in id order, all big-endian.
+// The sightings table: u32 schema 1, u64 count, then (id, u64 first
+// sighting in Unix ms) per object in id order, all big-endian. On disk
+// (`retention/unreferenced-{data,control}.bin`) it is one AES-256-GCM frame
+// under the node-local key, as every ledger a node keeps: nonce (12), tag
+// (16), ciphertext, with `sightings_aad` as the associated data.
+inline constexpr std::string_view sightings_aad = "dagda/sightings/1";
 Bytes encode_unreferenced_since(const std::map<ObjectId, uint64_t>& sightings);
+Bytes seal_unreferenced_since(const domain::StorageKey& key, const std::map<ObjectId, uint64_t>& sightings);
+// Throws std::runtime_error for a frame that does not open under `key`, and
+// as decode_unreferenced_since for what it holds.
+std::map<ObjectId, uint64_t> open_unreferenced_since(const domain::StorageKey& key, std::span<const uint8_t> file);
 // Throws dannan::net::DecodeError for an unknown schema, a duplicate object,
 // truncated or trailing bytes.
 std::map<ObjectId, uint64_t> decode_unreferenced_since(std::span<const uint8_t> bytes);
@@ -39,9 +48,10 @@ std::map<ObjectId, uint64_t> decode_unreferenced_since(std::span<const uint8_t> 
 // the state device.
 class UnreferencedSince {
  public:
-  // Loads `path` when it exists; an unreadable file is logged and ignored,
-  // which only delays deletion.
-  UnreferencedSince(std::filesystem::path path, dannan::status::ScopedLogger logger);
+  // Loads `path` when it exists; a file that does not open under `key` (the
+  // node-local key) or does not decode is logged and ignored, which only
+  // delays deletion. Throws std::invalid_argument without a key.
+  UnreferencedSince(std::filesystem::path path, std::shared_ptr<const domain::StorageKey> key, dannan::status::ScopedLogger logger);
 
   // Records `now_unix_ms` as the first sighting when there is none, and
   // answers whether the object has been unreferenced for `grace`.
@@ -64,6 +74,7 @@ class UnreferencedSince {
   };
 
   const std::filesystem::path _path;
+  const std::shared_ptr<const domain::StorageKey> _key;
   const dannan::status::ScopedLogger _logger;
   mutable dannan::contract::Mutex _mutex;
   std::map<ObjectId, Sighting> _seen DANNAN_GUARDED_BY(_mutex);

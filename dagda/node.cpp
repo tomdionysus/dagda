@@ -241,8 +241,10 @@ void Node::open() {
   step("open maintenance");
   {
     dannan::contract::Lock held(_maintenance_mutex);
-    _data_sightings = std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-data.bin", _context.logger("dagda.gc"));
-    _control_sightings = std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _context.logger("dagda.gc"));
+    _data_sightings =
+        std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-data.bin", _node_local, _context.logger("dagda.gc"));
+    _control_sightings =
+        std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _node_local, _context.logger("dagda.gc"));
   }
   publish_status();
   arm_status();

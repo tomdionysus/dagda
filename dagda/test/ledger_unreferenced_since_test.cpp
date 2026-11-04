@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -43,13 +44,14 @@ ObjectId id(uint8_t n) {
 }
 
 dannan::status::ScopedLogger quiet() { return test::quiet_logger(); }
+std::shared_ptr<const domain::StorageKey> key() { return test::key_of(0x4e); }
 
 // Macha: test_an_object_matures_a_grace_after_its_first_sighting. The wait
 // runs from this node's first sighting, whatever the time is when it is
 // asked again.
 TEST(LedgerUnreferencedSince, AnObjectMaturesAGraceAfterItsFirstSighting) {
   dannan::test::TempDir dir;
-  UnreferencedSince seen(dir.path() / "unreferenced.bin", quiet());
+  UnreferencedSince seen(dir.path() / "unreferenced.bin", key(), quiet());
   EXPECT_FALSE(seen.matured(id(1), 1'000, 500ms));
   EXPECT_FALSE(seen.matured(id(1), 1'499, 500ms));
   EXPECT_TRUE(seen.matured(id(1), 1'500, 500ms));
@@ -64,7 +66,7 @@ TEST(LedgerUnreferencedSince, AnObjectMaturesAGraceAfterItsFirstSighting) {
 // Macha: test_an_object_referenced_again_starts_its_wait_afresh.
 TEST(LedgerUnreferencedSince, AnObjectReferencedAgainStartsItsWaitAfresh) {
   dannan::test::TempDir dir;
-  UnreferencedSince seen(dir.path() / "unreferenced.bin", quiet());
+  UnreferencedSince seen(dir.path() / "unreferenced.bin", key(), quiet());
   EXPECT_FALSE(seen.matured(id(1), 1'000, 500ms));
   seen.forget(id(1));
   EXPECT_EQ(seen.size(), 0u);
@@ -75,7 +77,7 @@ TEST(LedgerUnreferencedSince, AnObjectReferencedAgainStartsItsWaitAfresh) {
 // Macha: test_a_clock_set_back_restarts_the_wait.
 TEST(LedgerUnreferencedSince, AClockSetBackRestartsTheWait) {
   dannan::test::TempDir dir;
-  UnreferencedSince seen(dir.path() / "unreferenced.bin", quiet());
+  UnreferencedSince seen(dir.path() / "unreferenced.bin", key(), quiet());
   EXPECT_FALSE(seen.matured(id(1), 10'000, 500ms));
   EXPECT_FALSE(seen.matured(id(1), 4'000, 500ms));
   EXPECT_FALSE(seen.matured(id(1), 4'499, 500ms));
@@ -85,7 +87,7 @@ TEST(LedgerUnreferencedSince, AClockSetBackRestartsTheWait) {
 // Macha: test_a_completed_sweep_drops_sightings_of_objects_no_longer_held.
 TEST(LedgerUnreferencedSince, ACompletedSweepDropsSightingsOfObjectsNoLongerHeld) {
   dannan::test::TempDir dir;
-  UnreferencedSince seen(dir.path() / "unreferenced.bin", quiet());
+  UnreferencedSince seen(dir.path() / "unreferenced.bin", key(), quiet());
   (void)seen.matured(id(1), 1'000, 500ms);
   (void)seen.matured(id(2), 1'000, 500ms);
   seen.pass_complete();
@@ -104,7 +106,7 @@ TEST(LedgerUnreferencedSince, SightingsSurviveARestart) {
   dannan::test::TempDir dir;
   const auto path = dir.path() / "retention" / "unreferenced.bin";
   {
-    UnreferencedSince seen(path, quiet());
+    UnreferencedSince seen(path, key(), quiet());
     (void)seen.matured(id(1), 1'000, 500ms);
     (void)seen.matured(id(2), 1'200, 500ms);
     seen.save();
@@ -117,7 +119,7 @@ TEST(LedgerUnreferencedSince, SightingsSurviveARestart) {
     EXPECT_TRUE(std::filesystem::exists(path));
   }
   {
-    UnreferencedSince seen(path, quiet());
+    UnreferencedSince seen(path, key(), quiet());
     EXPECT_EQ(seen.size(), 1u);
     EXPECT_TRUE(seen.matured(id(1), 1'500, 500ms));
     // Loaded sightings count as renewed for the first sweep after it.
@@ -126,7 +128,7 @@ TEST(LedgerUnreferencedSince, SightingsSurviveARestart) {
   }
   std::ofstream(path, std::ios::binary | std::ios::trunc) << "damaged";
   auto sink = std::make_shared<test::RecordingSink>();
-  UnreferencedSince seen(path, test::logger_into(sink));
+  UnreferencedSince seen(path, key(), test::logger_into(sink));
   EXPECT_EQ(seen.size(), 0u);
   EXPECT_TRUE(sink->saw("unreferenced-since: ignoring"));
 }
@@ -170,10 +172,11 @@ TEST(LedgerUnreferencedSince, TheSightingsCodecRoundTripsAndRefusesDamage) {
   EXPECT_TRUE(refused(huge.take()));
 }
 
-// Layout v18's sightings file, byte for byte (requirements 4.1): u32 schema
-// 1, u64 count, then (id, u64 Unix ms) in id order, big-endian, written
-// whole by save().
-TEST(LedgerUnreferencedSince, TheFileIsLayoutV18s) {
+// The sightings table's bytes (u32 schema 1, u64 count, then (id, u64 Unix
+// ms) in id order, big-endian), and on disk one frame under the node-local
+// key that opens to them and to nothing under another key: save() never
+// writes the table in the clear.
+TEST(LedgerUnreferencedSince, TheFileIsTheTableSealedUnderTheNodeLocalKey) {
   const std::map<ObjectId, uint64_t> sightings{{id(9), 1'234'567}, {id(1), 7}};
   const auto expected = dannan::identity::unhex(
                             "00000001"
@@ -188,14 +191,23 @@ TEST(LedgerUnreferencedSince, TheFileIsLayoutV18s) {
   dannan::test::TempDir dir;
   const auto path = dir.path() / "retention" / "unreferenced-data.bin";
   {
-    UnreferencedSince seen(path, quiet());
+    UnreferencedSince seen(path, key(), quiet());
     (void)seen.matured(id(9), 1'234'567, 1ms);
     (void)seen.matured(id(1), 7, 1ms);
     seen.save();
   }
   std::ifstream in(path, std::ios::binary);
   const Bytes written((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  EXPECT_EQ(written, expected);
+  ASSERT_EQ(written.size(), 12 + 16 + expected.size());
+  EXPECT_EQ(std::search(written.begin(), written.end(), expected.begin() + 12, expected.begin() + 44), written.end());
+  EXPECT_EQ(open_unreferenced_since(*key(), written), sightings);
+  EXPECT_THROW((void)open_unreferenced_since(*test::key_of(0x11), written), std::runtime_error);
+  // Under another key the file is ignored, which only delays deletion.
+  auto sink = std::make_shared<test::RecordingSink>();
+  UnreferencedSince other(path, test::key_of(0x11), test::logger_into(sink));
+  EXPECT_EQ(other.size(), 0u);
+  EXPECT_TRUE(sink->saw("unreferenced-since: ignoring"));
+  EXPECT_THROW(UnreferencedSince(path, nullptr, quiet()), std::invalid_argument);
 }
 
 }  // namespace
