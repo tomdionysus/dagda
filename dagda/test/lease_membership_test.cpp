@@ -62,6 +62,7 @@ class RosterNodes final : public dannan::Nodes {
     const auto found = absent.find(id);
     return found == absent.end() ? std::nullopt : std::optional(found->second);
   }
+  std::optional<dannan::identity::Certificate> certificate(const dannan::identity::NodeId&) const override { return std::nullopt; }
   bool directly_reachable(const dannan::identity::NodeId&) const override { return false; }
   bool all_known_reachable() const override { return false; }
   bool inbound_capable(const dannan::identity::NodeId&) const override { return false; }
