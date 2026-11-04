@@ -43,7 +43,8 @@ Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilitySe
       _time(context.time().source()),
       _share(options.foreground_weight, options.repair_weight, options.slice),
       _data_walk(contract::RetentionClass::data, &context.observations()),
-      _control_walk(contract::RetentionClass::control, &context.observations()) {}
+      _control_walk(contract::RetentionClass::control, &context.observations()),
+      _cpu(options.cpu) {}
 
 Repair::~Repair() = default;
 
@@ -88,7 +89,8 @@ RepairPass Repair::pass() {
   const double seconds = _last ? std::chrono::duration<double>(now - *_last).count() : 0.0;
   _last = now;
   const double burst = std::max(static_cast<double>(_options.extent_size), bandwidth * 5.0);
-  _credit = std::min(burst, _credit + bandwidth * _options.idle_bandwidth_fraction * std::max(0.0, seconds));
+  const double cpu_scale = _cpu.scale(seconds, _options.cpu_target);
+  _credit = std::min(burst, _credit + bandwidth * _options.idle_bandwidth_fraction * cpu_scale * std::max(0.0, seconds));
 
   out.surveyed = _availability.refresh();
   auto& activity = _context.activity();

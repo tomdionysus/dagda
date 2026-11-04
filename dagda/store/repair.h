@@ -17,6 +17,7 @@
 #include "dagda/contract/object_ledger.h"
 #include "dagda/ledger/claim_walk.h"
 #include "dagda/store/availability.h"
+#include "dagda/store/cpu_pacing.h"
 #include "dagda/store/distributed_store.h"
 #include "dannan/context.h"
 #include "dannan/contract/time_source.h"
@@ -46,6 +47,10 @@ struct RepairOptions {
   double idle_bandwidth_fraction = 0.10;
   uint64_t initial_bandwidth = 32ULL * 1024 * 1024;
   uint64_t max_bandwidth = 0;
+  // Above this share of a CPU in the rest of the process, repair's credit
+  // shrinks in proportion (Macha's cpu_target). No source: not paced by CPU.
+  double cpu_target = 0.10;
+  CpuSource cpu = system_cpu_sample;
   // Calls one step may make.
   size_t operation_budget = 16;
   size_t extent_size = 16 * 1024 * 1024;
@@ -115,6 +120,7 @@ class Repair {
   dannan::sched::DutyShare _share;
   ledger::ClaimWalk _data_walk;
   ledger::ClaimWalk _control_walk;
+  CpuPacer _cpu;
   double _credit = 0.0;
   std::optional<dannan::contract::TimePoint> _last;
   // Quiet after a pass with nothing to do, until an event or new lists.

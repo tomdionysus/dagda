@@ -3,6 +3,27 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: M3, maintenance parity (`feature/port-respec`)
+
+`dagda::Node` runs Macha's local stages in its order after repair: rebalance,
+`compact_if_needed(4096)`, DATA pack compaction, the scrub and the ledger verify.
+Gates, credit and rates are Macha's (`maintenance.cpp:417-462`, `:1099-1226`): all
+but the verify are skipped while foreground or loader work is present; the verify
+is 4 directories a second, 0.25 busy, then a day's rest. The scrub's date is
+Macha's file, `maintenance/scrub.next`, so a migrated node keeps it. Status has
+`dagda.maintenance.*`. Head repair and history truncation wait for step 4.
+
+Found on the way and matched: repair's credit had no CPU pacing, which Macha's
+has (`store/cpu_pacing.h`, `background_cpu_scale`).
+
+`StoreRepair.RepairIsPacedNotStoppedWhileHigherClassesStayBusy` began failing 2
+runs in 8 with the stages on and 0 in 8 with them off, because a whole node pass
+can now outlast the share's rest. The case makes a second repair pass straight
+after each node pass, and its assertions are unchanged.
+
+Gate: `dagda_tests` 410 passing, 1 disabled (was 399; 11 added), three whole runs.
+Nothing is measured at Macha's scale, which is M10.
+
 ## 2026-11-04 night: M2, `dagda-migrate` for a real Macha node (`feature/port-respec`)
 
 From the Macha session's audit (`ACTIVE.md`, "The port respec"). Gate:
