@@ -126,16 +126,15 @@ void HeldLedger::seed(const std::function<std::vector<ObjectId>()>& snapshot) {
     _trie->replace_all(std::move(records));
     _removals.fetch_add(1, std::memory_order_acq_rel);
   }
-  dannan::identity::durable_replace_file(_dir / "seeded", "1\n");
   {
     // Under the flush lock, so a flush either left everything queued or
-    // applies it over the seed. What was queued during the build is
-    // installed before the record is marked seeded: a reader that finds it
-    // seeded finds every change a returned write made (Macha marked it
-    // seeded first and installed after, so has() could miss a returned put
-    // in between).
+    // applies it over the seed. In this order: what was queued during the
+    // build is installed, then the durable marker, then the flag. A crash
+    // before the marker seeds again, so what was queued is never lost; a reader
+    // that finds it seeded finds every change a returned write made.
     Lock flushing(_flush_mutex);
     install_queued();
+    dannan::identity::durable_replace_file(_dir / "seeded", "1\n");
     _seeded.store(true, std::memory_order_release);
   }
 }
