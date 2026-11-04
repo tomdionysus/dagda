@@ -15,9 +15,16 @@ target_compile_definitions(dagda_test_fixtures INTERFACE DANNAN_TEST_TEMP_ROOT="
 
 add_executable(dagda_tests
   version_test.cpp
+  contract_gates_test.cpp
+  contract_include_direction_test.cpp
   domain_storage_key_test.cpp
+  ledger_claim_walk_test.cpp
+  ledger_collector_test.cpp
   ledger_held_ledger_test.cpp
+  ledger_horizon_builder_test.cpp
   ledger_object_trie_test.cpp
+  ledger_reference_counts_test.cpp
+  ledger_retention_test.cpp
   ledger_sealed_journal_test.cpp
   ledger_trie_diff_test.cpp
   ledger_trie_union_test.cpp
@@ -35,7 +42,10 @@ add_executable(dagda_tests
   store_persistent_cache_test.cpp
   store_presence_index_test.cpp
   store_sealing_test.cpp
+  store_state_layout_test.cpp
   store_storage_pool_test.cpp
   store_write_behind_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
+# The include-direction case reads the sources it checks.
+target_compile_definitions(dagda_tests PRIVATE DAGDA_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

@@ -9,9 +9,17 @@
 # Dannan; Dannan never includes anything from here.
 add_library(dagda SHARED
   version.cpp
+  contract/gates.cpp
+  contract/horizon.cpp
   domain/storage_key.cpp
+  ledger/claim_walk.cpp
+  ledger/collector.cpp
   ledger/held_ledger.cpp
+  ledger/node_horizon_builder.cpp
   ledger/object_trie.cpp
+  ledger/reference_counts.cpp
+  ledger/retention.cpp
+  ledger/retention_ledger.cpp
   ledger/sealed_journal.cpp
   ledger/trie_diff.cpp
   ledger/trie_union.cpp
@@ -28,6 +36,7 @@ add_library(dagda SHARED
   store/placement.cpp
   store/presence_index.cpp
   store/sealing.cpp
+  store/state_layout.cpp
   store/storage_pool.cpp
   store/write_behind.cpp
 )

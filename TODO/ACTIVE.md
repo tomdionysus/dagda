@@ -142,14 +142,9 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      tree-native branch merges. Run it through `StoragePool`, the control
      store and the cache, with the README's packing threshold and backend
      limits as the options.
-   - **"Refusing unversioned storage"**, its state half: a non-empty
-     state directory without `storage-layout` (`macha-state-layout-v18`,
-     Macha `cluster/node_identity.cpp:15-40`) refused. The backend half
-     is in (`ANonEmptyUnversionedBackendIsRefused`). The state marker is
-     Dagda's (decided by the Dagda session under the stack rules: Dannan
-     stores nothing for anyone, and the marker names the store's layout):
-     it lives in Dagda's state directory with Macha's bytes, and moves
-     with the step 2 session.
+   - ~~**"Refusing unversioned storage"**, its state half~~: done in
+     step 2 (`store/state_layout`, `StoreStateLayout`), Dagda's, with
+     Macha's bytes. The backend half is `ANonEmptyUnversionedBackendIsRefused`.
    - **For Tom, not blocking**: the control store's free-space reserve
      defaults to Macha's 0. A figure above 0 would keep CONTROL writable
      after DATA's reserve stops DATA writes on a shared filesystem.
@@ -167,13 +162,26 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    VALIDATION "Physical representation", "Admission and capacity",
    "Refusing unversioned storage", and a Macha fixture state directory
    opened with `has` and `get` true for every object.
-2. **Ledger, local** (`ledger/`). Object trie, held ledger, trie union
-   and diff; claims and retention (WAL, checkpoints; legacy readers
-   dropped); `unreferenced_since`; the three gates; horizons built from a
-   `ReachabilityProvider`; GC's two sweeps, CONTROL GC included. Gate:
-   `test_object_ledger`, `test_horizon_builder`, `test_ledger_gates`,
-   `test_claim_walk`, the GC cases, a claim from an unseen branch
-   surviving.
+2. ~~**Ledger, local**~~ Done 2026-11-04 on `feature/ledger`
+   (`COMPLETED.md`; `dagda_tests` 198). Claims and retention (WAL,
+   checkpoints; legacy readers dropped, slots reserved); reference
+   counts; the three gates; horizons built from a `ReachabilityProvider`;
+   the claim walk; GC's two sweeps in `ledger::Collector`, CONTROL GC
+   included; the state layout marker. Gate met: `test_horizon_builder`,
+   `test_ledger_gates`, `test_claim_walk`, the GC cases, a claim from an
+   unseen branch surviving, the include-direction check. What remains,
+   none of it local:
+   - Step 3: the availability survey, repair by diff, the claim walk's
+     restorer and its network credit, the pass's scheduling (quiet
+     windows, events, the repair share) and the DATA sweep's yield to the
+     store's idle times.
+   - Step 6: several providers per domain, unioned (complete only if all
+     are); one provider until domains exist.
+   - At the port (8a): Macha registers its provider (the FS's cached walk
+     and census, the catalogue's maintenance and retention objects, its
+     root epoch as the CONTROL epoch) and its pass calls
+     `Collector::pass`; `test_maintenance_trace.cpp` and
+     `test_catalogue_maintenance.cpp` stay Macha's gate.
 3. **Distributed store on Dannan** (`store/`). Placement through
    Dannan's functions (owner salts, capacity adverts); the write path
    with the four durability levels and evidence by node id; the read
