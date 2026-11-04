@@ -55,16 +55,33 @@ struct StoragePoolOptions {
   size_t pack_threshold = 1024 * 1024;
   size_t pack_target_size = 64 * 1024 * 1024;
   uint64_t ledger_cache_bytes = ledger_cache_share(default_ledger_cache_bytes, LedgerShare::data_held);
-  // The pool's domain, as its backends are sealed and marked: layout v18 for
-  // domain v1 (Macha's disks, their bytes unchanged), layout v19 with the
-  // domain for any other (the maintainer, 2026-11-04 evening). A backend made for one
-  // is refused by a pool of another.
+  // The pool's domain, as its backends are sealed and marked; v1 (Macha's)
+  // by default. A backend made for one domain is refused by a pool of
+  // another.
   SealingScheme sealing{};
-  // This node's role in the domain: a blind pool takes no storage key, opens
-  // v19 backends only, and keeps their held ledgers under `ledger_key`.
+  // This node's role in the domain: a blind pool takes no storage key.
   domain::Role role = domain::Role::member;
+  // The key every backend's held ledger is sealed under: the node-local key
+  // (StorageKey::derive_node_local), whatever the role, never the domain's.
+  // Required: a node without custody cannot run a pool.
   std::shared_ptr<const domain::StorageKey> ledger_key{};
 };
+
+// A backend's marker, `.macha.backend` in its root, mirrored under
+// <state>/backend-identities/<SHA-256 of the path>.id: "dagda-backend-v19
+// <node> <token> <domain> <check>", the check being backend_key_check under
+// the domain key, or "blind" when a blind node adopted the disk with no key
+// to check with. The migration (migrate/) writes these for Macha's disks.
+inline constexpr std::string_view backend_marker_name = ".macha.backend";
+inline constexpr std::string_view backend_marker_v19 = "dagda-backend-v19";
+inline constexpr std::string_view backend_blind_check = "blind";
+// The first sixteen bytes of HMAC-SHA256 under the domain key over
+// "dagda/backend-key-check/19" || domain || token, as hex: a node that lacks
+// the key is refused at open and learns nothing of the key from it.
+std::string backend_key_check(const domain::StorageKey& key, const domain::DomainId& domain, const dannan::identity::NodeId& token);
+std::string backend_marker_text(const SealingScheme& sealing, const dannan::identity::NodeId& node, const dannan::identity::NodeId& token,
+                                const std::string& check);
+std::filesystem::path backend_identity_path(const std::filesystem::path& state, const std::filesystem::path& backend);
 
 // A durability ticket naming another process, or a domain or backend
 // incarnation that is gone: it satisfies nothing here (protocol 23 answers
@@ -82,15 +99,20 @@ class StaleDurabilityTicket : public std::runtime_error {
 // put falls through to the next, and a backend that throws is taken offline.
 // Rebalance moves each object onto its preferred backend.
 //
-// A backend is a directory holding a marker (`.macha.backend`, layout v18:
-// "macha-backend-v18 <node> <token>"; layout v19: "dagda-backend-v19 <node>
-// <token> <domain>"), mirrored under <state>/backend-identities/. A disk of
-// another node, the wrong disk in a known place, a disk of another domain or
-// layout, or a non-empty unmarked directory is refused and stays offline; an
-// empty one is adopted under the pool's layout. Backends on one filesystem
-// share a durability domain. A backend's incarnation is a counter, new each
-// time it comes online, so a ticket outlives neither its process nor its
-// disk.
+// A backend is a directory holding a marker (backend_marker_text, above),
+// mirrored under <state>/backend-identities/. A disk of another node, the
+// wrong disk in a known place, a disk of another domain, a layout v18 disk
+// (Macha's: refused with a reason naming dagda-migrate, nothing on it
+// changed), or a non-empty unmarked directory is refused and stays offline;
+// an empty one is adopted. A member proves its key against the marker's
+// check; on a disk a blind node adopted there is no check, so the member
+// probes instead: it opens held records (up to eight) and the backend comes
+// online as a member's only if one opens, else it stays offline with the
+// reason and nothing is discarded. Until a backend's key has been checked
+// one way or the other, a copy that does not open is reported, never
+// removed. Backends on one filesystem share a durability domain. A
+// backend's incarnation is a counter, new each time it comes online, so a
+// ticket outlives neither its process nor its disk.
 //
 // Lock order: the pool's lock, then a backend's, then the domain lock. All
 // three guard memory only: no device operation runs under any of them.
@@ -126,8 +148,8 @@ class StoragePool final : public contract::ObjectStore {
   // backend keeps its held ledger under <state>/ledger/data-<token>. Opens
   // every backend it can; one that cannot be opened is offline, never an
   // error. Throws std::invalid_argument for two backends at one path, for a
-  // member pool with no key, or a blind pool of layout v18 or with no ledger
-  // key. Waits on the devices.
+  // member pool with no key, or a pool with no ledger key. Waits on the
+  // devices.
   StoragePool(std::filesystem::path state, dannan::identity::NodeId node, dannan::identity::NodeId epoch, StoragePoolOptions options,
               std::shared_ptr<const domain::StorageKey> key, LocalStore::Services services);
   ~StoragePool();
@@ -178,8 +200,9 @@ class StoragePool final : public contract::ObjectStore {
   // present implies durable. Nothing if no online backend holds it.
   std::optional<DurabilityTicket> reassert_durable(const ObjectId& id);
   // Reads in rank order. A copy that does not open is an object failure, not
-  // a backend's: it is removed and the next backend asked. Throws
-  // std::logic_error on a blind pool, which cannot open.
+  // a backend's: it is removed (where the backend's key check has passed)
+  // and the next backend asked. Throws std::logic_error on a blind pool,
+  // which cannot open.
   std::optional<Bytes> get(const ObjectId& id) const;
   bool has(const ObjectId& id) const override;
   // The union of every online backend's held trie, its identity the union's
@@ -199,7 +222,7 @@ class StoragePool final : public contract::ObjectStore {
   // nothing with fewer than two backends online. Single owner.
   MaintenanceResult rebalance_step(uint64_t budget_bytes, size_t operation_budget, const std::function<bool()>& should_yield = {});
   // One bounded slice of reading every object; one that does not open is
-  // removed. Single owner.
+  // removed, where the backend's key check has passed. Single owner.
   MaintenanceResult scrub_step(uint64_t budget_bytes, size_t operation_budget, const std::function<bool()>& should_yield = {});
   // One bounded slice of the DATA sweep. `live` and `protected_ids` are
   // sorted and unique. An unreferenced object goes only once older than
@@ -252,6 +275,11 @@ class StoragePool final : public contract::ObjectStore {
   std::vector<std::shared_ptr<Backend>> snapshot() const DANNAN_EXCLUDES(_mutex);
   std::filesystem::path identity_path(const std::filesystem::path& backend) const;
   bool activate(const std::shared_ptr<Backend>& backend);
+  // The key probe: whether this member's key opens a record the store holds.
+  // Nothing when the store holds no record to try. Throws nothing.
+  std::optional<bool> probe_key(LocalStore& store, std::string& reason) const;
+  // Whether a copy that does not open may be removed from `backend`.
+  static bool key_checked(const std::shared_ptr<Backend>& backend);
   void deactivate(const std::shared_ptr<Backend>& backend, const std::shared_ptr<LocalStore>& expected, const std::string& reason,
                   uint64_t expected_generation = 0) const;
   std::vector<std::shared_ptr<Backend>> ranked(const ObjectId& id) const;

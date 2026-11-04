@@ -41,7 +41,7 @@ TEST(StoreControlStore, AControlWriteIsNotBlockedByDataExhaustion) {
   ControlStoreOptions control_options;
   control_options.path = bed.dir.path() / "control";
   control_options.limit = 8ULL * 1024 * 1024;
-  auto control = open_control_store(state, control_options, bed.key, bed.services());
+  auto control = open_control_store(state, control_options, bed.key, bed.node_local, bed.services());
 
   // Exhaust ordinary DATA admission.
   size_t stored = 0;
@@ -79,7 +79,7 @@ TEST(StoreControlStore, TheControlStoreTakesMachasPlaceAndDefaults) {
   EXPECT_EQ(ledger_cache_share(default_ledger_cache_bytes, LedgerShare::references), 16ULL * 1024 * 1024);
   EXPECT_EQ(ledger_cache_share(default_ledger_cache_bytes, LedgerShare::data_held), 20ULL * 1024 * 1024);
 
-  auto control = open_control_store(state, defaults, bed.key, bed.services());
+  auto control = open_control_store(state, defaults, bed.key, bed.node_local, bed.services());
   EXPECT_EQ(control->limit(), defaults.limit);
   const auto small = pattern(64 * 1024, 3);
   ASSERT_TRUE(control->put(object_id(small), small));
@@ -97,7 +97,7 @@ TEST(StoreControlStore, AControlReserveStopsAWriteBeforeTheDeviceIsFull) {
   StoreBed bed;
   ControlStoreOptions options;
   options.reserve_free = std::numeric_limits<uint64_t>::max();
-  auto control = open_control_store(bed.dir.path() / "state", options, bed.key, bed.services());
+  auto control = open_control_store(bed.dir.path() / "state", options, bed.key, bed.node_local, bed.services());
   const auto bytes = pattern(64 * 1024, 4);
   EXPECT_FALSE(control->put(object_id(bytes), bytes));
   EXPECT_FALSE(control->has(object_id(bytes)));

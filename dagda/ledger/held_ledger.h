@@ -27,8 +27,9 @@ namespace dagda::ledger {
 // device so a restarted store knows at once instead of walking its disk.
 // Once seeded it is the store's whole answer to "do I hold this"; until then
 // the store answers as it always has and only queues what changes. A held
-// record's value is 1 as eight big-endian bytes. Its files are layout v18's:
-// the trie's, `seeded` and `verify-next`.
+// record's value is 1 as eight big-endian bytes. Its files are Macha's
+// layout v18's: the trie's, `seeded` and `verify-next`; the trie is sealed
+// under the node-local key.
 //
 // The store queues each change under its own index lock, so they are queued
 // in the order they happened, and flushes outside that lock: a flush

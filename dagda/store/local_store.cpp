@@ -70,37 +70,6 @@ void write_all(int fd, std::span<const uint8_t> bytes) {
   }
 }
 
-// First offset at or after `from` holding a decodable header, or nothing.
-// Tells a torn append (nothing decodable after) from damage inside a pack
-// (later records intact). Payloads are AES-GCM ciphertext, so a magic match
-// plus a valid SHA-256 inside one is not a realistic false positive. Reads in
-// bounded chunks; hashes only where the magic matches.
-std::optional<uint64_t> find_next_pack_header(int fd, uint64_t from, uint64_t file_size) {
-  constexpr size_t chunk = 1024 * 1024;
-  static_assert(chunk > 2 * pack_header_size);
-  uint64_t position = from;
-  while (position + pack_header_size <= file_size) {
-    const size_t want = static_cast<size_t>(std::min<uint64_t>(chunk, file_size - position));
-    const auto bytes = read_all_at(fd, want, position);
-    if (!bytes) throw std::runtime_error("cannot read pack during recovery");
-    const std::span<const uint8_t> view(*bytes);
-    size_t search = 0;
-    while (search + pack_header_size <= view.size()) {
-      const auto hit = std::search(view.begin() + static_cast<std::ptrdiff_t>(search), view.end(), pack_magic.begin(), pack_magic.end());
-      if (hit == view.end()) break;
-      const size_t index = static_cast<size_t>(hit - view.begin());
-      if (index + pack_header_size > view.size()) break;
-      if (decode_pack_header(view.subspan(index, pack_header_size))) return position + index;
-      search = index + 1;
-    }
-    if (want < chunk) break;
-    // Overlap the next chunk by a header, so one straddling the boundary is
-    // still seen whole.
-    position += want - (pack_header_size - 1);
-  }
-  return std::nullopt;
-}
-
 std::filesystem::file_time_type file_time_from_unix_ms(uint64_t value) {
   using namespace std::chrono;
   const auto target = system_clock::time_point(milliseconds(value));
@@ -155,11 +124,10 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _wall(services.wall),
       _files(files),
       _durability_domain(std::move(durability_domain)) {
-  if (_sealing.layout != 18 && _sealing.layout != 19) throw std::invalid_argument("local store layout must be 18 or 19");
   if (_role == domain::Role::member && !_key) throw std::invalid_argument("local store needs a storage key");
-  if (_role == domain::Role::blind && _sealing.layout != 19) throw std::invalid_argument("layout v18 has no blind role: every node is a member of domain v1");
-  if (_role == domain::Role::blind && !options.ledger_dir.empty() && !options.ledger_key)
-    throw std::invalid_argument("a blind store's held ledger needs a key of its own");
+  if (!options.ledger_dir.empty() && !options.ledger_key)
+    throw std::invalid_argument(
+        "a held ledger is sealed under the node-local key (LocalStoreOptions::ledger_key): a node without custody has none and cannot keep one");
   if (!_limit) throw std::invalid_argument("local store limit must be non-zero");
   if ((_pack_threshold == 0) != (_pack_target_size == 0)) throw std::invalid_argument("pack threshold and target size must both be zero or non-zero");
   if (_pack_threshold && _pack_target_size < _pack_threshold) throw std::invalid_argument("pack target size must be >= pack threshold");
@@ -183,7 +151,7 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
   if (!options.ledger_dir.empty()) {
     ledger::ObjectTrie::Options ledger_options;
     ledger_options.cache_bytes = options.ledger_cache_bytes;
-    _ledger = std::make_unique<ledger::HeldLedger>(options.ledger_dir, options.ledger_key ? options.ledger_key : _key, ledger_options, _logger.child("ledger"));
+    _ledger = std::make_unique<ledger::HeldLedger>(options.ledger_dir, options.ledger_key, ledger_options, _logger.child("ledger"));
   }
 
   // Pack indexes are rebuilt from the append-only records at every start. A

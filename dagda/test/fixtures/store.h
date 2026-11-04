@@ -12,6 +12,9 @@
 // device (tests/interposed_local_store_files.hpp).
 
 #include <gtest/gtest.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstring>
@@ -21,6 +24,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -79,11 +83,29 @@ bool ready(std::future<T>& future, std::chrono::milliseconds within = std::chron
   return future.wait_for(within) == std::future_status::ready;
 }
 
+// Waits for a forked child, never without a deadline: its exit code, or
+// nothing (the child is then killed). For the cases that end a process
+// without its stores' teardown.
+inline std::optional<int> exit_code(pid_t child, std::chrono::milliseconds bound = std::chrono::seconds(30)) {
+  const auto until = std::chrono::steady_clock::now() + bound;
+  while (std::chrono::steady_clock::now() < until) {
+    int status = 0;
+    const auto reaped = ::waitpid(child, &status, WNOHANG);
+    if (reaped == child) return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    if (reaped < 0) return std::nullopt;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ::kill(child, SIGKILL);
+  ::waitpid(child, nullptr, 0);
+  return std::nullopt;
+}
+
 // What a store runs on in a test: a directory, the node's services, a
 // logger that keeps what it is told, stepped time and a stepped wall clock.
 // The wall starts at the real date unless told otherwise, so it agrees with
 // the modification time a new file gets. The key is domain v1's from 1a's
-// known-answer cluster key.
+// known-answer cluster key; the node-local key, which every ledger is
+// sealed under, is a fixed stand-in for what custody would derive.
 struct StoreBed {
   explicit StoreBed(uint64_t wall_start_ms = dannan::contract::system_wall_clock().unix_ms()) : wall(wall_start_ms) {}
 
@@ -95,6 +117,7 @@ struct StoreBed {
   dannan::test::SteppedTime time;
   dannan::test::SteppedWall wall;
   std::shared_ptr<const domain::StorageKey> key = known_answer_key();
+  std::shared_ptr<const domain::StorageKey> node_local = key_of(0x4e);
 
   // A store that makes its own domain gets the steady clock for its window:
   // a test that awaits a batch hands in a domain on `time` instead.
@@ -109,6 +132,8 @@ struct StoreBed {
                                           store::LocalStoreMode mode = store::LocalStoreMode::authoritative,
                                           std::shared_ptr<store::DurabilityDomain> domain = {},
                                           store::LocalStoreFiles& files = store::posix_local_store_files()) {
+    // A store keeping a ledger seals it under the node's key.
+    if (!options.ledger_dir.empty() && !options.ledger_key) options.ledger_key = node_local;
     return std::make_unique<store::LocalStore>(root, options, key, services(), mode, std::move(domain), files);
   }
 
@@ -128,6 +153,7 @@ struct StoreBed {
     options.durability_batch_window = window;
     options.pack_threshold = 0;
     options.pack_target_size = 0;
+    options.ledger_key = node_local;
     return std::make_unique<store::StoragePool>(state, node, dannan::identity::NodeId::random(), options, key, pool_services(on));
   }
 };

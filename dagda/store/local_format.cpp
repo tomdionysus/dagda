@@ -7,7 +7,10 @@
 
 #include "dagda/store/local_format.h"
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -117,6 +120,38 @@ std::optional<PackHeader> decode_pack_header(std::span<const uint8_t> bytes) {
   } catch (const dannan::net::DecodeError&) {
     return std::nullopt;
   }
+}
+
+std::optional<uint64_t> find_next_pack_header(int fd, uint64_t from, uint64_t file_size) {
+  constexpr size_t chunk = 1024 * 1024;
+  static_assert(chunk > 2 * pack_header_size);
+  uint64_t position = from;
+  while (position + pack_header_size <= file_size) {
+    const size_t want = static_cast<size_t>(std::min<uint64_t>(chunk, file_size - position));
+    Bytes bytes(want);
+    size_t done = 0;
+    while (done < want) {
+      const auto n = ::pread(fd, bytes.data() + done, want - done, static_cast<off_t>(position + done));
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) throw std::runtime_error("cannot read pack during recovery");
+      done += static_cast<size_t>(n);
+    }
+    const std::span<const uint8_t> view(bytes);
+    size_t search = 0;
+    while (search + pack_header_size <= view.size()) {
+      const auto hit = std::search(view.begin() + static_cast<std::ptrdiff_t>(search), view.end(), pack_magic.begin(), pack_magic.end());
+      if (hit == view.end()) break;
+      const size_t index = static_cast<size_t>(hit - view.begin());
+      if (index + pack_header_size > view.size()) break;
+      if (decode_pack_header(view.subspan(index, pack_header_size))) return position + index;
+      search = index + 1;
+    }
+    if (want < chunk) break;
+    // Overlap the next chunk by a header, so one straddling the boundary is
+    // still seen whole.
+    position += want - (pack_header_size - 1);
+  }
+  return std::nullopt;
 }
 
 std::string pack_name(uint64_t sequence) {

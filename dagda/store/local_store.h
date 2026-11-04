@@ -79,18 +79,17 @@ struct LocalStoreOptions {
   // none, and the store walks its objects at every start.
   std::filesystem::path ledger_dir{};
   size_t ledger_cache_bytes = 8ULL * 1024 * 1024;
-  // How objects are sealed: layout v18, Macha's, or v19 with the domain in
-  // the associated data (sealing.h). A v18 store is written as v18 for ever.
+  // The domain objects are sealed for: the domain in the associated data
+  // (sealing.h); v1, Macha's, by default.
   SealingScheme sealing{};
   // This node's role in the store's domain (requirement D3). A blind store
   // takes no storage key and holds ciphertext only: put_sealed, get_sealed
-  // and held_digest; put and get refuse. Only a v19 store can be blind:
-  // every node is a member of domain v1.
+  // and held_digest; put and get refuse.
   domain::Role role = domain::Role::member;
-  // The key the held ledger (on the state device) is sealed under when it is
-  // not the domain's: a blind store has no domain key, so it needs one of
-  // its own here (the node's node-local key). A member's ledger is under the
-  // domain key unless this is given.
+  // The key the held ledger (on the state device) is sealed under: the
+  // node's node-local key (StorageKey::derive_node_local), whatever the
+  // role, never the domain's. Required with a ledger_dir: a node without
+  // custody has no such key and cannot keep a ledger.
   std::shared_ptr<const domain::StorageKey> ledger_key{};
 
   // Loose objects only, as the cache and some tests keep them.
@@ -146,9 +145,9 @@ struct LocalStoreDiagnostics {
 
 // Objects in one directory tree on one device (requirements S1 to S9, S16 to
 // S18): loose files above the pack threshold, records in packs at or below
-// it, each sealed under the domain's storage key with its id as the
-// associated data (and, from layout v19, the domain: sealing.h), in layout
-// v18's formats (local_format.h).
+// it, each sealed under the domain's storage key with the domain and the id
+// as the associated data (sealing.h), in the one layout's formats
+// (local_format.h, Macha's bytes but for the tag).
 //
 // The packs are replayed at every open, a torn tail truncated and a damaged
 // span skipped. Compaction is copy-on-write, one victim per call. A put is

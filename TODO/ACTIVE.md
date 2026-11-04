@@ -305,8 +305,10 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    maintenance on a blind pool, node-local spaces, the Replicated level's
    per-space k, retained values on Dannan's notify channels, the
    no-rollback test. Gate: each from the stack document's requirements.
-6b. **One layout, and the migration of Macha's disks** (the maintainer, 2026-11-04
-   night; `feature/one-layout`). The store knows layout v19 only: every
+6b. ~~**One layout, and the migration of Macha's disks**~~ Done 2026-11-04
+   night on `feature/one-layout` (`COMPLETED.md`; `dagda_tests` 367 and 1
+   disabled) but for its real-data gate, the Macha session's v18 state
+   directory (dry run first). As built: The store knows layout v19 only: every
    backend, the control store, the cache and the state layout carry the
    domain, v1 (Macha's) included; every object's AAD binds the domain;
    every node's ledgers (held tries, journals, retention claims,
@@ -320,8 +322,9 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    copied; the ledgers are re-sealed file by file under the node-local
    key; markers and the state layout are rewritten last; a crash leaves
    a disk the tool resumes (each record is v18 or v19, told by which AAD
-   authenticates it). Peak extra space: one ledger file. The key probe
-   at activate. Gate: the v18 known-answer bytes, now the migration's
+   authenticates it). Peak extra space: one ledger file. Manual only: the
+   store refuses a v18 disk with a message naming `dagda-migrate` and
+   never migrates on its own. The key probe at activate. Gate: the v18 known-answer bytes, now the migration's
    tests, migrate to the v19 known answers; a Macha v18 state directory
    from the Macha session, migrated, opens and reads back every object
    and claim; `dagda_tests` loses the v18 store cases only, each named.
@@ -443,7 +446,11 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
   disks are migrated in place, resumable after a crash, and the Macha
   session's real v18 state directory is its gate. The CONTROL offer check
   under the node principal stays. A member probes its key at activate
-  before trusting a blind-adopted backend. The store encodings (packs,
+  before trusting a blind-adopted backend. **The migration is manual
+  only** (the maintainer, the same night, on the Macha session's flag that nothing
+  on a live node is repaired by hand): a node that finds a v18 disk
+  refuses to start and names `dagda-migrate`; nothing migrates unbidden.
+  The store encodings (packs,
   the tree forms, the Merkle tree) are free to change where a step has
   reason; Macha's bytes bind nothing any more.
 - **Do not modify `../macha` until told to.**

@@ -171,7 +171,7 @@ class ClusterNode {
   // The node's keys from its custody (step 6): its wrap key, advertised on
   // its record at start, and its node-local domain key.
   const domain::WrapKey& wrap_key() const { return *_wrap; }
-  domain::StorageKey node_local_key() { return *domain::StorageKey::derive_node_local(context().identity()); }
+  domain::StorageKey node_local_key() { return domain::StorageKey::require_node_local(context().identity()); }
 
   // Requests of the store's types this node was asked, and the hook in
   // front of its server.
@@ -379,6 +379,8 @@ inline void ClusterNode::start() {
   domain::advertise_wrap_key(context, *_wrap);
 
   const auto key = known_answer_key();
+  // Every ledger the node keeps of its own is under its node-local key.
+  const auto node_local = std::make_shared<const domain::StorageKey>(domain::StorageKey::require_node_local(context.identity()));
   const store::LocalStore::Services services{context.threads(),
                                              context.observations(),
                                              _progress,
@@ -395,10 +397,11 @@ inline void ClusterNode::start() {
     pool.pack_threshold = 0;
     pool.pack_target_size = 0;
   }
+  pool.ledger_key = node_local;
   _data = std::make_unique<store::StoragePool>(_dir / "state", _id, context.identity().durability_epoch(), pool, key, services);
-  _control = store::open_control_store(_dir / "state", {}, key, services);
+  _control = store::open_control_store(_dir / "state", {}, key, node_local, services);
   _cache = std::make_unique<store::PersistentBlockCache>(_options.cache, key, services);
-  _claims = std::make_unique<ledger::RetentionStore>(_dir / "state", key, context.logger("dagda.claims"));
+  _claims = std::make_unique<ledger::RetentionStore>(_dir / "state", node_local, context.logger("dagda.claims"));
   _ledger = std::make_unique<ledger::RetentionLedger>(*_claims, *_data, *_control);
   if (_options.admission) {
     const auto quiet = _options.repair.foreground_quiet;

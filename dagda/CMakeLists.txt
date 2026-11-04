@@ -33,6 +33,8 @@ add_library(dagda SHARED
   ledger/trie_diff.cpp
   ledger/trie_union.cpp
   ledger/unreferenced_since.cpp
+  migrate/legacy_v18.cpp
+  migrate/migrate.cpp
   store/availability.cpp
   store/control_objects.cpp
   store/control_store.cpp

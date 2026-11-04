@@ -31,8 +31,9 @@ inline constexpr std::array<uint8_t, 8> reference_counts_magic{'M', 'R', 'E', 'F
 // root to root by the owner's diff, so a restart resumes where it stopped
 // instead of walking the state. The counting is Dagda's; what is counted is
 // the owner's, and a ReachabilityProvider hands its frozen views to the
-// horizons. A count is a u64 trie value. The files are layout v18's (Macha's
-// namespace reference counts): two tries and `state`.
+// horizons. A count is a u64 trie value. The files are Macha's layout v18's
+// (its namespace reference counts): two tries and `state`, the tries sealed
+// under the node-local key.
 //
 // Single owner (the owner's census); views are read from any thread. Every
 // operation waits on the state device.

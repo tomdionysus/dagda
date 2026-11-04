@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -24,10 +25,11 @@ namespace dagda::ledger {
 using Bytes = store::Bytes;
 
 // An append-only journal of sealed frames, the one crash-safe journal the
-// retention store and the object trie share (requirement L2; layout v18's
-// "sealed journal frame"). A frame is be32 length | 12-byte nonce | 16-byte
-// tag | AES-GCM ciphertext, sealed under the domain's storage key and the
-// journal's own 8-byte associated data; the file has no magic. An append is
+// retention store and the object trie share (requirement L2; Macha's layout
+// v18's "sealed journal frame"). A frame is be32 length | 12-byte nonce |
+// 16-byte tag | AES-GCM ciphertext, sealed under the key given (the
+// node-local key, for a node's own ledgers) and the journal's own 8-byte
+// associated data; the file has no magic. An append is
 // written and fsynced before it returns. Replay reads frames in order and
 // stops at the first that is torn, short or will not open, or that the
 // caller refuses; the file is truncated there, so the next append follows
@@ -86,6 +88,28 @@ class SealedJournal {
   std::shared_ptr<const FrameReader> reader() const;
   // Empties the journal durably, once what it held is checkpointed.
   void reset();
+
+  // Whether the frame at `offset` opens under `key` and `aad`: nothing for
+  // a missing or empty file, which opens under any key. For the migration
+  // (migrate/), which must know a file's key before opening it as a journal,
+  // since replay truncates at the first frame that will not open. Waits on
+  // the state device.
+  static std::optional<bool> probe(const std::filesystem::path& path, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame,
+                                   uint64_t offset = 0);
+  struct Rekeyed {
+    uint64_t frames = 0;
+    // Bytes after the last frame that opened under `from`: a torn tail,
+    // which replay would have truncated, left behind.
+    uint64_t dropped_bytes = 0;
+  };
+  // Re-seals every frame that opens under `from` with `to` (fresh nonces,
+  // the same plaintexts, so every frame keeps its offset and size), written
+  // whole to a sibling file and renamed over the journal: a reader sees the
+  // old file or the new, never a mixture. Peak extra space: one copy of the
+  // file. Throws std::runtime_error if the first frame does not open under
+  // `from`, writing nothing. Waits on the state device.
+  static Rekeyed rekey(const std::filesystem::path& path, const domain::StorageKey& from, const domain::StorageKey& to, std::array<uint8_t, 8> aad,
+                       uint32_t max_read_frame);
 
   // Frames replayed or appended since open; bytes() is the file's length.
   uint64_t frames() const noexcept { return _frames; }

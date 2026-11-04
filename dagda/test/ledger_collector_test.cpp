@@ -91,7 +91,7 @@ struct GcBed {
     std::filesystem::create_directories(disk);
     pool = bed.pool(state, {{disk, 64 * mib}});
     EXPECT_TRUE(test::wait_until([&] { return pool->online_backends() == 1; }));
-    control_store = store::open_control_store(state, {}, bed.key, bed.services());
+    control_store = store::open_control_store(state, {}, bed.key, bed.node_local, bed.services());
     retention = std::make_unique<RetentionStore>(state, bed.key, test::quiet_logger());
     ledger = std::make_unique<RetentionLedger>(*retention, *pool, *control_store, bed.time);
     data_seen = std::make_unique<UnreferencedSince>(state / "retention" / "unreferenced-data.bin", test::quiet_logger());

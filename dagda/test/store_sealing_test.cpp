@@ -5,11 +5,14 @@
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
 //
 
-// An object is sealed as Macha seals it (requirement D2), so what Macha wrote
-// opens here. The known answers were computed outside both codebases: the
-// keystream and block encryptions by `openssl enc` (AES-256-CTR and ECB),
-// GHASH by hand, the whole checked first against the GCM specification's
-// test case 16.
+// An object is sealed as Macha sealed it (requirement D2) but for what the
+// tag authenticates: the one layout, v19, binds the domain and the id (the maintainer,
+// 2026-11-04 night: v18 is read by the migration alone). The known answers
+// were computed outside both codebases: the keystream and block encryptions
+// by `openssl enc` (AES-256-CTR and ECB), GHASH by hand, the whole checked
+// first against the GCM specification's test case 16 (build/kat/step6 and
+// step6b). The v18 known answers, Macha's bytes, are the migration's now
+// (migrate_legacy_v18_test).
 
 #include <gtest/gtest.h>
 
@@ -54,52 +57,62 @@ dannan::identity::ClusterKey cluster_key(const dannan::test::TempDir& dir, const
   return dannan::identity::load_cluster_key(path);
 }
 
-// The known-answer object.
+// The known-answer object, under domain v1's key and nonce 00..0b: its v18
+// bytes were Macha's; its v19 tag (domain v1) and the empty object's are
+// step 6b's known answers.
 constexpr std::string_view plaintext = "An object Macha sealed under its own id.";
 constexpr char object_hex[] = "3e2d0f89b0b998fb97c9c3972a6f50791847d4cd70101c3910f971c77d43a4f8";
 constexpr char nonce_hex[] = "000102030405060708090a0b";
 constexpr char ciphertext_hex[] = "43550b1cd4a892751f602e1a3ec39f8c1ce80674082cf57c62457d06688a4bc417718343251f2723";
-constexpr char tag_hex[] = "6f6aa83135d5e163f1b04d0c9ec0758c";
+constexpr char v18_tag_hex[] = "6f6aa83135d5e163f1b04d0c9ec0758c";
+constexpr char v1_tag_hex[] = "b05d61c20d49091b6d3ee9e145ef880c";
+constexpr char v1_empty_tag_hex[] = "44b3ddd655b79590e686c9a569aa995f";
+const SealingScheme v1 = SealingScheme::v19(domain::domain_v1);
 
-// Bytes Macha sealed open here, with the size and the id checked.
-TEST(StoreSealing, OpensWhatMachaSealed) {
+// The known-answer bytes under domain v1 open here, with the size and the
+// id checked.
+TEST(StoreSealing, OpensTheKnownAnswerUnderDomainV1) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto id = object_id(bytes_of(plaintext));
   ASSERT_EQ(to_string(id), object_hex);
   const auto nonce = unhex(nonce_hex);
-  const auto tag = unhex(tag_hex);
+  const auto tag = unhex(v1_tag_hex);
   const auto ciphertext = unhex(ciphertext_hex);
   const auto opened =
-      open_object(key, id, std::span<const uint8_t, 12>(nonce.data(), 12), std::span<const uint8_t, 16>(tag.data(), 16), ciphertext, plaintext.size());
+      open_object(key, v1, id, std::span<const uint8_t, 12>(nonce.data(), 12), std::span<const uint8_t, 16>(tag.data(), 16), ciphertext, plaintext.size());
   EXPECT_EQ(opened, bytes_of(plaintext));
 }
 
-// Under the same nonce Dagda's sealing produces Macha's bytes exactly: the
-// AES-256-GCM of Dannan with the id as the associated data.
-TEST(StoreSealing, SealsMachasBytesUnderTheSameNonce) {
+// Under the same nonce Dagda's sealing produces the known answer exactly:
+// Dannan's AES-256-GCM with the label, the domain and the id as the
+// associated data. The ciphertext is Macha's, since the keystream does not
+// see the associated data; only the tag is the domain's.
+TEST(StoreSealing, SealsTheKnownAnswerUnderTheSameNonce) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto id = object_id(bytes_of(plaintext));
   const auto nonce = unhex(nonce_hex);
-  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), std::span<const uint8_t, 12>(nonce.data(), 12), bytes_of(plaintext), id.bytes);
+  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), std::span<const uint8_t, 12>(nonce.data(), 12), bytes_of(plaintext), v1.associated_data(id));
   EXPECT_EQ(hex(sealed.ciphertext), ciphertext_hex);
-  EXPECT_EQ(hex(sealed.tag), tag_hex);
+  EXPECT_EQ(hex(sealed.tag), v1_tag_hex);
+  EXPECT_NE(std::string(v1_tag_hex), v18_tag_hex);
 }
 
 // What seal_object writes is that layout: the plaintext's size of
-// ciphertext, a fresh nonce, and a tag over the id.
-TEST(StoreSealing, SealObjectIsAesGcmWithTheIdAsAssociatedData) {
+// ciphertext, a fresh nonce, and a tag over the domain and the id.
+TEST(StoreSealing, SealObjectIsAesGcmWithTheDomainAndIdAsAssociatedData) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto plain = pattern(4096, 3);
   const auto id = object_id(plain);
-  const auto first = seal_object(key, id, plain);
-  const auto second = seal_object(key, id, plain);
+  const auto first = seal_object(key, v1, id, plain);
+  const auto second = seal_object(key, v1, id, plain);
   EXPECT_EQ(first.ciphertext.size(), plain.size());
   EXPECT_NE(first.nonce, second.nonce);
-  EXPECT_EQ(dannan::identity::aes_gcm_open(key.bytes(), first.nonce, first.tag, first.ciphertext, id.bytes), plain);
+  EXPECT_EQ(dannan::identity::aes_gcm_open(key.bytes(), first.nonce, first.tag, first.ciphertext, v1.associated_data(id)), plain);
   EXPECT_THROW((void)dannan::identity::aes_gcm_open(key.bytes(), first.nonce, first.tag, first.ciphertext), std::runtime_error);
+  EXPECT_THROW((void)dannan::identity::aes_gcm_open(key.bytes(), first.nonce, first.tag, first.ciphertext, id.bytes), std::runtime_error);
 }
 
 // A ciphertext cannot be passed off as another object's: the id is
@@ -109,11 +122,11 @@ TEST(StoreSealing, AnotherIdDoesNotOpen) {
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto plain = pattern(1000, 4);
   const auto id = object_id(plain);
-  const auto sealed = seal_object(key, id, plain);
+  const auto sealed = seal_object(key, v1, id, plain);
   auto other = id;
   other.bytes[31] ^= 1;
-  EXPECT_THROW((void)open_object(key, other, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
-  EXPECT_EQ(open_object(key, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), plain);
+  EXPECT_THROW((void)open_object(key, v1, other, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
+  EXPECT_EQ(open_object(key, v1, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), plain);
 }
 
 // Authentic bytes that are not the object recorded are refused: another
@@ -123,13 +136,13 @@ TEST(StoreSealing, OpenChecksTheSizeAndTheId) {
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto plain = pattern(1000, 5);
   const auto id = object_id(plain);
-  const auto sealed = seal_object(key, id, plain);
-  EXPECT_THROW((void)open_object(key, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size() + 1), ObjectIntegrityError);
+  const auto sealed = seal_object(key, v1, id, plain);
+  EXPECT_THROW((void)open_object(key, v1, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size() + 1), ObjectIntegrityError);
 
   // Sealed under an id that does not name it.
   const auto stranger = object_id(pattern(1000, 6));
-  const auto misnamed = seal_object(key, stranger, plain);
-  EXPECT_THROW((void)open_object(key, stranger, misnamed.nonce, misnamed.tag, misnamed.ciphertext, plain.size()), ObjectIntegrityError);
+  const auto misnamed = seal_object(key, v1, stranger, plain);
+  EXPECT_THROW((void)open_object(key, v1, stranger, misnamed.nonce, misnamed.tag, misnamed.ciphertext, plain.size()), ObjectIntegrityError);
 }
 
 // Another domain's key opens nothing.
@@ -139,8 +152,8 @@ TEST(StoreSealing, AnotherKeyDoesNotOpen) {
   const auto other = domain::StorageKey::derive_v1(cluster_key(dir, "another cluster"));
   const auto plain = pattern(64, 7);
   const auto id = object_id(plain);
-  const auto sealed = seal_object(key, id, plain);
-  EXPECT_THROW((void)open_object(other, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
+  const auto sealed = seal_object(key, v1, id, plain);
+  EXPECT_THROW((void)open_object(other, v1, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
 }
 
 // Moved from Macha's tests/test_foundations.cpp, test_codec_and_crypto, its
@@ -180,19 +193,20 @@ TEST(StoreSealing, MachaCodecAndCryptoSealOpenAndRefuseAFlippedBit) {
   EXPECT_TRUE(rejected);
 }
 
-// The empty object seals to no ciphertext and a tag over its id alone.
+// The empty object seals to no ciphertext and a tag over the domain and its
+// id alone.
 TEST(StoreSealing, TheEmptyObjectSealsToATagAlone) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto id = object_id({});
   const auto nonce = unhex(nonce_hex);
-  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), std::span<const uint8_t, 12>(nonce.data(), 12), Bytes{}, id.bytes);
+  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), std::span<const uint8_t, 12>(nonce.data(), 12), Bytes{}, v1.associated_data(id));
   EXPECT_TRUE(sealed.ciphertext.empty());
-  EXPECT_EQ(hex(sealed.tag), "ead2fafb66dc09be7023213356c8d91f");
-  EXPECT_TRUE(open_object(key, id, sealed.nonce, sealed.tag, sealed.ciphertext, 0).empty());
+  EXPECT_EQ(hex(sealed.tag), v1_empty_tag_hex);
+  EXPECT_TRUE(open_object(key, v1, id, sealed.nonce, sealed.tag, sealed.ciphertext, 0).empty());
 }
 
-// ---- Layout v19 (step 6) -----------------------------------------------------
+// ---- The domain in the associated data (step 6) ------------------------------
 // The known answers were computed as the wrap's were (domain_wrap_test):
 // AES blocks by `openssl enc -aes-256-ecb`, GCM by hand, checked against the
 // GCM specification's test case 16.
@@ -200,34 +214,37 @@ TEST(StoreSealing, TheEmptyObjectSealsToATagAlone) {
 constexpr char domain_hex[] = "00112233445566778899aabbccddeeff";
 constexpr char v19_tag_hex[] = "d17467ebe8e66d7404b39ffbb2e67868";
 
-// Under v19 the associated data is the label, the domain and the id. The
-// ciphertext is the keystream's, the same as v18's under the same key and
-// nonce; the tag is where the binding lives, and it differs.
-TEST(StoreSealing, LayoutV19BindsTheDomainIntoTheAssociatedData) {
+// The associated data is the label, the domain and the id. The ciphertext
+// is the keystream's, the same whatever the associated data under the same
+// key and nonce; the tag is where the binding lives, and it differs by
+// domain, and from Macha's over the id alone.
+TEST(StoreSealing, TheAssociatedDataBindsTheDomain) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto id = object_id(bytes_of(plaintext));
   const auto domain = domain::DomainId::parse(domain_hex).value();
   const auto scheme = SealingScheme::v19(domain);
   EXPECT_EQ(hex(scheme.associated_data(id)), std::string("64616764612f7365616c2f3139") + domain_hex + object_hex);
-  EXPECT_EQ(hex(SealingScheme::v18().associated_data(id)), object_hex);
+  EXPECT_EQ(hex(v1.associated_data(id)), std::string("64616764612f7365616c2f3139") + "827b07101d79d9d84a433d8e9cb262ca" + object_hex);
   const auto nonce = unhex(nonce_hex);
   const auto sealed =
       dannan::identity::aes_gcm_seal(key.bytes(), std::span<const uint8_t, 12>(nonce.data(), 12), bytes_of(plaintext), scheme.associated_data(id));
   EXPECT_EQ(hex(sealed.ciphertext), ciphertext_hex);
   EXPECT_EQ(hex(sealed.tag), v19_tag_hex);
-  EXPECT_NE(std::string(v19_tag_hex), tag_hex);
+  EXPECT_NE(std::string(v19_tag_hex), v1_tag_hex);
+  EXPECT_NE(std::string(v19_tag_hex), v18_tag_hex);
   EXPECT_EQ(open_object(key, scheme, id, sealed.nonce, sealed.tag, sealed.ciphertext, plaintext.size()), bytes_of(plaintext));
-  // v18's bytes still open as v18, and not as v19.
-  const auto tag = unhex(tag_hex);
-  EXPECT_EQ(open_object(key, id, sealed.nonce, std::span<const uint8_t, 16>(tag.data(), 16), sealed.ciphertext, plaintext.size()), bytes_of(plaintext));
+  // Macha's tag over the id alone does not open under any domain.
+  const auto tag = unhex(v18_tag_hex);
   EXPECT_THROW((void)open_object(key, scheme, id, sealed.nonce, std::span<const uint8_t, 16>(tag.data(), 16), sealed.ciphertext, plaintext.size()),
+               std::runtime_error);
+  EXPECT_THROW((void)open_object(key, v1, id, sealed.nonce, std::span<const uint8_t, 16>(tag.data(), 16), sealed.ciphertext, plaintext.size()),
                std::runtime_error);
 }
 
-// The binding test (stack document, security requirement a; decision 12): a
-// v19 object moved to another domain, or to another id, does not open.
-TEST(StoreSealing, AV19ObjectMovedToAnotherDomainOrIdDoesNotOpen) {
+// The binding test (stack document, security requirement a; decision 12): an
+// object moved to another domain, or to another id, does not open.
+TEST(StoreSealing, AnObjectMovedToAnotherDomainOrIdDoesNotOpen) {
   dannan::test::TempDir dir;
   const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
   const auto plain = pattern(3000, 9);
@@ -237,13 +254,12 @@ TEST(StoreSealing, AV19ObjectMovedToAnotherDomainOrIdDoesNotOpen) {
   auto other_domain = domain;
   other_domain.bytes[15] ^= 1;
   EXPECT_THROW((void)open_object(key, SealingScheme::v19(other_domain), id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
-  EXPECT_THROW((void)open_object(key, SealingScheme::v19(domain::domain_v1), id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()),
-               std::runtime_error);
+  EXPECT_THROW((void)open_object(key, v1, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
   auto other_id = id;
   other_id.bytes[0] ^= 1;
   EXPECT_THROW((void)open_object(key, SealingScheme::v19(domain), other_id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
-  // Nor under v18's associated data: the same key and bytes, another binding.
-  EXPECT_THROW((void)open_object(key, id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), std::runtime_error);
+  // Nor under the id alone, Macha's binding: the same key and bytes.
+  EXPECT_THROW((void)dannan::identity::aes_gcm_open(key.bytes(), sealed.nonce, sealed.tag, sealed.ciphertext, id.bytes), std::runtime_error);
   EXPECT_EQ(open_object(key, SealingScheme::v19(domain), id, sealed.nonce, sealed.tag, sealed.ciphertext, plain.size()), plain);
 }
 

@@ -168,41 +168,51 @@ TEST(StoreStoragePool, AnObjectLandsOnItsFirstRankedBackend) {
   }
 }
 
-// Layout v18's marker, byte for byte: what the pool writes for an empty
-// directory it adopts, and what it accepts that Macha wrote.
-TEST(StoreStoragePool, TheBackendMarkerIsLayoutV18s) {
+// The one layout's marker for domain v1, byte for byte: what the pool
+// writes for an empty directory it adopts, and what it accepts that the
+// migration wrote (the key check was computed outside Dagda, Python's hmac,
+// build/kat/step6b). Macha's own v18 marker is refused with a reason naming
+// dagda-migrate and the state, and nothing on that disk changes: the
+// migration is manual (the maintainer, 2026-11-04 night).
+TEST(StoreStoragePool, TheBackendMarkerIsLayoutV19sAndMachasIsRefused) {
   StoreBed bed;
   const auto state = bed.dir.path() / "state";
   const auto fresh = bed.dir.path() / "fresh";
+  const auto migrated = bed.dir.path() / "migrated";
   const auto machas = bed.dir.path() / "machas";
   std::filesystem::create_directories(fresh);
+  std::filesystem::create_directories(migrated);
   std::filesystem::create_directories(machas);
   const auto node = filled(0xab);
   const auto token = filled(0xcd);
+  const std::string migrated_marker =
+      "dagda-backend-v19 abababababababababababababababab cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd 827b07101d79d9d84a433d8e9cb262ca 96fe387af04a9cdb77b3cd0086f4b356\n";
   const std::string machas_marker = "macha-backend-v18 abababababababababababababababab cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n";
+  std::ofstream(migrated / ".macha.backend") << migrated_marker;
   std::ofstream(machas / ".macha.backend") << machas_marker;
 
-  auto pool = bed.pool(state, {{fresh, 64 * mib, 0}, {machas, 64 * mib, 0}}, 500ms, node);
-  ASSERT_EQ(pool->online_backends(), 2u);
+  auto pool = bed.pool(state, {{fresh, 64 * mib, 0}, {migrated, 64 * mib, 0}, {machas, 64 * mib, 0}}, 500ms, node);
+  EXPECT_EQ(pool->online_backends(), 2u);
+  EXPECT_TRUE(bed.sink->saw("dagda-migrate --state " + state.string()));
 
   const auto read = [](const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(in)), {});
   };
   const auto marker = read(fresh / ".macha.backend");
-  ASSERT_EQ(marker.size(), 17u + 1 + 32 + 1 + 32 + 1);
-  EXPECT_EQ(marker.substr(0, 51), "macha-backend-v18 abababababababababababababababab ");
+  ASSERT_EQ(marker.size(), 17u + 1 + 32 + 1 + 32 + 1 + 32 + 1 + 32 + 1);
+  EXPECT_EQ(marker.substr(0, 51), "dagda-backend-v19 abababababababababababababababab ");
   EXPECT_TRUE(NodeId::parse(marker.substr(51, 32)).has_value());
+  EXPECT_EQ(marker.substr(84, 32), "827b07101d79d9d84a433d8e9cb262ca");
   EXPECT_EQ(marker.back(), '\n');
+  EXPECT_EQ(backend_key_check(*bed.key, domain::domain_v1, token), "96fe387af04a9cdb77b3cd0086f4b356");
 
-  // Mirrored under the state, named by the SHA-256 of the backend's path.
-  const auto mirror_of = [&](const std::filesystem::path& backend) {
-    const auto text = backend.lexically_normal().string();
-    return state / "backend-identities" /
-           (dannan::identity::hex(dannan::identity::sha256({reinterpret_cast<const uint8_t*>(text.data()), text.size()})) + ".id");
-  };
-  EXPECT_EQ(read(mirror_of(fresh)), marker);
-  EXPECT_EQ(read(mirror_of(machas)), machas_marker);
+  // Mirrored under the state, named by the SHA-256 of the backend's path;
+  // the refused disk gets no mirror and keeps its marker.
+  EXPECT_EQ(read(backend_identity_path(state, fresh)), marker);
+  EXPECT_EQ(read(backend_identity_path(state, migrated)), migrated_marker);
+  EXPECT_EQ(read(migrated / ".macha.backend"), migrated_marker);
+  EXPECT_FALSE(std::filesystem::exists(backend_identity_path(state, machas)));
   EXPECT_EQ(read(machas / ".macha.backend"), machas_marker);
   // The held ledger is named by the disk's token.
   EXPECT_TRUE(std::filesystem::exists(state / "ledger" / ("data-" + dannan::identity::to_string(token))));

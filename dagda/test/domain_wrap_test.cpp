@@ -264,6 +264,11 @@ TEST(DomainWrap, TheNodesKeysComeFromItsCustodyOrAreAbsent) {
   ASSERT_TRUE(wrap_key.has_value());
   EXPECT_EQ(hex(wrap_key->public_key()), hex(WrapKey::derive(a.context().identity())->public_key()));
   EXPECT_NE(hex(local->bytes()), hex(a.context().identity().derive_local(wrap_label).reveal()));
+  // The same key from custody opened outside the node, as dagda-migrate
+  // derives it; and required, it is this one.
+  EXPECT_EQ(hex(local->bytes()), hex(StorageKey::derive_node_local(dannan::identity::KeyCustody::open(dir.path() / "a", source)).bytes()));
+  EXPECT_EQ(hex(local->bytes()), hex(StorageKey::require_node_local(a.context().identity()).bytes()));
+  EXPECT_THROW((void)StorageKey::require_node_local(b.context().identity()), std::runtime_error);
   EXPECT_FALSE(StorageKey::derive_node_local(b.context().identity()).has_value());
   EXPECT_FALSE(WrapKey::derive(b.context().identity()).has_value());
   // Custody but no certificate: nothing to sign the advert with.
