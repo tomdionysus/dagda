@@ -194,10 +194,11 @@ struct DistributedStoreOptions {
   // A write's and a read's deadline when the caller names none.
   std::chrono::milliseconds write_deadline{60000};
   std::chrono::milliseconds read_deadline{60000};
-  // How long a peer's put or fetch may run on past the call that started
-  // it, so a slow peer's acknowledgement still reaches the write's ticket.
-  // TODO(Dannan: a deadline that cancels the call): a Routes::call whose
-  // deadline passes is answered but runs on, holding a reply slot.
+  // How long a peer's put or fetch may run on past the write or read that
+  // started it, so a slow peer's acknowledgement still reaches the write's
+  // ticket. At the horizon Dannan cancels the call (the peer told, its reply
+  // slot freed, a late reply dropped) and the copy is owed to prompt
+  // replication.
   std::chrono::milliseconds call_horizon{120000};
   // Each presence, claim and CONTROL call to one peer (Macha's
   // max(dead_after, connect_timeout)).
@@ -215,8 +216,6 @@ struct DistributedStoreOptions {
   std::chrono::milliseconds prompt_retry{30000};
   // Opportunistic local copies queued (cache fill, promotion).
   size_t local_copy_bytes = 256 * 1024 * 1024;
-  // The clock for retries and ticket ages; null is the node's.
-  const dannan::contract::TimeSource* time = nullptr;
   // How long work on this node's devices waits for its admission (DATA
   // credit, a device slot) when its caller named no deadline: background
   // work, repair and opportunistic copies.
@@ -349,10 +348,9 @@ class DistributedStore final : public ControlObjectSource {
     uint64_t dropped = 0;
   };
 
-  // `executor` runs the store's own completions (the io context's).
-  // TODO(Dannan: Context::executor and a TimeSource through the Context):
-  // the store takes the node's executor and clock beside the Context.
-  DistributedStore(dannan::Context& context, boost::asio::any_io_executor executor, Stores stores, DistributedStoreOptions options = {});
+  // The store's own completions run on the node's executor and its retries
+  // and ticket ages on the node's clock, both from `context.time()`.
+  DistributedStore(dannan::Context& context, Stores stores, DistributedStoreOptions options = {});
   ~DistributedStore();
   DistributedStore(const DistributedStore&) = delete;
   DistributedStore& operator=(const DistributedStore&) = delete;

@@ -471,15 +471,15 @@ struct DistributedStore::RepairState {
   }
 };
 
-DistributedStore::DistributedStore(dannan::Context& context, boost::asio::any_io_executor executor, Stores stores, DistributedStoreOptions options)
+DistributedStore::DistributedStore(dannan::Context& context, Stores stores, DistributedStoreOptions options)
     : _context(context),
-      _executor(std::move(executor)),
+      _executor(context.time().executor()),
       _data(stores.data),
       _control(stores.control),
       _cache(stores.cache),
       _claims(stores.claims),
       _options(options),
-      _time(options.time ? *options.time : dannan::contract::steady_time_source()),
+      _time(context.time().source()),
       _self(context.identity().id()),
       _logger(context.logger("dagda.store")),
       _storage_event(context.events().kind("storage")),

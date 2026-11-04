@@ -390,9 +390,8 @@ inline void ClusterNode::start() {
     });
   auto store_options = _options.store;
   store_options.admission_wait = _options.admission_wait;
-  _store =
-      std::make_unique<store::DistributedStore>(context, _cluster.io().context.get_executor(),
-                                                store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get()}, store_options);
+  _store = std::make_unique<store::DistributedStore>(context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get()},
+                                                     store_options);
   _availability = std::make_unique<store::AvailabilityService>(context, *_ledger, _options.availability);
   auto repair = _options.repair;
   repair.extent_size = _options.store.extent_size;

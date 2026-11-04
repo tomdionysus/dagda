@@ -39,8 +39,6 @@ struct AvailabilityOptions {
   // ceiling; an answer clears it.
   std::chrono::milliseconds retry_floor{1000};
   std::chrono::milliseconds retry_ceiling{300000};
-  // The clock surveys are paced on; null is the steady clock.
-  const dannan::contract::TimeSource* time = nullptr;
 };
 
 // One survey's result: immutable once published.
@@ -119,7 +117,9 @@ class AvailabilityService {
   dannan::contract::Clock::duration _retry_backoff{};
   std::optional<dannan::contract::TimePoint> _retry_at;
   std::optional<dannan::contract::TimePoint> _due;
-  uint64_t _surveyed_topology = 0;
+  // NodeEvents::membership at the last survey: joins, leaves, place,
+  // capabilities, path class and incarnation, never an advert.
+  uint64_t _surveyed_membership = 0;
   // Each extent-hosting peer and the storage it advertised.
   std::vector<std::pair<dannan::identity::NodeId, uint64_t>> _surveyed_peers;
 };
