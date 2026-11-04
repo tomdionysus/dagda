@@ -84,6 +84,10 @@ void HeldLedger::flush() {
   Lock flushing(_flush_mutex);
   // Unseeded, nothing reads the record: changes stay queued for the seed.
   if (!seeded()) return;
+  install_queued();
+}
+
+void HeldLedger::install_queued() {
   std::vector<ObjectTrie::Change> changes;
   {
     Lock lock(_queue_mutex);
@@ -125,11 +129,15 @@ void HeldLedger::seed(const std::function<std::vector<ObjectId>()>& snapshot) {
   dannan::identity::durable_replace_file(_dir / "seeded", "1\n");
   {
     // Under the flush lock, so a flush either left everything queued or
-    // applies it over the seed.
+    // applies it over the seed. What was queued during the build is
+    // installed before the record is marked seeded: a reader that finds it
+    // seeded finds every change a returned write made (Macha marked it
+    // seeded first and installed after, so has() could miss a returned put
+    // in between).
     Lock flushing(_flush_mutex);
+    install_queued();
     _seeded.store(true, std::memory_order_release);
   }
-  flush();
 }
 
 HeldLedger::View HeldLedger::view() const {

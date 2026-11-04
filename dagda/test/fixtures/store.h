@@ -16,16 +16,21 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "dagda/store/durability_domain.h"
+#include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/local_store_files.h"
+#include "dagda/store/storage_pool.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/identity/node_id.h"
 #include "dannan/status/observation.h"
 #include "dannan/supervise/startup.h"
 #include "dannan/supervise/supervised.h"
@@ -106,7 +111,46 @@ struct StoreBed {
                                           store::LocalStoreFiles& files = store::posix_local_store_files()) {
     return std::make_unique<store::LocalStore>(root, options, key, services(), mode, std::move(domain), files);
   }
+
+  // A pool's services: its domains' windows on `time` (the steady clock
+  // unless a test steps them).
+  store::LocalStore::Services pool_services(const dannan::contract::TimeSource& on = dannan::contract::steady_time_source()) {
+    return {threads, observations, progress, dannan::status::ScopedLogger(sink, "pool"), on, wall};
+  }
+  // A pool of loose objects only, as Macha's StoragePool constructor makes by
+  // default; its own node and process epoch unless given.
+  std::unique_ptr<store::StoragePool> pool(const std::filesystem::path& state, std::vector<store::StorageBackendOptions> backends,
+                                           std::chrono::milliseconds window = std::chrono::milliseconds(500),
+                                           dannan::identity::NodeId node = dannan::identity::NodeId::random(),
+                                           const dannan::contract::TimeSource& on = dannan::contract::steady_time_source()) {
+    store::StoragePoolOptions options;
+    options.backends = std::move(backends);
+    options.durability_batch_window = window;
+    options.pack_threshold = 0;
+    options.pack_target_size = 0;
+    return std::make_unique<store::StoragePool>(state, node, dannan::identity::NodeId::random(), options, key, pool_services(on));
+  }
 };
+
+// Where Macha's loose layout keeps an object under a store's root.
+inline std::filesystem::path object_path(const std::filesystem::path& root, const store::ObjectId& id) {
+  return store::local_format::loose_path(root / "objects", id);
+}
+
+// Flips the last byte of a loose object, as Macha's tests corrupt one.
+inline void corrupt_object(const std::filesystem::path& root, const store::ObjectId& id) {
+  std::fstream file(object_path(root, id), std::ios::in | std::ios::out | std::ios::binary);
+  ASSERT_TRUE(file.good());
+  file.seekg(-1, std::ios::end);
+  char byte{};
+  file.read(&byte, 1);
+  ASSERT_TRUE(file.good());
+  byte = static_cast<char>(byte ^ 0x5a);
+  file.seekp(-1, std::ios::end);
+  file.write(&byte, 1);
+  file.flush();
+  ASSERT_TRUE(file.good());
+}
 
 // A batchable barrier on stepped time: the window ends because the test
 // moves time on, never by waiting. Moving it on more than once is harmless.

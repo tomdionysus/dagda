@@ -88,6 +88,30 @@ struct LocalStoreOptions {
   }
 };
 
+// The node's one ledger cache, divided among the ledgers as Macha divides
+// storage.ledger_cache (cluster/local_state.cpp:29-50): three eighths to the
+// claims (both classes), a quarter to the namespace's reference counts, a
+// sixteenth to the control store's held ledger, the rest to the DATA
+// backends', which share it equally.
+enum class LedgerShare : uint8_t { data_held, control_held, claims, references };
+inline constexpr uint64_t default_ledger_cache_bytes = 64ULL * 1024 * 1024;
+constexpr uint64_t ledger_cache_share(uint64_t total, LedgerShare share) noexcept {
+  const auto claims = total / 8 * 3;
+  const auto references = total / 4;
+  const auto control_held = total / 16;
+  switch (share) {
+    case LedgerShare::claims:
+      return claims;
+    case LedgerShare::references:
+      return references;
+    case LedgerShare::control_held:
+      return control_held;
+    case LedgerShare::data_held:
+      break;
+  }
+  return total - claims - references - control_held;
+}
+
 struct LocalStoreDiagnostics {
   uint64_t loose_reaffirmation_fast_paths = 0;
   uint64_t loose_reaffirmation_full_validations = 0;
@@ -276,7 +300,11 @@ class LocalStore final : public contract::ObjectStore {
   void flush_ledger() const;
   void seed_ledger();
   void start_scan();
+  // The scan has failed: set, and its waiters woken, under _mutex.
+  void mark_scan_failed() DANNAN_EXCLUDES(_mutex);
   void wait_for_accounting(dannan::contract::Lock&) const DANNAN_REQUIRES(_mutex);
+  // wait_for_accounting with no object's lock held. Waits on the scan.
+  void await_accounting() const DANNAN_EXCLUDES(_mutex);
   bool wait_for_accounting(dannan::contract::Lock&, std::stop_token, bool exact = false) const DANNAN_REQUIRES(_mutex);
   bool restore_accounting(bool* clean);
   void persist_accounting(uint64_t used, uint8_t operation, const ObjectId&, uint64_t size, bool durable);

@@ -231,19 +231,26 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
   _presence_thread = std::jthread([this](std::stop_token stop) { _threads.once("local-store-presence", [this, stop] { warm_presence_index(stop); }); });
 }
 
+void LocalStore::mark_scan_failed() {
+  {
+    // As the scan's completion: under the mutex the waiters check it under.
+    Lock lock(_mutex);
+    _scan_failed.store(true, std::memory_order_release);
+  }
+  _accounting_cv.notify_all();
+}
+
 void LocalStore::start_scan() {
   _scan_thread = std::jthread([this](std::stop_token stop) {
     _threads.once("local-store-scan", [this, stop] {
       try {
         scan(stop);
       } catch (const std::exception& error) {
-        _scan_failed.store(true, std::memory_order_release);
-        _accounting_cv.notify_all();
+        mark_scan_failed();
         _logger.warn("storage accounting scan failed path=" + _root.string() + " error=" + error.what());
         throw;
       } catch (...) {
-        _scan_failed.store(true, std::memory_order_release);
-        _accounting_cv.notify_all();
+        mark_scan_failed();
         _logger.warn("storage accounting scan failed path=" + _root.string() + " error=<unknown>");
         throw;
       }
@@ -816,6 +823,7 @@ bool LocalStore::put_packed_locked(const ObjectId& id, std::span<const uint8_t> 
 
 bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, WriteDurability durability, uint64_t* deferred_generation) {
   if (object_id(data) != id) throw std::runtime_error("object hash mismatch");
+  await_accounting();
   ObjectLock object_guard(_object_locks.mutex(id));
   Lock lock(_mutex);
   wait_for_accounting(lock);
@@ -1091,6 +1099,7 @@ uint64_t LocalStore::durability_domain_id() const noexcept { return _durability_
 
 bool LocalStore::remove(const ObjectId& id) {
   bool removed = false;
+  await_accounting();
   {
     ObjectLock object_guard(_object_locks.mutex(id));
     Lock lock(_mutex);
@@ -1102,6 +1111,7 @@ bool LocalStore::remove(const ObjectId& id) {
 }
 
 bool LocalStore::remove_if_older_than(const ObjectId& id, std::chrono::milliseconds age) {
+  await_accounting();
   const bool removed = [&] {
     ObjectLock object_guard(_object_locks.mutex(id));
     Lock lock(_mutex);
@@ -1427,6 +1437,14 @@ bool LocalStore::compact_packs(std::stop_token stop) {
 
 void LocalStore::wait_for_accounting(Lock& lock) const { (void)wait_for_accounting(lock, {}); }
 
+void LocalStore::await_accounting() const {
+  // Before the object's lock, never under it: the scan takes object locks as
+  // it walks, so a writer waiting for the scan while holding one (as Macha's
+  // put and remove do) waits for ever once the scan reaches that object.
+  Lock lock(_mutex);
+  wait_for_accounting(lock);
+}
+
 bool LocalStore::wait_for_accounting(Lock& lock, std::stop_token stop, bool exact) const {
   // Ordinary puts and removes go on with a checkpoint's estimate; only a
   // caller that needs the reconciled figure (compaction) waits for the walk.
@@ -1599,8 +1617,7 @@ void LocalStore::scan(std::stop_token stop) {
     if (error) break;
   }
   if (error) {
-    _scan_failed.store(true, std::memory_order_release);
-    _accounting_cv.notify_all();
+    mark_scan_failed();
     _logger.warn("storage accounting scan failed path=" + _root.string() + " error=" + error.message());
     return;
   }
@@ -1611,8 +1628,7 @@ void LocalStore::scan(std::stop_token stop) {
       Lock lock(_mutex);
       _last_mutation_generation = std::max(_last_mutation_generation, baseline);
     } catch (const std::exception& ex) {
-      _scan_failed.store(true, std::memory_order_release);
-      _accounting_cv.notify_all();
+      mark_scan_failed();
       _logger.warn("storage accounting baseline durability failed path=" + _root.string() + " error=" + ex.what());
       return;
     }
@@ -1647,8 +1663,11 @@ void LocalStore::scan(std::stop_token stop) {
       _accounting_state_cv.notify_all();
       if (failure) std::rethrow_exception(failure);
     }
+    // Under the mutex a waiter checks it under, or the wake can fall between
+    // a waiter's check and its sleep and be lost (Macha sets and notifies
+    // outside it, so a put could wait for ever on a finished scan).
+    _scan_complete.store(true, std::memory_order_release);
   }
-  _scan_complete.store(true, std::memory_order_release);
   _accounting_cv.notify_all();
   flush_ledger();
   _logger.debug("storage accounting scan complete path=" + _root.string() + " used=" + std::to_string(total));
