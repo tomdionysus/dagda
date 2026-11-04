@@ -16,6 +16,12 @@
 #include "dannan/net/codec.h"
 
 namespace dagda::ledger {
+// The checkpoint forms Macha read once, before the tries held the claims:
+// reserved names, never read here.
+bool retention_holds_unmoved_checkpoint(const std::filesystem::path& root) {
+  return std::filesystem::exists(root / "claims.current") || std::filesystem::exists(root / "claims.meta");
+}
+
 namespace {
 
 using dannan::contract::Lock;
@@ -33,12 +39,6 @@ constexpr uint64_t checkpoint_journal_bytes = 4ULL * 1024 * 1024;
 constexpr size_t scan_page = 256;
 
 bool valid_class(uint8_t value) { return value == static_cast<uint8_t>(RetentionClass::data) || value == static_cast<uint8_t>(RetentionClass::control); }
-
-// The checkpoint forms Macha read once, before the tries held the claims:
-// reserved names, never read here.
-bool holds_an_unmoved_checkpoint(const std::filesystem::path& root) {
-  return std::filesystem::exists(root / "claims.current") || std::filesystem::exists(root / "claims.meta");
-}
 
 void remove_reserved_checkpoint_files(const std::filesystem::path& root, const dannan::status::ScopedLogger& logger) {
   std::error_code error;
@@ -301,7 +301,7 @@ void RetentionStore::load_journal_locked() {
 void RetentionStore::load(size_t cache_bytes) {
   Lock lock(_mutex);
   const bool marked = std::filesystem::exists(_root / "ledger");
-  if (!marked && holds_an_unmoved_checkpoint(_root))
+  if (!marked && retention_holds_unmoved_checkpoint(_root))
     throw std::runtime_error("retention claims at " + _root.string() +
                              " are in a checkpoint from before the claims ledger (claims.meta or claims.current), which Dagda does not read");
   ObjectTrie::Options data_options;

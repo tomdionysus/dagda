@@ -217,61 +217,79 @@ void count(Ledger outcome, MigrationReport& report) {
   }
 }
 
-bool is_trie_dir(const std::filesystem::path& dir) { return std::filesystem::exists(dir / "root") || std::filesystem::exists(dir / "journal.log"); }
-
-bool under(const std::filesystem::path& path, const std::filesystem::path& root) {
-  const auto p = path.lexically_normal();
-  const auto r = root.lexically_normal();
-  auto pi = p.begin();
-  for (auto ri = r.begin(); ri != r.end(); ++ri, ++pi)
-    if (pi == p.end() || *pi != *ri) return false;
-  return true;
-}
-
-void migrate_ledgers(const std::filesystem::path& state, const std::vector<std::filesystem::path>& skip, std::shared_ptr<const domain::StorageKey> from,
-                     std::shared_ptr<const domain::StorageKey> to, MigrationReport& report, const MigrationOptions& options) {
+// The ledgers, by the names the store gives them, as Macha's does. Nothing
+// else under the state is read: metadata/ holds a journal.log and is not a
+// trie, and the rest of a Macha state is not the store's.
+struct KnownLedgers {
   std::vector<std::filesystem::path> tries;
   std::vector<std::filesystem::path> journals;
   std::vector<std::filesystem::path> sightings;
+};
+
+KnownLedgers known_ledgers(const std::filesystem::path& state) {
+  KnownLedgers out;
   std::error_code ec;
-  for (auto it = std::filesystem::recursive_directory_iterator(state, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-    const auto& path = it->path();
-    if (std::any_of(skip.begin(), skip.end(), [&](const auto& s) { return under(path, s); })) {
-      it.disable_recursion_pending();
-      continue;
-    }
-    if (it->is_directory()) {
-      if (is_trie_dir(path)) {
-        tries.push_back(path);
-        it.disable_recursion_pending();
-      }
-      continue;
-    }
-    if (path.filename() == "claims.log") journals.push_back(path);
-    if (path.parent_path().filename() == "retention" && path.filename().string().starts_with("unreferenced-") && path.extension() == ".bin")
-      sightings.push_back(path);
+  const auto keep = [&](std::vector<std::filesystem::path>& into, const std::filesystem::path& path) {
+    if (std::filesystem::exists(path, ec)) into.push_back(path);
+  };
+  const auto ledger = state / "ledger";
+  const auto retention = state / "retention";
+  keep(out.tries, ledger / "control");
+  if (std::filesystem::is_directory(ledger, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(ledger, ec))
+      if (entry.is_directory() && entry.path().filename().string().starts_with("data-")) out.tries.push_back(entry.path());
+    if (ec) throw std::runtime_error("cannot list " + ledger.string() + ": " + ec.message());
   }
-  if (ec) throw std::runtime_error("cannot walk " + state.string() + ": " + ec.message());
-  std::sort(tries.begin(), tries.end());
-  std::sort(journals.begin(), journals.end());
-  for (const auto& path : journals) {
+  keep(out.tries, ledger / "referenced" / "extents");
+  keep(out.tries, ledger / "referenced" / "nodes");
+  keep(out.tries, retention / "ledger-data");
+  keep(out.tries, retention / "ledger-control");
+  keep(out.journals, retention / "claims.log");
+  keep(out.sightings, retention / "unreferenced-data.bin");
+  keep(out.sightings, retention / "unreferenced-control.bin");
+  std::sort(out.tries.begin(), out.tries.end());
+  return out;
+}
+
+void migrate_ledgers(const std::filesystem::path& state, std::shared_ptr<const domain::StorageKey> from, std::shared_ptr<const domain::StorageKey> to,
+                     MigrationReport& report, const MigrationOptions& options) {
+  const auto ledgers = known_ledgers(state);
+  for (const auto& path : ledgers.journals) {
     const auto outcome = migrate_journal(path, ledger::retention_format::journal_aad, *from, *to, report, options);
     count(outcome, report);
     say(options, "ledger " + path.string() + ": " + (outcome == Ledger::migrated ? "re-sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
     if (outcome == Ledger::migrated) step(options, report);
   }
-  std::sort(sightings.begin(), sightings.end());
-  for (const auto& path : sightings) {
+  for (const auto& path : ledgers.sightings) {
     const auto outcome = migrate_sightings(path, *to, report, options);
     count(outcome, report);
     say(options, "ledger " + path.string() + ": " + (outcome == Ledger::migrated ? "sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
     if (outcome == Ledger::migrated) step(options, report);
   }
-  for (const auto& dir : tries) {
+  for (const auto& dir : ledgers.tries) {
     const auto outcome = migrate_trie(dir, from, to, report, options);
     count(outcome, report);
     say(options, "ledger " + dir.string() + ": " + (outcome == Ledger::migrated ? "re-sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
     if (outcome == Ledger::migrated) step(options, report);
+  }
+}
+
+// What RetentionStore would refuse to open once migrated, refused while
+// nothing has been written. An unmarked trie with records is its "hold claims
+// but no ledger marker"; a probe cannot tell an empty trie, so an unmarked
+// one that has been written to refuses too and the operator decides.
+void check_retention(const std::filesystem::path& state, const domain::StorageKey& from, const domain::StorageKey& to) {
+  const auto root = state / "retention";
+  std::error_code ec;
+  if (std::filesystem::exists(root / "ledger", ec)) return;
+  if (ledger::retention_holds_unmoved_checkpoint(root))
+    throw MigrationRefused("retention claims at " + root.string() +
+                           " are in a checkpoint from before the claims ledger (claims.meta or claims.current), which Dagda does not read");
+  for (const auto* name : {"ledger-data", "ledger-control"}) {
+    const auto dir = root / name;
+    if (!std::filesystem::exists(dir, ec)) continue;
+    if (ledger::ObjectTrie::probe(dir, to).has_value() || ledger::ObjectTrie::probe(dir, from).has_value())
+      throw MigrationRefused("retention claims at " + root.string() + " hold claims but no ledger marker; Dagda will not rebuild them empty");
   }
 }
 
@@ -290,7 +308,10 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
     if (ec) throw std::runtime_error("cannot walk " + objects.string() + ": " + ec.message());
   }
   std::sort(loose.begin(), loose.end());
-  for (const auto& [file, id] : loose) migrate_loose_file(file, id, key, to, report, proved, options);
+  for (const auto& [file, id] : loose) {
+    if (options.probe_only && proved) return;
+    migrate_loose_file(file, id, key, to, report, proved, options);
+  }
 
   const auto packs = root / "packs";
   std::vector<std::pair<uint64_t, std::filesystem::path>> files;
@@ -302,7 +323,10 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
     if (ec) throw std::runtime_error("cannot list " + packs.string() + ": " + ec.message());
   }
   std::sort(files.begin(), files.end());
-  for (const auto& [sequence, pack] : files) migrate_pack_file(pack, key, to, report, proved, options);
+  for (const auto& [sequence, pack] : files) {
+    if (options.probe_only && proved) return;
+    migrate_pack_file(pack, key, to, report, proved, options);
+  }
 }
 
 // ---- markers ------------------------------------------------------------------
@@ -440,6 +464,7 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
         step(options, report);
       }
     }
+    if (options.probe_only && proved) return;
     offset += total;
   }
   (void)written;
@@ -525,9 +550,32 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   const auto domain_key = std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_v1(cluster));
   const auto node_local = std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_node_local(custody));
 
+  // Every refusal before the first write: the node id, the key, what the
+  // store would refuse to open, and every ledger.
+  if (options.node) {
+    for (const auto& backend : found) {
+      if (backend.v18 && backend.v18->node != *options.node)
+        throw MigrationRefused("backend " + backend.path.string() + " belongs to node " + dannan::identity::to_string(backend.v18->node) +
+                               " but this node is " + dannan::identity::to_string(*options.node) +
+                               ": the node would refuse the disk. Run with the --node-state whose node-id is the one Macha's state holds");
+    }
+  }
+  bool proved = false;
+  {
+    MigrationOptions quiet;
+    quiet.dry_run = true;
+    MigrationReport scratch;
+    MigrationOptions probe = quiet;
+    probe.probe_only = true;
+    for (const auto& backend : found) migrate_objects(backend.path, *domain_key, to, scratch, proved, probe);
+    if (have_control) migrate_objects(control, *domain_key, to, scratch, proved, probe);
+    if (have_cache) migrate_objects(options.cache, *domain_key, to, scratch, proved, probe);
+    check_retention(state, *domain_key, *node_local);
+    migrate_ledgers(state, domain_key, node_local, scratch, quiet);
+  }
+
   // Objects first: a backend, the control store and the cache are each a
   // tree of loose files and packs.
-  bool proved = false;
   for (const auto& backend : found) {
     say(options, "backend " + backend.path.string());
     migrate_objects(backend.path, *domain_key, to, report, proved, options);
@@ -541,12 +589,9 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     migrate_objects(options.cache, *domain_key, to, report, proved, options);
   }
 
-  // Then every ledger under the state: the held tries, the claims and
-  // their tries, the reference counts.
-  std::vector<std::filesystem::path> skip{state / "backend-identities", control};
-  if (have_cache) skip.push_back(options.cache);
-  for (const auto& backend : found) skip.push_back(backend.path);
-  migrate_ledgers(state, skip, domain_key, node_local, report, options);
+  // Then every ledger: the held tries, the claims and their tries, the
+  // reference counts.
+  migrate_ledgers(state, domain_key, node_local, report, options);
 
   // Markers last: the backends', their mirrors, then the state's.
   const auto rewrite = [&](const std::filesystem::path& path, const std::string& text) {

@@ -37,6 +37,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "dagda/ledger/held_ledger.h"
@@ -169,6 +170,8 @@ struct V18State {
     std::filesystem::create_directories(root);
     (void)cluster_key_from(cluster_key_file);
     (void)dannan::identity::KeyCustody::create(node_state, custody_source());
+    // The id the disks carry, in Dannan's file, as the operator arranges it.
+    std::ofstream(node_state / "node-id") << dannan::identity::to_string(node) << "\n";
     const auto& key = *bed.key;
     legacy::write_state_layout_v18(state);
     legacy::write_backend_marker_v18(state, backend, node, token);
@@ -231,7 +234,7 @@ struct V18State {
     }
     // Reference counts at a root.
     {
-      ledger::ReferenceCounts counts(state / "references", bed.key, 1 << 20, test::quiet_logger());
+      ledger::ReferenceCounts counts(state / "ledger" / "referenced", bed.key, 1 << 20, test::quiet_logger());
       references_root = control_objects[0].first;
       counts.reset(references_root, {loose[1].first, loose[1].first, packed[1].first}, {control_objects[1].first}, {7, 3});
     }
@@ -332,7 +335,7 @@ void expect_v19_opens(StoreBed& bed, const V18State& v18) {
     EXPECT_EQ(claims.claim_objects(contract::RetentionClass::control), 1u);
   }
   {
-    ledger::ReferenceCounts counts(v18.state / "references", node_local, 1 << 20, test::quiet_logger());
+    ledger::ReferenceCounts counts(v18.state / "ledger" / "referenced", node_local, 1 << 20, test::quiet_logger());
     EXPECT_EQ(counts.root(), std::optional<ObjectId>(v18.references_root));
     EXPECT_EQ(counts.totals().entries, 7u);
     EXPECT_EQ(counts.totals().extent_count, 3u);
@@ -566,6 +569,90 @@ TEST(MigrateState, ThePlainSightingsFilesAreSealed) {
   expect_v19_opens(bed, v18);
 }
 
+// A real Macha state directory holds more than the store's ledgers:
+// metadata/ has a journal.log and is not a trie, and it, the repair position
+// and the last survey are not the migration's to read. Left byte for byte, in
+// a dry run and a real one.
+TEST(MigrateState, WhatIsNotAKnownLedgerIsLeftAlone) {
+  StoreBed bed;
+  V18State v18(bed);
+  const std::vector<std::filesystem::path> others{v18.state / "metadata" / "journal.log", v18.state / "metadata" / "checkpoint.meta",
+                                                  v18.state / "metadata" / "root", v18.state / "repair" / "push-position",
+                                                  v18.state / "availability" / "last-survey.bin"};
+  for (const auto& path : others) legacy::write_file(path, bytes_of("not a ledger: " + path.filename().string()));
+  const auto unchanged = [&] {
+    for (const auto& path : others) EXPECT_EQ(read_text(path), "not a ledger: " + path.filename().string());
+  };
+  MigrationOptions dry;
+  dry.dry_run = true;
+  EXPECT_EQ(v18.migrate(dry).ledgers_migrated, 7u);
+  unchanged();
+  EXPECT_EQ(v18.migrate().ledgers_migrated, 7u);
+  unchanged();
+  expect_v19_opens(bed, v18);
+}
+
+// What the store would refuse to open once migrated is refused before the
+// migration writes: a checkpoint from before the claims ledger, or tries
+// holding claims, with no ledger marker (RetentionStore's own rule).
+TEST(MigrateState, RetentionTheStoreWouldRefuseIsRefusedBeforeAnyWrite) {
+  const auto expect_refused = [](V18State& v18, std::string_view why) {
+    const auto before = v18.digest();
+    try {
+      (void)v18.migrate();
+      ADD_FAILURE() << "not refused";
+    } catch (const MigrationRefused& error) {
+      EXPECT_NE(std::string(error.what()).find(why), std::string::npos) << error.what();
+    }
+    EXPECT_EQ(v18.digest(), before);
+  };
+  {
+    StoreBed bed;
+    V18State v18(bed);
+    std::filesystem::remove(v18.state / "retention" / "ledger");
+    legacy::write_file(v18.state / "retention" / "claims.meta", bytes_of("MRTS0001"));
+    expect_refused(v18, "checkpoint");
+  }
+  {
+    StoreBed bed;
+    V18State v18(bed);
+    std::filesystem::remove(v18.state / "retention" / "ledger");
+    expect_refused(v18, "no ledger marker");
+  }
+  {
+    // With the marker, the reserved names are the store's to remove at open.
+    StoreBed bed;
+    V18State v18(bed);
+    legacy::write_file(v18.state / "retention" / "claims.meta", bytes_of("MRTS0001"));
+    EXPECT_EQ(v18.migrate().ledgers_migrated, 7u);
+    expect_v19_opens(bed, v18);
+  }
+}
+
+// A migrated marker keeps the node id it was written with, and the pool
+// refuses another node's disk: an id that differs is refused here, before any
+// write, not by the node that later cannot open the disk.
+TEST(MigrateState, ABackendOfAnotherNodeIdIsRefusedBeforeAnyWrite) {
+  StoreBed bed;
+  V18State v18(bed);
+  const auto before = v18.digest();
+  MigrationOptions options;
+  options.node = filled(0x01);
+  try {
+    (void)v18.migrate(options);
+    ADD_FAILURE() << "not refused";
+  } catch (const MigrationRefused& error) {
+    const std::string why = error.what();
+    EXPECT_NE(why.find(dannan::identity::to_string(v18.node)), std::string::npos) << why;
+    EXPECT_NE(why.find(dannan::identity::to_string(filled(0x01))), std::string::npos) << why;
+    EXPECT_NE(why.find("node-id"), std::string::npos) << why;
+  }
+  EXPECT_EQ(v18.digest(), before);
+  options.node = v18.node;
+  EXPECT_EQ(v18.migrate(options).loose_migrated, 8u);
+  expect_v19_opens(bed, v18);
+}
+
 // A dry run classifies and counts as a run would and writes nothing.
 TEST(MigrateState, ADryRunWritesNothing) {
   StoreBed bed;
@@ -645,32 +732,37 @@ TEST(MigrateState, AWrongKeyAndAnUnrecognisedDiskAreRefusedBeforeAnyWrite) {
 }
 
 // A ledger that opens under neither key (another node's, or damaged) is
-// refused, naming it; the objects before it are migrated, which a second
-// run skips, and the markers are not touched, so the state is still v18.
+// refused, naming it, before any write: the objects are checked after the
+// ledgers are, so nothing on the disk has moved. Once it is dealt with a run
+// migrates everything. A trie under a name the store does not give a ledger is
+// not the migration's business.
 TEST(MigrateState, ALedgerUnderNeitherKeyIsRefusedAndTheStateStaysV18) {
   StoreBed bed;
   V18State v18(bed);
-  // A stranger's trie under the state.
-  {
-    ledger::ObjectTrie stranger(v18.state / "ledger" / "stranger", test::key_of(0x77), {}, test::quiet_logger());
+  const auto stranger_at = [&](const std::filesystem::path& dir) {
+    ledger::ObjectTrie stranger(dir, test::key_of(0x77), {}, test::quiet_logger());
     stranger.apply(std::vector<ledger::ObjectTrie::Change>{{v18.known, Bytes{1}}});
     stranger.checkpoint();
-  }
+  };
+  stranger_at(v18.state / "ledger" / "data-stranger");
+  stranger_at(v18.state / "ledger" / "stranger");
+  const auto before = v18.digest();
   std::string why;
   try {
     (void)v18.migrate();
   } catch (const MigrationRefused& error) {
     why = error.what();
   }
-  EXPECT_NE(why.find("ledger/stranger"), std::string::npos) << why;
+  EXPECT_NE(why.find("ledger/data-stranger"), std::string::npos) << why;
   EXPECT_NE(why.find("neither the node-local key nor the domain key"), std::string::npos) << why;
+  EXPECT_EQ(v18.digest(), before);
   EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
   EXPECT_EQ(read_text(v18.backend / ".macha.backend"), legacy::backend_marker_v18(v18.node, v18.token));
-  EXPECT_EQ(hex(legacy::read_file(loose_path(v18.backend / "objects", v18.known))), loose_v19_hex);
-  std::filesystem::remove_all(v18.state / "ledger" / "stranger");
+  EXPECT_EQ(hex(legacy::read_file(loose_path(v18.backend / "objects", v18.known))), loose_v18_hex);
+  std::filesystem::remove_all(v18.state / "ledger" / "data-stranger");
   const auto report = v18.migrate();
-  EXPECT_EQ(report.loose_already, 8u);
-  EXPECT_EQ(report.pack_records_already, 5u);
+  EXPECT_EQ(report.loose_migrated, 8u);
+  EXPECT_EQ(report.pack_records_migrated, 5u);
   EXPECT_EQ(report.markers_rewritten, 3u);
   expect_v19_opens(bed, v18);
 }
@@ -838,6 +930,22 @@ TEST(MigrateTool, DagdaMigrateRunsTheMigration) {
     const auto [code, output] = run(wrong, "wrong.log");
     EXPECT_EQ(code, std::optional<int>(1));
     EXPECT_NE(read_text(bed.dir.path() / "wrong.log").find("wrong cluster key"), std::string::npos);
+    EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+  }
+  {
+    // --node-state must hold the id the disks carry, and is never given one.
+    const auto id_file = v18.node_state / "node-id";
+    const auto id_text = read_text(id_file);
+    std::filesystem::remove(id_file);
+    auto [code, output] = run(common, "no-id.log");
+    EXPECT_EQ(code, std::optional<int>(1));
+    EXPECT_NE(read_text(bed.dir.path() / "no-id.log").find("no node-id"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(id_file));
+    std::ofstream(id_file) << dannan::identity::to_string(filled(0x01)) << "\n";
+    std::tie(code, output) = run(common, "other-id.log");
+    EXPECT_EQ(code, std::optional<int>(1));
+    EXPECT_NE(read_text(bed.dir.path() / "other-id.log").find("belongs to node"), std::string::npos);
+    std::ofstream(id_file, std::ios::trunc) << id_text;
     EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
   }
   {

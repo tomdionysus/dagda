@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@
 #include "dagda/store/sealing.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/key_custody.h"
+#include "dannan/identity/node_id.h"
 
 // The migration of a node's layout v18 state and disks (Macha's) to layout
 // v19, in place (Tom, 2026-11-04 night: one layout, no backward
@@ -131,6 +133,14 @@ struct MigrationOptions {
   // Classify and count without writing: the report says what a run would
   // do, and the refusals are the same.
   bool dry_run = false;
+  // The id of the node that will open these disks (Dannan's node-id file).
+  // A marker keeps the id it was written with and a pool refuses another
+  // node's disk, so a v18 marker naming another is refused here, before any
+  // write. Nothing: not checked.
+  std::optional<dannan::identity::NodeId> node{};
+  // Stop at the first record that opens: the key proved and no more read.
+  // With dry_run, what a run does before its first write.
+  bool probe_only = false;
   // Progress, a line at a time; nothing: silent.
   std::function<void(std::string_view)> say{};
   // Called after every record, ledger and marker written, with the report
