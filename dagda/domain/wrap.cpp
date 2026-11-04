@@ -52,14 +52,7 @@ WrapKey WrapKey::from_private(Secret seed) {
   return WrapKey(Secret(std::move(clamped)));
 }
 
-WrapKey::WrapKey(Secret clamped) : _private(std::move(clamped)) {
-  // The public half is the private scalar times the base point: X25519 with
-  // the base point u = 9 as the peer's public key. Dannan offers no "public
-  // from private"; this is the same function.
-  std::array<uint8_t, 32> base{};
-  base[0] = 9;
-  _public = dannan::identity::x25519_shared(key_span(_private), base);
-}
+WrapKey::WrapKey(Secret clamped) : _private(std::move(clamped)) { _public = dannan::identity::x25519_public(key_span(_private)); }
 
 std::array<uint8_t, 32> WrapKey::shared(std::span<const uint8_t, 32> peer_public) const {
   return dannan::identity::x25519_shared(key_span(_private), peer_public);
