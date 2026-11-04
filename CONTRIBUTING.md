@@ -44,12 +44,23 @@ which discipline it follows.
 
 ## Building and testing
 
-Dagda builds against the sibling Dannan checkout until Dannan has an install
-target and a tag carrying its Context.
+Dagda links an installed Dannan of the pinned minor version
+(`find_package(dannan 0.2 CONFIG)`). Once per checkout, build the pinned tag
+from the sibling repository into `build/deps/` (this reads `../dannan` and
+writes nothing there):
 
 ```
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON \
-  -DDAGDA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="/opt/local/libexec/boost/1.88;/opt/local"
+git clone --branch 0.2.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.2.0
+cmake -S build/deps/dannan-0.2.0 -B build/deps/dannan-0.2.0-build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix -DCMAKE_PREFIX_PATH="/opt/local/libexec/boost/1.88;/opt/local"
+cmake --build build/deps/dannan-0.2.0-build -j8 && cmake --install build/deps/dannan-0.2.0-build
+```
+
+Then:
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
+  -DCMAKE_PREFIX_PATH="$PWD/build/deps/prefix;/opt/local/libexec/boost/1.88;/opt/local"
 cmake --build build -j8
 ./build/dagda_tests
 ```

@@ -89,10 +89,9 @@ never edited there), is generalised here, and swaps Macha's transport,
 crypto, durable files, logging and time for Dannan's as it arrives.
 Requirement ids (S1, L4, H20...) are the requirements document's.
 
-0. **Skeleton.** CMake in the shared layout; `dagda` links Dannan
-   (`find_package(dannan 0.2 CONFIG)` once 0.2.0 is cut, the sibling
-   checkout until then); `dagda_tests` (GoogleTest) on Dannan's fixtures;
-   version and `--version`. Gate: builds warnings-as-errors, one test.
+0. ~~**Skeleton.**~~ Done 2026-11-04 on `feature/skeleton`: links
+   Dannan 0.2.0 by `find_package`, `dagda_tests` 3 (`COMPLETED.md`).
+   `--version` arrives with Dagda's first tool.
 1. **Local store** (`store/`, `domain/` v1). `LocalStore`, loose files
    and packs, torn-tail truncation and compaction, `DurabilityDomain`
    generations and tickets, `StoragePool` over several backends with
