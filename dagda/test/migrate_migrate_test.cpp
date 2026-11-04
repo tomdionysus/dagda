@@ -653,6 +653,20 @@ TEST(MigrateState, ABackendOfAnotherNodeIdIsRefusedBeforeAnyWrite) {
   expect_v19_opens(bed, v18);
 }
 
+// On a disk of a million objects the operator sees it moving.
+TEST(MigrateState, ARunReportsItsProgressAndRate) {
+  StoreBed bed;
+  V18State v18(bed);
+  std::vector<std::string> said;
+  MigrationOptions options;
+  options.progress_every = 2;
+  options.say = [&](std::string_view line) { said.emplace_back(line); };
+  (void)v18.migrate(options);
+  const auto lines =
+      std::count_if(said.begin(), said.end(), [](const std::string& line) { return line.starts_with("progress: ") && line.ends_with(" MiB/s"); });
+  EXPECT_GE(lines, 4);
+}
+
 // A dry run classifies and counts as a run would and writes nothing.
 TEST(MigrateState, ADryRunWritesNothing) {
   StoreBed bed;
