@@ -18,12 +18,11 @@ add_executable(dagda_tests
   contract_gates_test.cpp
   contract_include_direction_test.cpp
   domain_storage_key_test.cpp
-  fixtures/torrent_request.cpp
+  lease_claimed_collection_test.cpp
   lease_fence_test.cpp
   lease_keeper_test.cpp
   lease_lease_test.cpp
   lease_membership_test.cpp
-  lease_torrent_request_test.cpp
   ledger_availability_test.cpp
   ledger_claim_walk_test.cpp
   ledger_collector_test.cpp

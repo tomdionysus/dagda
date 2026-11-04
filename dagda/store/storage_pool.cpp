@@ -404,7 +404,7 @@ bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
 }
 
 std::optional<DurabilityTicket> StoragePool::put_deferred(const ObjectId& id, std::span<const uint8_t> data) {
-  // The provisional write path: ingest and publication put every extent here.
+  // The provisional write path: a deferred write puts every extent here.
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
     std::filesystem::path path;

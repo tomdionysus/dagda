@@ -3,6 +3,45 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: ingest removed (`feature/leases`)
+
+The maintainer: "Dagda doesn't need ingest, that will be handled by macha. Remove
+all code from dagda that handles ingest."
+
+- The library had no ingest engine. What handled ingest was in the
+  tests: Macha's `TorrentRequest` and `TorrentOwner` (its torrent
+  coordinator through the lease template), `test/fixtures/torrent_request.{h,cpp}`,
+  and their 16 cases, `test/lease_torrent_request_test.cpp`. All three
+  files are deleted.
+- Those cases were also the only tests of `ClaimedCollection<Traits>`,
+  which stays (leases are not ingest). New:
+  `test/lease_claimed_collection_test.cpp`, 11 cases over a neutral task
+  record: the group-by-group join, the record and collection merge laws
+  with and without a base (concurrent duplicates included, since this
+  rule's loser stamp does not depend on the keeper), erasure against a
+  base, the duplicate rule, snapshot and delta round trips, the decode
+  bounds, the tombstone window, and the two findings (Waiting on the maintainer 5
+  and 6) carried over unchanged, disabled as before.
+- Not carried over, being Macha's and its gate at the port: Macha's
+  record bytes against known answers, its merged-set and DLT9 bytes, its
+  bounds by offset, the three-concurrent-adds finding (its keeper-
+  dependent loser stamp), the owner-driven cases (requests driven by
+  their owner, ranked takers, the lowest-member sweep).
+- `ContractIncludeDirection.TheLeaseLibraryNamesNoTorrent` is now
+  `TheLibraryNamesNoIngest`: no file under `dagda/` outside `test/`
+  names a torrent or ingest.
+- Kept, as general machinery Macha's ingest drives but does not own: the
+  `loader` work class (Dannan's `WorkClass`/`FrameType`), deferred writes
+  and their tickets, the DATA credit arbiter, the device reserve,
+  repair's pacing behind loader work. Three comments that used ingest or
+  import as the example now say bulk or deferred writes
+  (`store/storage_pool.cpp`, `store/data_work.cpp`,
+  `store/availability.cpp`).
+- Gate: `dagda_tests` 317 passing, 3 disabled (was 322 and 3: 14 enabled
+  and 2 disabled torrent cases out, 9 enabled and 2 disabled template
+  cases in). Each removed test is named in the list above; the drop is
+  The maintainer's instruction, not a regression.
+
 ## 2026-11-04: step 5, leases and the claimed collection (`feature/leases`)
 
 Branched from `feature/distributed-store` at `ce7617c`; step 4 (heads) is

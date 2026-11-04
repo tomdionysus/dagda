@@ -266,23 +266,22 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    window, the three-way merge with the base when held, the owner's
    duplicate rule, snapshot and delta sections with Macha's bounds),
    `LeaseTable`, `LeaseKeeper` over an injected `Membership`
-   (`RosterMembership` on Dannan's roster) and the epoch fence (new);
-   `TorrentRequest` as the first instance, in the tests, bytes identical
-   against known answers. Gate met but for what waits:
+   (`RosterMembership` on Dannan's roster) and the epoch fence (new).
+   The template is tested over a neutral task record
+   (`lease_claimed_collection_test.cpp`); Macha's torrent requests, the
+   first instance, were removed with all ingest (the maintainer, 2026-11-04, see
+   Decisions; `dagda_tests` 317 and 3 disabled). Gate met but for what
+   waits:
    - Step 4: `LeaseRecords` (`lease/keeper.h`) over a head space holding a
-     `LeaseTable`; Macha's head codec and merge calling the collection's
-     sections and merge at SM16/17/19 and DLT9; the snapshot case's
-     magics, whole-snapshot bytes and `conflicts_created`; the records
-     living in a head.
-   - The Macha session's fixture: the byte round trip against its
-     SM16/17/19 and DLT9 bytes, cut after the tree-native merge (the
-     known answers stand in until then).
-   - For the maintainer (the findings in `COMPLETED.md`): the sweep's unsigned
-     window, DLT9 accepting a request with no id, three concurrent
-     duplicates settling only at the next merge.
-   - At the port (8b): Macha's `merge_torrent_requests` is the
-     template's merge; its coordinator's takeover stays Macha's until
-     `acquire` has renew and release (requirements 5.4).
+     `LeaseTable`; the records living in a head.
+   - For the maintainer (the findings in `COMPLETED.md`): the template's unsigned
+     tombstone window and its delta accepting a record with no key
+     (Waiting on the maintainer 5 and 6).
+   - At the port (8b), Macha's: its torrent requests as an instance of
+     the template, their bytes against its SM16/17/19 and DLT9 sections,
+     its duplicate rule (three concurrent duplicates settle only at the
+     next merge), and its coordinator's takeover until `acquire` has renew
+     and release (requirements 5.4). Dagda holds none of it.
 6. **What Lugh and Lir need beyond Macha.** Domains in full (several,
    member and blind roles, keys wrapped to node certificates once Dannan
    step 10 has them, the domain in the AAD for new domains); node-local
@@ -303,7 +302,7 @@ Settled with it (the maintainer, 2026-11-04):
   is the moved tests passing in `dagda_tests`. Macha keeps its own copies
   until the port.
 - **Fixtures come from the Macha session** (a Macha state directory,
-  torrent-request bytes, `macha-metadata-dump` output): it produces them
+  `macha-metadata-dump` output): it produces them
   in its own way and tells Dagda where they are. The Dagda session never
   builds or runs Macha. **Order (the maintainer, to the Macha session, 2026-11-04):
   Macha's tree-native branch merges first, then the fixtures are cut
@@ -368,6 +367,13 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
   keep per-field-group clocks; repair is diff only; legacy checkpoint
   readers are dropped; the GC provider is `ReachabilityProvider`. Full
   text: requirements document, section 8, head.
+- (2026-11-04) **Ingest is Macha's**: "Dagda doesn't need ingest, that
+  will be handled by macha. Remove all code from dagda that handles
+  ingest." Dagda holds no ingest, torrent or import code, in the library
+  or its tests; `ContractIncludeDirection.TheLibraryNamesNoIngest`
+  keeps the library clear. The general machinery Macha's ingest drives
+  stays: the `loader` work class (Dannan's), deferred writes and their
+  tickets, the DATA credit arbiter and the device reserve.
 - **Do not modify `../macha` until told to.**
 
 From `../dannan/TODO/ACTIVE.md`, binding Dagda, not reopened without
@@ -413,17 +419,19 @@ Open, none blocking (each has a default that keeps Macha's behaviour):
    disks there (Dagda cannot tell which share a device today).
 5. **A tombstone stamped by a clock ahead** (step 5): Macha's sweep
    computes `now - removed > grace` on unsigned milliseconds
-   (`torrent_coordinator.cpp:1066-1068`), so a tombstone from a node
-   whose clock is ahead wraps and is erased at once, and a branch that
-   missed the removal can bring the request back. Proven in Dagda
-   (`DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow` fails when run).
+   (`torrent_coordinator.cpp:1066-1068`), and the template's `expired`
+   keeps it, so a tombstone from a node whose clock is ahead wraps and is
+   erased at once, and a branch that missed the removal can bring the
+   record back. Proven in Dagda (`LeaseClaimedCollection.
+   DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow` fails when run).
    Recommended: count a future stamp as fresh, in Dagda now and in Macha
    at the port (8b); it changes the answer only for a clock-ahead
    tombstone.
 6. **A delta adding a record with no id** (step 5): Macha's DLT9 decoder
    accepts it (`metadata.cpp:1735-1740`) where the snapshot decoder
-   refuses it (`:873`), so a head that applies it writes a snapshot it
-   cannot read back. Proven (`AnUnkeyedRecordFromADeltaPoisonsTheSnapshot`;
+   refuses it (`:873`), and the template's delta form keeps that, so a
+   head that applies it writes a snapshot it cannot read back. Proven
+   (`LeaseClaimedCollection.AnUnkeyedRecordFromADeltaPoisonsTheSnapshot`;
    `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses` fails when
    run). Recommended: refuse it in both; no valid bytes change.
 7. **Merging the step branches to `develop`.** Steps 1 to 3 and 5 are

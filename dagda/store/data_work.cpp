@@ -92,8 +92,8 @@ bool DataResourceArbiter::available_locked(FrameType frame, uint64_t bytes, bool
   if (foreground(frame)) return true;
   if (_waiting_foreground) return false;
   // Law 3: the loader yields to pressure only when a foreground user is
-  // present; a slow device nobody is reading from must not hold an import
-  // back. Speculative work yields to pressure alone. Presence is asked only
+  // present; a slow device nobody is reading from must not hold a bulk
+  // write back. Speculative work yields to pressure alone. Presence is asked only
   // under pressure, keeping the uncontended path cheap.
   if (_monitor && _monitor->pressured() && _lower_active >= _min_background_under_pressure) {
     const bool present = _waiting_foreground > 0 || _used_bytes > _lower_used_bytes || (_foreground_recently_active && _foreground_recently_active());
