@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <memory>
@@ -79,6 +80,31 @@ class ClaimLocks {
     Guard() = default;
     std::vector<std::unique_lock<std::mutex>> _held;
   };
+
+  // Ids a batch holds its stripes for at once. A claim's journal write is
+  // under them, and a batch may be a million ids.
+  static constexpr size_t batch_ids = 4096;
+
+  // Calls `step` on `ids` a sub-batch at a time, each under its stripes alone
+  // and in stripe order, so a large publication holds only part of the guard
+  // at a time and others get through between. Stops at the first step that
+  // returns false, and returns false; what earlier steps did stands, a claim
+  // being safe to have made and safe to make again.
+  template <typename Step>
+  bool in_batches(std::span<const ObjectId> ids, Step&& step, size_t batch = batch_ids) DANNAN_EXCLUDES(dannan::contract::no_io) {
+    std::vector<ObjectId> sorted(ids.begin(), ids.end());
+    std::sort(sorted.begin(), sorted.end(), [](const ObjectId& a, const ObjectId& b) {
+      const auto stripe_a = a.bytes[0] % stripes;
+      const auto stripe_b = b.bytes[0] % stripes;
+      return stripe_a != stripe_b ? stripe_a < stripe_b : a < b;
+    });
+    for (size_t begin = 0; begin < sorted.size(); begin += batch) {
+      const std::span<const ObjectId> part(sorted.data() + begin, std::min(batch, sorted.size() - begin));
+      const auto guard = lock(part);
+      if (!step(part)) return false;
+    }
+    return true;
+  }
 
   // Every stripe `ids` fall in, held until the guard goes.
   Guard lock(std::span<const ObjectId> ids) DANNAN_EXCLUDES(dannan::contract::no_io) {

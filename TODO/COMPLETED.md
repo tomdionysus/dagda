@@ -3,6 +3,20 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: M8 and M9, the claims guard and placement (`feature/port-respec`)
+
+M8: `ClaimLocks::in_batches` holds a batch's stripes 4096 ids at a time, in stripe
+order, for the server's and the local claim; a later part that is not present
+leaves the earlier claims standing, which is safe and retried idempotently. The
+control slot is now taken before the guard, never waited for under it. Macha's
+`test_retain_data_batches_a_large_publication_within_bounded_time` is moved.
+
+M9: `StorePlacementVectors` compares `data_order`, rendezvous and logical capacity
+with Macha's answers from `capacity_placement_nodes` at `5776392`: 1,352 orders,
+1,352 rendezvous, 26 capacities, all equal. The reference is Linux aarch64 and this
+ran on an Intel Mac; Apple Silicon's 53-bit `long double` has not been run. Gate:
+`dagda_tests` 414 passing, 1 disabled.
+
 ## 2026-11-04 night: M4, Macha's write forms (`feature/port-respec`)
 
 `put`, `put_deferred` and `put_here` are persisted when the caller names no level,

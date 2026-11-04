@@ -1876,18 +1876,18 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
     }
     // A claim says "this node holds the object": index presence, not a
     // read. The bytes were verified when put; scrub finds later corruption.
-    // Under the objects' claim guard, as the server's claim is.
-    std::optional<ClaimLocks::Guard> guard;
-    if (object_class == contract::RetentionClass::data) guard.emplace(_data.claim_locks().lock(ids));
-    for (const auto& id : ids) {
-      const bool present = object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id);
-      if (!present) return false;
-    }
-    // A claim's journal is control work: a control slot, never DATA credit.
+    // Under the objects' claim guard a sub-batch at a time, as the server's
+    // claim is. A claim's journal is control work: a control slot, never DATA
+    // credit, and none is waited for under the guard.
     const auto slot = admit_control();
     if (!slot) return false;
-    _claims.retain_batch(object_class, ids, dot);
-    return true;
+    const auto claim = [&](std::span<const ObjectId> part) {
+      for (const auto& id : part)
+        if (!(object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id))) return false;
+      _claims.retain_batch(object_class, std::vector<ObjectId>(part.begin(), part.end()), dot);
+      return true;
+    };
+    return object_class == contract::RetentionClass::data ? _data.claim_locks().in_batches(ids, claim) : claim(ids);
   }
   const auto outcome = _context.routes().call_and_wait(target, message::retain_objects, message::encode_retain({object_class, dot, ids, writer}),
                                                        FrameType::loader, _options.control_call);
