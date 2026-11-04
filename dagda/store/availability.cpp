@@ -145,7 +145,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   const bool must_ask = !_surveyed || topology != _surveyed_topology || !same_peers || shrank || retry;
   const bool missing = _surveyed && previous && (!previous->survey.unavailable.empty() || !previous->survey.unknown.empty());
   // What the inventory or this node's holdings changed, or a peer holding
-  // more while something is missing (a peer that is importing grows all
+  // more while something is missing (a peer taking bulk writes grows all
   // the time), waits for the duty share.
   const auto survey_due = _surveyed_at + _surveyed_cost * _options.share;
   const bool paced = changed || (grew && missing);

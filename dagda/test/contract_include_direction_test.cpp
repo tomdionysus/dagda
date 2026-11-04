@@ -121,26 +121,30 @@ TEST(ContractIncludeDirection, TheLedgerAndTheContractKnowNoOwnersTypes) {
   }();
 }
 
-// The lease templates are generic: Macha's torrent requests are their first
-// owner and live in the tests, so nothing under dagda/lease names a torrent,
-// in code or in comments.
-bool names_a_torrent(const std::string& source) {
-  static const std::regex torrent(R"(torrent)", std::regex::icase);
-  return std::regex_search(source, torrent);
+// Ingest is Macha's, not the store's (Tom, 2026-11-04: "Dagda doesn't need
+// ingest, that will be handled by macha"): nothing in the library names
+// ingest or a torrent, in code or in comments.
+bool names_ingest(const std::string& source) {
+  static const std::regex ingest(R"(torrent|ingest)", std::regex::icase);
+  return std::regex_search(source, ingest);
 }
 
-TEST(ContractIncludeDirection, TheLeaseLibraryNamesNoTorrent) {
-  EXPECT_TRUE(names_a_torrent("struct TorrentRequest;"));
-  EXPECT_TRUE(names_a_torrent("// a torrent's claim"));
-  EXPECT_FALSE(names_a_torrent("struct Lease;"));
+TEST(ContractIncludeDirection, TheLibraryNamesNoIngest) {
+  EXPECT_TRUE(names_ingest("struct TorrentRequest;"));
+  EXPECT_TRUE(names_ingest("// a torrent's claim"));
+  EXPECT_TRUE(names_ingest("std::string ingest_job_id;"));
+  EXPECT_FALSE(names_ingest("struct Lease;"));
   const std::filesystem::path root = DAGDA_SOURCE_DIR;
   size_t scanned = 0;
   std::vector<std::string> found;
-  for (const auto& entry : std::filesystem::directory_iterator(root / "dagda/lease")) {
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(root / "dagda")) {
+    if (!entry.is_regular_file()) continue;
+    const auto relative = std::filesystem::relative(entry.path(), root / "dagda");
+    if (*relative.begin() == "test") continue;
     ++scanned;
-    if (names_a_torrent(read(entry.path()))) found.push_back(entry.path().filename().string());
+    if (names_ingest(read(entry.path()))) found.push_back(relative.string());
   }
-  EXPECT_GE(scanned, 10u);
+  EXPECT_GE(scanned, 80u);
   EXPECT_TRUE(found.empty()) << [&] {
     std::string all;
     for (const auto& name : found) all += name + "\n";
