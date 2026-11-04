@@ -121,5 +121,32 @@ TEST(ContractIncludeDirection, TheLedgerAndTheContractKnowNoOwnersTypes) {
   }();
 }
 
+// The lease templates are generic: Macha's torrent requests are their first
+// owner and live in the tests, so nothing under dagda/lease names a torrent,
+// in code or in comments.
+bool names_a_torrent(const std::string& source) {
+  static const std::regex torrent(R"(torrent)", std::regex::icase);
+  return std::regex_search(source, torrent);
+}
+
+TEST(ContractIncludeDirection, TheLeaseLibraryNamesNoTorrent) {
+  EXPECT_TRUE(names_a_torrent("struct TorrentRequest;"));
+  EXPECT_TRUE(names_a_torrent("// a torrent's claim"));
+  EXPECT_FALSE(names_a_torrent("struct Lease;"));
+  const std::filesystem::path root = DAGDA_SOURCE_DIR;
+  size_t scanned = 0;
+  std::vector<std::string> found;
+  for (const auto& entry : std::filesystem::directory_iterator(root / "dagda/lease")) {
+    ++scanned;
+    if (names_a_torrent(read(entry.path()))) found.push_back(entry.path().filename().string());
+  }
+  EXPECT_GE(scanned, 10u);
+  EXPECT_TRUE(found.empty()) << [&] {
+    std::string all;
+    for (const auto& name : found) all += name + "\n";
+    return all;
+  }();
+}
+
 }  // namespace
 }  // namespace dagda

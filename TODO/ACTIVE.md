@@ -91,6 +91,14 @@ projects, with recommendations for the maintainer.
   `context.time().source()` / `context.time().executor()` (`7c1501e`),
   so the store takes its clock and executor from the Context instead of
   beside it.
+- On Dannan's `develop` (`1d61b3f`), untagged, Dagda's requests from 3b:
+  `sched::DutyShare` (`dannan/sched/duty_share.h`, `11b803e`) replaces
+  the file-local share in `store/repair.cpp` at the repin; and
+  `status::NodeEvents::membership` (`42a65f8`), a count that moves only on
+  joins, leaves, place, capabilities, path class or incarnation, never on
+  adverts: the survey re-asks on it instead of topology. Hosted event
+  kinds now number from `NodeEvents::dannan_kinds`; Dagda names kinds
+  through `events().kind(name)`.
 - `contract::Unlocked` (Dannan `35d14e0`, develop `b24db75`): a scoped
   unlock of a held `contract::Lock`, annotated. Dagda's file-local copy
   in `store/local_store.cpp` is replaced by it at the repin to 0.3.0.
@@ -244,11 +252,31 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    `test_namespace_tree`, `test_storage_metadata`, `test_absent_nodes`,
    the `rpc_cluster` metadata cases, `macha-metadata-dump` identical on
    a fixture, a `replicas: 3` space on five in-process nodes.
-5. **Leases** (`lease/`). The lease and the claimed-collection template,
-   field groups with their own clocks, the epoch fence (new: Macha never
-   checks it); `TorrentRequest` as the first instance, bytes identical.
-   Gate: the torrent-request cases and a byte round trip against an
-   SM16/17/19 and DLT9 fixture.
+5. ~~**Leases** (`lease/`)~~ Done 2026-11-04 on `feature/leases`
+   (`COMPLETED.md`; `dagda_tests` 322 and 3 disabled). The lease
+   (`Lease`, its order, join and bytes), the claimed-collection template
+   (`ClaimedCollection<Traits>`: field groups with their own clocks, a
+   dominating cancel, the lease, a max-wins tombstone with the owner's
+   window, the three-way merge with the base when held, the owner's
+   duplicate rule, snapshot and delta sections with Macha's bounds),
+   `LeaseTable`, `LeaseKeeper` over an injected `Membership`
+   (`RosterMembership` on Dannan's roster) and the epoch fence (new);
+   `TorrentRequest` as the first instance, in the tests, bytes identical
+   against known answers. Gate met but for what waits:
+   - Step 4: `LeaseRecords` (`lease/keeper.h`) over a head space holding a
+     `LeaseTable`; Macha's head codec and merge calling the collection's
+     sections and merge at SM16/17/19 and DLT9; the snapshot case's
+     magics, whole-snapshot bytes and `conflicts_created`; the records
+     living in a head.
+   - The Macha session's fixture: the byte round trip against its
+     SM16/17/19 and DLT9 bytes, cut after the tree-native merge (the
+     known answers stand in until then).
+   - For the maintainer (the findings in `COMPLETED.md`): the sweep's unsigned
+     window, DLT9 accepting a request with no id, three concurrent
+     duplicates settling only at the next merge.
+   - At the port (8b): Macha's `merge_torrent_requests` is the
+     template's merge; its coordinator's takeover stays Macha's until
+     `acquire` has renew and release (requirements 5.4).
 6. **What Lugh and Lir need beyond Macha.** Domains in full (several,
    member and blind roles, keys wrapped to node certificates once Dannan
    step 10 has them, the domain in the AAD for new domains); node-local
@@ -279,6 +307,18 @@ Settled with it (the maintainer, 2026-11-04):
   naming the Macha commit and the config the node ran with (packing
   threshold, backend limits). Step 1's code can move before its fixture
   exists; its gate cannot close until it does.
+
+## What step 4 waits on (the Macha session, 2026-11-04)
+
+Macha's `feature/tree-native-namespace` is green at `b080c38`, no merge
+date. Its remaining steps, in order: genesis as a constant hash; the
+legacy head authority removed (cas, seed, install_committed_delta,
+floor 0); the inline snapshot and delta formats removed with their wire
+slots kept; a gate run on live-a, then merge and deploy to both nodes.
+The operator may put the LocalStore race fixes first. Genesis and the
+final tree forms are settled only at that merge, so Dagda's heads move
+from the merged code; the Macha session will say exactly what changed.
+Steps 5 and the parts of 6 that need no heads go first.
 
 ## Hosted systems waiting on Dagda
 
@@ -365,6 +405,41 @@ Open, none blocking (each has a default that keeps Macha's behaviour):
    measured on fi-1 under an import, then make the reserve per device
    only if a node's state path and DATA backends are on different
    disks there (Dagda cannot tell which share a device today).
+5. **A tombstone stamped by a clock ahead** (step 5): Macha's sweep
+   computes `now - removed > grace` on unsigned milliseconds
+   (`torrent_coordinator.cpp:1066-1068`), so a tombstone from a node
+   whose clock is ahead wraps and is erased at once, and a branch that
+   missed the removal can bring the request back. Proven in Dagda
+   (`DISABLED_ATombstoneFromAClockAheadIsKeptItsWindow` fails when run).
+   Recommended: count a future stamp as fresh, in Dagda now and in Macha
+   at the port (8b); it changes the answer only for a clock-ahead
+   tombstone.
+6. **A delta adding a record with no id** (step 5): Macha's DLT9 decoder
+   accepts it (`metadata.cpp:1735-1740`) where the snapshot decoder
+   refuses it (`:873`), so a head that applies it writes a snapshot it
+   cannot read back. Proven (`AnUnkeyedRecordFromADeltaPoisonsTheSnapshot`;
+   `DISABLED_ADeltaCannotInstallARecordTheSnapshotRefuses` fails when
+   run). Recommended: refuse it in both; no valid bytes change.
+7. **Merging the step branches to `develop`.** Steps 1 to 3 and 5 are
+   stacked branches (`feature/local-store` → `feature/ledger` →
+   `feature/distributed-store` → `feature/leases`), each green. Step 1's
+   gate cannot close until the Macha session's fixture exists, which
+   follows Macha's tree-native merge. Recommended: merge them to
+   `develop` now, each with its gate as it stands, and close step 1's
+   fixture gate as a follow-up when the fixture arrives.
+
+**What blocks further work** (needs the maintainer):
+- Step 4 (heads), and with it node-local spaces, retained values and
+  `dagda::Context` (steps 6 and 7), wait on Macha's tree-native branch
+  merging (its order is the operator's).
+- Domains with node certificates and the scope check (step 6) need
+  Dannan 0.3.0 (item 3).
+
+Decided by the Dagda session under the rules (step 5): a lease's
+`scope` is the head space its record lives in (plan 163); three
+concurrent duplicate adds keep Macha's answer for byte identity (replicas
+settle at the next merge), and new owners' duplicate rules must not
+depend on which record kept the key.
 
 Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store",
 Dagda's own version number from `0.1.0` pinning a Dannan tag, Dannan
