@@ -862,10 +862,11 @@ bool LocalStore::put_sealed(const ObjectId& id, const SealedObject& sealed) {
   if (loose_exists) return true;
   uint64_t generation = 0;
   if (!store_sealed_locked(id, sealed, generation, lock)) return false;
-  if (generation) {
-    lock.unlock();
-    _durability_domain->await_durable(generation, DurabilityUrgency::immediate);
-  }
+  lock.unlock();
+  if (generation) _durability_domain->await_durable(generation, DurabilityUrgency::immediate);
+  // As put: once the held ledger is seeded it answers has(), so the record
+  // is in it before the put returns.
+  flush_ledger();
   return true;
 }
 
