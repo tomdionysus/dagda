@@ -182,7 +182,35 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      root epoch as the CONTROL epoch) and its pass calls
      `Collector::pass`; `test_maintenance_trace.cpp` and
      `test_catalogue_maintenance.cpp` stay Macha's gate.
-3. **Distributed store on Dannan** (`store/`). Placement through
+3. **Distributed store on Dannan** (`store/`), on
+   `feature/distributed-store`, in two sessions:
+   - ~~**3a**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 236).
+     The write and read paths: the storage server's routes as Dagda
+     message types on Dannan, placement over the roster and adverts, the
+     four durability levels with deadlines and evidence by node id,
+     tickets that outlive the call, spill past stalled peers and prompt
+     replication, reads local then cache then latency-ordered remote,
+     CONTROL objects offered and claimed, DATA claims.
+   - **3b** Repair and admission: the availability survey and repair by
+     diff over the network (`have_valid_objects`, `trie_diff`,
+     `delete_object` and `replicate_all` with it), the DATA credit
+     arbiter with the control reserve of device I/O (section 7), the
+     I/O admission of each served request, rebalancing across nodes.
+     What 3a left of its moved cases: repair's last step of
+     `test_store_heals_a_bad_local_copy_from_a_peer`,
+     `test_min_write_floor_publishes_then_repair_converges_to_r2`, and the
+     DATA credit half of
+     `test_store_control_objects_take_no_data_credit_and_commit_alone`.
+     **Repair reports into tickets** (decided by the Dagda session from
+     Tom's approved design, requirements section 8 item 1(f): a ticket
+     "reports once more when the last pending node acknowledges"): 3a
+     settles a persisted or replicated ticket at its level and names the
+     members it never tried "pending, owed to repair"; when repair or
+     prompt replication lands a copy on such a member, the ticket records
+     it and reports again once none is pending, for as long as the ticket
+     is kept (`max_tickets`).
+
+   The whole of step 3: Placement through
    Dannan's functions (owner salts, capacity adverts); the write path
    with the four durability levels and evidence by node id; the read
    path (local, cache, latency-ordered remote); CONTROL objects; the

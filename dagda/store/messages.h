@@ -1,0 +1,133 @@
+//
+// Dagda - The Store
+//
+// Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+// Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+//
+
+#pragma once
+
+#include <cstdint>
+#include <span>
+#include <utility>
+#include <vector>
+
+#include "dagda/contract/claim_store.h"
+#include "dagda/store/durability_ticket.h"
+#include "dagda/store/object_id.h"
+#include "dannan/context.h"
+#include "dannan/net/codec.h"
+#include "dannan/net/routes.h"
+
+// The store's messages on Dannan (requirements 4.2, S30). Each type is Dagda's
+// own registration from 512, numbered 512 plus the protocol-23 number Macha
+// gave it, so a trace reads across; Dannan's framing, lanes and refusals
+// carry them, and the payloads are protocol 23's byte for byte. Protocol 23's
+// framing, handshake and numbers are gone (Tom, 2026-11-04): only the payload
+// bytes are kept. Refusals are Dannan's error replies; a reply of nothing
+// more than "done" is Dannan's ok.
+namespace dagda::store::message {
+
+using dannan::net::MessageType;
+
+// Requests. DATA lane: get_object, put_object, put_object_deferred,
+// object_durability_barrier and durability_covered; CONTROL lane: the rest.
+inline constexpr MessageType have_object{515};
+inline constexpr MessageType get_object{516};
+inline constexpr MessageType put_object{517};
+inline constexpr MessageType get_control_object{531};
+inline constexpr MessageType put_control_object{532};
+inline constexpr MessageType put_object_deferred{534};
+inline constexpr MessageType object_durability_barrier{535};
+inline constexpr MessageType retain_objects{544};
+inline constexpr MessageType have_objects{552};
+inline constexpr MessageType have_control_objects{557};
+// Dagda's own, with no protocol-23 number: whether a durability ticket's
+// generation is durable now, answered without waiting (a ticket's status, as
+// object_durability_barrier is its wait). The request is a ticket in its
+// protocol-23 form; the reply a bool_reply.
+inline constexpr MessageType durability_covered{768};
+
+// Replies.
+inline constexpr MessageType bool_reply{615};
+inline constexpr MessageType object_reply{616};
+inline constexpr MessageType control_object_reply{619};
+inline constexpr MessageType have_objects_reply{630};
+inline constexpr MessageType have_control_objects_reply{633};
+
+// Bounds every handler checks, Macha's (storage_server.cpp, net.hpp).
+inline constexpr size_t max_object_bytes = 128ULL * 1024 * 1024;
+inline constexpr uint32_t max_presence_batch = 200000;
+inline constexpr uint32_t max_barrier_probe = 4096;
+inline constexpr uint32_t max_retain_batch = 1000000;
+
+// Registers every store type's wire rules (not their handlers) on `routes`.
+// Before the node starts: Dannan refuses registration after. Throws as
+// Routes::add does.
+void register_types(dannan::Routes& routes);
+
+// have_object, get_object, get_control_object: the id.
+Bytes encode_id(const ObjectId& id);
+ObjectId decode_id(std::span<const uint8_t> payload);
+
+// put_object, put_object_deferred, put_control_object, object_reply,
+// control_object_reply: the id, then the bytes as a blob.
+struct ObjectPayload {
+  ObjectId id{};
+  Bytes data;
+};
+Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data);
+// Throws dannan::net::DecodeError past max_object_bytes.
+ObjectPayload decode_object(std::span<const uint8_t> payload);
+
+// bool_reply: one byte, 0 or 1.
+Bytes encode_bool(bool value);
+bool decode_bool(std::span<const uint8_t> payload);
+
+// have_objects, have_control_objects: u32 count, then the ids. Throws
+// dannan::net::DecodeError for none or more than `maximum`.
+Bytes encode_ids(std::span<const ObjectId> ids);
+std::vector<ObjectId> decode_ids(std::span<const uint8_t> payload, uint32_t maximum = max_presence_batch);
+
+// have_objects_reply, have_control_objects_reply: u32 count, then a byte
+// each. Throws dannan::net::DecodeError unless it answers `expected` ids.
+Bytes encode_presence(const std::vector<bool>& present);
+std::vector<bool> decode_presence(std::span<const uint8_t> payload, size_t expected);
+
+// put_object_deferred's reply: the ticket. durability_covered's request is
+// the same bytes.
+Bytes encode_ticket(const DurabilityTicket& ticket);
+DurabilityTicket decode_ticket(std::span<const uint8_t> payload);
+
+// object_durability_barrier: the ticket, then, to ask again after the
+// peer's process changed, u32 count and the ids (at most max_barrier_probe).
+struct BarrierRequest {
+  DurabilityTicket ticket;
+  std::vector<ObjectId> probe;
+};
+Bytes encode_barrier(const BarrierRequest& request);
+BarrierRequest decode_barrier(std::span<const uint8_t> payload);
+
+// The reply to a probe: the peer's current epoch, u32 count, then each id it
+// holds with its fresh domain, generation and backend instance.
+struct BarrierProbeAnswer {
+  dannan::identity::NodeId epoch;
+  std::vector<std::pair<ObjectId, DurabilityTicket>> present;
+};
+Bytes encode_probe_answer(const BarrierProbeAnswer& answer);
+// Each ticket carries the answer's epoch.
+BarrierProbeAnswer decode_probe_answer(std::span<const uint8_t> payload);
+
+// retain_objects: u8 class, the dot's origin (16) and sequence (u64), u32
+// count, then the ids.
+struct RetainRequest {
+  contract::RetentionClass object_class = contract::RetentionClass::data;
+  contract::RetentionDot dot;
+  std::vector<ObjectId> ids;
+};
+Bytes encode_retain(const RetainRequest& request);
+// Throws dannan::net::DecodeError for a class out of range, or no ids or
+// more than max_retain_batch.
+RetainRequest decode_retain(std::span<const uint8_t> payload);
+
+}  // namespace dagda::store::message

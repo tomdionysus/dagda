@@ -27,9 +27,15 @@ namespace dagda::store {
 inline constexpr const char* data_fallback_salt = "macha/data-fallback/v7";
 inline constexpr const char* data_extra_domain_salt = "macha/data-extra-domain/v7";
 // The advert holding a node's DATA capacity as a u64 (NodeRecord::advert_u64).
-// Within a pool it is a backend's limit; across nodes the store publishes it
-// at step 3.
+// Within a pool it is a backend's limit; across nodes it is the node's pool
+// limit, which its storage server publishes.
 inline constexpr const char* capacity_advert = "dagda/capacity";
+// Present on a node that hosts DATA extents (Macha's node_flag_hosts_extents,
+// types.hpp:49): only such nodes are placement candidates (requirement S25).
+inline constexpr const char* extents_advert = "dagda/extents";
+// The DATA bytes a node holds, as a u64: with its capacity, whether it has
+// room for one more extent (Macha's NodeInfo::used).
+inline constexpr const char* used_advert = "dagda/used";
 
 // The scheme DATA is placed under. Waits on nothing; thread-safe.
 const dannan::placement::Scheme& data_scheme();

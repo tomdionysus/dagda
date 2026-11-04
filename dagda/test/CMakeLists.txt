@@ -30,6 +30,7 @@ add_executable(dagda_tests
   ledger_trie_union_test.cpp
   ledger_unreferenced_since_test.cpp
   store_control_store_test.cpp
+  store_distributed_store_test.cpp
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
   store_io_pressure_test.cpp
@@ -38,9 +39,11 @@ add_executable(dagda_tests
   store_local_store_ledger_test.cpp
   store_local_store_presence_test.cpp
   store_local_store_test.cpp
+  store_messages_test.cpp
   store_object_id_test.cpp
   store_persistent_cache_test.cpp
   store_presence_index_test.cpp
+  store_replica_selector_test.cpp
   store_sealing_test.cpp
   store_state_layout_test.cpp
   store_storage_pool_test.cpp

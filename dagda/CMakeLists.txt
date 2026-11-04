@@ -24,20 +24,25 @@ add_library(dagda SHARED
   ledger/trie_diff.cpp
   ledger/trie_union.cpp
   ledger/unreferenced_since.cpp
+  store/control_objects.cpp
   store/control_store.cpp
+  store/distributed_store.cpp
   store/durability_domain.cpp
   store/durability_ticket.cpp
   store/io_pressure.cpp
   store/local_format.cpp
   store/local_store.cpp
   store/local_store_files.cpp
+  store/messages.cpp
   store/object_id.cpp
   store/persistent_cache.cpp
   store/placement.cpp
   store/presence_index.cpp
+  store/replica_selector.cpp
   store/sealing.cpp
   store/state_layout.cpp
   store/storage_pool.cpp
+  store/storage_server.cpp
   store/write_behind.cpp
 )
 add_library(dagda::dagda ALIAS dagda)

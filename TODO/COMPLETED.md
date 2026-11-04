@@ -3,6 +3,144 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 3a, the write and read paths on Dannan (`feature/distributed-store`)
+
+- Moved and adapted into `dagda/store/` (namespace `dagda::store`):
+  `distributed_store` (`DistributedStore`: Macha
+  `cluster/distributed_store.cpp:114-486` the write path, `:799-1134`
+  claims and CONTROL claims, `:1201-1342` prompt replication and
+  `put_on`, `:1344-1808` the read path, `:1810-2218` presence batches and
+  CONTROL offers, `:3088-3184` opportunistic local copies;
+  `StorageUnavailable`), `storage_server` (`StorageServer`: Macha
+  `cluster/storage_server.cpp`), `replica_selector`, `control_objects`
+  (`ControlObjectFetch`), and new `messages` (Dagda's numbers, the
+  registrations, protocol 23's payloads). Placement adverts beside the
+  scheme in `placement.h`: `dagda/extents` (hosts extents: the only
+  candidates), `dagda/capacity` (the pool's limit), `dagda/used`.
+  Requirements S22 to S30.
+- Runs on Dannan 0.2.0: `Routes::call` and `call_and_wait` with a
+  deadline on every call, `Nodes::placement` under the store's scheme
+  filtered by `dagda/extents`, `Nodes::roster`, `active`, `watch` and
+  `latency`, adverts, `ActivityClocks`, `NodeEvents` ("storage"),
+  `SupervisedThreads`, a scoped logger. Handlers are Dannan's
+  `RequestHandler`s; refusals are Dannan's error replies (status, code,
+  text), "done" is Dannan's `ok`.
+- Messages: Dagda's own from 512, each 512 plus Macha's protocol-23
+  number (`have_object` 515, `get_object` 516, `put_object` 517,
+  `get_control_object` 531, `put_control_object` 532,
+  `put_object_deferred` 534, `object_durability_barrier` 535,
+  `retain_objects` 544, `have_objects` 552, `have_control_objects` 557;
+  replies 615, 616, 619, 630, 633), plus `durability_covered` 768 (new:
+  a ticket's status without waiting). Lanes as protocol 23: objects on
+  DATA in any class but control, the rest on CONTROL. Payloads byte for
+  byte, pinned by known answers computed outside both codebases
+  (hashlib and struct): an id request, an object, a bool reply,
+  presence batches and replies, a ticket, a barrier with and without a
+  probe, a probe's answer, a claim (`store_messages_test.cpp`).
+- The durability levels, as built: every write takes a level and a
+  deadline. Ephemeral queues the bytes (bounded, 64 MiB) and returns at
+  once, every member named pending "queued"; a worker then writes it as
+  replicated. Persisted and replicated are Macha's write path with a
+  floor of 1 and of `max(1, min(write_copies, nodes))`: local first,
+  spill past a peer stalled beyond `write_stall` or one that fails,
+  return on what landed when nothing more can be had promptly, prompt
+  replication for a second copy. Durable writes local first and to every
+  live member of the replication set at once, spills a refusal to the
+  next fallback, never spills a stall, and returns when every live member
+  has its copy or at the deadline. The replication set is the first
+  `replication` capacity owners over every hosting node the roster knows,
+  so a member Dannan sees as dead is in it, not waited on, and named
+  pending "dead". Acknowledged means the node's strict put returned (its
+  domain's generation durable); a deferred write's copies are pending
+  "awaiting barrier" until `wait()` runs their barriers. Evidence names
+  each member by node id, then any other node reached, with its state and
+  why, `sought`, `met`, `settled` (nothing awaited), `lost`; and a ticket.
+  A call still in flight when the write returns runs on to
+  `call_horizon` (120 s) and lands in the ticket; a durable ticket pushes
+  the object to a dead member when the roster says it is back; prompt
+  replication's copies land in the ticket too. `status(ticket)` reads it,
+  `wait(ticket, deadline)` completes when it settles or at the deadline
+  and may be called again. 4,096 tickets are kept, the oldest settled
+  forgotten first. Every asynchronous completion is posted to the
+  caller's executor.
+- Reads: local, then the cache (promoted when this node owns it), then
+  the owners and the other ranked nodes in the replica selector's order,
+  every reader of one object sharing one fetch and one buffer (the
+  reply's retained frame); `read` names the source and the serving node,
+  `not_found` only when every candidate said 404. `has(id)` is the pool.
+- CONTROL: `offer_control` (asks `have_control_objects`, sends what is
+  missing, pipelined at a quarter of a connection's replies),
+  `retain_control` (local first then nearest by Dannan's
+  `order_commit_replicas` and latency, `metadata_write_copies` claims),
+  `ensure_control_local` (any active peer, speculative, checked by id),
+  none of it on the DATA device. `retain_data` (batched presence, one
+  claim per node) moved with them.
+- 0.91.5: `put` and `put_deferred` (the id-returning forms) throw
+  `StorageUnavailable` when nothing holds the write.
+- Changed from Macha, none on the wire's payloads: every read shares its
+  fetch (Macha kept deadline reads private; here every call has a
+  deadline, and a reader that gives up abandons the transfer only when
+  nobody else waits); an unmeasured peer is estimated by Dannan's round
+  trip, not 100 ms; decoders refuse a count larger than the payload
+  before reserving for it (section 7); a peer's room is read from its
+  adverts; there is no DATA credit or retained-memory admission (3b);
+  frame promotion of a joining reader uses `CallHandle::promote`.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest
+  on in-process Dannan clusters (`dagda/test/fixtures/cluster.h`: real
+  nodes on loopback, each with pool, control store, cache, claims,
+  server and store, a hook in front of the server to hold, refuse or
+  count), every assertion kept where it applies:
+  `test_rpc_cluster.cpp` `test_store_put_is_loader_activity_not_viewer_activity`,
+  `test_store_put_publishes_at_the_floor_and_copies_promptly` (the full
+  owner by its capacity advert against the extent size),
+  `test_store_put_replaces_a_replica_that_cannot_be_launched` (a peer
+  that fails the call at once), `test_store_claims_ask_nothing_more_about_objects_nobody_holds`
+  (the claimant hosts no extents, so the peer is the one candidate, as
+  Macha's bench made it by capacity), `test_store_put_to_a_silent_replica_returns_on_the_local_copy`,
+  `test_store_concurrent_readers_share_one_fetch_and_buffer` (memory
+  read from Dannan's ledger), `test_store_heals_a_bad_local_copy_from_a_peer`
+  (but repair's last step), `test_store_runtime_cache_keeps_a_playback_fetch`,
+  the store's half of `test_store_control_objects_take_no_data_credit_and_commit_alone`;
+  `test_storage_v18.cpp` `test_a_full_preferred_node_spills_data_but_not_control`
+  (its catalogue as CONTROL objects and claims),
+  `test_min_write_two_uses_fallback_when_preferred_replica_is_full`,
+  `test_a_control_graph_larger_than_the_connection_budget_still_publishes`,
+  `test_a_control_offer_sends_only_what_the_peer_lacks`, the store's half
+  of `test_catalogue_control_objects_recover_on_metadata_replica`,
+  `test_edge_node_never_owns_and_its_writes_land_on_owners`,
+  `test_durability_barrier_across_peer_restarts` (a copy once on disk
+  stays acknowledged, so the re-derivation is shown on a peer restarted
+  before its barrier). VALIDATION "Placement and the write floor" (but
+  repair's convergence) and "Class separation" through these.
+- New: each level (ephemeral returns at once and its ticket reports the
+  copies; persisted on the first copy; replicated at write_copies;
+  durable on every live member; durable with a dead member, named pending
+  and caught up when it returns; durable with a silent live member,
+  waited to the 400 ms deadline, pending, then reported by the ticket);
+  `StorageUnavailable`; the executor rule (writes, ephemeral, a settled
+  ticket's wait, a local read and an unknown ticket, all posted); a read
+  naming its server; the replica selector (4); the payload known answers
+  and registrations (9).
+- Not moved: `test_commit_replicas_ordered_local_then_nearest` (Dannan's
+  `order_commit_replicas` now); `test_min_write_floor_publishes_then_repair_converges_to_r2`,
+  the repair, survey and arbiter cases (3b);
+  `test_nodes_replicating_to_each_other_do_not_hold_their_slots_across_the_peer`
+  (the arbiter's slots, 3b); the transport cases of `test_rpc_cluster`
+  (Dannan's).
+- Findings: none in Macha proven. Two of this session's own, fixed: a
+  call not yet placed (`idle_for()` is max) was taken for stalled and
+  spilled at once; a fetch woke its readers before queueing its local
+  copy, so `wait_local_copies_settled()` could miss it (5 failures in
+  7,600 runs before; Macha queues first).
+- Gate: warnings as errors; `dagda_tests` 236 and 1 disabled (198
+  before). The 38 new cases ran 200 times each (four processes of 50):
+  all 7,600 passing after the second fix above.
+- Dannan: nothing after 0.2.0 is used. Requests (generic, marked
+  `TODO(Dannan: ...)` in `distributed_store.h`): a call's deadline that
+  also cancels the call (today the caller is told at the deadline but the
+  call runs on, holding a reply slot); the node's executor and its
+  `TimeSource` through the Context (the store takes both beside it).
+
 ## 2026-11-04: step 2, the local ledger and GC (`feature/ledger`)
 
 - The state layout marker, decided as Dagda's: `dagda/store/state_layout`
