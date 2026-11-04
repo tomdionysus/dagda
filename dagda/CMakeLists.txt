@@ -54,6 +54,7 @@ add_library(dagda SHARED
   store/persistent_cache.cpp
   store/placement.cpp
   store/presence_index.cpp
+  store/remove.cpp
   store/repair.cpp
   store/replica_selector.cpp
   store/sealing.cpp

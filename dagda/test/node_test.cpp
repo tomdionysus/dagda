@@ -52,10 +52,11 @@ struct Stages {
 
 const std::vector<std::string> opens{"open message-types", "open state-layout", "open node-local-key", "open storage-pool",     "open admission",
                                      "open control-store", "open cache",        "open claims",         "open reference-counts", "open distributed-store",
-                                     "open availability",  "open repair",       "open storage-server"};
-const std::vector<std::string> stops{"stop storage-server",   "stop repair",       "stop availability",   "stop distributed-store",
-                                     "stop reference-counts", "stop claims",       "stop cache",          "stop control-store",
-                                     "stop admission",        "stop storage-pool", "stop node-local-key", "stop state-layout"};
+                                     "open availability",  "open repair",       "open storage-server", "open maintenance"};
+// Step 7b: the maintenance thread stops first.
+const std::vector<std::string> stops{"stop maintenance",      "stop storage-server", "stop repair",      "stop availability",  "stop distributed-store",
+                                     "stop reference-counts", "stop claims",         "stop cache",       "stop control-store", "stop admission",
+                                     "stop storage-pool",     "stop node-local-key", "stop state-layout"};
 
 std::string refusal_of(ClusterNode& node) {
   try {

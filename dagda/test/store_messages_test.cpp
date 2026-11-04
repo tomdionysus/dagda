@@ -299,5 +299,57 @@ TEST(StoreMessages, APutOrAClaimCarriesItsPrincipalAfterMachasFields) {
   EXPECT_THROW(decode_retain(short_claim), dannan::net::DecodeError);
 }
 
+// Step 7b, the instant delete, Dagda's own types from 768: the request is the
+// observed clock as the claims' release frame carries it, the ids and the
+// writer; the reply a replica's refusal (its generation and reason) or each
+// object's state with the claims that remain.
+TEST(StoreMessages, ADeleteCarriesItsClockIdsAndWriterAndItsAnswerEachObjectsState) {
+  EXPECT_EQ(static_cast<uint16_t>(remove_objects), 769);
+  EXPECT_EQ(static_cast<uint16_t>(remove_objects_reply), 770);
+  const WritePrincipal alice{{dannan::contract::Principal::Kind::directory, "alice"}, "lugh/secrets"};
+  contract::NodeId origin;
+  origin.bytes.fill(0x11);
+  const auto request = encode_remove({{{origin, 5}}, {id_a}, alice});
+  const auto expected =
+      "00000001" + std::string(32, '1') + "0000000000000005" + "00000001" + to_string(id_a) + "01" + "00000005616c696365" + "0000000c6c7567682f73656372657473";
+  EXPECT_EQ(hex(request), expected);
+  const auto back = decode_remove(request);
+  EXPECT_EQ(back.observed, (contract::RetentionClock{{origin, 5}}));
+  EXPECT_EQ(back.ids, std::vector<ObjectId>{id_a});
+  EXPECT_EQ(back.writer, alice);
+  EXPECT_THROW(decode_remove(encode_remove({{{origin, 0}}, {id_a}, alice})), dannan::net::DecodeError);
+  EXPECT_THROW(decode_remove(encode_remove({{}, {}, alice})), dannan::net::DecodeError);
+  auto unwritten = request;
+  unwritten.resize(unwritten.size() - 31);
+  EXPECT_THROW(decode_remove(unwritten), dannan::net::DecodeError);
+
+  ReplicaRemoval answer;
+  answer.objects = {{id_a, RemoveState::kept_by_claim, {{origin, 5}}}, {id_b, RemoveState::removed, {}}};
+  const auto reply = encode_removal(answer);
+  EXPECT_EQ(hex(reply),
+            "00" + std::string("00000002") + to_string(id_a) + "02" + "0001" + std::string(32, '1') + "0000000000000005" + to_string(id_b) + "00" + "0000");
+  const auto decoded = decode_removal(reply);
+  EXPECT_FALSE(decoded.refused);
+  ASSERT_EQ(decoded.objects.size(), 2u);
+  EXPECT_EQ(decoded.objects[0].state, RemoveState::kept_by_claim);
+  EXPECT_EQ(decoded.objects[0].claims, (std::vector<contract::RetentionDot>{{origin, 5}}));
+  EXPECT_EQ(decoded.objects[1].id, id_b);
+  EXPECT_EQ(decoded.objects[1].state, RemoveState::removed);
+  ReplicaRemoval refused;
+  refused.refused = true;
+  refused.scope_generation = 42;
+  refused.why = "nope";
+  EXPECT_EQ(hex(encode_removal(refused)), "01000000000000002a000000046e6f7065");
+  const auto said_no = decode_removal(encode_removal(refused));
+  EXPECT_TRUE(said_no.refused);
+  EXPECT_EQ(said_no.scope_generation, 42u);
+  EXPECT_EQ(said_no.why, "nope");
+  // A replica answers only the four states it can know; refused and
+  // unreachable are the caller's words.
+  auto bad_state = reply;
+  bad_state[1 + 4 + 32] = static_cast<uint8_t>(RemoveState::refused);
+  EXPECT_THROW(decode_removal(bad_state), dannan::net::DecodeError);
+}
+
 }  // namespace
 }  // namespace dagda::store::message

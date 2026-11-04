@@ -485,6 +485,7 @@ DistributedStore::DistributedStore(dannan::Context& context, Stores stores, Dist
       _control(stores.control),
       _cache(stores.cache),
       _claims(stores.claims),
+      _ledger(stores.ledger),
       _options(options),
       _time(context.time().source()),
       _self(context.identity().id()),
@@ -1867,6 +1868,9 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
     }
     // A claim says "this node holds the object": index presence, not a
     // read. The bytes were verified when put; scrub finds later corruption.
+    // Under the objects' claim guard, as the server's claim is.
+    std::optional<ClaimLocks::Guard> guard;
+    if (object_class == contract::RetentionClass::data) guard.emplace(_data.claim_locks().lock(ids));
     for (const auto& id : ids) {
       const bool present = object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id);
       if (!present) return false;
@@ -2093,6 +2097,130 @@ void DistributedStore::retain(contract::RetentionClass type, std::vector<ObjectI
   };
   if (!submit(std::move(job))) {
     RetainOutcome refused;
+    refused.why = "the store is stopping";
+    boost::asio::post(executor, [done = std::move(done), refused = std::move(refused)] { done(refused); });
+  }
+}
+
+// ---- The instant delete ----------------------------------------------------
+
+RemoveEvidence DistributedStore::remove(const std::vector<ObjectId>& input, const contract::RetentionClock& given, const WriteScope& scope,
+                                        std::chrono::milliseconds deadline) {
+  RemoveEvidence evidence;
+  auto ids = input;
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  evidence.sought = ids;
+  if (ids.empty()) {
+    evidence.finished = true;
+    return evidence;
+  }
+  // An entry with no node or no sequence observes nothing.
+  contract::RetentionClock observed;
+  for (const auto& [node, sequence] : given)
+    if (node != NodeId{} && sequence) observed[node] = sequence;
+  const auto writer = writer_of(scope.principal, scope.prefix);
+  const auto call_deadline = deadline.count() > 0 ? std::min(deadline, _options.control_call) : _options.control_call;
+  const auto every = [&](NodeRemoval& node, RemoveState state) {
+    node.objects.clear();
+    for (const auto& id : ids) node.objects.push_back({id, state, {}});
+  };
+
+  // This node first, checked as a peer checks: its scope, then its half.
+  NodeRemoval local;
+  local.node = _self;
+  const auto decision = _context.identity().verify(writer.principal, writer.prefix);
+  if (!decision.allowed) {
+    local.why = decision.why;
+    local.scope_generation = decision.generation;
+    every(local, RemoveState::refused);
+  } else if (const auto admitted = admit_data(FrameType::loader, _options.extent_size, call_deadline); !admitted) {
+    local.why = "storage_busy: DATA admission busy or stopping";
+    every(local, RemoveState::unreachable);
+  } else {
+    local.objects = remove_here({_data, _claims, _ledger, &_cache}, ids, observed);
+  }
+  evidence.nodes.push_back(std::move(local));
+
+  // Every other node present: any may hold a copy or a claim (a fallback
+  // that took a spilled write, a node that stopped hosting), and one that
+  // holds neither answers absent.
+  auto peers = _context.nodes().active();
+  std::erase_if(peers, [&](const NodeRecord& node) { return node.id == _self; });
+  std::sort(peers.begin(), peers.end(), [](const NodeRecord& a, const NodeRecord& b) { return a.id < b.id; });
+  std::vector<Request> requests;
+  struct Part {
+    size_t peer = 0;
+    size_t begin = 0;
+    size_t end = 0;
+  };
+  std::vector<Part> parts;
+  for (size_t p = 0; p < peers.size(); ++p)
+    for (size_t begin = 0; begin < ids.size(); begin += message::max_remove_batch) {
+      const auto end = std::min(ids.size(), begin + message::max_remove_batch);
+      std::vector<ObjectId> part(ids.begin() + static_cast<std::ptrdiff_t>(begin), ids.begin() + static_cast<std::ptrdiff_t>(end));
+      requests.push_back({peers[p], message::remove_objects, message::encode_remove({observed, std::move(part), writer}), FrameType::loader});
+      parts.push_back({p, begin, end});
+    }
+  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), 16, call_deadline);
+  std::vector<NodeRemoval> answers(peers.size());
+  for (size_t p = 0; p < peers.size(); ++p) answers[p].node = peers[p].id;
+  for (size_t i = 0; i < outcomes.size(); ++i) {
+    auto& answer = answers[parts[i].peer];
+    const auto unanswered = [&](RemoveState state, const std::string& why) {
+      answer.why = why;
+      for (size_t k = parts[i].begin; k < parts[i].end; ++k) answer.objects.push_back({ids[k], state, {}});
+    };
+    const auto& outcome = outcomes[i];
+    if (!outcome.reply || outcome.reply->type != message::remove_objects_reply) {
+      unanswered(RemoveState::unreachable, outcome_text(outcome));
+      continue;
+    }
+    try {
+      auto removal = message::decode_removal(outcome.reply->payload);
+      if (removal.refused) {
+        answer.scope_generation = removal.scope_generation;
+        unanswered(RemoveState::refused, removal.why);
+      } else {
+        for (auto& object : removal.objects) answer.objects.push_back(std::move(object));
+      }
+    } catch (const std::exception& error) {
+      unanswered(RemoveState::unreachable, std::string("undecodable answer: ") + error.what());
+    }
+  }
+  for (auto& answer : answers) evidence.nodes.push_back(std::move(answer));
+
+  // A member of an object's replication set that is not present: nothing is
+  // known of its copy or its claims.
+  std::map<NodeId, NodeRemoval> away;
+  for (const auto& id : ids)
+    for (const auto& member : replication_set(id)) {
+      if (member.id == _self || std::any_of(peers.begin(), peers.end(), [&](const NodeRecord& peer) { return peer.id == member.id; })) continue;
+      auto& node = away[member.id];
+      node.node = member.id;
+      node.why = "not present";
+      node.objects.push_back({id, RemoveState::unreachable, {}});
+    }
+  for (auto& [node, removal] : away) evidence.nodes.push_back(std::move(removal));
+  evidence.finished = true;
+  return evidence;
+}
+
+void DistributedStore::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
+                              boost::asio::any_io_executor executor, RemoveDone done) {
+  auto job = [this, ids, observed, writer = std::move(writer), deadline, executor, done]() {
+    RemoveEvidence evidence;
+    try {
+      evidence = remove(ids, observed, writer, deadline);
+    } catch (const std::exception& error) {
+      evidence.sought = ids;
+      evidence.why = error.what();
+    }
+    boost::asio::post(executor, [done, evidence = std::move(evidence)] { done(evidence); });
+  };
+  if (!submit(std::move(job))) {
+    RemoveEvidence refused;
+    refused.sought = std::move(ids);
     refused.why = "the store is stopping";
     boost::asio::post(executor, [done = std::move(done), refused = std::move(refused)] { done(refused); });
   }

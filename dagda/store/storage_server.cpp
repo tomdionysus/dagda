@@ -38,7 +38,7 @@ const std::vector<dannan::net::MessageType>& StorageServer::served() {
       message::have_object,        message::get_object,         message::put_object,           message::delete_object,
       message::get_control_object, message::put_control_object, message::put_object_deferred,  message::object_durability_barrier,
       message::retain_objects,     message::have_objects,       message::have_control_objects, message::have_valid_objects,
-      message::trie_diff,          message::durability_covered,
+      message::trie_diff,          message::durability_covered, message::remove_objects,
   };
   return types;
 }
@@ -49,6 +49,7 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _control(stores.control),
       _claims(stores.claims),
       _cache(stores.cache),
+      _ledger(stores.ledger),
       _options(options),
       _admission(admission),
       _logger(context.logger("dagda.server")),
@@ -305,7 +306,11 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       if (auto refused = scope_refusal(peer, retain.principal)) return std::move(*refused);
       // A claim says "this node holds the object": index presence, not a
       // read. The bytes were verified when put and on every read; scrub
-      // finds later corruption. The claim's journal is control work.
+      // finds later corruption. The claim's journal is control work. Under
+      // the objects' claim guard, so no instant delete removes a copy
+      // between this check and the claim.
+      std::optional<ClaimLocks::Guard> guard;
+      if (retain.object_class == contract::RetentionClass::data) guard.emplace(_data.claim_locks().lock(retain.ids));
       for (const auto& id : retain.ids) {
         const bool present = retain.object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id);
         if (!present) return Handled::failed(409, "not_present", "retention object is not durably present");
@@ -314,6 +319,24 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       if (!slot) return busy();
       _claims.retain_batch(retain.object_class, retain.ids, retain.dot);
       return Handled::processed();
+    }
+    if (type == message::remove_objects) {
+      auto remove = message::decode_remove(request.payload);
+      ReplicaRemoval answer;
+      const auto& prefix = remove.writer.prefix.empty() ? _options.domain.name : remove.writer.prefix;
+      const auto decision = _context.identity().verify(remove.writer.principal, prefix);
+      if (!decision.allowed) {
+        answer.refused = true;
+        answer.scope_generation = decision.generation;
+        answer.why = decision.why;
+        return reply(message::remove_objects_reply, message::encode_removal(answer));
+      }
+      // The claims' journal and the unlinks: DATA device work.
+      const auto admitted = admit_data(frame, extent, true);
+      if (!admitted) return busy();
+      answer.objects = remove_here({_data, _claims, _ledger, _cache}, std::move(remove.ids), remove.observed);
+      advertise();
+      return reply(message::remove_objects_reply, message::encode_removal(answer));
     }
     if (type == message::trie_diff) return answer_trie(request);
   } catch (const dannan::net::DecodeError& error) {

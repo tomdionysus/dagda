@@ -3,6 +3,50 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: step 7b, maintenance in the node, the per-domain wait, the instant delete (`feature/maintenance`)
+
+Gate: `dagda_tests` 388 passing, 1 disabled (was 376 and 1; 12 added,
+none dropped); the new suites rerun 5 times.
+
+- Maintenance in `dagda::Node`: one supervised thread
+  (`dagda.maintenance`) on the node's clock; repair every `interval` (1 s,
+  Macha's), GC every interval until a pass settles, then every
+  `gc_interval` (300 s, Macha's `no_progress_backoff`); GC skipped while
+  foreground or loader work is present. A collector per registered
+  `ReachabilityProvider`; with none, nothing is removed and
+  `dagda.gc.state` says so. Unregistering is final: the provider is never
+  read again. `dagda.gc.*` figures. Stop stops the loop first. Tests turn
+  the thread off and call `run_maintenance_once()`; `store_repair_test`'s
+  hand loops converted to it.
+- The per-domain wait: `NodeOptions::garbage_grace` (30 days) for the
+  node's domain; the catalogue's descriptor carries it at step 4.
+  (`MaintenanceOptions::collector.garbage_grace` is now ignored: a second
+  setting to remove.)
+- The instant delete: `context.objects().remove(ids, observed clock,
+  scope, ...)`, async and blocking; messages `remove_objects` (769) and
+  its reply (770). Every present node is asked (a node can hold a claim
+  without a copy); each verifies scope, then under a new per-id claim
+  guard (`ClaimLocks`, 64 stripes) releases only the claims the observed
+  clock dominates (`RetentionStore::release_observed`, the same rule and
+  journal frame as `release_unreferenced`) and removes its copy only if no
+  claim is left and the latest inventory does not refer to it (an
+  incomplete inventory keeps it). `RemoveEvidence` per node and id:
+  `removed`, `absent`, `kept_by_claim` (naming every remaining claim),
+  `kept_referenced`, `refused` (why and scope generation), `unreachable`.
+- The partition case (`StoreRemove.AClaimTheCallersClockHasNotSeenKeeps
+  ThatNodesCopyAndIsNamed`): a delete under {a:1} removes a's copy and
+  keeps b's, naming (b,7); b's claims are exactly {b:7} after.
+- Tests: `store_remove_test` (7), `node_maintenance_test` (3), one each in
+  `LedgerRetention` and `StoreMessages`; `Context` and `node_test`
+  extended for the delete and the maintenance stage.
+- Findings, not fixed: the GC sweep's final check-and-delete
+  (`storage_pool.cpp:1134`), `erase_all` (`distributed_store.cpp:2294`)
+  and the `delete_object` handler (`storage_server.cpp:264`) check claims
+  without the new claim guard, so a claim can land between check and
+  delete (Macha has the same window); the sightings files
+  `retention/unreferenced-{data,control}.bin` are written unsealed
+  (`unreferenced_since.h:44`), unlike every other ledger since 6b.
+
 ## 2026-11-04 night: the repin to Dannan 0.4.0 and a race (`feature/dannan-0.4`)
 
 Dannan 0.4.0 (`d657a9b`; needs yaml-cpp to build) installed into

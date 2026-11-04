@@ -29,6 +29,7 @@
 
 #include "dagda/contract/claim_store.h"
 #include "dagda/contract/horizon.h"
+#include "dagda/contract/object_ledger.h"
 #include "dagda/domain/domain.h"
 #include "dagda/ledger/availability.h"
 #include "dagda/store/control_objects.h"
@@ -38,6 +39,7 @@
 #include "dagda/store/messages.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/persistent_cache.h"
+#include "dagda/store/remove.h"
 #include "dagda/store/replica_selector.h"
 #include "dagda/store/storage_pool.h"
 #include "dannan/context.h"
@@ -370,6 +372,9 @@ class DistributedStore final : public ControlObjectSource {
     // The node's DATA credit and device reserve; null admits everything.
     DataResourceArbiter* credit = nullptr;
     IoReserve* io = nullptr;
+    // The ledger whose published inventory this node's half of an instant
+    // delete checks. None: no inventory.
+    const contract::ObjectLedger* ledger = nullptr;
   };
 
   struct PromptReplicationStats {
@@ -470,6 +475,22 @@ class DistributedStore final : public ControlObjectSource {
   // what the blocking form waits on, each peer within control_call.
   void retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer, ClaimScope scope,
               boost::asio::any_io_executor executor, RetainDone done);
+
+  // The instant delete of DATA objects (remove.h): every node present is
+  // asked (remove_objects; this node through remove_here), each checks
+  // `writer` as it checks a write, releases the claims `observed` dominates
+  // and drops its copy where no claim remains and its inventory does not
+  // refer to it; a member of an object's replication set that is not present
+  // is named unreachable. Each peer is asked within min(deadline,
+  // control_call). The blocking form runs on the caller's thread; the
+  // asynchronous form on the store's workers, its evidence posted to
+  // `executor`, never inline.
+  using RemoveDone = std::function<void(RemoveEvidence)>;
+  static constexpr dannan::sched::Waits remove_waits = remove_here_waits | dannan::sched::Waits::network | dannan::sched::Waits::locks;
+  RemoveEvidence remove(const std::vector<ObjectId>& ids, const contract::RetentionClock& observed, const WriteScope& writer,
+                        std::chrono::milliseconds deadline);
+  void remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
+              boost::asio::any_io_executor executor, RemoveDone done);
   // Offers CONTROL objects this node holds to every other node present: each
   // is asked what it lacks and sent only that, at speculative priority.
   ControlOffer offer_control(const std::vector<ObjectId>& ids);
@@ -549,6 +570,7 @@ class DistributedStore final : public ControlObjectSource {
   LocalStore& _control;
   PersistentBlockCache& _cache;
   contract::ClaimStore& _claims;
+  const contract::ObjectLedger* const _ledger;
   const DistributedStoreOptions _options;
   const dannan::contract::TimeSource& _time;
   const dannan::identity::NodeId _self;

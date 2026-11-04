@@ -118,6 +118,7 @@ class RetentionStore final : public contract::ClaimStore {
   std::optional<ObjectId> next_retained(RetentionClass, std::optional<ObjectId>& cursor, bool& complete) const override;
   // `live` sorted and unique, or a membership test.
   size_t release_unreferenced(RetentionClass, const contract::IdLookup& live, const RetentionClock& observed, size_t operation_budget) override;
+  size_t release_observed(RetentionClass, const std::vector<ObjectId>& ids, const RetentionClock& observed) override;
   size_t claim_objects(RetentionClass) const override;
   // Checkpoints once the log holds `record_threshold` frames or 64 MiB.
   bool compact_if_needed(size_t record_threshold = 4096) override;

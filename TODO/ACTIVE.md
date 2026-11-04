@@ -357,8 +357,9 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    version check, its Heads, Retained and node-local spaces added at
    step 4 before the version is frozen. The "0.18" wording in
    `store/state_layout.cpp` reworded.
-7b. **Maintenance in the node, the per-domain wait, the instant delete**
-   (the maintainer, 2026-11-04 night; `feature/maintenance`). The collector and the
+7b. ~~**Maintenance in the node, the per-domain wait, the instant delete**~~
+   Done 2026-11-04 night on `feature/maintenance` (`COMPLETED.md`;
+   `dagda_tests` 388 and 1 disabled). The collector and the
    maintenance loop (GC and repair passes on the node's timer) move into
    `dagda::Node`, the owner supplying only its `ReachabilityProvider`.
    The collector's grace (30 days, Macha's) becomes a per-domain setting.

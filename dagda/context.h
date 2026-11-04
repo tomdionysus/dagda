@@ -35,8 +35,8 @@
 // from one of the io context's threads; nothing that happened on more than
 // one node is a bare boolean. Every noun is thread-safe.
 //
-// Version 1 as it stands carries Domains, Objects, Claims, Leases and
-// Tickets. Heads, Retained and node-local spaces are added at step 4, with
+// Version 1 as it stands carries Domains, Objects (with the instant delete,
+// step 7b), Claims, Leases and Tickets. Heads, Retained and node-local spaces are added at step 4, with
 // the domain catalogue, and version 1 is frozen only then: until it is, a
 // hosted system built against it is built against a contract still
 // growing.
@@ -66,6 +66,8 @@ using store::Durability;
 using store::ObjectId;
 using store::ReadOptions;
 using store::ReadResult;
+using store::RemoveEvidence;
+using store::RemoveState;
 using store::Ticket;
 using store::WriteEvidence;
 using store::WriteOptions;
@@ -128,6 +130,25 @@ class Context {
     static constexpr dannan::sched::Waits has_waits = dannan::sched::local_waits;
     bool has(const ObjectId& id) const;
 
+    // The instant delete (the maintainer, 2026-11-04 night, "Claims and space"; the
+    // message and the replica's rule are store/remove.h). Every node present
+    // checks `writer` as it checks a write, releases on each object only the
+    // claims `observed` dominates (a claim written where the caller has not
+    // seen survives, partition or not), and deletes its copy at once where no
+    // claim remains and its current inventory does not refer to it; it keeps
+    // it otherwise. The evidence names, node by node and object by object,
+    // what was removed, which claim kept a copy, what the inventory kept,
+    // which node refused the scope and why, and which could not be reached
+    // (a member of the replication set not present among them). Idempotent:
+    // asking again changes nothing more. What a delete keeps the collector
+    // frees later, once its claims go. Throws std::invalid_argument for a
+    // deadline that is not positive.
+    using RemoveDone = std::function<void(RemoveEvidence)>;
+    static constexpr dannan::sched::Waits remove_waits = store::DistributedStore::remove_waits;
+    void remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
+                boost::asio::any_io_executor executor, RemoveDone done);
+    RemoveEvidence remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline);
+
    private:
     friend class Context;
     explicit Objects(Node& node) : _node(node) {}
@@ -141,7 +162,9 @@ class Context {
   // each claiming node checks `writer` as it checks a write. There is no
   // release call, as in Macha: a claim goes when the owner's release
   // horizon (ReachabilityProvider::release) no longer refers to it and its
-  // clock has observed the claim, in the collector's pass.
+  // clock has observed the claim, in the node's collector, or when an
+  // instant delete (Objects::remove) whose clock has observed it names its
+  // object.
   class Claims {
    public:
     using Done = std::function<void(ClaimEvidence)>;

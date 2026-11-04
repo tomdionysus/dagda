@@ -17,6 +17,7 @@
 #include "dagda/contract/claim_store.h"
 #include "dagda/store/durability_ticket.h"
 #include "dagda/store/object_id.h"
+#include "dagda/store/remove.h"
 #include "dannan/context.h"
 #include "dannan/contract/scope.h"
 #include "dannan/net/codec.h"
@@ -54,6 +55,10 @@ inline constexpr MessageType trie_diff{561};
 // object_durability_barrier is its wait). The request is a ticket in its
 // protocol-23 form; the reply a bool_reply.
 inline constexpr MessageType durability_covered{768};
+// The instant delete (remove.h): the caller's observed clock, the ids and
+// the writer; the reply is remove_objects_reply.
+inline constexpr MessageType remove_objects{769};
+inline constexpr MessageType remove_objects_reply{770};
 
 // Replies.
 inline constexpr MessageType bool_reply{615};
@@ -72,6 +77,8 @@ inline constexpr uint32_t max_retain_batch = 1000000;
 // Each id of have_valid_objects is a full read on the peer, so a request is
 // bounded to one handler-sized job (Macha's have_valid_objects_max).
 inline constexpr uint32_t max_valid_batch = 16;
+// The ids one remove_objects carries; a larger delete is sent in parts.
+inline constexpr uint32_t max_remove_batch = 4096;
 
 // Registers every store type's wire rules (not their handlers) on `routes`.
 // Before the node starts: Dannan refuses registration after. Throws as
@@ -170,5 +177,26 @@ Bytes encode_retain(const RetainRequest& request);
 // Throws dannan::net::DecodeError for a class out of range, or no ids or
 // more than max_retain_batch.
 RetainRequest decode_retain(std::span<const uint8_t> payload);
+
+// remove_objects: u32 n, then (node 16, u64 sequence) x n, the caller's
+// observed clock as the claims' release frame carries it; u32 count and the
+// ids; the writer (always present).
+struct RemoveRequest {
+  contract::RetentionClock observed;
+  std::vector<ObjectId> ids;
+  WritePrincipal writer;
+};
+Bytes encode_remove(const RemoveRequest& request);
+// Throws dannan::net::DecodeError for a clock entry with no node or
+// sequence, a repeated node, no ids or more than max_remove_batch.
+RemoveRequest decode_remove(std::span<const uint8_t> payload);
+
+// remove_objects_reply: u8 refused; refused, u64 scope generation and the
+// reason as a string; otherwise u32 count, then per object the id, u8 state
+// (RemoveState), u16 n and the remaining claims (origin 16, u64 sequence) x n.
+Bytes encode_removal(const ReplicaRemoval& removal);
+// Throws dannan::net::DecodeError for a state out of range or past the
+// bounds.
+ReplicaRemoval decode_removal(std::span<const uint8_t> payload);
 
 }  // namespace dagda::store::message

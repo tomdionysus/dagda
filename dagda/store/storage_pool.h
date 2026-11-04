@@ -31,6 +31,7 @@
 #include "dagda/store/io_pressure.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/object_id.h"
+#include "dagda/store/object_lock.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/identity/node_id.h"
 
@@ -270,6 +271,10 @@ class StoragePool final : public contract::ObjectStore {
   // the steady clock (a test's stepped time).
   void time_advanced();
 
+  // The guard a claim on this pool's objects and an instant delete of them
+  // hold (object_lock.h).
+  ClaimLocks& claim_locks() const noexcept { return _claim_locks; }
+
  private:
   struct CursorItem {
     std::shared_ptr<Backend> backend;
@@ -333,6 +338,7 @@ class StoragePool final : public contract::ObjectStore {
   // so each is made from the one before.
   mutable dannan::contract::IoMutex _union_mutex;
   mutable std::shared_ptr<const ledger::TrieUnion> _union DANNAN_GUARDED_BY(_union_mutex);
+  mutable ClaimLocks _claim_locks;
 };
 
 }  // namespace dagda::store

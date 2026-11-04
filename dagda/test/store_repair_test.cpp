@@ -155,14 +155,15 @@ test::TestProvider referring_to(std::vector<ObjectId> ids) {
   return provider;
 }
 
-// Each node publishes what `provider` refers to, then runs repair passes
-// until `done`, as each node's maintenance would.
+// Each node publishes what `provider` refers to, then runs its maintenance
+// passes until `done` (step 7b: the node's own passes, which its thread runs
+// when on; no provider stays registered, so its collector removes nothing).
 bool converge(const std::vector<ClusterNode*>& nodes, test::TestProvider& provider, const std::function<bool()>& done,
               std::chrono::milliseconds bound = std::chrono::seconds(30)) {
   for (auto* node : nodes) node->publish_inventory(provider);
   return wait_until(
       [&] {
-        for (auto* node : nodes) (void)node->repair().pass();
+        for (auto* node : nodes) (void)node->run_maintenance_once();
         return done();
       },
       bound);
@@ -634,7 +635,7 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
   const auto run_until = [&](const ObjectId& id) {
     return wait_until(
         [&] {
-          (void)s2.repair().pass();
+          (void)s2.run_maintenance_once();
           return s2.data().valid(id);
         },
         10s);
@@ -655,7 +656,7 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
       read.frame = FrameType::foreground;
       while (watching_on.load()) (void)viewer.store().get(playing_id, read);
     });
-    const bool seen = wait_until([&] { return s2.repair().pass().paced_by & paced_by_peer_foreground; }, 10s);
+    const bool seen = wait_until([&] { return s2.run_maintenance_once().repair.paced_by & paced_by_peer_foreground; }, 10s);
     const auto [id, bytes] = lose_a_copy(1);
     const bool restored = run_until(id);
     const auto gates = s2.repair().gates();
@@ -679,7 +680,7 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
     // The busy class seen holding repair to its share, then a copy lost.
     const auto share_before = s2.repair().gates().share;
     ASSERT_TRUE(wait_until([&] {
-      (void)s2.repair().pass();
+      (void)s2.run_maintenance_once();
       return s2.repair().gates().share > share_before;
     }));
     const auto [id, bytes] = lose_a_copy(frame == FrameType::foreground ? 2 : 3);
@@ -725,7 +726,7 @@ TEST(StoreRepair, ARetainedMissingCopyIsRestoredWithoutReachability) {
   // Nothing referenced names it: no inventory is even published.
   ASSERT_TRUE(wait_until(
       [&] {
-        (void)s2.repair().pass();
+        (void)s2.run_maintenance_once();
         return s2.data().valid(id);
       },
       10s));
@@ -763,7 +764,7 @@ TEST(StoreRepair, HeldClaimsCostRepairNoCredit) {
 
   ASSERT_TRUE(wait_until(
       [&] {
-        (void)s2.repair().pass();
+        (void)s2.run_maintenance_once();
         return s2.data().valid(id);
       },
       5s));
@@ -1052,7 +1053,7 @@ TEST(StoreRepair, RepairKeepsACopyItHasNowhereToSend) {
 
   auto provider = referring_to(held);
   alone.publish_inventory(provider);
-  for (int pass = 0; pass < 3; ++pass) (void)alone.repair().pass();
+  for (int pass = 0; pass < 3; ++pass) (void)alone.run_maintenance_once();
   for (const auto& id : held) EXPECT_TRUE(alone.data().has(id));
 }
 

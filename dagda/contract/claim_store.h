@@ -84,6 +84,14 @@ class ClaimStore {
   static constexpr dannan::sched::Waits release_waits = write_waits;
   static constexpr dannan::sched::ThreadSafety release_safety = dannan::sched::ThreadSafety::single_owner;
   virtual size_t release_unreferenced(RetentionClass, const IdLookup& live, const RetentionClock& observed, size_t operation_budget) = 0;
+  // Releases, on the named objects only, the claims `observed` dominates, by
+  // the same observed-remove rule and journal frame as release_unreferenced:
+  // a claim from a dot the clock does not dominate survives, and an add the
+  // clock has already seen removed is refused when it arrives late. The
+  // instant delete's release. Returns the objects whose state changed.
+  static constexpr dannan::sched::Waits release_observed_waits = write_waits;
+  static constexpr dannan::sched::ThreadSafety release_observed_safety = dannan::sched::ThreadSafety::thread_safe;
+  virtual size_t release_observed(RetentionClass, const std::vector<ObjectId>& ids, const RetentionClock& observed) = 0;
   // Forgets causality tombstones once no claim remains and the object is
   // absent. Bounded; one journal frame. `exists` is called without the lock,
   // so this also waits on whatever `exists` waits on. Single owner (the

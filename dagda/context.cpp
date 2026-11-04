@@ -110,6 +110,36 @@ ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options, std::
 
 bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
 
+void Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
+                              boost::asio::any_io_executor executor, RemoveDone done) {
+  check_deadline(deadline);
+  RemoveEvidence base;
+  base.sought = ids;
+  std::sort(base.sought.begin(), base.sought.end());
+  base.sought.erase(std::unique(base.sought.begin(), base.sought.end()), base.sought.end());
+  // Whichever comes first, the delete's end or the deadline, answers; the
+  // other is dropped.
+  auto answered = std::make_shared<std::atomic<bool>>(false);
+  auto shared_done = std::make_shared<RemoveDone>(std::move(done));
+  _node.dannan().time().after(deadline, [answered, shared_done, base, executor] {
+    if (answered->exchange(true)) return;
+    auto evidence = base;
+    evidence.why = "the deadline passed with the delete still running; it may yet land on some nodes, and deleting again is harmless";
+    boost::asio::post(executor, [shared_done, evidence = std::move(evidence)] { (*shared_done)(evidence); });
+  });
+  _node.store().remove(std::move(ids), std::move(observed), std::move(writer), deadline, std::move(executor), [answered, shared_done](RemoveEvidence evidence) {
+    if (answered->exchange(true)) return;
+    (*shared_done)(std::move(evidence));
+  });
+}
+
+RemoveEvidence Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RemoveEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, RemoveDone done) {
+    remove(std::move(ids), std::move(observed), std::move(writer), deadline, std::move(executor), std::move(done));
+  });
+}
+
 // ---- Claims -----------------------------------------------------------------
 
 void Context::Claims::retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer,
