@@ -328,6 +328,20 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    tests, migrate to the v19 known answers; a Macha v18 state directory
    from the Macha session, migrated, opens and reads back every object
    and claim; `dagda_tests` loses the v18 store cases only, each named.
+7a. **The node, everything but heads** (2026-11-04 night,
+   `feature/node`). `dagda::Node`: opens a node's store from its
+   `dannan::Context` and config (the state layout, the DATA pool, the
+   control store, the cache, the claims, reference counts, the
+   distributed store, availability, repair, the storage server), taking
+   `StorageLock` on every root (step 6b's finding) and refusing a v18 disk
+   naming `dagda-migrate`; registers Dagda's message types (C5);
+   publishes its figures into Dannan's Status surface (C4); takes the
+   owner's `ReachabilityProvider` per domain (C3); starts and stops in
+   order. `dagda::Context` for the nouns that exist (Domains, Objects,
+   Claims, Leases, Tickets), with Dannan's callback shape (C1) and the
+   version check, its Heads, Retained and node-local spaces added at
+   step 4 before the version is frozen. The "0.18" wording in
+   `store/state_layout.cpp` reworded.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
