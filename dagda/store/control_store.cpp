@@ -24,6 +24,7 @@ std::unique_ptr<LocalStore> open_control_store(const std::filesystem::path& stat
   local.pack_target_size = options.pack_target_size;
   local.ledger_dir = state / "ledger" / "control";
   local.ledger_cache_bytes = static_cast<size_t>(ledger_cache_bytes);
+  local.sealing = options.sealing;
   return std::make_unique<LocalStore>(control_store_path(state, options), local, std::move(key), std::move(services), LocalStoreMode::authoritative);
 }
 

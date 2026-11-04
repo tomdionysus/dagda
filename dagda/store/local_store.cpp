@@ -146,6 +146,8 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _pack_threshold(options.pack_threshold),
       _pack_target_size(options.pack_target_size),
       _key(std::move(key)),
+      _sealing(options.sealing),
+      _role(options.role),
       _mode(mode),
       _threads(services.threads),
       _progress(services.progress),
@@ -153,7 +155,11 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _wall(services.wall),
       _files(files),
       _durability_domain(std::move(durability_domain)) {
-  if (!_key) throw std::invalid_argument("local store needs a storage key");
+  if (_sealing.layout != 18 && _sealing.layout != 19) throw std::invalid_argument("local store layout must be 18 or 19");
+  if (_role == domain::Role::member && !_key) throw std::invalid_argument("local store needs a storage key");
+  if (_role == domain::Role::blind && _sealing.layout != 19) throw std::invalid_argument("layout v18 has no blind role: every node is a member of domain v1");
+  if (_role == domain::Role::blind && !options.ledger_dir.empty() && !options.ledger_key)
+    throw std::invalid_argument("a blind store's held ledger needs a key of its own");
   if (!_limit) throw std::invalid_argument("local store limit must be non-zero");
   if ((_pack_threshold == 0) != (_pack_target_size == 0)) throw std::invalid_argument("pack threshold and target size must both be zero or non-zero");
   if (_pack_threshold && _pack_target_size < _pack_threshold) throw std::invalid_argument("pack target size must be >= pack threshold");
@@ -177,7 +183,7 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
   if (!options.ledger_dir.empty()) {
     ledger::ObjectTrie::Options ledger_options;
     ledger_options.cache_bytes = options.ledger_cache_bytes;
-    _ledger = std::make_unique<ledger::HeldLedger>(options.ledger_dir, _key, ledger_options, _logger.child("ledger"));
+    _ledger = std::make_unique<ledger::HeldLedger>(options.ledger_dir, options.ledger_key ? options.ledger_key : _key, ledger_options, _logger.child("ledger"));
   }
 
   // Pack indexes are rebuilt from the append-only records at every start. A
@@ -468,7 +474,7 @@ void LocalStore::select_active_pack_locked(uint64_t next_record_size) {
   }
 }
 
-bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, std::span<const uint8_t> data, uint64_t touched_ms, PackEntry* entry,
+bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, const SealedObject* sealed, uint64_t touched_ms, PackEntry* entry,
                                            uint64_t* record_size, Lock& lock) {
   PackHeader header;
   header.type = type;
@@ -480,15 +486,15 @@ bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, std
   uint64_t start = 0;
   {
     Unlocked unlocked(lock, _mutex);
-    Bytes payload;
+    std::span<const uint8_t> payload;
     try {
       if (type == pack_put) {
-        auto sealed = seal_object(*_key, id, data);
-        payload = std::move(sealed.ciphertext);
-        header.plain_size = data.size();
+        if (!sealed) throw std::logic_error("a pack put record needs its sealed object");
+        payload = sealed->ciphertext;
+        header.plain_size = sealed->plain_size;
         header.payload_size = payload.size();
-        header.nonce = sealed.nonce;
-        header.tag = sealed.tag;
+        header.nonce = sealed->nonce;
+        header.tag = sealed->tag;
       }
       encoded = encode_pack_header(header);
       total = encoded.size() + payload.size();
@@ -560,7 +566,7 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
     Unlocked unlocked(lock, _mutex);
     const auto payload = _files.read_at(entry.file, entry.payload_offset, static_cast<size_t>(entry.payload_size));
     if (!payload) throw std::runtime_error("short packed object read");
-    plain = open_object(*_key, id, entry.nonce, entry.tag, *payload, entry.plain_size);
+    plain = open_object(*_key, _sealing, id, entry.nonce, entry.tag, *payload, entry.plain_size);
   } catch (...) {
     release_reader();
     throw;
@@ -569,9 +575,65 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
   return plain;
 }
 
+std::optional<LocalStore::SealedObject> LocalStore::get_sealed_locked(const ObjectId& id, Lock& lock) const {
+  if (const auto found = _packed.find(id); found != _packed.end()) {
+    const auto entry = found->second;
+    ++_active_pack_readers[entry.file];
+    auto release_reader = [&]() DANNAN_REQUIRES(_mutex) {
+      const auto active = _active_pack_readers.find(entry.file);
+      if (active == _active_pack_readers.end() || active->second == 0) throw std::logic_error("local store pack reader underflow");
+      if (--active->second == 0) _active_pack_readers.erase(active);
+      _pack_readers_cv.notify_all();
+    };
+    SealedObject out;
+    try {
+      Unlocked unlocked(lock, _mutex);
+      auto payload = _files.read_at(entry.file, entry.payload_offset, static_cast<size_t>(entry.payload_size));
+      if (!payload) throw std::runtime_error("short packed object read");
+      out.plain_size = entry.plain_size;
+      out.nonce = entry.nonce;
+      out.tag = entry.tag;
+      out.ciphertext = std::move(*payload);
+    } catch (...) {
+      release_reader();
+      throw;
+    }
+    release_reader();
+    return out;
+  }
+  const auto file = path(id);
+  Unlocked unlocked(lock, _mutex);
+  if (!std::filesystem::exists(file)) return std::nullopt;
+  const auto encoded = _files.read(file);
+  if (encoded.empty()) return std::nullopt;
+  const auto loose = decode_loose(encoded);
+  SealedObject out;
+  out.plain_size = loose.plain_size;
+  out.nonce = loose.nonce;
+  out.tag = loose.tag;
+  out.ciphertext.assign(loose.ciphertext.begin(), loose.ciphertext.end());
+  return out;
+}
+
 Bytes LocalStore::open_loose(const ObjectId& id, std::span<const uint8_t> file) const {
   const auto loose = decode_loose(file);
-  return open_object(*_key, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size);
+  return open_object(*_key, _sealing, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size);
+}
+
+LocalStore::SealedObject LocalStore::seal(const ObjectId& id, std::span<const uint8_t> data) const {
+  if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot seal");
+  auto sealed = seal_object(*_key, _sealing, id, data);
+  SealedObject out;
+  out.plain_size = data.size();
+  out.nonce = sealed.nonce;
+  out.tag = sealed.tag;
+  out.ciphertext = std::move(sealed.ciphertext);
+  return out;
+}
+
+Bytes LocalStore::open(const ObjectId& id, const SealedObject& sealed) const {
+  if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot open");
+  return open_object(*_key, _sealing, id, sealed.nonce, sealed.tag, sealed.ciphertext, sealed.plain_size);
 }
 
 void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
@@ -696,10 +758,10 @@ void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
   }
 }
 
-bool LocalStore::put_loose_locked(const ObjectId& id, std::span<const uint8_t> data, uint64_t& generation, Lock& lock) {
-  // Reserve capacity and mark accounting dirty under _mutex, then seal and
-  // install under the object's lock only.
-  const uint64_t need = loose_header_size + data.size();
+bool LocalStore::put_loose_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+  // Reserve capacity and mark accounting dirty under _mutex, then install
+  // under the object's lock only.
+  const uint64_t need = loose_header_size + sealed.ciphertext.size();
   if (!physical_space_available_locked(need)) return false;
   const bool ephemeral = _mode == LocalStoreMode::ephemeral;
   _reserved_write_bytes += need;
@@ -726,8 +788,10 @@ bool LocalStore::put_loose_locked(const ObjectId& id, std::span<const uint8_t> d
     std::optional<LooseStamp> installed_stamp;
     {
       Unlocked unlocked(lock, _mutex);
-      const auto sealed = seal_object(*_key, id, data);
-      const auto header = encode_loose_header(data.size(), sealed);
+      dannan::identity::SealedData record;
+      record.nonce = sealed.nonce;
+      record.tag = sealed.tag;
+      const auto header = encode_loose_header(sealed.plain_size, record);
       if (header.size() + sealed.ciphertext.size() != need) throw std::logic_error("local store loose object size mismatch");
       _files.install(file, header, sealed.ciphertext);
       installed_stamp = loose_stamp(file);
@@ -758,8 +822,8 @@ bool LocalStore::put_loose_locked(const ObjectId& id, std::span<const uint8_t> d
   }
 }
 
-bool LocalStore::put_packed_locked(const ObjectId& id, std::span<const uint8_t> data, uint64_t& generation, Lock& lock) {
-  const uint64_t need = pack_header_size + data.size();
+bool LocalStore::put_packed_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+  const uint64_t need = pack_header_size + sealed.ciphertext.size();
   if (!physical_space_available_locked(need)) return false;
   const bool ephemeral = _mode == LocalStoreMode::ephemeral;
   _reserved_write_bytes += need;
@@ -783,7 +847,7 @@ bool LocalStore::put_packed_locked(const ObjectId& id, std::span<const uint8_t> 
   PackEntry entry;
   uint64_t record_size = 0;
   try {
-    append_pack_record_locked(pack_put, id, data, _wall.unix_ms(), &entry, &record_size, lock);
+    append_pack_record_locked(pack_put, id, &sealed, _wall.unix_ms(), &entry, &record_size, lock);
   } catch (...) {
     if (_reserved_write_bytes < need) throw std::logic_error("local store packed write reservation underflow");
     _reserved_write_bytes -= need;
@@ -807,7 +871,50 @@ bool LocalStore::put_packed_locked(const ObjectId& id, std::span<const uint8_t> 
   return true;
 }
 
+bool LocalStore::store_sealed_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+  const bool pack = _pack_threshold && sealed.plain_size <= _pack_threshold;
+  return pack ? put_packed_locked(id, sealed, generation, lock) : put_loose_locked(id, sealed, generation, lock);
+}
+
+bool LocalStore::put_sealed(const ObjectId& id, const SealedObject& sealed) {
+  if (sealed.ciphertext.size() != sealed.plain_size) throw std::invalid_argument("sealed object size mismatch");
+  await_accounting();
+  ObjectLock object_guard(_object_locks.mutex(id));
+  Lock lock(_mutex);
+  wait_for_accounting(lock);
+  // Held already: the record stands. A member re-putting plaintext verifies
+  // and re-affirms (put); a sealed copy is taken only where none is.
+  if (_packed.contains(id)) return true;
+  const auto file = path(id);
+  bool loose_exists = false;
+  {
+    Unlocked unlocked(lock, _mutex);
+    loose_exists = std::filesystem::exists(file);
+  }
+  if (loose_exists) return true;
+  uint64_t generation = 0;
+  if (!store_sealed_locked(id, sealed, generation, lock)) return false;
+  if (generation) {
+    lock.unlock();
+    _durability_domain->await_durable(generation, DurabilityUrgency::immediate);
+  }
+  return true;
+}
+
+std::optional<LocalStore::SealedObject> LocalStore::get_sealed(const ObjectId& id) const {
+  ObjectLock object_guard(_object_locks.mutex(id));
+  Lock lock(_mutex);
+  return get_sealed_locked(id, lock);
+}
+
+std::optional<dannan::identity::Hash256> LocalStore::held_digest(const ObjectId& id) const {
+  const auto sealed = get_sealed(id);
+  if (!sealed) return std::nullopt;
+  return blind_digest(sealed->nonce, sealed->tag, sealed->ciphertext);
+}
+
 bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, WriteDurability durability, uint64_t* deferred_generation) {
+  if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only: put_sealed");
   if (object_id(data) != id) throw std::runtime_error("object hash mismatch");
   await_accounting();
   ObjectLock object_guard(_object_locks.mutex(id));
@@ -828,7 +935,7 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
       PackEntry record;
       if (_mode != LocalStoreMode::ephemeral) ensure_accounting_dirty(lock);
       const auto touched = _wall.unix_ms();
-      append_pack_record_locked(pack_touch, id, {}, touched, &record, &record_size, lock);
+      append_pack_record_locked(pack_touch, id, nullptr, touched, &record, &record_size, lock);
       _packed.at(id).touched_unix_ms = touched;
       _pack_dead_bytes += record_size;
       _used.fetch_add(record_size, std::memory_order_relaxed);
@@ -905,8 +1012,14 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
     pack = _pack_threshold && data.size() <= _pack_threshold;
   }
 
+  // Sealed under the object's lock with the index free, as the install is.
+  SealedObject sealed;
+  {
+    Unlocked unlocked(lock, _mutex);
+    sealed = seal(id, data);
+  }
   uint64_t generation = 0;
-  const bool stored = pack ? put_packed_locked(id, data, generation, lock) : put_loose_locked(id, data, generation, lock);
+  const bool stored = pack ? put_packed_locked(id, sealed, generation, lock) : put_loose_locked(id, sealed, generation, lock);
   if (!stored) return false;
   if (deferred_generation) *deferred_generation = generation;
   if (durability == WriteDurability::immediate && generation) {
@@ -917,6 +1030,7 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
 }
 
 std::optional<Bytes> LocalStore::get(const ObjectId& id) const {
+  if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only: get_sealed");
   ObjectLock object_guard(_object_locks.mutex(id));
   Lock lock(_mutex);
   if (_packed.contains(id)) return get_packed_locked(id, lock);
@@ -989,6 +1103,10 @@ bool LocalStore::has(const ObjectId& id) const noexcept {
 
 bool LocalStore::valid(const ObjectId& id) const noexcept {
   try {
+    if (_role != domain::Role::member) {
+      const auto sealed = get_sealed(id);
+      return sealed && sealed->ciphertext.size() == sealed->plain_size;
+    }
     return get(id).has_value();
   } catch (...) {
     return false;

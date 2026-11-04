@@ -19,6 +19,11 @@ StorageKey StorageKey::derive_v1(const dannan::identity::ClusterKey& cluster) {
   return StorageKey(dannan::identity::hkdf_sha256_secret(cluster.master, {}, label));
 }
 
+std::optional<StorageKey> StorageKey::derive_node_local(const dannan::Identity& identity) {
+  if (!identity.has_custody()) return std::nullopt;
+  return StorageKey(identity.derive_local(node_local_label));
+}
+
 StorageKey::StorageKey(dannan::identity::Secret key) : _key(std::move(key)) {
   if (_key.size() != 32) throw std::invalid_argument("a storage key is 32 bytes");
 }

@@ -65,10 +65,27 @@ ObjectId decode_id(std::span<const uint8_t> payload) {
   return id;
 }
 
-Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data) {
+void encode_principal(Writer& writer, const WritePrincipal& principal) {
+  writer.u8(static_cast<uint8_t>(principal.principal.kind));
+  writer.string(principal.principal.id);
+  writer.string(principal.prefix);
+}
+
+WritePrincipal decode_principal(Reader& reader) {
+  WritePrincipal out;
+  const auto kind = reader.u8();
+  if (kind > static_cast<uint8_t>(dannan::contract::Principal::Kind::directory)) throw DecodeError("invalid principal kind");
+  out.principal.kind = static_cast<dannan::contract::Principal::Kind>(kind);
+  out.principal.id = reader.string(4096);
+  out.prefix = reader.string(4096);
+  return out;
+}
+
+Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal) {
   Writer writer;
   writer.fixed(id.bytes);
   writer.bytes(data);
+  if (principal) encode_principal(writer, *principal);
   return writer.take();
 }
 
@@ -77,6 +94,7 @@ ObjectPayload decode_object(std::span<const uint8_t> payload) {
   ObjectPayload out;
   out.id = read_id(reader);
   out.data = reader.bytes(max_object_bytes);
+  if (reader.remaining()) out.principal = decode_principal(reader);
   reader.finish();
   return out;
 }
@@ -227,6 +245,7 @@ Bytes encode_retain(const RetainRequest& request) {
   writer.u64(request.dot.sequence);
   writer.u32(static_cast<uint32_t>(request.ids.size()));
   for (const auto& id : request.ids) writer.fixed(id.bytes);
+  if (request.principal) encode_principal(writer, *request.principal);
   return writer.take();
 }
 
@@ -241,9 +260,10 @@ RetainRequest decode_retain(std::span<const uint8_t> payload) {
   out.dot.sequence = reader.u64();
   const auto count = reader.u32();
   if (!count || count > max_retain_batch) throw DecodeError("invalid retention object count");
-  if (reader.remaining() != static_cast<size_t>(count) * 32) throw DecodeError("retention batch size does not match its count");
+  if (reader.remaining() < static_cast<size_t>(count) * 32) throw DecodeError("retention batch size does not match its count");
   out.ids.reserve(count);
   for (uint32_t i = 0; i < count; ++i) out.ids.push_back(read_id(reader));
+  if (reader.remaining()) out.principal = decode_principal(reader);
   reader.finish();
   return out;
 }

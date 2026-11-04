@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "dagda/contract/object_store.h"
+#include "dagda/domain/domain.h"
 #include "dagda/domain/storage_key.h"
 #include "dagda/ledger/held_ledger.h"
 #include "dagda/store/durability_domain.h"
@@ -31,6 +32,7 @@
 #include "dagda/store/object_id.h"
 #include "dagda/store/object_lock.h"
 #include "dagda/store/presence_index.h"
+#include "dagda/store/sealing.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/status/log.h"
@@ -77,6 +79,19 @@ struct LocalStoreOptions {
   // none, and the store walks its objects at every start.
   std::filesystem::path ledger_dir{};
   size_t ledger_cache_bytes = 8ULL * 1024 * 1024;
+  // How objects are sealed: layout v18, Macha's, or v19 with the domain in
+  // the associated data (sealing.h). A v18 store is written as v18 for ever.
+  SealingScheme sealing{};
+  // This node's role in the store's domain (requirement D3). A blind store
+  // takes no storage key and holds ciphertext only: put_sealed, get_sealed
+  // and held_digest; put and get refuse. Only a v19 store can be blind:
+  // every node is a member of domain v1.
+  domain::Role role = domain::Role::member;
+  // The key the held ledger (on the state device) is sealed under when it is
+  // not the domain's: a blind store has no domain key, so it needs one of
+  // its own here (the node's node-local key). A member's ledger is under the
+  // domain key unless this is given.
+  std::shared_ptr<const domain::StorageKey> ledger_key{};
 
   // Loose objects only, as the cache and some tests keep them.
   static LocalStoreOptions loose_only(uint64_t limit) {
@@ -132,7 +147,8 @@ struct LocalStoreDiagnostics {
 // Objects in one directory tree on one device (requirements S1 to S9, S16 to
 // S18): loose files above the pack threshold, records in packs at or below
 // it, each sealed under the domain's storage key with its id as the
-// associated data, in layout v18's formats (local_format.h).
+// associated data (and, from layout v19, the domain: sealing.h), in layout
+// v18's formats (local_format.h).
 //
 // The packs are replayed at every open, a torn tail truncated and a damaged
 // span skipped. Compaction is copy-on-write, one victim per call. A put is
@@ -171,12 +187,24 @@ class LocalStore final : public contract::ObjectStore {
     bool loose_initialized = false;
   };
 
+  // A record as a member sealed it: the plaintext's size, the nonce, the tag
+  // and the ciphertext. What a blind store holds and what either role moves
+  // without opening.
+  struct SealedObject {
+    uint64_t plain_size = 0;
+    std::array<uint8_t, 12> nonce{};
+    std::array<uint8_t, 16> tag{};
+    Bytes ciphertext;
+    bool operator==(const SealedObject&) const = default;
+  };
+
   // Opens or creates the store at `root`. Without a domain an authoritative
   // store makes its own over `root` (500 ms window); an ephemeral one keeps
-  // none. Throws std::invalid_argument for options that do not hold
-  // together, and std::runtime_error if the packs or the accounting cannot
-  // be opened. Replays the packs, then starts the scan and the presence walk
-  // as the accounting and the ledger need them. Waits on the device.
+  // none. The key is the domain's; a blind store (options.role) takes none.
+  // Throws std::invalid_argument for options that do not hold together, and
+  // std::runtime_error if the packs or the accounting cannot be opened.
+  // Replays the packs, then starts the scan and the presence walk as the
+  // accounting and the ledger need them. Waits on the device.
   LocalStore(std::filesystem::path root, LocalStoreOptions options, std::shared_ptr<const domain::StorageKey> key, Services services,
              LocalStoreMode mode = LocalStoreMode::authoritative, std::shared_ptr<DurabilityDomain> durability_domain = {},
              LocalStoreFiles& files = posix_local_store_files());
@@ -186,13 +214,31 @@ class LocalStore final : public contract::ObjectStore {
   LocalStore(const LocalStore&) = delete;
   LocalStore& operator=(const LocalStore&) = delete;
 
+  domain::Role role() const noexcept { return _role; }
+  const SealingScheme& sealing() const noexcept { return _sealing; }
+
   // Strict: true once the object is durable here; false if admission refused
   // it (capacity or reserve). Throws std::runtime_error for bytes that are
-  // not the id's ("object hash mismatch") or a device that failed.
+  // not the id's ("object hash mismatch") or a device that failed, and
+  // std::logic_error on a blind store, which cannot seal.
   bool put(const ObjectId&, std::span<const uint8_t>);
   // As put, durable once the returned generation is (0: already durable);
   // nothing if admission refused it.
   std::optional<uint64_t> put_deferred(const ObjectId&, std::span<const uint8_t>);
+  // Stores a record a member sealed, as it is, under either role: strict,
+  // true once durable, false if admission refused it; true at once for an
+  // object already held. The id is taken to name the plaintext; a blind
+  // store cannot check it, and a member does not open it here. Throws
+  // std::invalid_argument for a record whose sizes disagree and
+  // std::runtime_error for a device that failed.
+  bool put_sealed(const ObjectId&, const SealedObject&);
+  // The record as held, unopened; nothing if not held. Either role. Throws
+  // std::runtime_error for a record that cannot be read.
+  std::optional<SealedObject> get_sealed(const ObjectId&) const;
+  // The ciphertext digest of the record held (sealing.h, blind_digest):
+  // what a blind node compares with the digest a member bound to the id.
+  // Nothing if not held.
+  std::optional<dannan::identity::Hash256> held_digest(const ObjectId&) const;
   void durability_barrier(uint64_t required_generation, DurabilityUrgency = DurabilityUrgency::batchable);
   // Everything this store has done, immediately.
   void durability_barrier();
@@ -201,7 +247,8 @@ class LocalStore final : public contract::ObjectStore {
 
   // The plaintext, opened and checked against its id; nothing if not held.
   // Throws ObjectIntegrityError or std::runtime_error for bytes that do not
-  // open. Waits on the device under the object's lock.
+  // open, and std::logic_error on a blind store, which cannot open. Waits on
+  // the device under the object's lock.
   std::optional<Bytes> get(const ObjectId&) const;
   // True once a put has installed the object; false while it is being
   // written and after a remove. Once seeded or warm it waits only on the
@@ -209,6 +256,10 @@ class LocalStore final : public contract::ObjectStore {
   // is checked on disk under the object's lock and an empty file is pruned.
   // Never verifies content: get() and valid() do.
   bool has(const ObjectId&) const noexcept override;
+  // A member's copy reads back and opens to its id. A blind store's is a
+  // whole record whose ciphertext is the recorded size: what it can tell
+  // with no key (the digest check is the caller's, held_digest).
+  bool valid(const ObjectId&) const noexcept;
   // From the held ledger once seeded. Without a ledger, or before its seed,
   // the identity is incomplete and `held` answers nothing.
   contract::HeldView held_view() const override;
@@ -218,7 +269,6 @@ class LocalStore final : public contract::ObjectStore {
   uint64_t losses() const noexcept { return _losses.load(std::memory_order_acquire); }
   // Whether warm-up has finished and has() answers from the index alone.
   bool presence_authoritative() const DANNAN_EXCLUDES(_mutex);
-  bool valid(const ObjectId&) const noexcept;
 
   // True if it held the object. A packed object gets a tombstone, a loose one
   // is unlinked; neither waits for durability (requirement S17).
@@ -313,12 +363,26 @@ class LocalStore final : public contract::ObjectStore {
   void ensure_accounting_dirty(dannan::contract::Lock&) DANNAN_REQUIRES(_mutex);
   void reap_durable_generations_locked() DANNAN_REQUIRES(_mutex);
   bool put_impl(const ObjectId&, std::span<const uint8_t>, WriteDurability, uint64_t*) DANNAN_EXCLUDES(_mutex, _pack_io_mutex);
-  // Store a new object; _mutex is released across the I/O. `generation` is
-  // the durability generation to await (0 when none).
-  bool put_loose_locked(const ObjectId&, std::span<const uint8_t>, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+  // Seals under the store's scheme. The caller holds the object's lock and
+  // not _mutex.
+  SealedObject seal(const ObjectId&, std::span<const uint8_t>) const;
+  // The sealed record opened and checked against the id.
+  Bytes open(const ObjectId&, const SealedObject&) const;
+  // Stores a record not held yet, sealed already, as a loose file or a pack
+  // record by its plaintext size; `generation` is the durability generation
+  // to await (0 when none). Called with the object's lock and _mutex held,
+  // the object known absent.
+  bool store_sealed_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
       DANNAN_EXCLUDES(_pack_io_mutex);
-  bool put_packed_locked(const ObjectId&, std::span<const uint8_t>, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+  // Store a new object; _mutex is released across the I/O.
+  bool put_loose_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
       DANNAN_EXCLUDES(_pack_io_mutex);
+  bool put_packed_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+      DANNAN_EXCLUDES(_pack_io_mutex);
+  // The record held, unopened: a packed one's payload read at its entry, a
+  // loose one's file decoded. Called with the object's lock and _mutex held;
+  // _mutex is released across the read.
+  std::optional<SealedObject> get_sealed_locked(const ObjectId&, dannan::contract::Lock&) const DANNAN_REQUIRES(_mutex);
   void scan(std::stop_token) DANNAN_EXCLUDES(_mutex);
   void warm_presence_index(std::stop_token) DANNAN_EXCLUDES(_mutex);
   // Constructor only, before any other thread exists, so it takes no lock.
@@ -327,8 +391,9 @@ class LocalStore final : public contract::ObjectStore {
   std::optional<Bytes> get_packed_locked(const ObjectId&, dannan::contract::Lock&) const DANNAN_REQUIRES(_mutex);
   // Opens a loose object's file bytes: integrity-checked plaintext.
   Bytes open_loose(const ObjectId&, std::span<const uint8_t> file) const;
-  // Releases _mutex and takes _pack_io_mutex across the append.
-  bool append_pack_record_locked(uint8_t type, const ObjectId&, std::span<const uint8_t>, uint64_t touched_ms, PackEntry*, uint64_t* record_size,
+  // Releases _mutex and takes _pack_io_mutex across the append. A put
+  // record carries the sealed object; a tombstone and a touch carry none.
+  bool append_pack_record_locked(uint8_t type, const ObjectId&, const SealedObject*, uint64_t touched_ms, PackEntry*, uint64_t* record_size,
                                  dannan::contract::Lock&) DANNAN_REQUIRES(_mutex) DANNAN_EXCLUDES(_pack_io_mutex);
   void select_active_pack_locked(uint64_t next_record_size) DANNAN_REQUIRES(_pack_io_mutex);
   // Releases _mutex (keeping _pack_io_mutex) across the compaction I/O.
@@ -362,7 +427,10 @@ class LocalStore final : public contract::ObjectStore {
   const uint64_t _reserve_free;
   const size_t _pack_threshold;
   const size_t _pack_target_size;
+  // Null on a blind store.
   const std::shared_ptr<const domain::StorageKey> _key;
+  const SealingScheme _sealing;
+  const domain::Role _role;
   const LocalStoreMode _mode;
   dannan::supervise::SupervisedThreads& _threads;
   dannan::supervise::StartupProgress& _progress;

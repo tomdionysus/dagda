@@ -17,7 +17,10 @@ add_executable(dagda_tests
   version_test.cpp
   contract_gates_test.cpp
   contract_include_direction_test.cpp
+  domain_cluster_keys_test.cpp
+  domain_domain_id_test.cpp
   domain_storage_key_test.cpp
+  domain_wrap_test.cpp
   lease_claimed_collection_test.cpp
   lease_fence_test.cpp
   lease_keeper_test.cpp
@@ -41,6 +44,7 @@ add_executable(dagda_tests
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
   store_io_pressure_test.cpp
+  store_layout_v19_test.cpp
   store_local_format_test.cpp
   store_local_store_durability_test.cpp
   store_local_store_ledger_test.cpp
@@ -52,6 +56,7 @@ add_executable(dagda_tests
   store_presence_index_test.cpp
   store_repair_test.cpp
   store_replica_selector_test.cpp
+  store_scope_test.cpp
   store_sealing_test.cpp
   store_state_layout_test.cpp
   store_storage_pool_test.cpp

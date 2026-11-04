@@ -16,6 +16,8 @@
 #include "dagda/ledger/trie_diff.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/placement.h"
+#include "dannan/contract/scope.h"
+#include "dannan/identity/node_id.h"
 #include "dannan/membership/node_record.h"
 
 namespace dagda::store {
@@ -98,6 +100,15 @@ std::optional<DataAdmission> StorageServer::admit_data(FrameType frame, uint64_t
 
 std::optional<IoReserve::Slot> StorageServer::admit_control() { return store::admit_control(_admission.io, _options.admission_wait); }
 
+std::optional<Handled> StorageServer::scope_refusal(const dannan::membership::NodeRecord& peer, const std::optional<message::WritePrincipal>& writer) const {
+  const dannan::contract::Principal sender{dannan::contract::Principal::Kind::node, dannan::identity::to_string(peer.id)};
+  const auto& principal = writer ? writer->principal : sender;
+  const auto& prefix = writer && !writer->prefix.empty() ? writer->prefix : _options.domain.name;
+  const auto decision = _context.identity().verify(principal, prefix);
+  if (decision.allowed) return std::nullopt;
+  return Handled::failed(403, "scope_refused", decision.why + " (scope generation " + std::to_string(decision.generation) + ")");
+}
+
 Handled StorageServer::answer_trie(const Message& request) {
   const auto question = ledger::decode_trie_question(request.payload);
   const auto now = std::chrono::steady_clock::now();
@@ -134,7 +145,7 @@ Handled StorageServer::answer_trie(const Message& request) {
   }
 }
 
-Handled StorageServer::handle(const dannan::membership::NodeRecord&, FrameType frame, const Message& request) {
+Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameType frame, const Message& request) {
   const auto type = request.type;
   const bool control_frame = dannan::sched::work_class(frame) == dannan::sched::WorkClass::control;
   const uint64_t extent = std::max<uint64_t>(1, _options.extent_size);
@@ -222,6 +233,9 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord&, FrameType f
     if (type == message::put_object || type == message::put_object_deferred) {
       auto object = message::decode_object(request.payload);
       if (object.data.size() > _options.extent_size) return Handled::failed(413, "too_large", "DATA object exceeds configured extent size");
+      // Checked before the device is asked for anything: a refused writer
+      // costs no admission.
+      if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
       const auto admitted = admit_data(frame, object.data.size(), true);
       if (!admitted) return busy();
       _context.activity().note(frame, object.data.size());
@@ -240,6 +254,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord&, FrameType f
     }
     if (type == message::put_control_object) {
       const auto object = message::decode_object(request.payload);
+      if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
       const auto slot = admit_control();
       if (!slot) return busy();
       if (!_control.put(object.id, object.data)) return Handled::failed(507, "storage_full", "control storage limit reached");
@@ -287,6 +302,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord&, FrameType f
     }
     if (type == message::retain_objects) {
       const auto retain = message::decode_retain(request.payload);
+      if (auto refused = scope_refusal(peer, retain.principal)) return std::move(*refused);
       // A claim says "this node holds the object": index presence, not a
       // read. The bytes were verified when put and on every read; scrub
       // finds later corruption. The claim's journal is control work.

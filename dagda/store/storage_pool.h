@@ -55,6 +55,15 @@ struct StoragePoolOptions {
   size_t pack_threshold = 1024 * 1024;
   size_t pack_target_size = 64 * 1024 * 1024;
   uint64_t ledger_cache_bytes = ledger_cache_share(default_ledger_cache_bytes, LedgerShare::data_held);
+  // The pool's domain, as its backends are sealed and marked: layout v18 for
+  // domain v1 (Macha's disks, their bytes unchanged), layout v19 with the
+  // domain for any other (Tom, 2026-11-04 evening). A backend made for one
+  // is refused by a pool of another.
+  SealingScheme sealing{};
+  // This node's role in the domain: a blind pool takes no storage key, opens
+  // v19 backends only, and keeps their held ledgers under `ledger_key`.
+  domain::Role role = domain::Role::member;
+  std::shared_ptr<const domain::StorageKey> ledger_key{};
 };
 
 // A durability ticket naming another process, or a domain or backend
@@ -74,12 +83,14 @@ class StaleDurabilityTicket : public std::runtime_error {
 // Rebalance moves each object onto its preferred backend.
 //
 // A backend is a directory holding a marker (`.macha.backend`, layout v18:
-// "macha-backend-v18 <node> <token>"), mirrored under
-// <state>/backend-identities/. A disk of another node, the wrong disk in a
-// known place, or a non-empty unmarked directory is refused and stays
-// offline; an empty one is adopted. Backends on one filesystem share a
-// durability domain. A backend's incarnation is a counter, new each time it
-// comes online, so a ticket outlives neither its process nor its disk.
+// "macha-backend-v18 <node> <token>"; layout v19: "dagda-backend-v19 <node>
+// <token> <domain>"), mirrored under <state>/backend-identities/. A disk of
+// another node, the wrong disk in a known place, a disk of another domain or
+// layout, or a non-empty unmarked directory is refused and stays offline; an
+// empty one is adopted under the pool's layout. Backends on one filesystem
+// share a durability domain. A backend's incarnation is a counter, new each
+// time it comes online, so a ticket outlives neither its process nor its
+// disk.
 //
 // Lock order: the pool's lock, then a backend's, then the domain lock. All
 // three guard memory only: no device operation runs under any of them.
@@ -114,8 +125,9 @@ class StoragePool final : public contract::ObjectStore {
   // `epoch` its process's durability epoch, which every ticket carries. Each
   // backend keeps its held ledger under <state>/ledger/data-<token>. Opens
   // every backend it can; one that cannot be opened is offline, never an
-  // error. Throws std::invalid_argument for two backends at one path. Waits
-  // on the devices.
+  // error. Throws std::invalid_argument for two backends at one path, for a
+  // member pool with no key, or a blind pool of layout v18 or with no ledger
+  // key. Waits on the devices.
   StoragePool(std::filesystem::path state, dannan::identity::NodeId node, dannan::identity::NodeId epoch, StoragePoolOptions options,
               std::shared_ptr<const domain::StorageKey> key, LocalStore::Services services);
   ~StoragePool();
@@ -137,12 +149,24 @@ class StoragePool final : public contract::ObjectStore {
   const DiskServiceMonitor& service_monitor() const noexcept { return _service_monitor; }
   void configure_service_monitor(DiskServiceMonitor::Thresholds thresholds) noexcept { _service_monitor.configure(thresholds); }
 
+  domain::Role role() const noexcept { return _role; }
+  const SealingScheme& sealing() const noexcept { return _sealing; }
+
   // Strict: true once durable on the first backend that took it; false if
-  // none would. A put of an object already held reaffirms its age.
+  // none would. A put of an object already held reaffirms its age. Throws
+  // std::logic_error on a blind pool, which cannot seal.
   bool put(const ObjectId& id, std::span<const uint8_t> data);
   // Provisional: the ticket to await, from the backend that took it; nothing
   // if none would.
   std::optional<DurabilityTicket> put_deferred(const ObjectId& id, std::span<const uint8_t> data);
+  // A record a member sealed, stored as it is on the first backend that
+  // takes it (LocalStore::put_sealed); either role. Throws
+  // std::invalid_argument for a record whose sizes disagree.
+  bool put_sealed(const ObjectId& id, const LocalStore::SealedObject& sealed);
+  // The record as held, unopened, from the first online backend holding it;
+  // and its ciphertext digest. Either role.
+  std::optional<LocalStore::SealedObject> get_sealed(const ObjectId& id) const;
+  std::optional<dannan::identity::Hash256> held_digest(const ObjectId& id) const;
   // Returns once the ticket's generation is durable. Throws
   // StaleDurabilityTicket if it names another process, or a domain or
   // incarnation no longer online; std::invalid_argument for an invalid one;
@@ -154,7 +178,8 @@ class StoragePool final : public contract::ObjectStore {
   // present implies durable. Nothing if no online backend holds it.
   std::optional<DurabilityTicket> reassert_durable(const ObjectId& id);
   // Reads in rank order. A copy that does not open is an object failure, not
-  // a backend's: it is removed and the next backend asked.
+  // a backend's: it is removed and the next backend asked. Throws
+  // std::logic_error on a blind pool, which cannot open.
   std::optional<Bytes> get(const ObjectId& id) const;
   bool has(const ObjectId& id) const override;
   // The union of every online backend's held trie, its identity the union's
@@ -239,6 +264,9 @@ class StoragePool final : public contract::ObjectStore {
   const dannan::identity::NodeId _node;
   const dannan::identity::NodeId _epoch;
   const std::shared_ptr<const domain::StorageKey> _key;
+  const SealingScheme _sealing;
+  const domain::Role _role;
+  const std::shared_ptr<const domain::StorageKey> _ledger_key;
   const LocalStore::Services _services;
   const std::chrono::milliseconds _durability_batch_window;
   const size_t _pack_threshold;

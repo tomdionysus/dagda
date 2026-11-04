@@ -18,9 +18,11 @@
 #include <vector>
 
 #include "dagda/contract/claim_store.h"
+#include "dagda/domain/domain.h"
 #include "dagda/ledger/trie_union.h"
 #include "dagda/store/data_work.h"
 #include "dagda/store/local_store.h"
+#include "dagda/store/messages.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/store/storage_pool.h"
 #include "dannan/context.h"
@@ -43,6 +45,9 @@ struct StorageServerOptions {
   // device slot) before it is refused 503 storage_busy. Macha's waited for
   // the arbiter's no-progress window; every wait here has a deadline.
   std::chrono::milliseconds admission_wait{30000};
+  // The domain served: its name is the prefix a write or a claim is checked
+  // under when the request names none (Tom, 2026-11-04 evening).
+  domain::Domain domain = domain::domain_v1_descriptor();
 };
 
 // What a served request is admitted by: the node's DATA credit arbiter and
@@ -60,6 +65,13 @@ struct StorageServerAdmission {
 // Dagda's routes on Dannan (messages.h), with protocol 23's payloads, and
 // keeps the store's adverts current: the pool's limit as its capacity, what
 // it holds, and whether it hosts extents.
+//
+// Scope (step 6): a put, a CONTROL put and a claim are checked through
+// Identity::verify before anything is stored, under the principal and
+// prefix the request carries (messages.h, WritePrincipal) or, for one that
+// carries none, the sending node under the domain's name; a refusal is 403
+// scope_refused with the source's reason and generation, and stores
+// nothing.
 //
 // Admission (step 3b): a request that reads or writes the DATA device holds
 // DATA credit for its class and a DATA slot of the device reserve across the
@@ -111,6 +123,9 @@ class StorageServer {
  private:
   std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, bool wait);
   std::optional<IoReserve::Slot> admit_control();
+  // The refusal of a writer this node will not store for; nothing when it
+  // may write.
+  std::optional<dannan::net::Handled> scope_refusal(const dannan::membership::NodeRecord& peer, const std::optional<message::WritePrincipal>& writer) const;
   dannan::net::Handled answer_trie(const dannan::net::Message& request);
   void refresh_loop(std::stop_token stop);
 
