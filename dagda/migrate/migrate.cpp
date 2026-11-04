@@ -16,12 +16,14 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <sstream>
 
 #include "dagda/ledger/object_trie.h"
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
+#include "dagda/ledger/unreferenced_since.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
@@ -172,6 +174,33 @@ Ledger migrate_trie(const std::filesystem::path& dir, std::shared_ptr<const doma
   return Ledger::migrated;
 }
 
+// A sightings file (`retention/unreferenced-*.bin`): v18 wrote the table in
+// the clear; v19 seals it under the node-local key. Rewritten whole through
+// a sibling and a rename, as a journal is.
+Ledger migrate_sightings(const std::filesystem::path& path, const domain::StorageKey& to, MigrationReport& report, const MigrationOptions& options) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return Ledger::empty;
+  const store::Bytes bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (bytes.empty()) return Ledger::empty;
+  try {
+    (void)ledger::open_unreferenced_since(to, bytes);
+    return Ledger::already;
+  } catch (const std::exception&) {
+  }
+  std::map<store::ObjectId, uint64_t> table;
+  try {
+    table = ledger::decode_unreferenced_since(bytes);
+  } catch (const std::exception&) {
+    throw MigrationRefused("sightings file " + path.string() + " is neither v18's table nor sealed under the node-local key: damaged, or another node's");
+  }
+  report.bytes_read += bytes.size();
+  if (options.dry_run) return Ledger::migrated;
+  const auto sealed = ledger::seal_unreferenced_since(to, table);
+  dannan::identity::durable_replace_file(path, std::string_view(reinterpret_cast<const char*>(sealed.data()), sealed.size()));
+  report.bytes_written += sealed.size();
+  return Ledger::migrated;
+}
+
 void count(Ledger outcome, MigrationReport& report) {
   switch (outcome) {
     case Ledger::migrated:
@@ -203,6 +232,7 @@ void migrate_ledgers(const std::filesystem::path& state, const std::vector<std::
                      std::shared_ptr<const domain::StorageKey> to, MigrationReport& report, const MigrationOptions& options) {
   std::vector<std::filesystem::path> tries;
   std::vector<std::filesystem::path> journals;
+  std::vector<std::filesystem::path> sightings;
   std::error_code ec;
   for (auto it = std::filesystem::recursive_directory_iterator(state, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
     const auto& path = it->path();
@@ -218,6 +248,8 @@ void migrate_ledgers(const std::filesystem::path& state, const std::vector<std::
       continue;
     }
     if (path.filename() == "claims.log") journals.push_back(path);
+    if (path.parent_path().filename() == "retention" && path.filename().string().starts_with("unreferenced-") && path.extension() == ".bin")
+      sightings.push_back(path);
   }
   if (ec) throw std::runtime_error("cannot walk " + state.string() + ": " + ec.message());
   std::sort(tries.begin(), tries.end());
@@ -226,6 +258,13 @@ void migrate_ledgers(const std::filesystem::path& state, const std::vector<std::
     const auto outcome = migrate_journal(path, ledger::retention_format::journal_aad, *from, *to, report, options);
     count(outcome, report);
     say(options, "ledger " + path.string() + ": " + (outcome == Ledger::migrated ? "re-sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
+    if (outcome == Ledger::migrated) step(options, report);
+  }
+  std::sort(sightings.begin(), sightings.end());
+  for (const auto& path : sightings) {
+    const auto outcome = migrate_sightings(path, *to, report, options);
+    count(outcome, report);
+    say(options, "ledger " + path.string() + ": " + (outcome == Ledger::migrated ? "sealed" : outcome == Ledger::already ? "node-local already" : "empty"));
     if (outcome == Ledger::migrated) step(options, report);
   }
   for (const auto& dir : tries) {

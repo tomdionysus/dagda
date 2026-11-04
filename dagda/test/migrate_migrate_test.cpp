@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -41,6 +42,7 @@
 #include "dagda/ledger/held_ledger.h"
 #include "dagda/ledger/reference_counts.h"
 #include "dagda/ledger/retention.h"
+#include "dagda/ledger/unreferenced_since.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/local_format.h"
@@ -533,6 +535,34 @@ TEST(MigrateState, AV18StateMigratesInPlaceAndOpensAsV19) {
   EXPECT_EQ(again.summary(), "state is layout v19 already: nothing to do\n");
   EXPECT_EQ(v18.digest(), after);
 
+  expect_v19_opens(bed, v18);
+}
+
+// v18 wrote the collector's sightings in the clear; the migration seals
+// them under the node-local key, so a migrated node keeps every deletion
+// wait it had instead of starting them all again. A table already sealed is
+// left alone.
+TEST(MigrateState, ThePlainSightingsFilesAreSealed) {
+  StoreBed bed;
+  V18State v18(bed);
+  const std::map<ObjectId, uint64_t> seen{{v18.loose[2].first, 1'000}, {v18.packed[2].first, 2'000}};
+  const auto plain = ledger::encode_unreferenced_since(seen);
+  legacy::write_file(v18.state / "retention" / "unreferenced-data.bin", plain);
+  legacy::write_file(v18.state / "retention" / "unreferenced-control.bin", ledger::encode_unreferenced_since({}));
+  const auto report = v18.migrate();
+  // The seven ledgers of the plain fixture, and the two sightings files.
+  EXPECT_EQ(report.ledgers_migrated, 9u);
+  const auto read = [](const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return Bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  };
+  const auto sealed = read(v18.state / "retention" / "unreferenced-data.bin");
+  EXPECT_NE(sealed, plain);
+  EXPECT_EQ(ledger::open_unreferenced_since(*v18.node_local(), sealed), seen);
+  ledger::UnreferencedSince loaded(v18.state / "retention" / "unreferenced-data.bin", v18.node_local(), test::quiet_logger());
+  EXPECT_EQ(loaded.size(), 2u);
+  EXPECT_TRUE(v18.migrate().already_v19);
+  EXPECT_EQ(read(v18.state / "retention" / "unreferenced-data.bin"), sealed);
   expect_v19_opens(bed, v18);
 }
 

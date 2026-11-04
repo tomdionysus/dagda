@@ -94,8 +94,8 @@ struct GcBed {
     control_store = store::open_control_store(state, {}, bed.key, bed.node_local, bed.services());
     retention = std::make_unique<RetentionStore>(state, bed.key, test::quiet_logger());
     ledger = std::make_unique<RetentionLedger>(*retention, *pool, *control_store, bed.time);
-    data_seen = std::make_unique<UnreferencedSince>(state / "retention" / "unreferenced-data.bin", test::quiet_logger());
-    control_seen = std::make_unique<UnreferencedSince>(state / "retention" / "unreferenced-control.bin", test::quiet_logger());
+    data_seen = std::make_unique<UnreferencedSince>(state / "retention" / "unreferenced-data.bin", bed.node_local, test::quiet_logger());
+    control_seen = std::make_unique<UnreferencedSince>(state / "retention" / "unreferenced-control.bin", bed.node_local, test::quiet_logger());
     CollectorOptions options;
     options.garbage_grace = 1h;
     options.retry_window = 1s;

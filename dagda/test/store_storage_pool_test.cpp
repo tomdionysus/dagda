@@ -640,7 +640,8 @@ TEST(StoreStoragePool, AClaimedCopyIsUntouchable) {
   // decides, and claimed by the time the second would delete it.
   std::map<ObjectId, int> asked;
   const StoragePool::ClaimCheck claim = [&](const ObjectId& id) { return id == claimed || (id == late && ++asked[id] > 2); };
-  ledger::UnreferencedSince sightings(bed.dir.path() / "state" / "retention" / "unreferenced-data.bin", dannan::status::ScopedLogger(bed.sink, "sightings"));
+  ledger::UnreferencedSince sightings(bed.dir.path() / "state" / "retention" / "unreferenced-data.bin", bed.node_local,
+                                      dannan::status::ScopedLogger(bed.sink, "sightings"));
   const std::vector<ObjectId> none;
   const auto sweep = [&](uint64_t now) {
     StoragePool::MaintenanceResult total;

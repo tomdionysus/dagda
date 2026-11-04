@@ -9,8 +9,10 @@
 
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 #include <string_view>
 
+#include "dannan/identity/crypto.h"
 #include "dannan/identity/durable_file.h"
 #include "dannan/net/codec.h"
 
@@ -20,6 +22,9 @@ namespace {
 using dannan::contract::Lock;
 
 constexpr uint32_t persisted_schema = 1;
+constexpr size_t frame_header = 12 + 16;
+
+std::span<const uint8_t> aad() { return {reinterpret_cast<const uint8_t*>(sightings_aad.data()), sightings_aad.size()}; }
 
 }  // namespace
 
@@ -50,14 +55,32 @@ std::map<ObjectId, uint64_t> decode_unreferenced_since(std::span<const uint8_t> 
   return sightings;
 }
 
-UnreferencedSince::UnreferencedSince(std::filesystem::path path, dannan::status::ScopedLogger logger) : _path(std::move(path)), _logger(std::move(logger)) {
+Bytes seal_unreferenced_since(const domain::StorageKey& key, const std::map<ObjectId, uint64_t>& sightings) {
+  const auto sealed = dannan::identity::aes_gcm_seal(key.bytes(), encode_unreferenced_since(sightings), aad());
+  Bytes out;
+  out.reserve(frame_header + sealed.ciphertext.size());
+  out.insert(out.end(), sealed.nonce.begin(), sealed.nonce.end());
+  out.insert(out.end(), sealed.tag.begin(), sealed.tag.end());
+  out.insert(out.end(), sealed.ciphertext.begin(), sealed.ciphertext.end());
+  return out;
+}
+
+std::map<ObjectId, uint64_t> open_unreferenced_since(const domain::StorageKey& key, std::span<const uint8_t> file) {
+  if (file.size() < frame_header) throw std::runtime_error("sightings file shorter than its frame header");
+  const auto plain = dannan::identity::aes_gcm_open(key.bytes(), file.first<12>(), file.subspan<12, 16>(), file.subspan(frame_header), aad());
+  return decode_unreferenced_since(plain);
+}
+
+UnreferencedSince::UnreferencedSince(std::filesystem::path path, std::shared_ptr<const domain::StorageKey> key, dannan::status::ScopedLogger logger)
+    : _path(std::move(path)), _key(std::move(key)), _logger(std::move(logger)) {
+  if (!_key) throw std::invalid_argument("the sightings file needs the node-local key");
   std::ifstream in(_path, std::ios::binary);
   if (!in) return;
   const Bytes bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   try {
     Lock lock(_mutex);
-    for (const auto& [id, first_unix_ms] : decode_unreferenced_since(bytes)) _seen.emplace(id, Sighting{first_unix_ms, true});
-  } catch (const dannan::net::DecodeError& error) {
+    for (const auto& [id, first_unix_ms] : open_unreferenced_since(*_key, bytes)) _seen.emplace(id, Sighting{first_unix_ms, true});
+  } catch (const std::exception& error) {
     _logger.warn("unreferenced-since: ignoring " + _path.string() + ": " + error.what());
   }
 }
@@ -101,7 +124,7 @@ void UnreferencedSince::save() {
     for (const auto& [id, sighting] : _seen) sightings.emplace(id, sighting.first_unix_ms);
     _dirty = false;
   }
-  const auto bytes = encode_unreferenced_since(sightings);
+  const auto bytes = seal_unreferenced_since(*_key, sightings);
   try {
     std::filesystem::create_directories(_path.parent_path());
     dannan::identity::durable_replace_file(_path, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
