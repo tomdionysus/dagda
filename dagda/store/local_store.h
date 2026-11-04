@@ -36,6 +36,7 @@
 #include "dagda/store/sealing.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/identity/node_identity.h"
 #include "dannan/status/log.h"
 #include "dannan/status/observation.h"
 #include "dannan/supervise/startup.h"
@@ -43,19 +44,13 @@
 
 namespace dagda::store {
 
-// An exclusive lock on a store's root (`.macha.lock`, by flock), so two
-// processes, or two nodes in one, never open one store. Throws
-// std::runtime_error if it is held.
+// An exclusive lock on a store's root (`.macha.lock`): Dannan's state lock
+// under the store's name, so two processes, or two nodes in one, never open
+// one store. Throws std::runtime_error if it is held.
 inline constexpr std::string_view storage_lock_name = ".macha.lock";
-class StorageLock {
+class StorageLock final : public dannan::identity::StateLock {
  public:
-  explicit StorageLock(const std::filesystem::path& root);
-  ~StorageLock();
-  StorageLock(const StorageLock&) = delete;
-  StorageLock& operator=(const StorageLock&) = delete;
-
- private:
-  int _fd = -1;
+  explicit StorageLock(const std::filesystem::path& root) : StateLock(root, storage_lock_name) {}
 };
 
 enum class LocalStoreMode : uint8_t {

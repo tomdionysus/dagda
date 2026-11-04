@@ -84,26 +84,6 @@ int64_t unix_ms_of(std::filesystem::file_time_type time) {
 
 }  // namespace
 
-StorageLock::StorageLock(const std::filesystem::path& root) {
-  std::filesystem::create_directories(root);
-  const auto path = root / std::string(storage_lock_name);
-  _fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-  if (_fd < 0) throw std::runtime_error("cannot open storage lock: " + std::string(std::strerror(errno)));
-  if (::flock(_fd, LOCK_EX | LOCK_NB) != 0) {
-    const auto error = std::string(std::strerror(errno));
-    ::close(_fd);
-    _fd = -1;
-    throw std::runtime_error("storage path is already in use: " + error);
-  }
-}
-
-StorageLock::~StorageLock() {
-  if (_fd >= 0) {
-    (void)::flock(_fd, LOCK_UN);
-    ::close(_fd);
-  }
-}
-
 LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, std::shared_ptr<const domain::StorageKey> key, Services services,
                        LocalStoreMode mode, std::shared_ptr<DurabilityDomain> durability_domain, LocalStoreFiles& files)
     : _root(std::move(root)),
