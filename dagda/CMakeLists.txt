@@ -17,9 +17,13 @@ add_library(dagda SHARED
   ledger/trie_union.cpp
   store/durability_domain.cpp
   store/durability_ticket.cpp
+  store/local_format.cpp
+  store/local_store.cpp
+  store/local_store_files.cpp
   store/object_id.cpp
   store/presence_index.cpp
   store/sealing.cpp
+  store/write_behind.cpp
 )
 add_library(dagda::dagda ALIAS dagda)
 target_include_directories(dagda

@@ -93,7 +93,8 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 |---|---|
 | `MACHA_*` annotations | `DANNAN_*` (`contract/thread_safety.h`), the same set |
 | `NoIo`, `no_io`, `NoIoRegion`, `Mutex`, `IoMutex`, `SharedMutex`, `IoSharedMutex`, `Lock`, `WriteLock`, `ReadLock` | `dannan::contract::*`, the same semantics |
-| `ObjectLock` (per-object `IoMutex` held across a writer's I/O) | **missing in Dannan (request)**: generic, and LocalStore needs it in 1c. Until it lands, 1c holds a `std::shared_ptr<IoMutex>` and a `Lock` |
+| `ObjectLock` (per-object `IoMutex` held across a writer's I/O) | **Dagda's own** (decided in 1a's review: store-only): `dagda/store/object_lock.h` (`ObjectLock`, `ObjectLocks`), 1c |
+| `Unlocked` (file-local in `local_store.cpp`: releases a held `Mutex` for a scope) | **missing in Dannan (request)**, generic; file-local in `dagda/store/local_store.cpp` until it lands, as in Macha (1c) |
 
 ### `src/contract/time_source.hpp`
 
@@ -150,13 +151,13 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 
 | Macha | Where it goes |
 |---|---|
-| `WriteBehind`, `start_writeback` | **Dagda's own**, moved with LocalStore in 1c (loose objects and packs). Macha's FS spool uses it too; whether it belongs in Dannan instead is a question for Tom (below) |
+| `WriteBehind`, `start_writeback` | **Dagda's own** (decided): `dagda/store/write_behind.{h,cpp}`, moved with LocalStore in 1c. Macha's FS spool will link it from Dagda |
 
 ### `src/config.hpp` (the parts storage reads)
 
 | Macha | Where it goes |
 |---|---|
-| `StorageBackendConfig`, `StoragePackingConfig`, `MetadataObjectStoreConfig`, `CacheConfig`, `ledger_cache`, `write_copies`, `metadata_write_copies`, `replication`, `MaintenanceConfig::garbage_grace` | **Dagda's own**, moved in 1c and 1d as plain option structs handed to the store (no YAML in Dagda; Macha's config parser keeps reading them and passes them in) |
+| `StorageBackendConfig`, `StoragePackingConfig`, `MetadataObjectStoreConfig`, `CacheConfig`, `ledger_cache`, `write_copies`, `metadata_write_copies`, `replication`, `MaintenanceConfig::garbage_grace` | **Dagda's own**, moved in 1c and 1d as plain option structs handed to the store (no YAML in Dagda; Macha's config parser keeps reading them and passes them in). 1c: `dagda::store::LocalStoreOptions` (limit, reserve, packing threshold and target with Macha's 1 MiB and 64 MiB defaults, ledger directory and cache) |
 | durability batch window (`StoragePool` argument, default 500 ms) | a constructor argument of `dagda::store::DurabilityDomain` |
 
 ## The store pieces moved in 1a
@@ -169,3 +170,16 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 | `storage/presence_index.{hpp,cpp}` | `dagda/store/presence_index.{h,cpp}`, unchanged |
 | `storage/durability_domain.{hpp,cpp}` | `dagda/store/durability_domain.{h,cpp}`: takes `SupervisedThreads`, `Observations` and a `TimeSource` instead of process globals; the batch window runs on the injected time (`time_advanced()` wakes the worker for a stepped source); the destructor's stop can no longer be missed (stop-token waits); constructor errors are `std::invalid_argument` |
 | `StoragePool::DurabilityToken` plus the server's epoch | `dagda/store/durability_ticket.{h,cpp}` (`DurabilityTicket`, its protocol-23 form) |
+
+## The store pieces moved in 1c
+
+| Macha | Dagda |
+|---|---|
+| `storage/local_store.{hpp,cpp}`: `LocalStore`, `LocalStoreOptions`, `LocalStoreMode`, `LocalStoreDiagnostics`, `StorageLock` | `dagda/store/local_store.{h,cpp}`: takes the domain's `StorageKey`, Dannan's `SupervisedThreads`, `Observations`, `StartupProgress`, a `ScopedLogger`, a `TimeSource` (its default domain's window) and a `WallClock` (record times and ages) instead of process globals; `own_syncs` added to the diagnostics |
+| the formats inside `local_store.cpp` (loose header, pack header, accounting slot, pack names) | `dagda/store/local_format.{h,cpp}`, pure and pinned by known answers (`store_local_format_test.cpp`) |
+| `LocalStoreFiles`, `PosixLocalStoreFiles` | `dagda/store/local_store_files.{h,cpp}` |
+| `ObjectLock` and `LocalStore::object_mutex` | `dagda/store/object_lock.h` |
+| `write_behind.{hpp,cpp}` | `dagda/store/write_behind.{h,cpp}` |
+| `contract/object_store.hpp` (`HeldIdentity`, `HeldView`, `ObjectStore`) | `dagda/contract/object_store.h` (`dagda::contract`) |
+| `load_or_create_node_id` | not moved: the node id is Dannan's (`identity/node_identity.h`) |
+

@@ -23,8 +23,14 @@ add_executable(dagda_tests
   ledger_trie_union_test.cpp
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
+  store_local_format_test.cpp
+  store_local_store_durability_test.cpp
+  store_local_store_ledger_test.cpp
+  store_local_store_presence_test.cpp
+  store_local_store_test.cpp
   store_object_id_test.cpp
   store_presence_index_test.cpp
   store_sealing_test.cpp
+  store_write_behind_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
