@@ -108,10 +108,10 @@ GoogleTest, and an installed Dannan of the pinned minor version. Build the pinne
 tag from the sibling checkout into the build tree once, then configure against it:
 
 ```bash
-git clone --branch 0.4.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.4.0
-cmake -S build/deps/dannan-0.4.0 -B build/deps/dannan-0.4.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.4.1 --depth 1 file://$PWD/../dannan build/deps/dannan-0.4.1
+cmake -S build/deps/dannan-0.4.1 -B build/deps/dannan-0.4.1-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.4.0-build -j8 && cmake --install build/deps/dannan-0.4.0-build
+cmake --build build/deps/dannan-0.4.1-build -j8 && cmake --install build/deps/dannan-0.4.1-build
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
   -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
@@ -184,14 +184,17 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.1.0 in progress, on Dannan 0.4.0. Built and tested: the local store and its
-formats, the pool, the CONTROL store and the cache; the ledger and the collector; the
-distributed store on Dannan with durability levels, evidence, tickets, availability and
-repair; leases and claimed collections; domains with node-local keys, wrapped domain
-keys, member and blind roles, and the scope check at the write floor. Next: one layout
-for every domain with the in-place migration of Macha's disks, node-local spaces, heads
-once Macha's tree-native format has merged, the `dagda::Context` contract, and then
-Macha's port. Every step ends green in `dagda_tests`, with sanitizers before a release.
+Version 0.1.0 in progress, on Dannan 0.4.1. Built and tested: the local store and its
+one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
+the ledger and the collector; the distributed store on Dannan with durability levels,
+evidence, tickets, availability and repair; an instant delete beside the collector's
+per-domain wait; leases and claimed collections; domains with node-local keys, wrapped
+domain keys, member and blind roles, and the scope check at the write floor;
+`dagda-migrate`, which moves Macha's v18 disks to v19 in place; and `dagda::Node`, which
+opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`. Next,
+once Macha's tree-native format has merged: heads, node-local spaces and retained
+values, which complete and freeze `dagda::Context` version 1; then Macha's port. Every
+step ends green in `dagda_tests`, with sanitizers before a release.
 
 ## Licence
 

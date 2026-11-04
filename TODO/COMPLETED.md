@@ -3,6 +3,19 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: two cleanups and the stale text (`feature/tidy`)
+
+Nothing waits on Macha here. `MaintenanceOptions::collector` is now
+`ledger::CollectorBudgets` (the retry window and the four budgets);
+`ledger::CollectorOptions` derives from it and adds the grace, so the
+node's dead second grace setting is gone and the wait is only
+`NodeOptions::garbage_grace`, the domain's. `store::WritePrincipal`
+defaults its comparison on Dannan 0.4.0's `Principal::operator==`. The
+README names Dannan 0.4.1 and the current status; `ACTIVE.md`'s header
+says where things stand. Still to adopt with the next domain work:
+`Nodes::certificate` and `Identity::ca_certificate`, to shrink the wrap
+advert. Gate: `dagda_tests` 389 passing, 1 disabled, unchanged.
+
 ## 2026-11-04 night: Dannan 0.4.1, the node declares its planes (`feature/declare-planes`)
 
 Dannan 0.4.1 (`9174cca`, pushed) adds `status::Readiness::declare`; the
