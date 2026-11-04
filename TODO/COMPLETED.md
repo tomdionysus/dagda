@@ -3,6 +3,19 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: Dannan 0.4.1, the node declares its planes (`feature/declare-planes`)
+
+Dannan 0.4.1 (`9174cca`, pushed) adds `status::Readiness::declare`; the
+pin (`find_package(dannan 0.4 CONFIG)`) takes it unchanged. `dagda::Node`
+declares its readiness planes (`data_storage`, `control_storage`,
+`cache`, `retention`) at open, before the Dannan node starts, and refuses
+with a reason if it has started; the `readiness_planes()` export is gone,
+and an owner names none of Dagda's planes in its `NodeConfig`.
+`Node.UndeclaredReadinessPlanesAreRefusedWithTheRemedy` became
+`Node.DeclaresItsOwnReadinessPlanes` (no planes in the config, the node
+still reports each and goes ready); the cluster fixture's `planes` option
+is gone. Gate: `dagda_tests` 389 passing, 1 disabled, unchanged.
+
 ## 2026-11-04 night: the claim guard and sealed sightings (`feature/guard-and-seal`)
 
 Step 7b's two findings, fixed on Tom's word, one commit each. Gate:

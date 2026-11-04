@@ -46,9 +46,12 @@ const char* gate_name(store::RepairGate gate) noexcept {
   return "unknown";
 }
 
-}  // namespace
-
+// The readiness planes the node reports, Macha's names: the DATA pool, the
+// CONTROL store, the cache, and the claims with the reference counts (heads
+// add "metadata" at step 4).
 std::vector<std::string> readiness_planes() { return {plane_data, plane_control, plane_cache, plane_retention}; }
+
+}  // namespace
 
 // The status timer's hold on the node, so a timer that fires as the node
 // stops finds nothing.
@@ -77,19 +80,20 @@ void Node::step(std::string_view what) {
   if (_options.trace) _options.trace(what);
 }
 
-void Node::ready(const std::string& plane) {
-  try {
-    _context.readiness().ready(plane);
-  } catch (const std::invalid_argument&) {
-    throw NodeRefused("readiness plane \"" + plane + "\" was not declared: name dagda::readiness_planes() in dannan::NodeConfig::planes");
-  }
-}
+void Node::ready(const std::string& plane) { _context.readiness().ready(plane); }
 
 void Node::open() {
   if (_context.version() != dannan::context_version)
     throw NodeRefused("the Dannan node serves dannan::Context version " + std::to_string(_context.version()) + " and Dagda was built against version " +
                       std::to_string(dannan::context_version));
   if (_options.state.empty()) throw NodeRefused("no state path: the node's state is a directory of its own");
+  // Every plane the node will report is known before the Dannan node starts,
+  // so it never reports ready without them.
+  try {
+    for (const auto& plane : readiness_planes()) _context.readiness().declare(plane);
+  } catch (const std::logic_error&) {
+    throw NodeRefused("the Dannan node has started: a dagda::Node opens before the Dannan node starts");
+  }
   if (_options.domain.role != domain::Role::member)
     throw NodeRefused("a blind node's store waits on the catalogue (step 4): domain " + domain::to_string(_options.domain.id) + " is " +
                       domain::role_name(_options.domain.role) + " here");

@@ -125,8 +125,6 @@ struct ClusterNodeOptions {
   // Step 7a's node cases: a node with no key custody (refused), and another
   // node's Dagda state or DATA backend in place of this node's own.
   bool custody = true;
-  // Whether the Dannan node declares Dagda's readiness planes.
-  bool planes = true;
   std::filesystem::path state{};
   std::filesystem::path data{};
   // The node's open and stop stages, as dagda::Node reports them.
@@ -440,7 +438,6 @@ inline void ClusterNode::open() {
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;
-  if (_options.planes) config.planes = dagda::readiness_planes();
   // Custody made once, the certificate issued over its key for this start.
   if (_options.custody) {
     const auto source = Cluster::custody_source();

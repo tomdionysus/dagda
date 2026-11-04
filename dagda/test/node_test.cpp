@@ -236,7 +236,7 @@ TEST(Node, PublishesTheStoresFiguresAndGoesReady) {
   auto& a = cluster.add("a");
   a.start();
   auto& readiness = a.context().readiness();
-  for (const auto& plane : readiness_planes()) EXPECT_TRUE(readiness.has(plane)) << plane;
+  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention"}) EXPECT_TRUE(readiness.has(plane)) << plane;
   EXPECT_TRUE(readiness.complete());
   EXPECT_FALSE(readiness.failed());
 
@@ -262,15 +262,18 @@ TEST(Node, PublishesTheStoresFiguresAndGoesReady) {
   a.stop();
 }
 
-// Dannan declares planes when its node is made, so an owner that did not
-// name Dagda's is told how.
-TEST(Node, UndeclaredReadinessPlanesAreRefusedWithTheRemedy) {
+// The node declares its own readiness planes (Dannan 0.4.1's
+// Readiness::declare), so an owner names none of Dagda's in its
+// NodeConfig: the node still reports each and goes ready.
+TEST(Node, DeclaresItsOwnReadinessPlanes) {
   Cluster cluster;
-  ClusterNodeOptions options;
-  options.planes = false;
-  auto& a = cluster.add("a", options);
-  const auto why = refusal_of(a);
-  EXPECT_NE(why.find("dagda::readiness_planes()"), std::string::npos) << why;
+  auto& a = cluster.add("a");
+  a.start();
+  auto& readiness = a.context().readiness();
+  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention"}) EXPECT_TRUE(readiness.has(plane)) << plane;
+  EXPECT_TRUE(readiness.complete());
+  EXPECT_FALSE(readiness.failed());
+  a.stop();
 }
 
 }  // namespace

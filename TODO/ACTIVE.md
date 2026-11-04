@@ -368,9 +368,8 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
    the claims the caller's observed clock dominates, and removes the
    object at once when no claim remains and the current inventory does
    not refer to it; otherwise it stays, and the evidence names, node by
-   node, what was removed and what claim kept the rest. Readiness: Dannan
-   `f3d5456` adds `Readiness::declare` (untagged); at the next tag Dagda
-   declares its own planes and drops `readiness_planes()`.
+   node, what was removed and what claim kept the rest. Readiness: done
+   on Dannan 0.4.1, the node declares its own planes.
 7. **`dagda::Context` v1.** Domains, Objects, Claims, Heads, Leases,
    Tickets, Retained, node-local spaces, written as a spec; versioned,
    async, a mismatch refused. Grown through steps 1 to 6; this step
