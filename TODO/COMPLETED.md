@@ -3,6 +3,29 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: the claim guard and sealed sightings (`feature/guard-and-seal`)
+
+Step 7b's two findings, fixed on Tom's word, one commit each. Gate:
+`dagda_tests` 389 passing, 1 disabled (was 388; 1 added); the touched
+suites rerun 3 times.
+
+- The claim guard (`ClaimLocks`) is now held across the claim check and
+  the delete in the GC sweep (`StoragePool::gc_step`), a node's own erase
+  (`DistributedStore::erase_all`) and a peer's `delete_object` request
+  (`StorageServer`), as the instant delete and the claim path already
+  were. No claim can land between a check and its delete. No new test:
+  the window is not reproducible deterministically; the existing
+  late-claim sweep case still passes.
+- `retention/unreferenced-{data,control}.bin` are one AES-256-GCM frame
+  under the node-local key (AAD "dagda/sightings/1"), the table's bytes
+  unchanged inside; `UnreferencedSince` requires the key; a file that does
+  not open is ignored as before (it only delays deletion). The migration
+  seals a v18 node's plain files (`MigrateState.ThePlainSightingsFiles
+  AreSealed`), so a migrated node keeps its deletion waits.
+  `LedgerUnreferencedSince.TheFileIsLayoutV18s` became
+  `TheFileIsTheTableSealedUnderTheNodeLocalKey` (the table's bytes are
+  still pinned; the file is checked to be sealed and to refuse another key).
+
 ## 2026-11-04 night: step 7b, maintenance in the node, the per-domain wait, the instant delete (`feature/maintenance`)
 
 Gate: `dagda_tests` 388 passing, 1 disabled (was 376 and 1; 12 added,
