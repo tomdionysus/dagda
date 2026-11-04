@@ -1502,10 +1502,9 @@ bool LocalStore::wait_for_accounting(Lock& lock, std::stop_token stop, bool exac
   // Ordinary puts and removes go on with a checkpoint's estimate; only a
   // caller that needs the reconciled figure (compaction) waits for the walk.
   if (!exact && _accounting_estimate.load(std::memory_order_acquire) && !_scan_failed.load(std::memory_order_acquire)) return true;
-  std::stop_callback wake_waiter(stop, [this] { _accounting_cv.notify_all(); });
-  _accounting_cv.wait(lock.native(), [this, &stop] {
-    return _scan_complete.load(std::memory_order_acquire) || _scan_failed.load(std::memory_order_acquire) || stop.stop_requested();
-  });
+  // The stop wakes it through the token: a callback notifying without the
+  // mutex could fall between this check and the sleep and be lost.
+  _accounting_cv.wait(lock.native(), stop, [this] { return _scan_complete.load(std::memory_order_acquire) || _scan_failed.load(std::memory_order_acquire); });
   if (stop.stop_requested()) return false;
   if (_scan_failed.load(std::memory_order_acquire)) throw std::runtime_error("storage accounting reconciliation failed");
   return true;

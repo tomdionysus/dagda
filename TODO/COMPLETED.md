@@ -3,6 +3,16 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: matching Macha's fixed shapes (`feature/port-respec`)
+
+Under Tom's ruling that the libraries match Macha's fixed behaviour (Macha
+0.92.3, `feature/dagda-found-defects`): the accounting wait takes the stop through
+the token, with no callback notifying outside the mutex; `HeldLedger::seed`
+installs what was queued, then writes the durable marker, then sets the flag, so a
+crash between them cannot lose those changes. Neither has a new test: neither
+window can be hit deterministically without a fault seam in the code, and the
+existing stop and seed cases still pass.
+
 ## 2026-11-04 night: M3, maintenance parity (`feature/port-respec`)
 
 `dagda::Node` runs Macha's local stages in its order after repair: rebalance,

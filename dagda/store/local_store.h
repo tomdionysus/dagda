@@ -460,7 +460,7 @@ class LocalStore final : public contract::ObjectStore {
   mutable uint64_t _verified_loose_sequence DANNAN_GUARDED_BY(_mutex) = 0;
   std::atomic<uint64_t> _loose_reaffirmation_fast_paths{0};
   std::atomic<uint64_t> _loose_reaffirmation_full_validations{0};
-  mutable std::condition_variable _accounting_cv;
+  mutable std::condition_variable_any _accounting_cv;
   // Which objects this store holds, kept across restarts: once seeded, the
   // answer to has() and the reason a start walks nothing.
   std::unique_ptr<ledger::HeldLedger> _ledger;
