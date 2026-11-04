@@ -3,6 +3,121 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 2, the local ledger and GC (`feature/ledger`)
+
+- The state layout marker, decided as Dagda's: `dagda/store/state_layout`
+  (`open_state_layout`; Macha `cluster/node_identity.cpp:15-40`):
+  `<state>/storage-layout` holding `macha-state-layout-v18\n`, a non-empty
+  unmarked state refused ("fresh namespace"), `.macha.lock` allowed. One
+  change: a missing state directory is created (Macha's root had made it).
+- Moved and adapted into `dagda/contract/` (namespace `dagda::contract`):
+  `claim_store.h` (`ClaimStore`, `RetentionClass`, `RetentionDot`,
+  `RetentionClock`), `object_ledger.h` (`ObjectLedger`), `horizon.{h,cpp}`
+  (`ReferencedSets`, `InventoryHorizon`, `ReleaseHorizon`, `ReleaseBuild`),
+  `gates.{h,cpp}` (`PassFacts`, the three gates), and new
+  `reachability.h` (`ReachabilityProvider`, `Reachability`, `Garbage`,
+  `GarbageBatch`, `ControlEpoch`, `GarbageCollection`). Into
+  `dagda/ledger/`: `retention` (`RetentionStore` and its pure
+  `retention_format`), `retention_ledger`, `reference_counts`,
+  `node_horizon_builder` (`build_inventory`, `build_release`,
+  `NodeHorizonBuilder` over a provider), `claim_walk` (Macha's
+  `service/claim_walk`), and `collector` (`Collector`: Macha's
+  `service/maintenance.cpp:620-660` and `:866-1071`, with
+  `CatalogueManager::control_gc_step`, `catalogue.cpp:2355-2433`, moved in).
+  Requirements L12 to L24, C3. Dannan's `sched/walk.h` (Budget, Cursor,
+  Page) and `contract/published.h` are used; Dagda has no copy.
+- The provider (requirements 5.3): `generation()`, `known_generation()`,
+  `inventory()` and `release(head)` answer a `Reachability` (counted views,
+  DATA and CONTROL ids, retirements and their batches, completeness, the
+  stamp); `release_head()` is the owner's sole accepted head;
+  `control_epoch()` and `within_control_epoch(sequence, removal)` are the
+  catalogue's root epoch and its lock as an answer; `collect_garbage()`
+  receives tombstone collection's decisions. Garbage is the provider's
+  type (`Garbage {id, retired_at_ns, token}`, Macha's `GarbageRef` with its
+  retirement id as the token; `GarbageBatch` Macha's tombstone batch). The
+  ledger and the contract name no catalogue, filesystem, namespace or
+  metadata type; a test enforces it.
+- Kept as Macha has it: the gates' reasons and trace words ("catalogue
+  inventory incomplete", `catalogue_complete=`), the trace kinds and the
+  observation names (`catalogue.control_gc.removed` among them), so
+  Macha's decision-trace fixtures read the same; budgets 64/64/64/32; the
+  orphan grace `max(garbage_grace, no_progress_backoff)`; sightings saved
+  on completion or every 30 s.
+- Legacy readers dropped (the maintainer, 2026-11-04): the monolithic checkpoint
+  `retention/claims.meta` (MRTS0001, `decode_monolithic_checkpoint`) and the
+  sharded one `claims.current` naming `checkpoints/gen-*/xx.meta`
+  (MRTS0002, `decode_checkpoint_shard`, `read_clocks`, `read_small_text`,
+  `load_checkpoint_files`, `migrate_locked`'s move). Their names stay
+  reserved: a state holding either without the tries' marker
+  (`retention/ledger`) is refused with `std::runtime_error`, never opened
+  empty, and the first checkpoint removes them as Macha's does. The WAL's
+  64 MiB read limit (Macha's `max_legacy_frame`) is kept: it reads
+  frames an older writer wrote, and is not a reader of an old format.
+- Byte compatibility, pinned by known answers computed outside both
+  codebases (hashlib; AES blocks by `openssl enc -aes-256-ecb`, GHASH by
+  hand, checked first against 1b's known frame): the WAL's five
+  operations' plaintext; a five-frame `claims.log` Macha would write,
+  replayed here; its checkpoint, each trie's published `root` byte for
+  byte and its node file's size; a checkpoint Macha saved, opened here;
+  the claims record value; `retention/ledger` = `1\n`; the reference
+  counts' `state` (MREF0001) both ways and a count's u64.
+- Changed from Macha, none on disk: an invalid dot handed to
+  `retain_batch` is `std::invalid_argument` (Macha `std::runtime_error`;
+  from the journal it is a `DecodeError`); retirement ages are taken from
+  the wall clock's milliseconds (Macha's `wall_ns`); the claim walk counts
+  into an injected `Observations` and records no per-object timing; an
+  inventory the provider cannot answer throws out of `pass()` having
+  removed nothing.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest,
+  every assertion kept: `test_ledger_gates.cpp` (all 7);
+  `test_claim_walk.cpp` (all 8); `test_horizon_builder.cpp` (all 6, as
+  provider answers: what they proved of the FS's walk is Macha's);
+  `test_storage_metadata.cpp` (`test_retention_claims_are_causal_durable_and_observed_remove`,
+  `test_retention_prune_cursor_cannot_starve_later_tombstones`,
+  `test_retention_prune_keeps_a_row_claimed_while_it_checks_presence`,
+  `test_retention_claims_checkpoint_into_the_ledger_and_restart`,
+  `test_retention_checkpoints_after_enough_changes`,
+  `test_retention_start_checkpoints_a_long_journal`,
+  `test_retention_prune_survives_a_restart`,
+  `test_retention_claim_is_physical_gc_barrier`; and
+  `test_retention_shard_checkpoint_moves_into_the_ledger`, whose reader is
+  dropped, as the refusal and the removal at the first checkpoint);
+  `test_object_ledger.cpp` `test_reference_counts_follow_and_survive_a_restart`;
+  `test_baselines.cpp` (`test_baseline_claim_walk_per_object`,
+  `test_baseline_claim_walk_on_the_ledger_per_object`);
+  `test_hydration_catalogue.cpp`, the CONTROL GC block of
+  `test_catalogue_on_one_node_predicts_caches_and_protects_its_control_objects`;
+  `test_storage_v18.cpp`, the state half of `test_unversioned_state_is_refused`.
+  `test_absent_nodes.cpp`'s GC cases moved in 1d.
+- New: a claim from an unseen branch survives a partition (store and
+  sweeps); an inventory never used destructively in the pass that built
+  it; an incomplete release never published; an inventory behind or
+  incomplete sweeps nothing; tombstone collection's decisions; a CONTROL
+  removal never races a new epoch; the CONTROL sweep in a pass; the
+  include-direction check (`contract_include_direction_test`, with a
+  planted self-check).
+- Not moved: `test_catalogue_maintenance.cpp` (every case drives the
+  catalogue; the ledger's side, an inventory complete only at the head and
+  data released when nothing refers to it, is the provider's answer);
+  `test_maintenance_trace.cpp` (a whole node's pass; the trace words are
+  kept so it reads the same at the port); `test_namespace_tree.cpp`
+  `test_every_tree_node_is_reachable_for_the_collector` (the FS's walk).
+- Left for step 3: the availability survey, repair by diff, the claim
+  walk's restorer with network credit, the pass's scheduling (quiet
+  windows, events, repair share) and the DATA sweep's `should_yield` from
+  the store's idle times. Several providers per domain, unioned: one
+  provider for now; it waits on domains (step 6).
+- Findings, none fixed (none blocks this step): Macha's retention store,
+  finding no `retention/ledger` marker, rebuilds both tries empty before
+  replaying the journal, so a lost marker loses every checkpointed claim
+  (kept, as Macha's; worth a refusal when the tries hold records). The
+  CONTROL step compares an age on the wall clock with a span on the
+  steady one (kept).
+- Gate: warnings as errors; `dagda_tests` 198 and 1 disabled (145
+  before). The 51 new cases other than the two baselines ran 200 times
+  each (four processes of 50 repeats), all 10,200 passing.
+- Dannan: nothing after 0.2.0 is used; no new request.
+
 ## 2026-11-04: step 1d, the pool, the CONTROL store and the cache (`feature/local-store`)
 
 - Moved and adapted into `dagda/store/` (namespace `dagda::store`):

@@ -195,3 +195,18 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 | `cluster/local_state.cpp:134-142` (the control store) | `dagda/store/control_store.{h,cpp}`: `ControlStoreOptions` (Macha's `metadata_store`), `open_control_store`; `ledger_cache_share` (`local_state.cpp:29-50`) in `dagda/store/local_store.h` |
 | `storage/persistent_cache.{hpp,cpp}` without the metadata seed | `dagda/store/persistent_cache.{h,cpp}`: `CacheOptions` (Macha's `CacheConfig`, `prefer_metadata` named `seed`); the seed's reading and writing (`remember_metadata`, `metadata`, `DHTCMET1`) stay for step 4 behind `with_seed` |
 
+
+## The pieces moved in step 2
+
+| Macha | Dagda |
+|---|---|
+| `contract/walk.hpp` (`Budget`, `Cursor`, `Page`, `Stop`, `YieldSource`) | Dannan's `sched/walk.h`; `Budget::must_stop` takes the injected time |
+| `contract/published.hpp` (`Published`) | Dannan's `contract/published.h` |
+| `cluster/node_identity.cpp:15-40` (the state layout marker) | `dagda/store/state_layout.{h,cpp}` (`open_state_layout`), Dagda's |
+| `contract/claim_store.hpp`, `contract/object_ledger.hpp` | `dagda/contract/claim_store.h`, `object_ledger.h` |
+| `storage/retention.{hpp,cpp}` (`RetentionStore`) | `dagda/ledger/retention.{h,cpp}`; the MRTS0001 and MRTS0002 readers dropped, their names reserved |
+| `ledger/retention_ledger.{hpp,cpp}`, `ledger/reference_counts.{hpp,cpp}` | `dagda/ledger/`, the same names |
+| `contract/horizon.{hpp,cpp}`, `contract/gates.{hpp,cpp}` | `dagda/contract/`; `GarbageRef` and `TombstoneBatch` become the provider's `Garbage` and `GarbageBatch`, `catalogue_complete()` is `complete()` |
+| `ledger/node_horizon_builder.{hpp,cpp}`, `contract/horizon_builder.hpp` | `dagda/ledger/node_horizon_builder.{h,cpp}` over `contract::ReachabilityProvider` (`dagda/contract/reachability.h`) |
+| `service/claim_walk.{hpp,cpp}` | `dagda/ledger/claim_walk.{h,cpp}` |
+| `service/maintenance.cpp:620-660`, `:866-1071`; `CatalogueManager::control_gc_step` (`catalogue.cpp:2355-2433`) | `dagda/ledger/collector.{h,cpp}` (`Collector`); the catalogue's root epoch is the provider's `ControlEpoch` |
