@@ -1,0 +1,150 @@
+//
+// Dagda - The Store
+//
+// Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+// Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+//
+
+#include "dagda/ledger/held_ledger.h"
+
+#include <algorithm>
+#include <fstream>
+#include <string>
+
+#include "dannan/identity/durable_file.h"
+
+namespace dagda::ledger {
+namespace {
+
+using dannan::contract::Lock;
+
+// One, as eight big-endian bytes.
+const Bytes held_value{0, 0, 0, 0, 0, 0, 0, 1};
+
+}  // namespace
+
+HeldLedger::HeldLedger(std::filesystem::path dir, std::shared_ptr<const domain::StorageKey> key, ObjectTrie::Options options,
+                       dannan::status::ScopedLogger logger)
+    : _dir(std::move(dir)), _trie(std::make_unique<ObjectTrie>(_dir, std::move(key), options, std::move(logger))) {
+  _seeded.store(std::filesystem::exists(_dir / "seeded"), std::memory_order_release);
+  if (std::ifstream in(_dir / "verify-next"); in) {
+    unsigned next = 0;
+    if (in >> next && next <= 0xffff) _verify_next = static_cast<uint16_t>(next);
+  }
+}
+
+void HeldLedger::set_verify_next(uint16_t next) {
+  if (next == _verify_next) return;
+  dannan::identity::durable_replace_file(_dir / "verify-next", std::to_string(next) + "\n");
+  _verify_next = next;
+}
+
+std::optional<bool> HeldLedger::held(const ObjectId& id) const {
+  if (!seeded()) return std::nullopt;
+  Lock lock(_trie_mutex);
+  return _trie->get(id).has_value();
+}
+
+std::vector<ObjectId> HeldLedger::held_with_prefix(uint16_t prefix) const {
+  const auto first = static_cast<uint8_t>(prefix >> 8);
+  const auto second = static_cast<uint8_t>(prefix & 0xff);
+  // Start after the last id of the prefix before.
+  std::optional<ObjectId> after;
+  if (prefix) {
+    ObjectId before;
+    before.bytes.fill(0xff);
+    before.bytes[0] = static_cast<uint8_t>((prefix - 1) >> 8);
+    before.bytes[1] = static_cast<uint8_t>((prefix - 1) & 0xff);
+    after = before;
+  }
+  std::vector<ObjectId> out;
+  Lock lock(_trie_mutex);
+  while (true) {
+    const auto page = _trie->next(after, 256);
+    for (const auto& [id, value] : page) {
+      if (id.bytes[0] != first || id.bytes[1] != second) return out;
+      out.push_back(id);
+    }
+    if (page.size() < 256) return out;
+    after = page.back().first;
+  }
+}
+
+void HeldLedger::record(const ObjectId& id, bool held) {
+  Lock lock(_queue_mutex);
+  _queued.push_back({id, held ? std::optional<Bytes>(held_value) : std::nullopt});
+}
+
+void HeldLedger::drop_queued() {
+  Lock lock(_queue_mutex);
+  _queued.clear();
+}
+
+void HeldLedger::flush() {
+  Lock flushing(_flush_mutex);
+  // Unseeded, nothing reads the record: changes stay queued for the seed.
+  if (!seeded()) return;
+  std::vector<ObjectTrie::Change> changes;
+  {
+    Lock lock(_queue_mutex);
+    changes.swap(_queued);
+  }
+  if (changes.empty()) return;
+  // In order, a later change to an id winning.
+  std::stable_sort(changes.begin(), changes.end(), [](const ObjectTrie::Change& a, const ObjectTrie::Change& b) { return a.id < b.id; });
+  std::vector<ObjectTrie::Change> unique;
+  unique.reserve(changes.size());
+  for (const auto& change : changes) {
+    if (!unique.empty() && unique.back().id == change.id)
+      unique.back() = change;
+    else
+      unique.push_back(change);
+  }
+  // The journal's sync is the write; lookups go on meanwhile.
+  write_journal(unique);
+  const auto removed = static_cast<uint64_t>(std::count_if(unique.begin(), unique.end(), [](const ObjectTrie::Change& change) { return !change.value; }));
+  Lock lock(_trie_mutex);
+  _trie->install(unique);
+  _removals.fetch_add(removed, std::memory_order_acq_rel);
+}
+
+void HeldLedger::write_journal(std::span<const ObjectTrie::Change> changes) { _trie->write(changes); }
+
+void HeldLedger::seed(const std::function<std::vector<ObjectId>()>& snapshot) {
+  // Flushes leave the trie alone until _seeded is set, so the build runs
+  // without the flush lock and a write never waits for it.
+  const auto present = snapshot();
+  std::vector<ObjectTrie::Record> records;
+  records.reserve(present.size());
+  for (const auto& id : present) records.emplace_back(id, held_value);
+  {
+    Lock lock(_trie_mutex);
+    _trie->replace_all(std::move(records));
+    _removals.fetch_add(1, std::memory_order_acq_rel);
+  }
+  dannan::identity::durable_replace_file(_dir / "seeded", "1\n");
+  {
+    // Under the flush lock, so a flush either left everything queued or
+    // applies it over the seed.
+    Lock flushing(_flush_mutex);
+    _seeded.store(true, std::memory_order_release);
+  }
+  flush();
+}
+
+HeldLedger::View HeldLedger::view() const {
+  Lock lock(_trie_mutex);
+  return {_trie->snapshot(), removals()};
+}
+
+ObjectTrie::Stats HeldLedger::stats() const {
+  Lock lock(_trie_mutex);
+  return _trie->stats();
+}
+
+uint64_t HeldLedger::size() const {
+  Lock lock(_trie_mutex);
+  return _trie->size();
+}
+
+}  // namespace dagda::ledger

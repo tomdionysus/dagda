@@ -16,6 +16,11 @@ target_compile_definitions(dagda_test_fixtures INTERFACE DANNAN_TEST_TEMP_ROOT="
 add_executable(dagda_tests
   version_test.cpp
   domain_storage_key_test.cpp
+  ledger_held_ledger_test.cpp
+  ledger_object_trie_test.cpp
+  ledger_sealed_journal_test.cpp
+  ledger_trie_diff_test.cpp
+  ledger_trie_union_test.cpp
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
   store_object_id_test.cpp
