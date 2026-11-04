@@ -13,23 +13,7 @@ namespace dagda::lease {
 
 using dannan::contract::Lock;
 
-RosterMembership::RosterMembership(dannan::Nodes& nodes, const dannan::contract::TimeSource& time, boost::asio::any_io_executor executor)
-    : _nodes(nodes), _time(time), _self(nodes.self().id), _absences(std::make_shared<Absences>()) {
-  _watch = _nodes.watch(std::move(executor), [absences = _absences, time = &time](dannan::RosterChange change) {
-    Lock lock(absences->mutex);
-    if (absences->closed) return;
-    if (change.kind == dannan::RosterChange::Kind::left)
-      absences->since.try_emplace(change.node.id, time->now());
-    else
-      absences->since.erase(change.node.id);
-  });
-}
-
-RosterMembership::~RosterMembership() {
-  _nodes.unwatch(_watch);
-  Lock lock(_absences->mutex);
-  _absences->closed = true;
-}
+RosterMembership::RosterMembership(dannan::Nodes& nodes, const dannan::contract::TimeSource& time) : _nodes(nodes), _time(time), _self(nodes.self().id) {}
 
 NodeId RosterMembership::self() const { return _self; }
 
@@ -37,13 +21,14 @@ std::optional<dannan::contract::TimePoint> RosterMembership::absent_since(const 
   if (node == _self) return std::nullopt;
   const auto active = _nodes.active();
   const bool member = std::any_of(active.begin(), active.end(), [&](const dannan::membership::NodeRecord& record) { return record.id == node; });
-  Lock lock(_absences->mutex);
-  if (member) {
-    // Active again before the watch said so.
-    _absences->since.erase(node);
-    return std::nullopt;
+  const auto since = member ? std::nullopt : _nodes.absent_since(node);
+  Lock lock(_mutex);
+  if (member || since) {
+    // Known to the roster: its answer, and any first look forgotten.
+    _unknown_since.erase(node);
+    return since;
   }
-  return _absences->since.try_emplace(node, _time.now()).first->second;
+  return _unknown_since.try_emplace(node, _time.now()).first->second;
 }
 
 std::vector<NodeId> RosterMembership::active() const {

@@ -7,10 +7,7 @@
 
 #pragma once
 
-#include <boost/asio/any_io_executor.hpp>
-#include <cstdint>
 #include <map>
-#include <memory>
 #include <optional>
 #include <vector>
 
@@ -38,20 +35,17 @@ class Membership {
   virtual std::vector<NodeId> active() const = 0;
 };
 
-// TODO(Dannan: absence on the roster): when a node left, on the steady
-// clock, from Nodes (a RosterChange's time, or Nodes::absent_since), so a
-// hosted system does not rebuild it from watch() as this does.
-//
 // Membership from Dannan's roster: active is `Nodes::active()` (heard of
-// within dead_after), and a node's absence starts when `Nodes::watch()`
-// reports it left, or, for a node never seen to leave (one this node never
-// knew active), when this node first asks about it. A node seen again is
-// active at once and its absence forgotten.
+// within dead_after), and a node's absence starts when the roster last heard
+// of it (`Nodes::absent_since`, on the node's steady clock, kept across a
+// restart), or, for a node the roster does not know, when this node first
+// asks about it. A node active again is a member at once and its absence
+// forgotten.
 class RosterMembership final : public Membership {
  public:
-  // `nodes` and `time` must outlive this. Watches the roster on `executor`.
-  RosterMembership(dannan::Nodes& nodes, const dannan::contract::TimeSource& time, boost::asio::any_io_executor executor);
-  ~RosterMembership() override;
+  // `nodes` and `time` must outlive this; `time` is the clock the roster
+  // measures absence on (`Context::time().source()`).
+  RosterMembership(dannan::Nodes& nodes, const dannan::contract::TimeSource& time);
   RosterMembership(const RosterMembership&) = delete;
   RosterMembership& operator=(const RosterMembership&) = delete;
 
@@ -60,19 +54,12 @@ class RosterMembership final : public Membership {
   std::vector<NodeId> active() const override;
 
  private:
-  // Shared with the watch handler, which may run once more after unwatch:
-  // once closed it touches nothing else.
-  struct Absences {
-    dannan::contract::Mutex mutex;
-    std::map<NodeId, dannan::contract::TimePoint> since DANNAN_GUARDED_BY(mutex);
-    bool closed DANNAN_GUARDED_BY(mutex) = false;
-  };
-
   dannan::Nodes& _nodes;
   const dannan::contract::TimeSource& _time;
   const NodeId _self;
-  std::shared_ptr<Absences> _absences;
-  uint64_t _watch = 0;
+  // Nodes the roster does not know, from the first look.
+  mutable dannan::contract::Mutex _mutex;
+  mutable std::map<NodeId, dannan::contract::TimePoint> _unknown_since DANNAN_GUARDED_BY(_mutex);
 };
 
 }  // namespace dagda::lease
