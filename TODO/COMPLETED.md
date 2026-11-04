@@ -3,6 +3,36 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04: step 1b, the held trie (`feature/local-store`)
+
+- Moved and adapted into `dagda/ledger/` (namespace `dagda::ledger`):
+  `sealed_journal`, `object_trie`, `held_ledger`, `trie_union`, and
+  `trie_diff` whole (the local diff, `records_not_held`, and the pure
+  protocol-23 encodings of trie questions and answers). Each takes the
+  domain's `StorageKey` as a `shared_ptr` (snapshots and frame readers
+  outlive their trie) and a Dannan `ScopedLogger`; files, AADs, magics,
+  hashes and frames are Macha's (requirements 4.1, L1-L3, L5, L6).
+- Known answers, computed outside both codebases (hashlib, `openssl enc
+  -aes-256-ecb`, GHASH by hand, checked against GCM test case 16) and
+  pinned: a trie journal frame (`MACHLJ01`) both ways; the root hash and
+  the published `root` file for 3 and 300 fixed ids; a node file
+  (`MACHLN01`) and root Macha would write, opened here; the four wire
+  encodings.
+- Tests moved from Macha (develop `5a06d3c`), converted to GoogleTest,
+  every assertion kept: 19 of `test_object_ledger.cpp` (journal 4, trie
+  10 with the heavy one disabled, diff 3, union 1, held ledger 1) and
+  `test_trie_questions_and_answers_survive_the_wire` of
+  `test_availability.cpp`.
+- Not moved: the four `test_object_ledger` cases that drive a
+  `LocalStore` (1c) and `test_reference_counts_follow_and_survive_a_restart`
+  (`ledger/reference_counts`, the namespace's counts: step 2 or the heads
+  step). Left for step 3: the diff's network rounds (snapshot pinning,
+  503/410, the remote source) in `availability_service`.
+- Gate: warnings as errors; `dagda_tests` 67 and 1 disabled (the heavy
+  measurement: 222,000 records open in 273 ms against a 30 s bound). The
+  two concurrency tests (`ASnapshotIsFrozenThroughWritesAndRewrites`,
+  `AFlushDoesNotWaitForTheSeed`) ran 200 times each, all passing.
+
 ## 2026-11-04: step 1a, foundations and sealing (`feature/local-store`)
 
 - `docs/macha-foundations-map.md`: every Macha foundation the local store

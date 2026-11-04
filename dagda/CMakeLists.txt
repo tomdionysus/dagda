@@ -10,6 +10,11 @@
 add_library(dagda SHARED
   version.cpp
   domain/storage_key.cpp
+  ledger/held_ledger.cpp
+  ledger/object_trie.cpp
+  ledger/sealed_journal.cpp
+  ledger/trie_diff.cpp
+  ledger/trie_union.cpp
   store/durability_domain.cpp
   store/durability_ticket.cpp
   store/object_id.cpp

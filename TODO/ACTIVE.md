@@ -67,6 +67,14 @@ projects, with recommendations for Tom.
 - `Identity::durability_epoch` is a random 128-bit id per process: it
   tells a restart from a reconnect but is not ordered. Dagda persists its
   own counter for anything that needs order across restarts.
+- After 0.2.0, on Dannan's `feature/wire-v1` (`f32053e`), Dagda's three
+  requests from 1a: `status::set_thread_name` (and supervised threads
+  named after their name), `status::resident_bytes()` and
+  `physical_memory_bytes()` (`dannan/status/process.h`), and
+  `status::ObservedDuration` with `elapsed_us()` and `cancel()` on the
+  injected time source (`dannan/status/observation.h`). Dagda moves its
+  pin from 0.2.0 to that commit, or to Dannan's next tag, when a step
+  first uses them.
 - Notify channels have landed (`dannan/net/fanout.h`,
   `Context::channels()`, `2f16981`). Retained is Dagda's own: `retain()`
   on a notify channel plus a Dagda head; Dannan declares no seam for it.
@@ -103,7 +111,8 @@ Requirement ids (S1, L4, H20...) are the requirements document's.
      format depends on them; object ids, the storage key derived from the
      cluster key, sealing with the id as AAD; the presence index; the
      durability domain and tickets.
-   - **1b** The held trie (`ledger/`: object trie, held ledger, trie
+   - ~~**1b**~~ Done 2026-11-04 (`COMPLETED.md`; `dagda_tests` 67).
+     The held trie (`ledger/`: object trie, held ledger, trie
      union), which `LocalStore` keeps.
    - **1c** `LocalStore`: loose files and packs, torn tails, compaction,
      tombstones; write-behind.
