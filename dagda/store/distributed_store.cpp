@@ -2296,7 +2296,11 @@ void DistributedStore::erase_all(const ObjectId& id) {
     try {
       if (target.id == _self) {
         const auto admitted = admit_data(FrameType::speculative, _options.extent_size, _options.admission_wait);
-        if (admitted && !_claims.retained(contract::RetentionClass::data, id)) (void)_data.remove(id);
+        if (admitted) {
+          // No claim may land between the check and the delete.
+          const auto guard = _data.claim_locks().lock(std::span<const ObjectId>(&id, 1));
+          if (!_claims.retained(contract::RetentionClass::data, id)) (void)_data.remove(id);
+        }
         (void)_cache.remove(id);
       } else {
         (void)_context.routes().call_and_wait(target, message::delete_object, message::encode_id(id), FrameType::speculative, _options.control_call);
