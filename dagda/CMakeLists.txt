@@ -1,0 +1,24 @@
+#
+# Dagda - The Store
+#
+# Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+# Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+#
+
+# The store: a hosted system on Dannan, never a floor under it. It links
+# Dannan; Dannan never includes anything from here.
+add_library(dagda SHARED
+  version.cpp
+)
+add_library(dagda::dagda ALIAS dagda)
+target_include_directories(dagda
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/generated>
+)
+target_link_libraries(dagda
+  PUBLIC dannan::dannan
+  PRIVATE dagda_warnings
+)
+set_target_properties(dagda PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
