@@ -212,6 +212,61 @@ std::shared_ptr<const SealedJournal::FrameReader> SealedJournal::reader() const 
   return std::shared_ptr<const FrameReader>(new FrameReader(copy, _key, _aad, _max_frame, _bytes));
 }
 
+std::optional<bool> SealedJournal::probe(const std::filesystem::path& path, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame,
+                                         uint64_t offset) {
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  if (ec || size == 0) return std::nullopt;
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) throw std::runtime_error("cannot open journal " + path.string() + ": " + std::strerror(errno));
+  try {
+    (void)read_frame(fd, key, aad, max_read_frame, size, offset);
+  } catch (const std::exception&) {
+    ::close(fd);
+    return false;
+  }
+  ::close(fd);
+  return true;
+}
+
+SealedJournal::Rekeyed SealedJournal::rekey(const std::filesystem::path& path, const domain::StorageKey& from, const domain::StorageKey& to,
+                                            std::array<uint8_t, 8> aad, uint32_t max_read_frame) {
+  Rekeyed out;
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  if (ec || size == 0) return out;
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) throw std::runtime_error("cannot open journal " + path.string() + ": " + std::strerror(errno));
+  std::string rewritten;
+  uint64_t offset = 0;
+  try {
+    while (offset + frame_header <= size) {
+      std::array<uint8_t, 4> length_bytes{};
+      if (!pread_all(fd, length_bytes, offset)) break;
+      const uint32_t length = read_be32(length_bytes.data());
+      if (length > max_read_frame || offset + frame_header + length > size) break;
+      Bytes plain;
+      try {
+        plain = read_frame(fd, from, aad, max_read_frame, size, offset);
+      } catch (const std::exception& error) {
+        if (offset == 0) throw std::runtime_error("journal " + path.string() + " does not open under the key it is said to be sealed with: " + error.what());
+        break;
+      }
+      const auto frame = seal_frame(to, aad, plain, std::numeric_limits<uint32_t>::max(), path);
+      rewritten.append(reinterpret_cast<const char*>(frame.data()), frame.size());
+      offset += frame_header + length;
+      ++out.frames;
+    }
+  } catch (...) {
+    ::close(fd);
+    throw;
+  }
+  ::close(fd);
+  out.dropped_bytes = size - offset;
+  dannan::identity::durable_replace_file(path, rewritten);
+  return out;
+}
+
 void SealedJournal::reset() {
   close_fd();
   dannan::identity::durable_replace_file(_path, {});

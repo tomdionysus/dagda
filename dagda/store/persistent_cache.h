@@ -32,8 +32,8 @@ struct CacheOptions {
   // Whether a head owner may keep its recovery seed beside the cache
   // (Macha's prefer_metadata).
   bool seed = true;
-  // How its objects are sealed: layout v18 (domain v1) or v19 with the
-  // domain.
+  // The domain its objects are sealed for; v1 by default. The cache keeps no
+  // ledger: its index is rebuilt from its directory at every open.
   SealingScheme sealing{};
 };
 

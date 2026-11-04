@@ -41,6 +41,7 @@ endif()
 configure_file(dagda/include/dagda/version.h.in ${PROJECT_BINARY_DIR}/generated/dagda/version.h @ONLY)
 
 add_subdirectory(dagda)
+add_subdirectory(tools)
 
 if(DAGDA_BUILD_TESTING)
   find_package(GTest 1.14 CONFIG REQUIRED)

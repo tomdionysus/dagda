@@ -3,6 +3,60 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: step 6b, one layout and the migration (`feature/one-layout`)
+
+Tom: "We don't need backward compatibility": one layout, v19, for every
+domain; Macha's v18 disks migrated in place by a tool that works and needs
+no extra storage; manual only. Gate: `dagda_tests` 367 passing, 1
+disabled (was 347 and 1; 22 added, 2 moved, none dropped); the migration,
+layout, pool, sealing and domain cases rerun 5 times, 79 of 79.
+
+- The store is v19 only: `SealingScheme{domain}`, AAD "dagda/seal/19" ||
+  domain || id; v19 markers and state layout only. A v18 marker or state
+  layout is refused with a reason naming `dagda-migrate --state <path>`,
+  nothing on the disk changed; nothing in `store/` migrates.
+- Every node's ledgers (held tries and journals, retention claims,
+  reference counts, the control store's) are sealed under the node-local
+  key (`require_node_local`), mandatory; no fallback to the domain key.
+- `dagda/migrate/` (`legacy_v18`: the v18 readers, read only; `migrate`:
+  `migrate_state`, `MigrationReport`, `MigrationRefused`) and
+  `tools/dagda_migrate.cpp` (`dagda-migrate --state DIR --node-state DIR
+  --cluster-key FILE (--passphrase-env VAR | --credential NAME) [--backend
+  DIR]... [--control DIR] [--cache DIR] [--dry-run]`; exit 0 v19, 1
+  refused or failed, 2 usage). `docs/migration.md`.
+- Proven: under the same key and nonce v18 and v19 give the same
+  ciphertext and different tags (known answers computed outside Dagda), so
+  a loose object changes 16 bytes (its tag) and a pack record 48 (tag and
+  header checksum), in place. Ledgers are re-sealed to a sibling and
+  renamed over. Peak extra space: one ledger file.
+- Order: objects, then ledgers, then markers, `storage-layout` last. A
+  crash leaves each record v18 or v19 (told by its AAD), each ledger under
+  one key (told by probe) and the markers v18, so the store still refuses
+  and a rerun finishes (tested by `_exit` mid-run). A v19 state is left
+  alone; `--dry-run` writes nothing. Refused before any write: missing or
+  foreign markers, a held lock, a key under which no probe record opens.
+- The key probe at activate: a member on a "blind"-checked backend opens up
+  to 8 records before trusting its key, and upgrades the marker's check
+  when one opens; `get` and scrub discard a copy that does not open only
+  where the key is checked.
+- Moved, assertions kept: `StoreLocalFormat.OpensALooseObjectMachaWrote`
+  and `OpensAPackMachaWrote` to `MigrateLoose`/`MigratePack`;
+  `StoreSealing.OpensWhatMachaSealed`, `SealsMachasBytesUnderTheSameNonce`
+  and the v18 tag of `TheEmptyObjectSealsToATagAlone` to
+  `MigrateLegacyV18` (the store keeps v19 versions). Converted to v19:
+  the sealing, state layout, pool marker and layout cases (renamed where
+  they named v18). Added: the refusal test, 3 layout cases, 6
+  `MigrateLegacyV18`, 12 `migrate_migrate_test` (a whole v18 state from
+  the known answers, migrated, read back object by object and claim by
+  claim).
+- Findings, not fixed: nothing in the store takes `StorageLock` at open
+  (`store/local_store.h:47`), so the tool's "node is running" refusal holds
+  only if the node holds the locks; recommended at step 7's node.
+  `store/state_layout.cpp`'s "0.18 requires a fresh namespace" wording is
+  Macha's; reword at step 7.
+- Still the gate: the Macha session's real v18 state directory, dry run
+  first. An empty blind-adopted disk stays online with its key unchecked.
+
 ## 2026-11-04: step 6, domains, the parts that need no head (`feature/domains`)
 
 Branched from `develop` at "Record Tom's step 6 decisions". One commit.

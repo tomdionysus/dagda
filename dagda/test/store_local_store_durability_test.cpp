@@ -51,6 +51,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using test::barrier_through_window;
+using test::exit_code;
 using test::pattern;
 using test::StoreBed;
 using test::wait_until;
@@ -67,21 +68,6 @@ struct Counts {
   uint64_t fsync_calls() const { return store.diagnostics().own_syncs - syncs; }
   uint64_t syncfs_calls() const { return domain.physical_barriers() - barriers; }
 };
-
-// Waits for a child, never without a deadline: its exit code, or nothing.
-std::optional<int> exit_code(pid_t child) {
-  const auto until = std::chrono::steady_clock::now() + 30s;
-  while (std::chrono::steady_clock::now() < until) {
-    int status = 0;
-    const auto reaped = ::waitpid(child, &status, WNOHANG);
-    if (reaped == child) return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-    if (reaped < 0) return std::nullopt;
-    std::this_thread::sleep_for(1ms);
-  }
-  ::kill(child, SIGKILL);
-  ::waitpid(child, nullptr, 0);
-  return std::nullopt;
-}
 
 // Macha: test_authoritative_deferred_generation_batches_stable_storage_barriers.
 TEST(StoreLocalStoreDurability, DeferredGenerationsBatchStableStorageBarriers) {

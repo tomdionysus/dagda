@@ -537,33 +537,65 @@ void ObjectTrie::checkpoint() {
 
   // More superseded than live, and enough of it to matter: rewrite.
   const auto file = _nodes->bytes();
-  if (file > 2 * _live_bytes && file - _live_bytes > _options.rewrite_floor_bytes) {
-    const auto next = _generation + 1;
-    std::error_code ec;
-    std::filesystem::remove(nodes_path(next), ec);
-    auto fresh = open_nodes(next);
-    // Every node is copied: unsave the tree, then save it into the new file.
-    std::function<Child(const Child&)> copy = [&](const Child& child) -> Child {
-      if (child.empty()) return {};
-      const auto node = load(child);
-      if (node->leaf) return child_of(make_leaf(node->depth, node->records));
-      std::vector<Child> children(256);
-      for (size_t i = 0; i < 256; ++i) children[i] = copy(node->children[i]);
-      return child_of(make_interior(node->depth, std::move(children)));
-    };
-    auto rewritten = save(copy(_root), *fresh);
-    fresh->sync();
-    const auto old = nodes_path(_generation);
-    _generation = next;
-    _root = rewritten;
-    _live_bytes = fresh->bytes();
-    _nodes = std::move(fresh);
-    _cache->drop_generation(_generation - 1);
-    publish_root();
-    std::filesystem::remove(old, ec);
-    ++_rewrites;
-    if (!_root.empty()) _root.node = load(_root);
+  if (file > 2 * _live_bytes && file - _live_bytes > _options.rewrite_floor_bytes) rewrite(_key);
+}
+
+void ObjectTrie::rewrite(std::shared_ptr<const domain::StorageKey> key) {
+  const auto next = _generation + 1;
+  std::error_code ec;
+  std::filesystem::remove(nodes_path(next), ec);
+  auto fresh = std::make_unique<SealedJournal>(nodes_path(next), key, nodes_aad, max_frame, _logger);
+  // Every node is copied: unsave the tree, then save it into the new file.
+  std::function<Child(const Child&)> copy = [&](const Child& child) -> Child {
+    if (child.empty()) return {};
+    const auto node = load(child);
+    if (node->leaf) return child_of(make_leaf(node->depth, node->records));
+    std::vector<Child> children(256);
+    for (size_t i = 0; i < 256; ++i) children[i] = copy(node->children[i]);
+    return child_of(make_interior(node->depth, std::move(children)));
+  };
+  auto rewritten = save(copy(_root), *fresh);
+  fresh->sync();
+  const auto old = nodes_path(_generation);
+  _generation = next;
+  _root = rewritten;
+  _live_bytes = fresh->bytes();
+  _nodes = std::move(fresh);
+  _key = std::move(key);
+  _cache->drop_generation(_generation - 1);
+  publish_root();
+  std::filesystem::remove(old, ec);
+  ++_rewrites;
+  if (!_root.empty()) _root.node = load(_root);
+}
+
+void ObjectTrie::rekey(std::shared_ptr<const domain::StorageKey> key) {
+  if (!key) throw std::invalid_argument("an object trie needs a key");
+  checkpoint();
+  rewrite(std::move(key));
+  // The emptied journal appends under the new key from here.
+  _journal = std::make_unique<SealedJournal>(_dir / "journal.log", _key, journal_aad, max_frame, _logger);
+}
+
+std::optional<bool> ObjectTrie::probe(const std::filesystem::path& dir, const domain::StorageKey& key) {
+  constexpr uint32_t lenient = 64U * 1024U * 1024U;
+  if (std::ifstream in(dir / "root", std::ios::binary); in) {
+    const Bytes bytes{std::istreambuf_iterator<char>(in), {}};
+    Reader reader(bytes);
+    const auto magic = reader.fixed<8>();
+    if (magic != root_magic && magic != format1_root_magic) throw DecodeError("object trie root of another format");
+    const auto generation = reader.u64();
+    const auto offset = reader.u64();
+    (void)reader.u32();
+    const auto count = reader.u64();
+    if (count) {
+      const auto nodes = dir / ("nodes-" + std::to_string(generation) + ".bin");
+      // The root's own node: a published node is always a whole frame,
+      // where the file's first bytes may be a tail a crash left.
+      if (const auto opens = SealedJournal::probe(nodes, key, nodes_aad, lenient, offset); opens.has_value()) return opens;
+    }
   }
+  return SealedJournal::probe(dir / "journal.log", key, journal_aad, lenient);
 }
 
 std::optional<Bytes> ObjectTrie::find(const Child& root, const ObjectId& id, const std::function<NodePtr(const Child&)>& load) {

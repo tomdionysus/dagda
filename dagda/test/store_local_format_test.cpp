@@ -5,14 +5,19 @@
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
 //
 
-// Layout v18's local store files, byte for byte (requirements section 4.1,
-// S2, S3, S7, S8). The known answers were worked out from Macha's code
+// The local store's files, byte for byte Macha's layout v18 (requirements
+// section 4.1, S2, S3, S7, S8), since only the tag's binding changed with
+// the one layout. The known answers were worked out from Macha's code
 // (src/storage/local_store.cpp, develop 5a06d3c: the loose header at
 // :1092-1096, the pack header at :139-156, the accounting slot at :96-112)
 // and computed outside both codebases, the SHA-256s by Python's hashlib, over
 // 1a's pinned sealing of "An object Macha sealed under its own id." under
 // domain v1's known-answer key (store_sealing_test). A pack record's time is
-// the stepped wall clock's.
+// the stepped wall clock's. The codec cases keep Macha's v18 tag in the
+// bytes, since the codecs do not look at it; the cases that opened Macha's
+// files through the store (OpensALooseObjectMachaWrote, OpensAPackMachaWrote)
+// are the migration's now (migrate_migrate_test), where those files are
+// migrated and then opened.
 
 #include <gtest/gtest.h>
 
@@ -103,13 +108,6 @@ Bytes file_bytes(const std::filesystem::path& path) {
   return Bytes(std::istreambuf_iterator<char>(in), {});
 }
 
-void write_file(const std::filesystem::path& path, std::span<const uint8_t> bytes) {
-  std::filesystem::create_directories(path.parent_path());
-  std::ofstream out(path, std::ios::binary);
-  out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-  ASSERT_TRUE(out.good());
-}
-
 LocalStoreOptions packing() {
   LocalStoreOptions options;
   options.limit = 64ULL * 1024 * 1024;
@@ -197,50 +195,10 @@ TEST(StoreLocalFormat, NamesPacksAndObjectsAsMachaDoes) {
   EXPECT_FALSE(object_id_from_file_name("zz" + std::string(object_hex).substr(2) + ".obj").has_value());
 }
 
-// A loose object file Macha wrote opens here.
-TEST(StoreLocalFormat, OpensALooseObjectMachaWrote) {
-  StoreBed bed;
-  const auto root = bed.dir.path() / "store";
-  write_file(root / "objects" / "3e" / "2d" / (std::string(object_hex) + ".obj"), unhex(loose_file_hex));
-  auto store = bed.open(root, packing());
-  EXPECT_TRUE(store->has(the_id()));
-  EXPECT_EQ(store->get(the_id()), std::optional<Bytes>(Bytes(plaintext.begin(), plaintext.end())));
-  EXPECT_FALSE(store->is_packed(the_id()));
-}
-
-// A pack Macha wrote opens here: a put and then a touch keep the object and
-// take the touch's time; a tombstone after them removes it.
-TEST(StoreLocalFormat, OpensAPackMachaWrote) {
-  StoreBed bed(put_ms + 500);
-  const auto root = bed.dir.path() / "store";
-  Bytes pack = unhex(put_header_hex);
-  const auto ciphertext = unhex(ciphertext_hex);
-  pack.insert(pack.end(), ciphertext.begin(), ciphertext.end());
-  const auto touch = unhex(touch_hex);
-  pack.insert(pack.end(), touch.begin(), touch.end());
-  write_file(root / "packs" / "pack-00000000000000000001.pack", pack);
-  {
-    auto store = bed.open(root, packing());
-    EXPECT_TRUE(store->has(the_id()));
-    EXPECT_TRUE(store->is_packed(the_id()));
-    EXPECT_EQ(store->get(the_id()), std::optional<Bytes>(Bytes(plaintext.begin(), plaintext.end())));
-    EXPECT_EQ(store->stored_size(the_id()), pack_header_size + plaintext.size());
-    // Touched at put_ms + 500, which is now: not older than a millisecond.
-    EXPECT_FALSE(store->older_than(the_id(), std::chrono::milliseconds(0)));
-    bed.wall.advance(std::chrono::milliseconds(2));
-    EXPECT_TRUE(store->older_than(the_id(), std::chrono::milliseconds(1)));
-  }
-  const auto tombstone = unhex(tombstone_hex);
-  pack.insert(pack.end(), tombstone.begin(), tombstone.end());
-  write_file(root / "packs" / "pack-00000000000000000001.pack", pack);
-  auto store = bed.open(root, packing());
-  EXPECT_FALSE(store->has(the_id()));
-  EXPECT_FALSE(store->get(the_id()).has_value());
-}
-
 // Dagda writes Macha's bytes. A packed put's header is Macha's in every
-// field but the nonce and tag it drew, which open under the key; a touch and
-// a tombstone, which carry no secret, are Macha's exactly.
+// field but the nonce and tag it drew, which open under the key and the
+// domain; a touch and a tombstone, which carry no secret, are Macha's
+// exactly.
 TEST(StoreLocalFormat, WritesThePackRecordsMachaWrites) {
   StoreBed bed(put_ms);
   const auto root = bed.dir.path() / "store";
@@ -256,7 +214,9 @@ TEST(StoreLocalFormat, WritesThePackRecordsMachaWrites) {
   EXPECT_EQ(hex(std::span<const uint8_t>(bytes).first(65)), hex(std::span<const uint8_t>(known).first(65)));
   const auto header = decode_pack_header(std::span<const uint8_t>(bytes).first(pack_header_size));
   ASSERT_TRUE(header.has_value());
-  EXPECT_EQ(open_object(*bed.key, the_id(), header->nonce, header->tag, std::span<const uint8_t>(bytes).subspan(pack_header_size), plain.size()), plain);
+  EXPECT_EQ(
+      open_object(*bed.key, store->sealing(), the_id(), header->nonce, header->tag, std::span<const uint8_t>(bytes).subspan(pack_header_size), plain.size()),
+      plain);
 
   bed.wall.advance(std::chrono::milliseconds(500));
   store->touch(the_id());
@@ -269,7 +229,8 @@ TEST(StoreLocalFormat, WritesThePackRecordsMachaWrites) {
 }
 
 // A loose object Dagda writes is Macha's layout: the header's magic and size,
-// then a nonce and tag that open the ciphertext under the key and the id.
+// then a nonce and tag that open the ciphertext under the key, the domain
+// and the id.
 TEST(StoreLocalFormat, WritesTheLooseFileMachaWrites) {
   StoreBed bed;
   const auto root = bed.dir.path() / "store";
@@ -282,7 +243,7 @@ TEST(StoreLocalFormat, WritesTheLooseFileMachaWrites) {
   ASSERT_EQ(bytes.size(), loose_header_size + plain.size());
   EXPECT_EQ(hex(std::span<const uint8_t>(bytes).first(16)), std::string(loose_file_hex).substr(0, 32));
   const auto loose = decode_loose(bytes);
-  EXPECT_EQ(open_object(*bed.key, the_id(), loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), plain);
+  EXPECT_EQ(open_object(*bed.key, store->sealing(), the_id(), loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), plain);
 }
 
 }  // namespace

@@ -24,6 +24,14 @@ std::optional<StorageKey> StorageKey::derive_node_local(const dannan::Identity& 
   return StorageKey(identity.derive_local(node_local_label));
 }
 
+StorageKey StorageKey::derive_node_local(const dannan::identity::KeyCustody& custody) { return StorageKey(custody.derive(node_local_label)); }
+
+StorageKey StorageKey::require_node_local(const dannan::Identity& identity) {
+  auto key = derive_node_local(identity);
+  if (!key) throw std::runtime_error("this node has no key custody, so no node-local key: it cannot keep a store's ledgers (NodeConfig::custody)");
+  return std::move(*key);
+}
+
 StorageKey::StorageKey(dannan::identity::Secret key) : _key(std::move(key)) {
   if (_key.size() != 32) throw std::invalid_argument("a storage key is 32 bytes");
 }

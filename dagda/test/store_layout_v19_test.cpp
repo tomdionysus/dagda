@@ -5,13 +5,16 @@
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
 //
 
-// Layout v19 (step 6; Tom, 2026-11-04 evening): a backend made for any
-// domain but v1 is layout v19, its marker naming the domain, every object
-// sealed with the domain in the associated data; v18 disks (Macha's) open
-// and are written as v18, byte for byte, for ever; a v19 disk is refused by
-// a node that lacks its domain's key unless opened blind; the binding test
-// (stack document, security requirement a; decision 12); the state layout
-// marker; the control store and the cache under v19.
+// The one layout, v19 (step 6; Tom, 2026-11-04 evening and night): every
+// backend's marker names its domain, every object is sealed with the domain
+// in the associated data, a disk is refused by a node that lacks its
+// domain's key unless opened blind, and a member probes its key on a disk a
+// blind node adopted before trusting it (the key probe at activate). Macha's
+// v18 disks are refused with a reason naming dagda-migrate and nothing on
+// them is changed: the migration is manual. The binding test (stack
+// document, security requirement a; decision 12); the state layout marker;
+// the control store and the cache. Every node's ledgers are under its
+// node-local key, and a store with a ledger refuses to open without one.
 
 #include <gtest/gtest.h>
 
@@ -71,7 +74,8 @@ std::shared_ptr<const domain::StorageKey> key_filled(uint8_t fill) {
   return std::make_shared<const domain::StorageKey>(dannan::identity::Secret(key));
 }
 
-// A pool of loose objects under `sealing` and `role`, on `node`.
+// A pool of loose objects under `sealing` and `role`, on `node`, its
+// ledgers under the bed's node-local key unless another is given.
 std::unique_ptr<StoragePool> pool_of(StoreBed& bed, const std::filesystem::path& state, const std::filesystem::path& backend, const SealingScheme& sealing,
                                      std::shared_ptr<const domain::StorageKey> key, NodeId node = filled(0xab), domain::Role role = domain::Role::member,
                                      std::shared_ptr<const domain::StorageKey> ledger_key = {}) {
@@ -83,7 +87,7 @@ std::unique_ptr<StoragePool> pool_of(StoreBed& bed, const std::filesystem::path&
   options.pack_target_size = 0;
   options.sealing = sealing;
   options.role = role;
-  options.ledger_key = std::move(ledger_key);
+  options.ledger_key = ledger_key ? std::move(ledger_key) : bed.node_local;
   return std::make_unique<StoragePool>(state, node, NodeId::random(), options, std::move(key), bed.pool_services());
 }
 
@@ -123,77 +127,65 @@ TEST(StoreLayoutV19, TheBackendMarkerNamesTheDomainAndChecksTheKey) {
   message.insert(message.end(), token->bytes.begin(), token->bytes.end());
   const auto mac = dannan::identity::hmac_sha256(bed.key->bytes(), message);
   EXPECT_EQ(marker.substr(117, 32), hex(std::span<const uint8_t>(mac.data(), 16)));
+  EXPECT_EQ(backend_key_check(*bed.key, domain, *token), marker.substr(117, 32));
   EXPECT_EQ(marker.back(), '\n');
-  const auto text = fresh.lexically_normal().string();
-  const auto mirror = bed.dir.path() / "fresh-state" / "backend-identities" /
-                      (hex(dannan::identity::sha256({reinterpret_cast<const uint8_t*>(text.data()), text.size()})) + ".id");
-  EXPECT_EQ(read_file(mirror), marker);
+  EXPECT_EQ(backend_marker_text(SealingScheme::v19(domain), filled(0xab), *token, marker.substr(117, 32)) + "\n", marker);
+  EXPECT_EQ(read_file(backend_identity_path(bed.dir.path() / "fresh-state", fresh)), marker);
 }
 
-// A disk is its layout's for ever: a v18 disk opened by a pool of another
-// domain stays offline and unchanged, and a v19 disk opens only in its own
-// domain, never as v18.
-TEST(StoreLayoutV19, AV18DiskStaysV18AndAV19DiskStaysItsDomains) {
+// A disk is its domain's for ever: a v19 disk opens only in its own
+// domain. Macha's v18 disk is refused with a reason naming the migration and
+// the state, and left as it was: the store never migrates on its own.
+TEST(StoreLayoutV19, AV18DiskIsRefusedNamingTheMigrationAndAV19DiskStaysItsDomains) {
   StoreBed bed;
   const auto state = bed.dir.path() / "state";
   const auto v18 = bed.dir.path() / "v18";
   const auto v19 = bed.dir.path() / "v19";
-  std::string v18_marker;
+  std::filesystem::create_directories(v18);
+  const std::string v18_marker = "macha-backend-v18 abababababababababababababababab cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n";
+  std::ofstream(v18 / ".macha.backend") << v18_marker;
   std::string v19_marker;
-  {
-    auto pool = pool_of(bed, state, v18, SealingScheme::v18(), bed.key);
-    ASSERT_EQ(pool->online_backends(), 1u);
-    v18_marker = read_file(v18 / ".macha.backend");
-    EXPECT_EQ(v18_marker.substr(0, 18), "macha-backend-v18 ");
-  }
   {
     auto pool = pool_of(bed, bed.dir.path() / "state-x", v19, SealingScheme::v19(the_domain()), bed.key);
     ASSERT_EQ(pool->online_backends(), 1u);
     v19_marker = read_file(v19 / ".macha.backend");
   }
-  // The v18 disk in a pool of another domain: refused, and not rewritten.
-  {
-    auto pool = pool_of(bed, bed.dir.path() / "state-y", v18, SealingScheme::v19(the_domain()), bed.key);
+  // The v18 disk, in a pool of its own domain (v1) and in another's:
+  // refused, naming dagda-migrate, and not rewritten.
+  for (const auto& sealing : {SealingScheme::v19(domain::domain_v1), SealingScheme::v19(the_domain())}) {
+    auto pool = pool_of(bed, state, v18, sealing, bed.key);
     EXPECT_EQ(pool->online_backends(), 0u);
     EXPECT_TRUE(pool->degraded());
-    EXPECT_TRUE(bed.sink->saw("layout v18 backend is domain v1's"));
+    EXPECT_TRUE(bed.sink->saw("layout v18 (Macha's) is not opened by the store"));
+    EXPECT_TRUE(bed.sink->saw("dagda-migrate --state " + state.string()));
     EXPECT_EQ(read_file(v18 / ".macha.backend"), v18_marker);
+    EXPECT_FALSE(std::filesystem::exists(backend_identity_path(state, v18)));
   }
-  // The v19 disk in a v18 pool, and in a pool of another domain: refused.
-  {
-    auto pool = pool_of(bed, bed.dir.path() / "state-z", v19, SealingScheme::v18(), bed.key);
-    EXPECT_EQ(pool->online_backends(), 0u);
-    EXPECT_TRUE(bed.sink->saw("this pool is domain v1 (layout v18)"));
-  }
+  // The v19 disk in a pool of another domain: refused.
   {
     auto pool = pool_of(bed, bed.dir.path() / "state-w", v19, SealingScheme::v19(other_domain()), bed.key);
     EXPECT_EQ(pool->online_backends(), 0u);
     EXPECT_TRUE(bed.sink->saw(std::string("backend belongs to domain ") + domain_hex));
   }
   EXPECT_EQ(read_file(v19 / ".macha.backend"), v19_marker);
-  // Each in its own pool again: online, unchanged.
-  {
-    auto pool = pool_of(bed, state, v18, SealingScheme::v18(), bed.key);
-    EXPECT_EQ(pool->online_backends(), 1u);
-    EXPECT_EQ(read_file(v18 / ".macha.backend"), v18_marker);
-  }
+  // In its own pool again: online, unchanged.
   {
     auto pool = pool_of(bed, bed.dir.path() / "state-x", v19, SealingScheme::v19(the_domain()), bed.key);
     EXPECT_EQ(pool->online_backends(), 1u);
     EXPECT_EQ(read_file(v19 / ".macha.backend"), v19_marker);
   }
-  // A pool's options must hold together.
-  StoragePoolOptions bad;
-  bad.sealing = SealingScheme::v18();
-  bad.role = domain::Role::blind;
-  bad.ledger_key = key_filled(2);
-  EXPECT_THROW(StoragePool(bed.dir.path() / "bad", filled(1), NodeId::random(), bad, nullptr, bed.pool_services()), std::invalid_argument);
-  bad.sealing = SealingScheme::v19(the_domain());
-  bad.ledger_key.reset();
-  EXPECT_THROW(StoragePool(bed.dir.path() / "bad", filled(1), NodeId::random(), bad, nullptr, bed.pool_services()), std::invalid_argument);
+  // A pool's options must hold together: a member needs the domain key, and
+  // every pool the node-local key for its ledgers.
   StoragePoolOptions member;
   member.sealing = SealingScheme::v19(the_domain());
+  member.ledger_key = key_filled(2);
   EXPECT_THROW(StoragePool(bed.dir.path() / "bad", filled(1), NodeId::random(), member, nullptr, bed.pool_services()), std::invalid_argument);
+  member.ledger_key.reset();
+  EXPECT_THROW(StoragePool(bed.dir.path() / "bad", filled(1), NodeId::random(), member, bed.key, bed.pool_services()), std::invalid_argument);
+  StoragePoolOptions blind;
+  blind.sealing = SealingScheme::v19(the_domain());
+  blind.role = domain::Role::blind;
+  EXPECT_THROW(StoragePool(bed.dir.path() / "bad", filled(1), NodeId::random(), blind, nullptr, bed.pool_services()), std::invalid_argument);
 }
 
 // Requirement D3: a node without the domain's key is refused the disk
@@ -263,7 +255,8 @@ TEST(StoreLayoutV19, AV19DiskIsRefusedWithoutItsKeyUnlessOpenedBlind) {
 
 // A sealed record moves between roles unopened: a blind node holds what a
 // member sealed and the member reads it back; a blind node adopts its own
-// empty disk, with no key to check.
+// empty disk, with no key to check. The same node given the key proves it
+// by the probe, and the marker carries the check from then on.
 TEST(StoreLayoutV19, ASealedRecordMovesToABlindNodeAndBackUnopened) {
   StoreBed bed;
   const auto sealing = SealingScheme::v19(the_domain());
@@ -286,12 +279,15 @@ TEST(StoreLayoutV19, ASealedRecordMovesToABlindNodeAndBackUnopened) {
     EXPECT_EQ(blind->get_sealed(id), std::optional<LocalStore::SealedObject>(sealed));
   }
   // The same node, given the key (its ledgers still under its own): the
-  // record opens.
+  // record opens, and the probe has put the check into the marker.
   {
     auto enrolled = pool_of(bed, bed.dir.path() / "blind-state", bed.dir.path() / "blind", sealing, bed.key, filled(2), domain::Role::member, key_filled(3));
     ASSERT_EQ(enrolled->online_backends(), 1u);
     EXPECT_EQ(enrolled->get(id), std::optional<Bytes>(data));
     EXPECT_TRUE(enrolled->valid(id));
+    const auto marker = read_file(bed.dir.path() / "blind" / ".macha.backend");
+    EXPECT_EQ(marker.find(" blind\n"), std::string::npos);
+    EXPECT_EQ(read_file(backend_identity_path(bed.dir.path() / "blind-state", bed.dir.path() / "blind")), marker);
   }
   // A member takes a sealed record too, without opening it.
   auto second = pool_of(bed, bed.dir.path() / "second-state", bed.dir.path() / "second", sealing, bed.key, filled(4));
@@ -303,6 +299,117 @@ TEST(StoreLayoutV19, ASealedRecordMovesToABlindNodeAndBackUnopened) {
   lying.plain_size += 1;
   EXPECT_THROW((void)second->put_sealed(object_id(pattern(10)), lying), std::invalid_argument);
   EXPECT_EQ(second->online_backends(), 1u);
+}
+
+// The key probe at activate (Tom, 2026-11-04 night): a member opening a
+// disk a blind node adopted has no check to prove its key against, so it
+// opens a record. The wrong key fails the probe: the backend stays offline
+// with the reason, and the record is still there. The right key passes, and
+// the marker is upgraded with the check so the wrong key is refused at the
+// marker from then on.
+TEST(StoreLayoutV19, AMemberProbesItsKeyOnABlindAdoptedBackend) {
+  StoreBed bed;
+  const auto sealing = SealingScheme::v19(the_domain());
+  const auto data = pattern(2500, 6);
+  const auto id = object_id(data);
+  const auto disk = bed.dir.path() / "disk";
+  const auto state = bed.dir.path() / "state";
+  auto member = pool_of(bed, bed.dir.path() / "member-state", bed.dir.path() / "member", sealing, bed.key, filled(1));
+  ASSERT_TRUE(member->put(id, data));
+  const auto sealed = member->get_sealed(id).value();
+  {
+    auto blind = pool_of(bed, state, disk, sealing, nullptr, filled(2), domain::Role::blind);
+    ASSERT_EQ(blind->online_backends(), 1u);
+    ASSERT_TRUE(blind->put_sealed(id, sealed));
+  }
+  const auto blind_marker = read_file(disk / ".macha.backend");
+  ASSERT_NE(blind_marker.find(" blind\n"), std::string::npos);
+  {
+    auto wrong = pool_of(bed, state, disk, sealing, key_filled(7), filled(2));
+    EXPECT_EQ(wrong->online_backends(), 0u);
+    EXPECT_TRUE(wrong->degraded());
+    EXPECT_TRUE(bed.sink->saw("backend key probe failed"));
+    EXPECT_TRUE(bed.sink->saw("record " + to_string(id) + " does not open under this node's key"));
+  }
+  // Nothing discarded, nothing rewritten.
+  EXPECT_TRUE(std::filesystem::exists(object_path(disk, id)));
+  EXPECT_EQ(read_file(disk / ".macha.backend"), blind_marker);
+  {
+    auto right = pool_of(bed, state, disk, sealing, bed.key, filled(2));
+    ASSERT_EQ(right->online_backends(), 1u);
+    EXPECT_EQ(right->get(id), std::optional<Bytes>(data));
+  }
+  const auto checked = read_file(disk / ".macha.backend");
+  EXPECT_EQ(checked.find(" blind\n"), std::string::npos);
+  EXPECT_EQ(checked.substr(0, blind_marker.size() - 6), blind_marker.substr(0, blind_marker.size() - 6));
+  {
+    // The marker refuses the wrong key now, before any probe.
+    auto wrong = pool_of(bed, state, disk, sealing, key_filled(7), filled(2));
+    EXPECT_EQ(wrong->online_backends(), 0u);
+    EXPECT_TRUE(bed.sink->saw("backend key check failed"));
+  }
+}
+
+// Step 6's finding: a copy that does not open is discarded by get and by
+// the scrub only where the backend's key check has passed. On a
+// blind-adopted disk holding nothing to probe, the member's key is
+// unchecked, so a record that arrives sealed under another key is kept,
+// not thrown away as corrupt.
+TEST(StoreLayoutV19, ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked) {
+  StoreBed bed;
+  const auto sealing = SealingScheme::v19(the_domain());
+  const auto data = pattern(1800, 8);
+  const auto id = object_id(data);
+  auto member = pool_of(bed, bed.dir.path() / "member-state", bed.dir.path() / "member", sealing, bed.key, filled(1));
+  ASSERT_TRUE(member->put(id, data));
+  const auto sealed = member->get_sealed(id).value();
+  const auto disk = bed.dir.path() / "disk";
+  const auto state = bed.dir.path() / "state";
+  {
+    auto blind = pool_of(bed, state, disk, sealing, nullptr, filled(2), domain::Role::blind);
+    ASSERT_EQ(blind->online_backends(), 1u);
+  }
+  {
+    // Nothing to probe: online, the key unchecked.
+    auto unchecked = pool_of(bed, state, disk, sealing, key_filled(7), filled(2));
+    ASSERT_EQ(unchecked->online_backends(), 1u);
+    ASSERT_TRUE(unchecked->put_sealed(id, sealed));
+    EXPECT_FALSE(unchecked->get(id).has_value());
+    EXPECT_TRUE(unchecked->has(id));
+    EXPECT_TRUE(bed.sink->saw("kept (key unchecked)"));
+    const auto scrubbed = unchecked->scrub_step(0, 0);
+    EXPECT_TRUE(scrubbed.complete);
+    EXPECT_TRUE(unchecked->has(id));
+    EXPECT_TRUE(std::filesystem::exists(object_path(disk, id)));
+  }
+  // Where the key has been checked, a corrupt copy goes as before.
+  const auto checked_disk = bed.dir.path() / "checked";
+  auto checked = pool_of(bed, bed.dir.path() / "checked-state", checked_disk, sealing, bed.key, filled(3));
+  ASSERT_TRUE(checked->put(id, data));
+  test::corrupt_object(checked_disk, id);
+  EXPECT_FALSE(checked->get(id).has_value());
+  EXPECT_TRUE(bed.sink->saw("discarding unreadable local object " + to_string(id)));
+  EXPECT_FALSE(checked->has(id));
+}
+
+// Every ledger a node keeps is sealed under its node-local key: a store with
+// a ledger directory and no such key refuses to open, saying so, as a pool
+// does (above). Nothing falls back to the domain key.
+TEST(StoreLayoutV19, AStoreWithALedgerNeedsTheNodeLocalKey) {
+  StoreBed bed;
+  auto options = LocalStoreOptions::loose_only(64 * mib);
+  options.ledger_dir = bed.dir.path() / "ledger";
+  std::string why;
+  try {
+    LocalStore store(bed.dir.path() / "store", options, bed.key, bed.services());
+  } catch (const std::invalid_argument& error) {
+    why = error.what();
+  }
+  EXPECT_NE(why.find("node-local key"), std::string::npos) << why;
+  EXPECT_FALSE(std::filesystem::exists(options.ledger_dir));
+  options.ledger_key = bed.node_local;
+  LocalStore store(bed.dir.path() / "store", options, bed.key, bed.services());
+  EXPECT_TRUE(std::filesystem::is_directory(options.ledger_dir));
 }
 
 // The binding test (stack document, security requirement a; decision 12) on
@@ -324,7 +431,8 @@ TEST(StoreLayoutV19, AV19ObjectMovedToAnotherDomainOrIdDoesNotOpen) {
   EXPECT_EQ(open_object(*bed.key, SealingScheme::v19(the_domain()), id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), data);
   EXPECT_THROW((void)open_object(*bed.key, SealingScheme::v19(other_domain()), id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size),
                std::runtime_error);
-  EXPECT_THROW((void)open_object(*bed.key, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), std::runtime_error);
+  EXPECT_THROW((void)open_object(*bed.key, SealingScheme::v19(domain::domain_v1), id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size),
+               std::runtime_error);
   // Moved to another domain's store (placed before the store opens, as a
   // disk's contents are).
   const auto move_to = [&](const std::filesystem::path& root, const ObjectId& as) {
@@ -343,43 +451,39 @@ TEST(StoreLayoutV19, AV19ObjectMovedToAnotherDomainOrIdDoesNotOpen) {
   move_to(bed.dir.path() / "mine", other_id);
   EXPECT_THROW((void)mine->get(other_id), std::runtime_error);
   EXPECT_FALSE(mine->valid(other_id));
-  // And a v18 store of the same key reads it as nothing it can open.
-  move_to(bed.dir.path() / "v18", id);
-  auto v18 = bed.open(bed.dir.path() / "v18", LocalStoreOptions::loose_only(64 * mib));
-  EXPECT_TRUE(v18->has(id));
-  EXPECT_THROW((void)v18->get(id), std::runtime_error);
-  // A blind local store's options must hold together too.
+  // And domain v1's store of the same key reads it as nothing it can open.
+  move_to(bed.dir.path() / "v1", id);
+  auto v1 = bed.open(bed.dir.path() / "v1", LocalStoreOptions::loose_only(64 * mib));
+  EXPECT_TRUE(v1->has(id));
+  EXPECT_THROW((void)v1->get(id), std::runtime_error);
+  // A blind local store's options must hold together too: a ledger needs
+  // the node's key.
   auto blind = options;
   blind.role = domain::Role::blind;
-  blind.sealing = SealingScheme::v18();
-  EXPECT_THROW(bed.open(bed.dir.path() / "blind", blind), std::invalid_argument);
-  blind.sealing = SealingScheme::v19(the_domain());
   blind.ledger_dir = bed.dir.path() / "blind-ledger";
   EXPECT_THROW(std::make_unique<LocalStore>(bed.dir.path() / "blind", blind, nullptr, bed.services()), std::invalid_argument);
 }
 
-// The state directory's marker: v18's text unchanged, v19's naming the
-// domain, each refusing the other and another domain.
+// The state directory's marker names the layout and the domain, refusing
+// another domain and Macha's v18 (store_state_layout_test has its bytes).
 TEST(StoreLayoutV19, TheStateLayoutMarkerNamesTheDomain) {
   dannan::test::TempDir dir;
-  const auto v18 = dir.path() / "v18";
-  open_state_layout(v18);
-  EXPECT_EQ(read_file(v18 / "storage-layout"), "macha-state-layout-v18\n");
-  open_state_layout(v18, SealingScheme::v18());
-  EXPECT_THROW(open_state_layout(v18, SealingScheme::v19(the_domain())), std::runtime_error);
-  EXPECT_EQ(read_file(v18 / "storage-layout"), "macha-state-layout-v18\n");
   const auto v19 = dir.path() / "v19";
   open_state_layout(v19, SealingScheme::v19(the_domain()));
   EXPECT_EQ(read_file(v19 / "storage-layout"), std::string("dagda-state-layout-v19 ") + domain_hex + "\n");
   open_state_layout(v19, SealingScheme::v19(the_domain()));
-  EXPECT_THROW(open_state_layout(v19), std::runtime_error);
+  EXPECT_THROW(open_state_layout(v19, SealingScheme::v19(domain::domain_v1)), std::runtime_error);
   EXPECT_THROW(open_state_layout(v19, SealingScheme::v19(other_domain())), std::runtime_error);
   EXPECT_EQ(read_file(v19 / "storage-layout"), std::string("dagda-state-layout-v19 ") + domain_hex + "\n");
-  EXPECT_THROW(open_state_layout(dir.path() / "x", SealingScheme{17, {}}), std::invalid_argument);
+  const auto v18 = dir.path() / "v18";
+  std::filesystem::create_directories(v18);
+  std::ofstream(v18 / "storage-layout") << "macha-state-layout-v18\n";
+  EXPECT_THROW(open_state_layout(v18, SealingScheme::v19(domain::domain_v1)), std::runtime_error);
+  EXPECT_EQ(read_file(v18 / "storage-layout"), "macha-state-layout-v18\n");
 }
 
-// The control store and the cache seal under v19 when told to.
-TEST(StoreLayoutV19, TheControlStoreAndTheCacheSealUnderV19) {
+// The control store and the cache seal under their domain.
+TEST(StoreLayoutV19, TheControlStoreAndTheCacheSealUnderTheirDomain) {
   StoreBed bed;
   const auto data = pattern(900, 5);
   const auto id = object_id(data);
@@ -389,12 +493,13 @@ TEST(StoreLayoutV19, TheControlStoreAndTheCacheSealUnderV19) {
   control_options.pack_threshold = 0;
   control_options.pack_target_size = 0;
   control_options.sealing = SealingScheme::v19(the_domain());
-  auto control = open_control_store(bed.dir.path() / "state", control_options, bed.key, bed.services());
+  auto control = open_control_store(bed.dir.path() / "state", control_options, bed.key, bed.node_local, bed.services());
   ASSERT_TRUE(control->put(id, data));
   EXPECT_EQ(control->get(id), std::optional<Bytes>(data));
   const auto file = read_file(object_path(control_store_path(bed.dir.path() / "state", control_options), id));
   const auto loose = local_format::decode_loose({reinterpret_cast<const uint8_t*>(file.data()), file.size()});
-  EXPECT_THROW((void)open_object(*bed.key, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), std::runtime_error);
+  EXPECT_THROW((void)open_object(*bed.key, SealingScheme::v19(domain::domain_v1), id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size),
+               std::runtime_error);
   EXPECT_EQ(open_object(*bed.key, SealingScheme::v19(the_domain()), id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size), data);
 
   CacheOptions cache_options;
@@ -407,7 +512,9 @@ TEST(StoreLayoutV19, TheControlStoreAndTheCacheSealUnderV19) {
   EXPECT_EQ(cache.get(id), std::optional<Bytes>(data));
   const auto cached = read_file(object_path(cache_options.path, id));
   const auto cached_loose = local_format::decode_loose({reinterpret_cast<const uint8_t*>(cached.data()), cached.size()});
-  EXPECT_THROW((void)open_object(*bed.key, id, cached_loose.nonce, cached_loose.tag, cached_loose.ciphertext, cached_loose.plain_size), std::runtime_error);
+  EXPECT_THROW((void)open_object(*bed.key, SealingScheme::v19(domain::domain_v1), id, cached_loose.nonce, cached_loose.tag, cached_loose.ciphertext,
+                                 cached_loose.plain_size),
+               std::runtime_error);
 }
 
 }  // namespace

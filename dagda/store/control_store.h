@@ -35,8 +35,8 @@ struct ControlStoreOptions {
   uint64_t reserve_free = 256ULL * 1024 * 1024;
   size_t pack_threshold = 1024 * 1024;
   size_t pack_target_size = 64 * 1024 * 1024;
-  // How its objects are sealed: layout v18 (domain v1) or v19 with the
-  // domain. The control store is a member's: it opens what it holds.
+  // The domain its objects are sealed for; v1 by default. The control store
+  // is a member's: it opens what it holds.
   SealingScheme sealing{};
 };
 
@@ -45,12 +45,14 @@ std::filesystem::path control_store_path(const std::filesystem::path& state, con
 
 // Opens the control store as Macha's local state does
 // (cluster/local_state.cpp:134-142): authoritative, a durability domain of
-// its own over its root, and its held ledger at <state>/ledger/control with
-// `ledger_cache_bytes` of cache (ledger_cache_share(total,
-// LedgerShare::control_held) for a node's one cache). Throws as LocalStore's
-// constructor does. Waits on the device.
+// its own over its root, and its held ledger at <state>/ledger/control,
+// sealed under `ledger_key` (the node-local key), with `ledger_cache_bytes`
+// of cache (ledger_cache_share(total, LedgerShare::control_held) for a
+// node's one cache). Throws as LocalStore's constructor does. Waits on the
+// device.
 std::unique_ptr<LocalStore> open_control_store(const std::filesystem::path& state, const ControlStoreOptions& options,
-                                               std::shared_ptr<const domain::StorageKey> key, LocalStore::Services services,
+                                               std::shared_ptr<const domain::StorageKey> key, std::shared_ptr<const domain::StorageKey> ledger_key,
+                                               LocalStore::Services services,
                                                uint64_t ledger_cache_bytes = ledger_cache_share(default_ledger_cache_bytes, LedgerShare::control_held));
 
 }  // namespace dagda::store

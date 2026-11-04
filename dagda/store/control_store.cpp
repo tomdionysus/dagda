@@ -16,7 +16,8 @@ std::filesystem::path control_store_path(const std::filesystem::path& state, con
 }
 
 std::unique_ptr<LocalStore> open_control_store(const std::filesystem::path& state, const ControlStoreOptions& options,
-                                               std::shared_ptr<const domain::StorageKey> key, LocalStore::Services services, uint64_t ledger_cache_bytes) {
+                                               std::shared_ptr<const domain::StorageKey> key, std::shared_ptr<const domain::StorageKey> ledger_key,
+                                               LocalStore::Services services, uint64_t ledger_cache_bytes) {
   LocalStoreOptions local;
   local.limit = options.limit;
   local.reserve_free = options.reserve_free;
@@ -24,6 +25,7 @@ std::unique_ptr<LocalStore> open_control_store(const std::filesystem::path& stat
   local.pack_target_size = options.pack_target_size;
   local.ledger_dir = state / "ledger" / "control";
   local.ledger_cache_bytes = static_cast<size_t>(ledger_cache_bytes);
+  local.ledger_key = std::move(ledger_key);
   local.sealing = options.sealing;
   return std::make_unique<LocalStore>(control_store_path(state, options), local, std::move(key), std::move(services), LocalStoreMode::authoritative);
 }

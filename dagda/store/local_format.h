@@ -19,16 +19,20 @@
 #include "dagda/store/object_id.h"
 #include "dannan/identity/crypto.h"
 
-// A local store's files as layout v18 has them (requirements section 4.1,
-// S2, S3, S8), byte for byte Macha's: every integer big-endian, every encoder
-// and decoder pure. Waits on nothing; thread-safe.
+// A local store's files (requirements section 4.1, S2, S3, S8), byte for
+// byte Macha's layout v18 but for what the tag authenticates (sealing.h):
+// every integer big-endian, every encoder and decoder pure. The migration
+// (migrate/) reads v18 disks through these same codecs, since only the tag
+// moves. Waits on nothing; thread-safe.
 namespace dagda::store::local_format {
 
 // A loose object, objects/xx/yy/<hex>.obj: the magic, the plaintext's size,
-// the nonce, the tag, then the ciphertext (as long as the plaintext), sealed
-// with the id as the associated data.
+// the nonce, the tag, then the ciphertext (as long as the plaintext).
 inline constexpr std::array<uint8_t, 8> loose_magic{'D', 'H', 'T', 'O', 'B', 'J', '0', '1'};
 inline constexpr size_t loose_header_size = loose_magic.size() + sizeof(uint64_t) + 12 + 16;
+// Where the tag sits in a loose file: after the magic, the size and the
+// nonce.
+inline constexpr size_t loose_tag_offset = loose_magic.size() + sizeof(uint64_t) + 12;
 
 // The bytes before a loose object's ciphertext.
 Bytes encode_loose_header(uint64_t plain_size, const dannan::identity::SealedData& sealed);
@@ -60,6 +64,9 @@ inline constexpr uint8_t pack_touch = 3;
 inline constexpr size_t pack_header_prefix_size = 93;
 // The prefix and its SHA-256.
 inline constexpr size_t pack_header_size = pack_header_prefix_size + 32;
+// Where the tag sits in a record's header: the last sixteen bytes of the
+// prefix, the checksum after them.
+inline constexpr size_t pack_tag_offset = pack_header_prefix_size - 16;
 inline constexpr uint64_t pack_payload_safety_limit = 128ULL * 1024 * 1024;
 
 struct PackHeader {
@@ -76,6 +83,15 @@ Bytes encode_pack_header(const PackHeader& header);
 // Nothing unless the bytes are a whole header, its checksum holds, its type
 // is known and its sizes fit its type.
 std::optional<PackHeader> decode_pack_header(std::span<const uint8_t> bytes);
+
+// First offset at or after `from` in the open pack `fd` (of `file_size`
+// bytes) holding a decodable header, or nothing. Tells a torn append
+// (nothing decodable after) from damage inside a pack (later records
+// intact). Payloads are AES-GCM ciphertext, so a magic match plus a valid
+// SHA-256 inside one is not a realistic false positive. Reads in bounded
+// chunks; hashes only where the magic matches. Throws std::runtime_error if
+// the pack cannot be read. Waits on the device.
+std::optional<uint64_t> find_next_pack_header(int fd, uint64_t from, uint64_t file_size);
 
 std::string pack_name(uint64_t sequence);
 // The sequence a pack's file name carries (from 1); nothing for any other

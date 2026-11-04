@@ -38,6 +38,8 @@ add_executable(dagda_tests
   ledger_trie_diff_test.cpp
   ledger_trie_union_test.cpp
   ledger_unreferenced_since_test.cpp
+  migrate_legacy_v18_test.cpp
+  migrate_migrate_test.cpp
   store_control_store_test.cpp
   store_data_work_test.cpp
   store_distributed_store_test.cpp
@@ -63,5 +65,12 @@ add_executable(dagda_tests
   store_write_behind_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
-# The include-direction case reads the sources it checks.
-target_compile_definitions(dagda_tests PRIVATE DAGDA_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# The include-direction case reads the sources it checks; the migration's
+# runs the tool, which is built beside the tests.
+target_compile_definitions(dagda_tests PRIVATE DAGDA_SOURCE_DIR="${PROJECT_SOURCE_DIR}" DAGDA_BINARY_DIR="${PROJECT_BINARY_DIR}")
+add_dependencies(dagda_tests dagda-migrate)
+# Dannan's ChildProcess fixture opens a pseudo-terminal through libutil on
+# Linux.
+if(NOT APPLE)
+  target_link_libraries(dagda_tests PRIVATE util)
+endif()

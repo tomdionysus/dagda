@@ -47,9 +47,10 @@ using Hash256 = dannan::identity::Hash256;
 // journal, never the number of records. Saved nodes are read from disk as
 // lookups reach them and kept in a cache of `cache_bytes`; the root and
 // unsaved nodes stay in memory. When the node file holds more superseded
-// nodes than live ones it is rewritten. The files are layout v18's:
+// nodes than live ones it is rewritten. The files are Macha's layout v18's:
 // `root`, `journal.log` (associated data MACHLJ01) and `nodes-<generation>.bin`
-// (MACHLN01), sealed under the domain's storage key.
+// (MACHLN01), sealed under the key given: the node-local key for every
+// ledger a node keeps of its own (Tom, 2026-11-04 night).
 //
 // Every operation may wait on the state device. Not thread-safe: its owner
 // serialises every call, const ones included. Snapshots are read from any
@@ -185,6 +186,21 @@ class ObjectTrie {
   void replace_all(std::vector<Record> records);
   // Folds the journal into the node file now.
   void checkpoint();
+  // Re-seals the trie under `key` (the migration's move of a node's ledgers
+  // to its node-local key): the journal folded in and emptied, every live
+  // node written into the next generation's file under the new key, the
+  // root published (one atomic replace: the trie is under the old key or the
+  // new, never both), the old file removed. Peak extra space: the live nodes
+  // once more. Throws std::invalid_argument for no key.
+  void rekey(std::shared_ptr<const domain::StorageKey> key);
+  // Whether the trie in `dir` is sealed under `key`: its published root's
+  // node, or failing a saved root its journal's first frame, opens under it.
+  // Nothing for an empty trie (no saved node, no journal frame), which any
+  // key opens. Reads one node and nothing else; a trie must be probed before
+  // it is opened under a key that may be wrong, since opening replays the
+  // journal and truncates it at the first frame that will not open. Waits
+  // on the state device.
+  static std::optional<bool> probe(const std::filesystem::path& dir, const domain::StorageKey& key);
   // Records after `after` (from the first when none), in id order, at most
   // `limit` of them.
   std::vector<Record> next(const std::optional<ObjectId>& after, size_t limit) const;
@@ -213,6 +229,9 @@ class ObjectTrie {
 
   std::filesystem::path nodes_path(uint64_t generation) const;
   std::unique_ptr<SealedJournal> open_nodes(uint64_t generation) const;
+  // Writes every live node into the next generation's file under `key` and
+  // publishes it.
+  void rewrite(std::shared_ptr<const domain::StorageKey> key);
   void publish_root() const;
   NodePtr load(const Child&) const;
   static NodePtr load_from(const Child&, uint64_t generation, const Read&, NodeCache&, bool format1);
@@ -235,7 +254,8 @@ class ObjectTrie {
   static size_t footprint(const Node&) noexcept;
 
   const std::filesystem::path _dir;
-  const std::shared_ptr<const domain::StorageKey> _key;
+  // Changed by rekey() alone.
+  std::shared_ptr<const domain::StorageKey> _key;
   const Options _options;
   const dannan::status::ScopedLogger _logger;
   std::unique_ptr<SealedJournal> _journal;

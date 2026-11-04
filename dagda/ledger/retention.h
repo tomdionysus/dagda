@@ -32,8 +32,9 @@ using contract::RetentionClass;
 using contract::RetentionClock;
 using contract::RetentionDot;
 
-// Layout v18's claims, as bytes (requirements 4.1, "Retention WAL" and the
-// claims tries). Pure; pinned by known answers.
+// The claims as bytes, Macha's layout v18's (requirements 4.1, "Retention
+// WAL" and the claims tries), sealed under the node-local key. Pure; pinned
+// by known answers.
 namespace retention_format {
 
 // claims.log's associated data. The WAL has no file magic: it is a sealed
