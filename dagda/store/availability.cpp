@@ -93,11 +93,7 @@ class RemoteTrie final : public ledger::TrieSource {
 }  // namespace
 
 AvailabilityService::AvailabilityService(dannan::Context& context, const contract::ObjectLedger& ledger, AvailabilityOptions options)
-    : _context(context),
-      _ledger(ledger),
-      _options(options),
-      _time(options.time ? *options.time : dannan::contract::steady_time_source()),
-      _logger(context.logger("dagda.availability")) {}
+    : _context(context), _ledger(ledger), _options(options), _time(context.time().source()), _logger(context.logger("dagda.availability")) {}
 
 bool AvailabilityService::unavailable(const ObjectId& id) const {
   const auto current = _snapshot.handle();
@@ -106,7 +102,7 @@ bool AvailabilityService::unavailable(const ObjectId& id) const {
 
 bool AvailabilityService::refresh(const std::function<void()>& pause) {
   const auto now = _time.now();
-  const auto topology = _context.events().count(dannan::status::NodeEvents::topology);
+  const auto membership = _context.events().count(dannan::status::NodeEvents::membership);
   const auto inventory = _ledger.inventory();
   auto view = _ledger.held_view(contract::RetentionClass::data);
   const auto later = [&](TimePoint at) { _due = _due ? std::min(*_due, at) : at; };
@@ -142,7 +138,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     grew = grew || peers[i].second > _surveyed_peers[i].second;
   }
   // What must be asked of the peers again, whatever it costs.
-  const bool must_ask = !_surveyed || topology != _surveyed_topology || !same_peers || shrank || retry;
+  const bool must_ask = !_surveyed || membership != _surveyed_membership || !same_peers || shrank || retry;
   const bool missing = _surveyed && previous && (!previous->survey.unavailable.empty() || !previous->survey.unknown.empty());
   // What the inventory or this node's holdings changed, or a peer holding
   // more while something is missing (a peer taking bulk writes grows all
@@ -225,7 +221,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     _retry_at.reset();
   }
   _surveyed = true;
-  _surveyed_topology = topology;
+  _surveyed_membership = membership;
   _surveyed_peers = std::move(peers);
   return true;
 }
