@@ -1,0 +1,445 @@
+//
+// Dagda - The Store
+//
+// Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+// Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+//
+
+#pragma once
+
+#include <atomic>
+#include <boost/asio/any_io_executor.hpp>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "dagda/contract/claim_store.h"
+#include "dagda/store/control_objects.h"
+#include "dagda/store/durability_ticket.h"
+#include "dagda/store/local_store.h"
+#include "dagda/store/object_id.h"
+#include "dagda/store/persistent_cache.h"
+#include "dagda/store/replica_selector.h"
+#include "dagda/store/storage_pool.h"
+#include "dannan/context.h"
+#include "dannan/contract/thread_safety.h"
+#include "dannan/contract/time_source.h"
+#include "dannan/net/message.h"
+
+namespace dagda::store {
+
+// No node present can take a write now: no backend online, none with room,
+// or none answering in time. It passes, so a caller waits and tries again
+// (Macha 0.91.5, requirement S23).
+class StorageUnavailable final : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+
+// What a write waits for (the maintainer, 2026-11-04; requirements section 8, head).
+// "On disk" is synced to stable storage: the durability domain's generation
+// made durable. A write is never undone.
+enum class Durability : uint8_t {
+  // Received in memory and queued; the call returns at once. Best effort: it
+  // may be lost.
+  ephemeral,
+  // On disk on at least one node.
+  persisted,
+  // On disk on at least k nodes: for objects k is the store's write_copies.
+  replicated,
+  // On disk on every available node of the replication set. A node Dannan
+  // already sees as dead is not waited on and is named pending; a live one
+  // that does not answer is waited on to the deadline, never longer.
+  durable,
+};
+const char* durability_name(Durability) noexcept;
+
+enum class ReplicaState : uint8_t { acknowledged, pending, refused };
+const char* replica_state_name(ReplicaState) noexcept;
+
+// One node of a write, by Dannan node id.
+struct ReplicaEvidence {
+  dannan::identity::NodeId node;
+  ReplicaState state = ReplicaState::pending;
+  // A member of the object's replication set; otherwise another node the
+  // write reached (the local first copy, a fallback a refused or stalled
+  // owner spilled to).
+  bool in_set = false;
+  // Why pending or refused: "dead", "queued", "no answer yet", "awaiting
+  // barrier", "owed to repair", a refusal's code and text.
+  std::string why;
+  // A deferred write's place on that node, for its barrier.
+  std::optional<DurabilityTicket> durability;
+};
+
+// A write's handle, outliving the call: status() and wait() read it.
+struct Ticket {
+  uint64_t serial = 0;
+  bool valid() const noexcept { return serial != 0; }
+  auto operator<=>(const Ticket&) const = default;
+};
+
+// What a write did, on every node it concerns: the replication set's
+// members first, in placement order, then the other nodes it reached.
+struct WriteEvidence {
+  ObjectId id{};
+  Durability level = Durability::replicated;
+  // A deferred write: copies are on disk once a wait() makes them so.
+  bool deferred = false;
+  // Acknowledgements the level asks for (for durable, the members waited
+  // on).
+  size_t sought = 0;
+  // The level holds: queued (ephemeral), or enough acknowledged.
+  bool met = false;
+  // No node is pending: nothing more will be reported.
+  bool settled = false;
+  // Nothing acknowledged and nothing pending: the write landed nowhere.
+  bool lost = false;
+  std::vector<ReplicaEvidence> replicas;
+  Ticket ticket;
+
+  size_t acknowledged() const noexcept;
+  // Nodes that took the bytes, on disk or awaiting a barrier.
+  size_t holders() const noexcept;
+  const ReplicaEvidence* on(const dannan::identity::NodeId& node) const noexcept;
+};
+
+struct WriteOptions {
+  Durability level = Durability::replicated;
+  // Written now, made durable by a later wait() (Macha's put_deferred).
+  bool deferred = false;
+  // The call returns by then, whatever is still pending. Zero: the store's
+  // write_deadline.
+  std::chrono::milliseconds deadline{0};
+  dannan::sched::FrameType frame = dannan::sched::FrameType::loader;
+  std::atomic_bool* cancelled = nullptr;
+};
+
+// An object as read, and the memory its bytes hold (a reply's retained
+// frame) until the last reader lets it go.
+struct ObjectBuffer {
+  Bytes bytes;
+  dannan::net::MemoryHold memory;
+};
+using ObjectData = std::shared_ptr<const ObjectBuffer>;
+
+// What asking for an object came to: found; not_found, every online peer
+// that might hold it said it does not and asking again will not change
+// that; or try_later, nothing that settles it now.
+enum class FetchAnswer : uint8_t { ok, not_found, try_later };
+enum class ReadSource : uint8_t { none, local, cache, remote };
+
+struct ReadOptions {
+  dannan::sched::FrameType frame = dannan::sched::FrameType::foreground;
+  // Zero: the store's read_deadline.
+  std::chrono::milliseconds deadline{0};
+  // Rotates equal-scored replicas, so a file's stripes spread over them.
+  size_t stripe = 0;
+  std::atomic_bool* cancelled = nullptr;
+};
+
+struct ReadResult {
+  ObjectData object;
+  ReadSource source = ReadSource::none;
+  // Which node's copy it is: this node's for local and cache.
+  std::optional<dannan::identity::NodeId> served_by;
+  FetchAnswer answer = FetchAnswer::try_later;
+};
+
+// What a CONTROL offer did: `held_by` counts the nodes that hold every object
+// afterwards, the offering node included.
+struct ControlOffer {
+  size_t held_by = 0;
+  size_t objects_sent = 0;
+  uint64_t bytes_sent = 0;
+};
+
+// Macha's figures (config.hpp:602-640), with its defaults, and Dagda's.
+struct DistributedStoreOptions {
+  // Copies each object is placed on (Macha's dht.replicas).
+  size_t replication = 3;
+  // k of the replicated level: the maintainer's default of 2 (2026-11-04). Macha's own
+  // write_copies of 1 is the persisted level, which is what Macha asks for.
+  size_t write_copies = 2;
+  // Nodes a CONTROL claim is sought on.
+  size_t metadata_write_copies = 2;
+  size_t extent_size = 16 * 1024 * 1024;
+  // A peer whose put has moved no byte for this long is spilled past.
+  std::chrono::milliseconds write_stall{2500};
+  // A write's and a read's deadline when the caller names none.
+  std::chrono::milliseconds write_deadline{60000};
+  std::chrono::milliseconds read_deadline{60000};
+  // How long a peer's put or fetch may run on past the call that started
+  // it, so a slow peer's acknowledgement still reaches the write's ticket.
+  // TODO(Dannan: a deadline that cancels the call): a Routes::call whose
+  // deadline passes is answered but runs on, holding a reply slot.
+  std::chrono::milliseconds call_horizon{120000};
+  // Each presence, claim and CONTROL call to one peer (Macha's
+  // max(dead_after, connect_timeout)).
+  std::chrono::milliseconds control_call{30000};
+  size_t retention_check_batch_size = 2000;
+  size_t retention_check_concurrency = 8;
+  // Threads that run writes and reads for the asynchronous calls and the
+  // ephemeral queue.
+  size_t workers = 4;
+  // Bytes the ephemeral queue holds before it refuses.
+  size_t ephemeral_queue_bytes = 64 * 1024 * 1024;
+  // Tickets kept, the oldest settled ones forgotten first.
+  size_t max_tickets = 4096;
+  // Prompt replication's first retry, doubling (Macha's 30 s).
+  std::chrono::milliseconds prompt_retry{30000};
+  // Opportunistic local copies queued (cache fill, promotion).
+  size_t local_copy_bytes = 256 * 1024 * 1024;
+  // The clock for retries and ticket ages; null is the node's.
+  const dannan::contract::TimeSource* time = nullptr;
+};
+
+// The distributed store (requirements S22 to S29; Macha's
+// cluster/distributed_store.*), on Dannan.
+//
+// Placement: Dannan's capacity placement under the store's scheme
+// (placement.h, Macha's salts) over the nodes advertising extents. An
+// object's replication set is its first `replication` owners over every
+// hosting node the roster knows, dead ones included; a write goes to the
+// active ones, local first.
+//
+// Writes (S22, S23, S28): Macha's write path with the four levels in place
+// of its write_copies-only wait. Persisted and replicated seek their count
+// local first, spill past a peer stalled beyond write_stall or one that
+// refuses, and return on what landed when nothing more can be had promptly;
+// the rest is owed to prompt replication (a second copy) and repair. Durable
+// writes to every live member of the set and waits for each to the deadline.
+// Every write returns evidence naming each node, and a ticket: calls still in
+// flight when the write returns run on to call_horizon and report into it,
+// and a durable write's ticket pushes the object to a member that was dead
+// once it is back.
+//
+// Reads (S27): local, then the persistent cache, then remote owners and the
+// other ranked nodes in the replica selector's order; concurrent readers of
+// one object share one fetch and one buffer. has() is the local ground
+// truth.
+//
+// CONTROL objects (S29): offered to every node, claimed on
+// metadata_write_copies nodes local first then nearest, fetched from any
+// peer at speculative priority without DATA credit.
+//
+// Left for step 3b: the availability survey and repair by diff, the DATA
+// credit arbiter and the control reserve of device I/O, rebalancing across
+// nodes. Nothing here waits for DATA credit.
+//
+// Every call that waits on a peer takes a deadline. The blocking forms wait
+// on the network and the devices and must not run on one of the io
+// context's threads; the asynchronous forms post their completion to the
+// caller's executor, never inline. Thread-safe.
+class DistributedStore final : public ControlObjectSource {
+ public:
+  using WriteDone = std::function<void(WriteEvidence)>;
+  using ReadDone = std::function<void(ReadResult)>;
+  enum class ClaimScope { everywhere, here, every_node };
+
+  struct Stores {
+    StoragePool& data;
+    LocalStore& control;
+    PersistentBlockCache& cache;
+    contract::ClaimStore& claims;
+  };
+
+  struct PromptReplicationStats {
+    uint64_t queued = 0;
+    uint64_t copies = 0;
+    uint64_t failures = 0;
+    uint64_t skipped_no_room = 0;
+    uint64_t dropped = 0;
+  };
+
+  // `executor` runs the store's own completions (the io context's).
+  // TODO(Dannan: Context::executor and a TimeSource through the Context):
+  // the store takes the node's executor and clock beside the Context.
+  DistributedStore(dannan::Context& context, boost::asio::any_io_executor executor, Stores stores, DistributedStoreOptions options = {});
+  ~DistributedStore();
+  DistributedStore(const DistributedStore&) = delete;
+  DistributedStore& operator=(const DistributedStore&) = delete;
+
+  // Writes. The blocking forms throw std::runtime_error for bytes that are
+  // not the id's ("object hash mismatch") or larger than an extent.
+  WriteEvidence write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options = {});
+  void write(const ObjectId& id, Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done);
+  // Macha's forms: the id-returning ones throw StorageUnavailable when the
+  // write landed nowhere (or std::runtime_error when cancelled); the bool
+  // ones return whether it landed anywhere.
+  ObjectId put(std::span<const uint8_t> data, WriteOptions options = {});
+  bool put(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options = {});
+  ObjectId put_deferred(std::span<const uint8_t> data, WriteOptions options = {});
+  // Durable here and returned at once, the further copies owed to prompt
+  // replication; as put() on a node that hosts no extents.
+  bool put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+
+  // Tickets. status() waits on nothing: nothing for a ticket forgotten.
+  // wait() completes when the ticket settles or at the deadline, whichever
+  // comes first, and may be called again; for a deferred write it first asks
+  // each copy awaiting its barrier for it.
+  std::optional<WriteEvidence> status(Ticket ticket) const;
+  void wait(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
+  std::optional<WriteEvidence> wait(Ticket ticket, std::chrono::milliseconds deadline);
+
+  // Reads.
+  ReadResult read(const ObjectId& id, ReadOptions options = {});
+  void read(const ObjectId& id, ReadOptions options, boost::asio::any_io_executor executor, ReadDone done);
+  std::optional<Bytes> get(const ObjectId& id, ReadOptions options = {});
+  // The local ground truth: this node's pool holds it. Asks no peer.
+  bool has(const ObjectId& id) const;
+  // In the pool or the cache.
+  bool locally_available(const ObjectId& id) const;
+  // Waits until every opportunistic local copy queued so far is written or
+  // dropped.
+  void wait_local_copies_settled();
+
+  // Placement.
+  bool holds_extents() const;
+  bool should_own(const ObjectId& id) const;
+  // Active hosting nodes in placement order: the first `replication` the
+  // owners, the rest fallbacks.
+  std::vector<dannan::membership::NodeRecord> ranked(const ObjectId& id) const;
+  // The replication set over every hosting node known, dead ones included.
+  std::vector<dannan::membership::NodeRecord> replication_set(const ObjectId& id) const;
+  bool has_on(const dannan::membership::NodeRecord& target, const ObjectId& id);
+
+  // Claims. retain_data claims each object on up to write_copies nodes that
+  // hold it, the presence asked in batches; it returns, sorted, the objects
+  // no node present holds. retain_control makes the objects local, offers
+  // them and claims them on the nodes `scope` names, local first then
+  // nearest; false only when the local claim did not hold.
+  std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot);
+  bool retain_control(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, ClaimScope scope = ClaimScope::everywhere);
+  // Offers CONTROL objects this node holds to every other node present: each
+  // is asked what it lacks and sent only that, at speculative priority.
+  ControlOffer offer_control(const std::vector<ObjectId>& ids);
+  bool ensure_control_local(const ObjectId& id) override;
+
+  PromptReplicationStats prompt_replication_stats() const;
+  ReplicaTransferStats replica_stats(const dannan::identity::NodeId& node) const { return _selector.stats(node); }
+  // The clocks moved other than with the steady clock (a test's stepped
+  // time): retries due by them are looked at now.
+  void time_advanced();
+
+ private:
+  struct Shared;
+  struct TicketRecord;
+  struct WriteRun;
+  struct SharedFetch;
+  struct Job;
+
+  WriteEvidence run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into = {});
+  std::shared_ptr<TicketRecord> new_ticket(const ObjectId& id, Durability level, bool deferred);
+  std::chrono::milliseconds write_deadline_of(const WriteOptions& options) const;
+  void check_write(const ObjectId& id, std::span<const uint8_t> data) const;
+  std::vector<dannan::membership::NodeRecord> hosting(const std::vector<dannan::membership::NodeRecord>& nodes) const;
+
+  // Queues a job for the workers; false when `ephemeral_bytes` would take the
+  // ephemeral queue past its bound.
+  bool submit(std::function<void()> job, size_t ephemeral_bytes = 0);
+  void worker_loop(std::stop_token stop);
+  // A copy acknowledged by `node` outside a write's own calls (prompt
+  // replication, a ticket's catch-up): every ticket for `id` hears of it.
+  void note_acknowledged(const ObjectId& id, const dannan::identity::NodeId& node);
+  void on_roster(const dannan::RosterChange& change);
+  void catch_up(const ObjectId& id, const dannan::membership::NodeRecord& node);
+  void run_barriers(const std::shared_ptr<TicketRecord>& record, std::chrono::milliseconds deadline);
+
+  bool put_on(const dannan::membership::NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame);
+  ReadResult read_impl(const ObjectId& id, const ReadOptions& options);
+  ReadResult get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist);
+  void fetch_next(const std::shared_ptr<SharedFetch>& fetch);
+  void fetched(const std::shared_ptr<SharedFetch>& fetch, const dannan::membership::NodeRecord& target, ReplicaWorkClass work,
+               std::chrono::steady_clock::time_point started, dannan::net::CallOutcome outcome);
+  void finish_fetch(const std::shared_ptr<SharedFetch>& fetch, ObjectData result, FetchAnswer answer, std::optional<dannan::identity::NodeId> served_by);
+  void enqueue_local_copy(const ObjectId& id, std::span<const uint8_t> data, bool promote);
+  void local_writer_loop(std::stop_token stop);
+  void queue_prompt_replication(const ObjectId& id);
+  void prompt_replication_loop(std::stop_token stop);
+
+  bool retain_on(const dannan::membership::NodeRecord& target, contract::RetentionClass object_class, const std::vector<ObjectId>& ids,
+                 const contract::RetentionDot& dot);
+  bool offer_control_on(const dannan::membership::NodeRecord& target, const std::vector<ObjectId>& ids, dannan::sched::FrameType frame, ControlOffer& out);
+  std::map<ObjectId, std::vector<dannan::membership::NodeRecord>> select_present_batched(
+      const std::map<ObjectId, std::vector<dannan::membership::NodeRecord>>& candidates_by_object, size_t floor);
+  std::map<dannan::identity::NodeId, std::map<ObjectId, bool>> batched_have_objects(
+      const std::map<dannan::identity::NodeId, dannan::membership::NodeRecord>& node_info,
+      const std::map<dannan::identity::NodeId, std::vector<ObjectId>>& ids_by_node);
+
+  dannan::Context& _context;
+  const boost::asio::any_io_executor _executor;
+  StoragePool& _data;
+  LocalStore& _control;
+  PersistentBlockCache& _cache;
+  contract::ClaimStore& _claims;
+  const DistributedStoreOptions _options;
+  const dannan::contract::TimeSource& _time;
+  const dannan::identity::NodeId _self;
+  const dannan::status::ScopedLogger _logger;
+  const dannan::status::NodeEvents::Kind _storage_event;
+  ControlObjectFetch _control_fetch;
+  ReplicaSelector _selector;
+  // What completions and timers reach after the store has gone: they hold it
+  // weakly.
+  std::shared_ptr<Shared> _shared;
+  uint64_t _watch = 0;
+  // Set as the store goes: a write in progress returns on what it has.
+  std::atomic<bool> _stopping{false};
+
+  // The workers' queue. Lock order: taken with no other lock held.
+  mutable dannan::contract::Mutex _jobs_mutex;
+  std::condition_variable_any _jobs_wake;
+  std::deque<std::function<void()>> _jobs DANNAN_GUARDED_BY(_jobs_mutex);
+  bool _jobs_stopped DANNAN_GUARDED_BY(_jobs_mutex) = false;
+  size_t _ephemeral_bytes DANNAN_GUARDED_BY(_jobs_mutex) = 0;
+  std::vector<std::jthread> _workers;
+
+  // Readers of one object share its fetch.
+  mutable dannan::contract::Mutex _fetch_mutex;
+  std::map<ObjectId, std::weak_ptr<SharedFetch>> _fetches DANNAN_GUARDED_BY(_fetch_mutex);
+
+  // Prompt second copy: objects that reached only their floor, pushed to the
+  // next owner by one worker as speculative DATA work.
+  mutable dannan::contract::Mutex _prompt_mutex;
+  std::condition_variable_any _prompt_wake;
+  std::deque<ObjectId> _prompt_queue DANNAN_GUARDED_BY(_prompt_mutex);
+  std::set<ObjectId> _prompt_queued DANNAN_GUARDED_BY(_prompt_mutex);
+  std::atomic<uint64_t> _prompt_copies{0};
+  std::atomic<uint64_t> _prompt_failures{0};
+  std::atomic<uint64_t> _prompt_skipped_no_room{0};
+  std::atomic<uint64_t> _prompt_dropped{0};
+  std::jthread _prompt_thread;
+
+  // Opportunistic local copies of fetched objects, written by one worker so
+  // a read never waits on them.
+  struct LocalCopy {
+    ObjectId id;
+    Bytes data;
+    bool promote = false;
+  };
+  dannan::contract::Mutex _local_copy_mutex;
+  std::condition_variable_any _local_copy_wake;
+  std::condition_variable_any _local_copy_settled;
+  std::deque<LocalCopy> _local_copies DANNAN_GUARDED_BY(_local_copy_mutex);
+  size_t _local_copy_bytes DANNAN_GUARDED_BY(_local_copy_mutex) = 0;
+  // A dequeued copy not yet written: with the queue empty and this false,
+  // every queued copy is settled.
+  bool _local_copy_writing DANNAN_GUARDED_BY(_local_copy_mutex) = false;
+  std::jthread _local_writer;
+};
+
+}  // namespace dagda::store
