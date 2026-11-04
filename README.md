@@ -125,8 +125,8 @@ checked, not decorative.
 ### Link it
 
 A hosted system links `dagda::dagda`, opens a `dagda::Node` on its Dannan node before
-that node starts (name `dagda::readiness_planes()` in its `NodeConfig::planes`), and
-holds the node's `dagda::Context`:
+that node starts (the node registers its message types and declares its readiness
+planes itself), and holds the node's `dagda::Context`:
 
 ```cmake
 find_package(dagda 0.1 CONFIG REQUIRED)

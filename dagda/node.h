@@ -51,12 +51,6 @@ namespace dagda {
 
 class Context;
 
-// The readiness planes the node reports, Macha's names: the DATA pool, the
-// CONTROL store, the cache, and the claims with the reference counts. An
-// owner names them in dannan::NodeConfig::planes, since Dannan's planes are
-// declared when its node is made (heads add "metadata" at step 4).
-std::vector<std::string> readiness_planes();
-
 // The node's DATA admission (Macha's data_inflight_bytes and its foreground
 // reserve, its background concurrency and no-progress window) and its device
 // I/O reserve.
@@ -189,8 +183,8 @@ class Node {
 
   // Throws NodeRefused, with a reason, for a Dannan contract of another
   // version, a Dannan node already started, a held lock, a refused layout, a
-  // node without custody, an undeclared readiness plane, or a part that
-  // cannot open.
+  // node without custody, or a part that cannot open. Declares its own
+  // readiness planes (data_storage, control_storage, cache, retention).
   Node(dannan::Context& context, NodeOptions options);
   ~Node();
   Node(const Node&) = delete;
