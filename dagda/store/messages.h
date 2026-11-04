@@ -99,9 +99,7 @@ ObjectId decode_id(std::span<const uint8_t> payload);
 struct WritePrincipal {
   dannan::contract::Principal principal;
   std::string prefix;
-  bool operator==(const WritePrincipal& other) const {
-    return principal.kind == other.principal.kind && principal.id == other.principal.id && prefix == other.prefix;
-  }
+  bool operator==(const WritePrincipal&) const = default;
 };
 void encode_principal(dannan::net::Writer& writer, const WritePrincipal& principal);
 // Throws dannan::net::DecodeError for a kind out of range.

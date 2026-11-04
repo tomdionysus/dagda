@@ -381,7 +381,8 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
     return true;
   }
   if (!_collector || _collector_provider != provider) {
-    auto options = _options.maintenance.collector;
+    ledger::CollectorOptions options;
+    static_cast<ledger::CollectorBudgets&>(options) = _options.maintenance.collector;
     options.garbage_grace = _options.garbage_grace;
     _collector = std::make_unique<ledger::Collector>(
         *_ledger, *provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
