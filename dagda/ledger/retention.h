@@ -90,7 +90,8 @@ Bytes encode_prune(RetentionClass, std::span<const ObjectId>);
 // prune is journaled and fsynced, then applied to the trie in memory; a
 // checkpoint saves both tries and empties the log, at 8,192 changed objects
 // or a 4 MiB log. Replaying the log over a checkpoint is idempotent. The
-// file `retention/ledger` ("1\n") says the tries are the claims.
+// file `retention/ledger` ("1\n") says the tries are the claims; tries that
+// hold claims under no such file are refused, never rebuilt empty.
 //
 // Macha read two older checkpoint forms once, to move them into the tries
 // (`claims.meta`, MRTS0001; `claims.current` naming `checkpoints/gen-*`,

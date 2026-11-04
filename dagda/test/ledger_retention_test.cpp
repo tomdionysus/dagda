@@ -435,6 +435,33 @@ TEST(LedgerRetention, AnUnmovedLegacyCheckpointIsRefusedAndAMovedOneRemoved) {
   EXPECT_EQ(reopened.claim_objects(data), 1u);
 }
 
+// Finding (Macha, retention.cpp:383-400 and :457-458 at develop, by
+// reading): with the tries' marker missing over tries that hold claims,
+// Macha rebuilt both empty and replayed the journal, so every checkpointed
+// claim was lost and GC could remove what someone still needed. Decided
+// (the maintainer, 2026-11-04): refuse to open and say why; nothing on disk changes,
+// and the marker restored, the claims are there.
+TEST(LedgerRetention, ClaimsWithNoMarkerAreRefusedNotRebuiltEmpty) {
+  dannan::test::TempDir t;
+  const auto state = t.path() / "state";
+  const auto root = state / "retention";
+  const auto a = NodeId::random();
+  ObjectId id{};
+  id.bytes[0] = 42;
+  {
+    auto retention = open_store(state);
+    retention.retain(data, id, {a, 1});
+    ASSERT_TRUE(retention.compact_if_needed(1));
+  }
+  ASSERT_TRUE(std::filesystem::remove(root / "ledger"));
+  EXPECT_THROW(open_store(state), std::runtime_error);
+  EXPECT_FALSE(std::filesystem::exists(root / "ledger"));
+  std::ofstream(root / "ledger") << "1\n";
+  auto restored = open_store(state);
+  EXPECT_TRUE(restored.retained(data, id));
+  EXPECT_EQ(restored.claim_objects(data), 1u);
+}
+
 // --- Known answers: layout v18's bytes --------------------------------------
 
 const NodeId origin_a{{0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a}};

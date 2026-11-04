@@ -291,7 +291,8 @@ void RetentionStore::load_journal_locked() {
 
 void RetentionStore::load(size_t cache_bytes) {
   Lock lock(_mutex);
-  if (!std::filesystem::exists(_root / "ledger") && holds_an_unmoved_checkpoint(_root))
+  const bool marked = std::filesystem::exists(_root / "ledger");
+  if (!marked && holds_an_unmoved_checkpoint(_root))
     throw std::runtime_error("retention claims at " + _root.string() +
                              " are in a checkpoint from before the claims ledger (claims.meta or claims.current), which Dagda does not read");
   ObjectTrie::Options data_options;
@@ -300,7 +301,16 @@ void RetentionStore::load(size_t cache_bytes) {
   control_options.cache_bytes = cache_bytes / 4;
   _data.trie = std::make_unique<ObjectTrie>(_root / "ledger-data", _key, data_options, _logger);
   _control.trie = std::make_unique<ObjectTrie>(_root / "ledger-control", _key, control_options, _logger);
-  if (!std::filesystem::exists(_root / "ledger")) create_locked();
+  if (!marked) {
+    // Tries holding claims under no marker: Macha rebuilt both empty and
+    // replayed the journal, losing every checkpointed claim
+    // (retention.cpp:383-400 at develop), and GC could then remove what
+    // someone still needs. Refused instead (the maintainer, 2026-11-04; discipline 3):
+    // the operator restores the marker or says the claims may go.
+    if (!_data.trie->next(std::nullopt, 1).empty() || !_control.trie->next(std::nullopt, 1).empty())
+      throw std::runtime_error("retention claims at " + _root.string() + " hold claims but no ledger marker; Dagda will not rebuild them empty");
+    create_locked();
+  }
   load_journal_locked();
   checkpoint_if_due_locked();
 }
