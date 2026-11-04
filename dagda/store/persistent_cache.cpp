@@ -34,8 +34,9 @@ void PersistentBlockCache::open_locked() {
   ++_opening;
   if (_options.path.empty() || !_options.max_blocks) return;
   try {
-    _store = std::make_shared<LocalStore>(_options.path, LocalStoreOptions::loose_only(std::numeric_limits<uint64_t>::max()), _key, _services,
-                                          LocalStoreMode::ephemeral);
+    auto local = LocalStoreOptions::loose_only(std::numeric_limits<uint64_t>::max());
+    local.sealing = _options.sealing;
+    _store = std::make_shared<LocalStore>(_options.path, local, _key, _services, LocalStoreMode::ephemeral);
     rebuild_lru_locked();
   } catch (const std::exception& error) {
     _store.reset();

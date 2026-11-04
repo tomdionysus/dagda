@@ -32,6 +32,9 @@ struct CacheOptions {
   // Whether a head owner may keep its recovery seed beside the cache
   // (Macha's prefer_metadata).
   bool seed = true;
+  // How its objects are sealed: layout v18 (domain v1) or v19 with the
+  // domain.
+  SealingScheme sealing{};
 };
 
 // A node-local, persistent read cache (requirement S19). Cached objects are

@@ -8,7 +8,9 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -16,6 +18,7 @@
 #include "dagda/store/durability_ticket.h"
 #include "dagda/store/object_id.h"
 #include "dannan/context.h"
+#include "dannan/contract/scope.h"
 #include "dannan/net/codec.h"
 #include "dannan/net/routes.h"
 
@@ -79,13 +82,33 @@ void register_types(dannan::Routes& routes);
 Bytes encode_id(const ObjectId& id);
 ObjectId decode_id(std::span<const uint8_t> payload);
 
+// Who a write or a claim is for and under what prefix (dannan/contract/
+// scope.h), as put_object, put_object_deferred and retain_objects carry it
+// to the storing replicas (the maintainer, 2026-11-04 evening): appended after
+// protocol 23's fields, whose bytes stay, as u8 kind, the id as a string,
+// the prefix as a string. A payload without it is the sending node's own
+// write under the domain's name, which is what every protocol 23 payload
+// was.
+struct WritePrincipal {
+  dannan::contract::Principal principal;
+  std::string prefix;
+  bool operator==(const WritePrincipal& other) const {
+    return principal.kind == other.principal.kind && principal.id == other.principal.id && prefix == other.prefix;
+  }
+};
+void encode_principal(dannan::net::Writer& writer, const WritePrincipal& principal);
+// Throws dannan::net::DecodeError for a kind out of range.
+WritePrincipal decode_principal(dannan::net::Reader& reader);
+
 // put_object, put_object_deferred, put_control_object, object_reply,
-// control_object_reply: the id, then the bytes as a blob.
+// control_object_reply: the id, then the bytes as a blob; for the two puts,
+// the principal when given.
 struct ObjectPayload {
   ObjectId id{};
   Bytes data;
+  std::optional<WritePrincipal> principal;
 };
-Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data);
+Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt);
 // Throws dannan::net::DecodeError past max_object_bytes.
 ObjectPayload decode_object(std::span<const uint8_t> payload);
 
@@ -136,11 +159,12 @@ Bytes encode_probe_answer(const BarrierProbeAnswer& answer);
 BarrierProbeAnswer decode_probe_answer(std::span<const uint8_t> payload);
 
 // retain_objects: u8 class, the dot's origin (16) and sequence (u64), u32
-// count, then the ids.
+// count, then the ids; then the principal when given.
 struct RetainRequest {
   contract::RetentionClass object_class = contract::RetentionClass::data;
   contract::RetentionDot dot;
   std::vector<ObjectId> ids;
+  std::optional<WritePrincipal> principal;
 };
 Bytes encode_retain(const RetainRequest& request);
 // Throws dannan::net::DecodeError for a class out of range, or no ids or

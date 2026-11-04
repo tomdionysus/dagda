@@ -28,9 +28,11 @@ namespace {
 using dannan::contract::Lock;
 using dannan::identity::NodeId;
 
-// Layout v18's backend marker (storage_pool.cpp:22-23).
+// Layout v18's backend marker (storage_pool.cpp:22-23), and v19's, which
+// names the domain too.
 constexpr const char* marker_name = ".macha.backend";
-constexpr std::string_view backend_marker_version = "macha-backend-v18";
+constexpr std::string_view backend_marker_v18 = "macha-backend-v18";
+constexpr std::string_view backend_marker_v19 = "dagda-backend-v19";
 
 std::string read_text(const std::filesystem::path& path) {
   std::ifstream in(path);
@@ -40,21 +42,70 @@ std::string read_text(const std::filesystem::path& path) {
   return text;
 }
 
-std::string marker_text(const NodeId& node, const NodeId& token) {
-  return std::string(backend_marker_version) + " " + dannan::identity::to_string(node) + " " + dannan::identity::to_string(token);
+// A v19 marker's key check: the first sixteen bytes of HMAC-SHA256 under
+// the domain key over this label, the domain and the token, so a node that
+// lacks the key is refused at open and learns nothing of the key.
+constexpr std::string_view key_check_label = "dagda/backend-key-check/19";
+// The check of a backend a blind node adopted: there was no key to check
+// with. A member that later opens it (this node, given the key) cannot be
+// checked against it either.
+constexpr const char* blind_check = "blind";
+
+std::string key_check(const domain::StorageKey& key, const domain::DomainId& domain, const NodeId& token) {
+  Bytes message(key_check_label.begin(), key_check_label.end());
+  message.insert(message.end(), domain.bytes.begin(), domain.bytes.end());
+  message.insert(message.end(), token.bytes.begin(), token.bytes.end());
+  const auto mac = dannan::identity::hmac_sha256(key.bytes(), message);
+  return dannan::identity::hex(std::span<const uint8_t>(mac.data(), 16));
 }
 
-bool parse_marker(const std::string& text, NodeId& node, NodeId& token) {
-  const auto first = text.find(' ');
-  if (first == std::string::npos || text.substr(0, first) != backend_marker_version) return false;
-  const auto second = text.find(' ', first + 1);
-  if (second == std::string::npos) return false;
-  const auto n = NodeId::parse(text.substr(first + 1, second - first - 1));
-  const auto t = NodeId::parse(text.substr(second + 1));
-  if (!n || !t) return false;
-  node = *n;
-  token = *t;
-  return true;
+std::string marker_text(const SealingScheme& sealing, const NodeId& node, const NodeId& token, const std::string& check) {
+  if (sealing.layout == 18) return std::string(backend_marker_v18) + " " + dannan::identity::to_string(node) + " " + dannan::identity::to_string(token);
+  return std::string(backend_marker_v19) + " " + dannan::identity::to_string(node) + " " + dannan::identity::to_string(token) + " " +
+         domain::to_string(sealing.domain) + " " + check;
+}
+
+// A marker's fields: its layout (and domain and key check under v19), node
+// and token.
+struct Marker {
+  SealingScheme sealing;
+  NodeId node;
+  NodeId token;
+  std::string check;
+};
+
+std::optional<Marker> parse_marker(const std::string& text) {
+  std::vector<std::string> fields;
+  for (size_t from = 0; from <= text.size();) {
+    const auto end = std::min(text.find(' ', from), text.size());
+    fields.push_back(text.substr(from, end - from));
+    from = end + 1;
+  }
+  Marker out;
+  if (fields.size() == 3 && fields[0] == backend_marker_v18) {
+    out.sealing = SealingScheme::v18();
+  } else if (fields.size() == 5 && fields[0] == backend_marker_v19) {
+    const auto domain = domain::DomainId::parse(fields[3]);
+    if (!domain || (fields[4] != blind_check && fields[4].size() != 32)) return std::nullopt;
+    out.sealing = SealingScheme::v19(*domain);
+    out.check = fields[4];
+  } else {
+    return std::nullopt;
+  }
+  const auto n = NodeId::parse(fields[1]);
+  const auto t = NodeId::parse(fields[2]);
+  if (!n || !t) return std::nullopt;
+  out.node = *n;
+  out.token = *t;
+  return out;
+}
+
+// Why a backend of `found` cannot be this pool's; empty when it can.
+std::string layout_mismatch(const SealingScheme& pool, const SealingScheme& found) {
+  if (pool == found) return {};
+  if (found.layout == 18) return "layout v18 backend is domain v1's (Macha's); this pool is domain " + domain::to_string(pool.domain);
+  if (pool.layout == 18) return "layout v19 backend of domain " + domain::to_string(found.domain) + "; this pool is domain v1 (layout v18)";
+  return "backend belongs to domain " + domain::to_string(found.domain) + "; this pool is domain " + domain::to_string(pool.domain);
 }
 
 }  // namespace
@@ -84,13 +135,19 @@ StoragePool::StoragePool(std::filesystem::path state, NodeId node, NodeId epoch,
       _node(node),
       _epoch(epoch),
       _key(std::move(key)),
+      _sealing(options.sealing),
+      _role(options.role),
+      _ledger_key(options.ledger_key),
       _services(std::move(services)),
       _durability_batch_window(options.durability_batch_window),
       _pack_threshold(options.pack_threshold),
       _pack_target_size(options.pack_target_size),
       _ledger_cache_bytes(options.ledger_cache_bytes),
       _service_monitor(_services.logger.child("pressure")) {
-  if (!_key) throw std::invalid_argument("storage pool needs a storage key");
+  if (_sealing.layout != 18 && _sealing.layout != 19) throw std::invalid_argument("storage pool layout must be 18 or 19");
+  if (_role == domain::Role::member && !_key) throw std::invalid_argument("storage pool needs a storage key");
+  if (_role == domain::Role::blind && _sealing.layout != 19) throw std::invalid_argument("layout v18 has no blind role: every node is a member of domain v1");
+  if (_role == domain::Role::blind && !_ledger_key) throw std::invalid_argument("a blind pool's held ledgers need a key of their own");
   reconfigure(options.backends);
   refresh();
 }
@@ -187,23 +244,27 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
 
     NodeId token = known_token;
     if (have_state) {
-      NodeId expected_node;
-      NodeId expected_token;
-      if (!parse_marker(read_text(state_id), expected_node, expected_token) || expected_node != _node)
-        throw std::runtime_error("invalid backend identity in node state");
-      token = expected_token;
+      const auto expected = parse_marker(read_text(state_id));
+      if (!expected || expected->node != _node) throw std::runtime_error("invalid backend identity in node state");
+      token = expected->token;
       token_known = true;
     }
 
     if (have_marker) {
-      NodeId marker_node;
-      NodeId marker_token;
-      if (!parse_marker(read_text(marker), marker_node, marker_token)) throw std::runtime_error("invalid backend marker");
-      if (marker_node != _node) throw std::runtime_error("backend belongs to another node identity");
-      if (token_known && marker_token != token) throw std::runtime_error("backend identity mismatch (wrong disk mounted)");
-      token = marker_token;
+      const auto found = parse_marker(read_text(marker));
+      if (!found) throw std::runtime_error("invalid backend marker");
+      if (found->node != _node) throw std::runtime_error("backend belongs to another node identity");
+      // A disk is its layout's and its domain's for ever: a v18 disk is never
+      // rewritten as v19, and a v19 disk opens only in its domain.
+      if (const auto why = layout_mismatch(_sealing, found->sealing); !why.empty()) throw std::runtime_error(why);
+      if (token_known && found->token != token) throw std::runtime_error("backend identity mismatch (wrong disk mounted)");
+      // A member proves it has the domain's key; a blind pool has none and
+      // takes the disk as it is.
+      if (_key && _sealing.layout == 19 && found->check != blind_check && found->check != key_check(*_key, _sealing.domain, found->token))
+        throw std::runtime_error("backend key check failed: this node lacks the key of domain " + domain::to_string(_sealing.domain));
+      token = found->token;
       token_known = true;
-      if (!have_state) dannan::identity::durable_replace_file(state_id, marker_text(_node, marker_token) + "\n");
+      if (!have_state) dannan::identity::durable_replace_file(state_id, marker_text(_sealing, _node, found->token, found->check) + "\n");
     } else if (have_state) {
       deactivate(backend, existing, "known backend marker is absent", generation);
       return false;
@@ -215,14 +276,13 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
       if (first != std::filesystem::directory_iterator()) throw std::runtime_error("non-empty unversioned storage backend; 0.18 requires an empty backend");
       token = NodeId::random();
       token_known = true;
-      dannan::identity::durable_replace_file(marker, marker_text(_node, token) + "\n");
-      dannan::identity::durable_replace_file(state_id, marker_text(_node, token) + "\n");
+      const auto check = _sealing.layout != 19 ? std::string{} : _key ? key_check(*_key, _sealing.domain, token) : std::string(blind_check);
+      dannan::identity::durable_replace_file(marker, marker_text(_sealing, _node, token, check) + "\n");
+      dannan::identity::durable_replace_file(state_id, marker_text(_sealing, _node, token, check) + "\n");
     }
 
-    NodeId marker_node;
-    NodeId marker_token;
-    if (!parse_marker(read_text(marker), marker_node, marker_token) || marker_node != _node || marker_token != token)
-      throw std::runtime_error("backend marker changed");
+    const auto settled = parse_marker(read_text(marker));
+    if (!settled || settled->node != _node || settled->token != token || settled->sealing != _sealing) throw std::runtime_error("backend marker changed");
 
     auto store = existing;
     std::shared_ptr<DurabilityDomain> durability_domain;
@@ -242,6 +302,9 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
       // place starts its own ledger.
       local.ledger_dir = _state / "ledger" / ("data-" + dannan::identity::to_string(token));
       local.ledger_cache_bytes = static_cast<size_t>(_ledger_cache_bytes / std::max<size_t>(1, _ledger_shares.load()));
+      local.sealing = _sealing;
+      local.role = _role;
+      local.ledger_key = _ledger_key;
       store = std::make_shared<LocalStore>(options.path, local, _key,
                                            LocalStore::Services{_services.threads, _services.observations, _services.progress,
                                                                 _services.logger.child("backend"), _services.time, _services.wall},
@@ -375,6 +438,7 @@ std::vector<std::shared_ptr<StoragePool::Backend>> StoragePool::ranked(const Obj
 }
 
 bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
+  if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: put_sealed");
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
     std::filesystem::path path;
@@ -404,6 +468,7 @@ bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
 }
 
 std::optional<DurabilityTicket> StoragePool::put_deferred(const ObjectId& id, std::span<const uint8_t> data) {
+  if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: put_sealed");
   // The provisional write path: a deferred write puts every extent here.
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
@@ -520,7 +585,58 @@ void StoragePool::observe_get(size_t bytes, uint64_t elapsed_ms) const {
                          " avg_ms=" + std::to_string(total_ms / gets) + " max_ms=" + std::to_string(max_ms));
 }
 
+bool StoragePool::put_sealed(const ObjectId& id, const LocalStore::SealedObject& sealed) {
+  // The record's fault, not a backend's.
+  if (sealed.ciphertext.size() != sealed.plain_size) throw std::invalid_argument("sealed object size mismatch");
+  for (const auto& backend : ranked(id)) {
+    std::shared_ptr<LocalStore> store;
+    std::filesystem::path path;
+    uint64_t generation = 0;
+    {
+      Lock lock(backend->mutex);
+      if (!backend->online || !backend->store) continue;
+      store = backend->store;
+      path = backend->options.path;
+      generation = backend->generation;
+    }
+    try {
+      if (store->put_sealed(id, sealed)) return true;
+    } catch (const std::exception& error) {
+      deactivate(backend, store, error.what(), generation);
+    }
+  }
+  return false;
+}
+
+std::optional<LocalStore::SealedObject> StoragePool::get_sealed(const ObjectId& id) const {
+  for (const auto& backend : ranked(id)) {
+    std::shared_ptr<LocalStore> store;
+    std::filesystem::path path;
+    {
+      Lock lock(backend->mutex);
+      if (!backend->online || !backend->store) continue;
+      store = backend->store;
+      path = backend->options.path;
+    }
+    try {
+      if (auto sealed = store->get_sealed(id)) return sealed;
+    } catch (const std::exception& error) {
+      _services.logger.warn("unreadable local record " + to_string(id) + " on " + path.string() + ": " + error.what());
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<dannan::identity::Hash256> StoragePool::held_digest(const ObjectId& id) const {
+  const auto sealed = get_sealed(id);
+  if (!sealed) return std::nullopt;
+  return blind_digest(sealed->nonce, sealed->tag, sealed->ciphertext);
+}
+
 std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
+  // A blind pool cannot open what it holds; a get is a programming error,
+  // never a discarded object.
+  if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: get_sealed");
   // Reads feed the same pressure signal: slow reads starve a viewer as slow
   // writes do.
   for (const auto& backend : ranked(id)) {

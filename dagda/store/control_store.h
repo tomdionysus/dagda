@@ -35,6 +35,9 @@ struct ControlStoreOptions {
   uint64_t reserve_free = 256ULL * 1024 * 1024;
   size_t pack_threshold = 1024 * 1024;
   size_t pack_target_size = 64 * 1024 * 1024;
+  // How its objects are sealed: layout v18 (domain v1) or v19 with the
+  // domain. The control store is a member's: it opens what it holds.
+  SealingScheme sealing{};
 };
 
 // Where the control store lives under `state`.

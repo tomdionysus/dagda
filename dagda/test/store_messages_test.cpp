@@ -260,5 +260,44 @@ TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
   EXPECT_THROW(register_types(routes), std::invalid_argument);
 }
 
+// Step 6: the principal and the prefix a write or a claim is checked under
+// ride after protocol 23's fields, which keep their bytes; without them a
+// payload is the sending node's own write (every protocol 23 payload).
+TEST(StoreMessages, APutOrAClaimCarriesItsPrincipalAfterMachasFields) {
+  const WritePrincipal alice{{dannan::contract::Principal::Kind::directory, "alice"}, "lugh/secrets"};
+  const auto plain = encode_object(id_a, dagda_bytes);
+  const auto with = encode_object(id_a, dagda_bytes, alice);
+  EXPECT_EQ(hex(plain), "f110686f239efc75e4b3d14dbfd31600eaa4de19089d633bbea49bfec8740ac7000000056461676461");
+  EXPECT_EQ(hex(with), hex(plain) + "01" + "00000005616c696365" + "0000000c6c7567682f73656372657473");
+  EXPECT_FALSE(decode_object(plain).principal.has_value());
+  const auto decoded = decode_object(with);
+  EXPECT_EQ(decoded.id, id_a);
+  EXPECT_EQ(decoded.data, dagda_bytes);
+  EXPECT_EQ(decoded.principal, std::optional<WritePrincipal>(alice));
+  // A node principal is kind 0.
+  const WritePrincipal node{{dannan::contract::Principal::Kind::node, "00112233445566778899aabbccddeeff"}, "macha"};
+  EXPECT_EQ(decode_object(encode_object(id_b, macha_bytes, node)).principal, std::optional<WritePrincipal>(node));
+  auto bad_kind = with;
+  bad_kind[plain.size()] = 7;
+  EXPECT_THROW(decode_object(bad_kind), dannan::net::DecodeError);
+  auto truncated = with;
+  truncated.pop_back();
+  EXPECT_THROW(decode_object(truncated), dannan::net::DecodeError);
+
+  contract::RetentionDot dot;
+  dot.origin.bytes.fill(0x11);
+  dot.sequence = 5;
+  const auto claim = encode_retain({contract::RetentionClass::data, dot, {id_a}, std::nullopt});
+  const auto claim_with = encode_retain({contract::RetentionClass::data, dot, {id_a}, alice});
+  EXPECT_EQ(hex(claim_with), hex(claim) + "01" + "00000005616c696365" + "0000000c6c7567682f73656372657473");
+  EXPECT_FALSE(decode_retain(claim).principal.has_value());
+  const auto decoded_claim = decode_retain(claim_with);
+  EXPECT_EQ(decoded_claim.ids, std::vector<ObjectId>{id_a});
+  EXPECT_EQ(decoded_claim.principal, std::optional<WritePrincipal>(alice));
+  auto short_claim = claim;
+  short_claim.pop_back();
+  EXPECT_THROW(decode_retain(short_claim), dannan::net::DecodeError);
+}
+
 }  // namespace
 }  // namespace dagda::store::message

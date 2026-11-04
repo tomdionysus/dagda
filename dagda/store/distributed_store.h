@@ -29,16 +29,19 @@
 
 #include "dagda/contract/claim_store.h"
 #include "dagda/contract/horizon.h"
+#include "dagda/domain/domain.h"
 #include "dagda/ledger/availability.h"
 #include "dagda/store/control_objects.h"
 #include "dagda/store/data_work.h"
 #include "dagda/store/durability_ticket.h"
 #include "dagda/store/local_store.h"
+#include "dagda/store/messages.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/store/replica_selector.h"
 #include "dagda/store/storage_pool.h"
 #include "dannan/context.h"
+#include "dannan/contract/scope.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/net/message.h"
@@ -129,6 +132,15 @@ struct WriteEvidence {
   const ReplicaEvidence* on(const dannan::identity::NodeId& node) const noexcept;
 };
 
+// Who a write or a claim is for, and under what prefix: what every storing
+// replica, this node included, checks through Identity::verify before it
+// stores (the maintainer, 2026-11-04 evening; stack document, "Scope"). Nothing: this
+// node, as a node principal, under the domain's name.
+struct WriteScope {
+  std::optional<dannan::contract::Principal> principal;
+  std::string prefix;
+};
+
 struct WriteOptions {
   Durability level = Durability::replicated;
   // Written now, made durable by a later wait() (Macha's put_deferred).
@@ -138,6 +150,10 @@ struct WriteOptions {
   std::chrono::milliseconds deadline{0};
   dannan::sched::FrameType frame = dannan::sched::FrameType::loader;
   std::atomic_bool* cancelled = nullptr;
+  // The scope the write is checked under (WriteScope): a replica that
+  // refuses it stores nothing and says why in the evidence.
+  std::optional<dannan::contract::Principal> principal;
+  std::string prefix;
 };
 
 // An object as read, and the memory its bytes hold (a reply's retained
@@ -181,6 +197,10 @@ struct ControlOffer {
 
 // Macha's figures (config.hpp:602-640), with its defaults, and Dagda's.
 struct DistributedStoreOptions {
+  // The domain the store's objects belong to: its name is the prefix a
+  // write is checked under when the caller names none. Domain v1, Macha's,
+  // until the catalogue (step 4) hands a store its domain.
+  domain::Domain domain = domain::domain_v1_descriptor();
   // Copies each object is placed on (Macha's dht.replicas).
   size_t replication = 3;
   // k of the replicated level: the maintainer's default of 2 (2026-11-04). Macha's own
@@ -427,9 +447,12 @@ class DistributedStore final : public ControlObjectSource {
   // hold it, the presence asked in batches; it returns, sorted, the objects
   // no node present holds. retain_control makes the objects local, offers
   // them and claims them on the nodes `scope` names, local first then
-  // nearest; false only when the local claim did not hold.
-  std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot);
-  bool retain_control(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, ClaimScope scope = ClaimScope::everywhere);
+  // nearest; false only when the local claim did not hold. Each claiming
+  // node checks `writer` as it checks a write (WriteScope); a node that
+  // refuses it claims nothing.
+  std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, const WriteScope& writer = {});
+  bool retain_control(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot, ClaimScope scope = ClaimScope::everywhere,
+                      const WriteScope& writer = {});
   // Offers CONTROL objects this node holds to every other node present: each
   // is asked what it lacks and sent only that, at speculative priority.
   ControlOffer offer_control(const std::vector<ObjectId>& ids);
@@ -454,6 +477,12 @@ class DistributedStore final : public ControlObjectSource {
   std::chrono::milliseconds write_deadline_of(const WriteOptions& options) const;
   void check_write(const ObjectId& id, std::span<const uint8_t> data) const;
   std::vector<dannan::membership::NodeRecord> hosting(const std::vector<dannan::membership::NodeRecord>& nodes) const;
+  // The principal and prefix as the replicas are told them: this node under
+  // the domain's name where the caller named none.
+  message::WritePrincipal writer_of(const std::optional<dannan::contract::Principal>& principal, const std::string& prefix) const;
+  // This node's check of a writer before it stores; the refusal's text, or
+  // nothing when allowed.
+  std::optional<std::string> scope_refusal(const message::WritePrincipal& writer) const;
 
   // Queues a job for the workers; false when `ephemeral_bytes` would take the
   // ephemeral queue past its bound.
@@ -489,7 +518,7 @@ class DistributedStore final : public ControlObjectSource {
   void prompt_replication_loop(std::stop_token stop);
 
   bool retain_on(const dannan::membership::NodeRecord& target, contract::RetentionClass object_class, const std::vector<ObjectId>& ids,
-                 const contract::RetentionDot& dot);
+                 const contract::RetentionDot& dot, const message::WritePrincipal& writer);
   bool offer_control_on(const dannan::membership::NodeRecord& target, const std::vector<ObjectId>& ids, dannan::sched::FrameType frame, ControlOffer& out);
   std::map<ObjectId, std::vector<dannan::membership::NodeRecord>> select_present_batched(
       const std::map<ObjectId, std::vector<dannan::membership::NodeRecord>>& candidates_by_object, size_t floor);

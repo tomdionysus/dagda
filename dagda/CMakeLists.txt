@@ -11,7 +11,10 @@ add_library(dagda SHARED
   version.cpp
   contract/gates.cpp
   contract/horizon.cpp
+  domain/domain.cpp
+  domain/domain_id.cpp
   domain/storage_key.cpp
+  domain/wrap.cpp
   lease/fence.cpp
   lease/keeper.cpp
   lease/lease.cpp

@@ -33,6 +33,13 @@ using dannan::membership::NodeRecord;
 using dannan::net::CallOutcome;
 using dannan::sched::FrameType;
 
+// A scope refusal as the evidence carries it: the status and code every
+// replica answers with, the source's reason, and the generation of the
+// scope data it read.
+std::string scope_refusal_text(const dannan::contract::ScopeDecision& decision) {
+  return "403 scope_refused: " + decision.why + " (scope generation " + std::to_string(decision.generation) + ")";
+}
+
 // Why a call came to nothing: the peer's refusal, or why no reply came.
 std::string outcome_text(const CallOutcome& outcome) {
   if (!outcome.reply) return outcome.failure.empty() ? "no reply" : outcome.failure;
@@ -613,6 +620,19 @@ void DistributedStore::check_write(const ObjectId& id, std::span<const uint8_t> 
   if (data.size() > _options.extent_size) throw std::runtime_error("DATA object exceeds configured extent size");
 }
 
+message::WritePrincipal DistributedStore::writer_of(const std::optional<dannan::contract::Principal>& principal, const std::string& prefix) const {
+  message::WritePrincipal out;
+  out.principal = principal ? *principal : dannan::contract::Principal{dannan::contract::Principal::Kind::node, dannan::identity::to_string(_self)};
+  out.prefix = prefix.empty() ? _options.domain.name : prefix;
+  return out;
+}
+
+std::optional<std::string> DistributedStore::scope_refusal(const message::WritePrincipal& writer) const {
+  const auto decision = _context.identity().verify(writer.principal, writer.prefix);
+  if (decision.allowed) return std::nullopt;
+  return scope_refusal_text(decision);
+}
+
 std::chrono::milliseconds DistributedStore::write_deadline_of(const WriteOptions& options) const {
   return options.deadline.count() > 0 ? options.deadline : _options.write_deadline;
 }
@@ -693,7 +713,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
 
   auto run = std::make_shared<WriteRun>();
   run->deferred = deferred;
-  const auto payload = message::encode_object(id, data);
+  const auto writer = writer_of(options.principal, options.prefix);
+  const auto payload = message::encode_object(id, data, writer);
   const auto type = deferred ? message::put_object_deferred : message::put_object;
   size_t next_fallback = initial;
   size_t replacement_needed = 0;
@@ -712,11 +733,16 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       std::string why;
       std::optional<DurabilityTicket> durability;
       try {
+        // This replica checks the writer's scope before it stores, as every
+        // replica does; a refusal is evidence, never a bare failure.
+        const auto refusal = scope_refusal(writer);
         // This node's device admits the write as a peer's would: no lease is
         // held across another node's answer.
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
-        const auto admitted = admit_data(options.frame, data.size(), std::max(left, std::chrono::milliseconds(1)), options.cancelled);
-        if (!admitted) {
+        const auto admitted = refusal ? std::nullopt : admit_data(options.frame, data.size(), std::max(left, std::chrono::milliseconds(1)), options.cancelled);
+        if (refusal) {
+          why = *refusal;
+        } else if (!admitted) {
           busy = true;
           why = "503 storage_busy: DATA resource admission busy or stopping";
         } else {
@@ -991,6 +1017,10 @@ bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> dat
   options.frame = frame;
   if (!holds_extents()) return put(id, data, options);
   check_write(id, data);
+  if (const auto refusal = scope_refusal(writer_of(std::nullopt, {}))) {
+    _logger.debug("local write refused id=" + to_string(id) + " " + *refusal);
+    return false;
+  }
   bool held = false;
   {
     const auto admitted = admit_data(frame, data.size(), _options.write_deadline);
@@ -1005,6 +1035,11 @@ bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> dat
 
 bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, FrameType frame) {
   if (target.id == _self) {
+    // A copy this node takes for repair or replication is its own write.
+    if (const auto refusal = scope_refusal(writer_of(std::nullopt, {}))) {
+      _logger.debug("local copy refused id=" + to_string(id) + " " + *refusal);
+      return false;
+    }
     const auto admitted = admit_data(frame, data.size(), _options.admission_wait);
     if (!admitted) return false;
     const bool held = _data.has(id);
@@ -1818,12 +1853,18 @@ std::map<ObjectId, std::vector<NodeRecord>> DistributedStore::select_present_bat
 }
 
 bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionClass object_class, const std::vector<ObjectId>& input,
-                                 const contract::RetentionDot& dot) {
+                                 const contract::RetentionDot& dot, const message::WritePrincipal& writer) {
   if (input.empty()) return true;
   auto ids = input;
   std::sort(ids.begin(), ids.end());
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   if (target.id == _self) {
+    // A claim is checked as a write is: this node claims nothing for a
+    // writer it refuses.
+    if (const auto refusal = scope_refusal(writer)) {
+      _logger.debug("local claim refused " + *refusal);
+      return false;
+    }
     // A claim says "this node holds the object": index presence, not a
     // read. The bytes were verified when put; scrub finds later corruption.
     for (const auto& id : ids) {
@@ -1836,8 +1877,8 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
     _claims.retain_batch(object_class, ids, dot);
     return true;
   }
-  const auto outcome = _context.routes().call_and_wait(target, message::retain_objects, message::encode_retain({object_class, dot, ids}), FrameType::loader,
-                                                       _options.control_call);
+  const auto outcome = _context.routes().call_and_wait(target, message::retain_objects, message::encode_retain({object_class, dot, ids, writer}),
+                                                       FrameType::loader, _options.control_call);
   if (!outcome.reply || outcome.reply->type != dannan::net::message::ok) {
     _logger.debug("retention claim peer=" + target.host + " error=" + outcome_text(outcome));
     return false;
@@ -1845,12 +1886,13 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
   return true;
 }
 
-std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>& input, const contract::RetentionDot& dot) {
+std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>& input, const contract::RetentionDot& dot, const WriteScope& scope) {
   auto ids = input;
   std::sort(ids.begin(), ids.end());
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   std::vector<ObjectId> unheld;
   if (ids.empty()) return unheld;
+  const auto writer = writer_of(scope.principal, scope.prefix);
   // Claims sought per object. A holder that is away is not claimed on: its
   // own head and the deletion grace protect its copy until it returns.
   const size_t floor = std::max<size_t>(1, _options.write_copies);
@@ -1894,7 +1936,7 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
   // One claim per selected node: claims are independent.
   std::map<ObjectId, std::set<NodeId>> claimed;
   for (const auto& [node, batch] : batches)
-    if (retain_on(node_info.at(node), contract::RetentionClass::data, batch, dot))
+    if (retain_on(node_info.at(node), contract::RetentionClass::data, batch, dot, writer))
       for (const auto& id : batch) claimed[id].insert(node);
 
   for (const auto& id : ids) {
@@ -1907,7 +1949,7 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
     for (const auto& candidate : candidates_by_object[id]) {
       if (successful.size() >= floor) break;
       if (successful.contains(candidate.id)) continue;
-      if (has_on(candidate, id) && retain_on(candidate, contract::RetentionClass::data, {id}, dot)) successful.insert(candidate.id);
+      if (has_on(candidate, id) && retain_on(candidate, contract::RetentionClass::data, {id}, dot, writer)) successful.insert(candidate.id);
     }
     if (successful.empty()) unheld.push_back(id);
   }
@@ -1982,11 +2024,12 @@ ControlOffer DistributedStore::offer_control(const std::vector<ObjectId>& input)
   return out;
 }
 
-bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const contract::RetentionDot& dot, ClaimScope scope) {
+bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const contract::RetentionDot& dot, ClaimScope scope, const WriteScope& by) {
   auto ids = input;
   std::sort(ids.begin(), ids.end());
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   if (ids.empty()) return true;
+  const auto writer = writer_of(by.principal, by.prefix);
   const size_t sought = scope == ClaimScope::here         ? 1
                         : scope == ClaimScope::every_node ? std::numeric_limits<size_t>::max()
                                                           : std::max<size_t>(1, _options.metadata_write_copies);
@@ -2023,7 +2066,7 @@ bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const 
   bool local_retained = false;
   for (const auto& candidate : active) {
     if (!put_graph_on(candidate)) continue;
-    if (retain_on(candidate, contract::RetentionClass::control, ids, dot)) {
+    if (retain_on(candidate, contract::RetentionClass::control, ids, dot, writer)) {
       ++retained;
       local_retained = local_retained || candidate.id == _self;
     }

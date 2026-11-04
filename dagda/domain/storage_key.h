@@ -8,9 +8,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
+#include "dannan/context.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/secure_memory.h"
 
@@ -22,6 +24,11 @@ namespace dagda::domain {
 // cluster key file, trailing CR and LF removed), no salt, this label.
 inline constexpr std::string_view storage_key_label_v1 = "macha/storage/v1";
 
+// A node's node-local domain key (requirement D4) is derived from its key
+// custody under this label (Identity::derive_local): it exists only on that
+// node and is never wrapped to another.
+inline constexpr std::string_view node_local_label = "dagda/node-local/1";
+
 // The key a domain's objects are sealed under, held in secure memory.
 // Move-only; read-only once made, so any thread may read it.
 class StorageKey {
@@ -29,6 +36,10 @@ class StorageKey {
   // Domain v1's key from the cluster key. Throws std::runtime_error if the
   // secure pages cannot be mapped. Waits on nothing.
   static StorageKey derive_v1(const dannan::identity::ClusterKey& cluster);
+
+  // This node's node-local domain key, from its custody; nothing on a node
+  // without custody (it is reported absent, never made up). Waits on nothing.
+  static std::optional<StorageKey> derive_node_local(const dannan::Identity& identity);
 
   // A key already derived. Throws std::invalid_argument unless 32 bytes.
   explicit StorageKey(dannan::identity::Secret key);

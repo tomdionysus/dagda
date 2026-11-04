@@ -32,6 +32,8 @@
 #include <vector>
 
 #include "dagda/contract/reachability.h"
+#include "dagda/domain/storage_key.h"
+#include "dagda/domain/wrap.h"
 #include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/retention_ledger.h"
@@ -48,7 +50,12 @@
 #include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/store.h"
 #include "dannan/contract/thread_safety.h"
+#include "dannan/identity/argon2.h"
+#include "dannan/identity/certificate.h"
 #include "dannan/identity/cluster_key.h"
+#include "dannan/identity/key_custody.h"
+#include "dannan/identity/node_identity.h"
+#include "dannan/identity/secure_memory.h"
 #include "dannan/node.h"
 #include "dannan/supervise/startup.h"
 #include "dannan/test/fixtures/ports.h"
@@ -109,8 +116,12 @@ using Interpose = std::function<std::optional<dannan::net::Handled>(dannan::net:
 
 class Cluster;
 
-// One node. Its directories, port and node id outlive restarts; its
-// process (the durability epoch) does not.
+// One node. Its directories, port, node id, key custody and certificate
+// outlive restarts; its process (the durability epoch) does not. Each node
+// has custody (a passphrase, light Argon2id costs: the tests prove the
+// shape) and a certificate the cluster's CA issued over its custody key, as
+// Dannan's node tests make them; it keeps the cluster key too
+// (use_cluster_key), as a v1 cluster does while it moves.
 class ClusterNode {
  public:
   ClusterNode(Cluster& cluster, std::string name, ClusterNodeOptions options);
@@ -157,6 +168,10 @@ class ClusterNode {
   ClusterNodeOptions& options() { return _options; }
   // What the node logged, every level.
   RecordingSink& log() { return *_sink; }
+  // The node's keys from its custody (step 6): its wrap key, advertised on
+  // its record at start, and its node-local domain key.
+  const domain::WrapKey& wrap_key() const { return *_wrap; }
+  domain::StorageKey node_local_key() { return *domain::StorageKey::derive_node_local(context().identity()); }
 
   // Requests of the store's types this node was asked, and the hook in
   // front of its server.
@@ -186,6 +201,7 @@ class ClusterNode {
   dannan::supervise::StartupProgress _progress;
   std::shared_ptr<RecordingSink> _sink = std::make_shared<RecordingSink>();
   std::unique_ptr<dannan::Node> _node;
+  std::optional<domain::WrapKey> _wrap;
   std::unique_ptr<store::StoragePool> _data;
   std::unique_ptr<store::LocalStore> _control;
   std::unique_ptr<store::PersistentBlockCache> _cache;
@@ -204,11 +220,13 @@ class ClusterNode {
 };
 
 // Nodes on one io context under one temporary directory, with one cluster
-// key. Heartbeats are short, so a stopped node is dead to the others within
-// dead_after.
+// key and one CA. Heartbeats are short, so a stopped node is dead to the
+// others within dead_after.
 class Cluster {
  public:
-  explicit Cluster(std::chrono::milliseconds dead_after = std::chrono::milliseconds(1500)) : _dead_after(dead_after) {
+  explicit Cluster(std::chrono::milliseconds dead_after = std::chrono::milliseconds(1500))
+      : _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
+        _dead_after(dead_after) {
     std::ofstream(_dir.path() / "cluster.key") << "dagda cluster test";
     _key = dannan::identity::load_cluster_key(_dir.path() / "cluster.key");
   }
@@ -290,6 +308,16 @@ class Cluster {
   ClusterIo& io() { return _io; }
   const std::filesystem::path& dir() const { return _dir.path(); }
   const dannan::identity::ClusterKey& key() const { return _key; }
+  const dannan::identity::CertificateAuthority& ca() const { return _ca; }
+  // Every node's custody source: a passphrase, light costs.
+  static dannan::identity::KeySource custody_source() {
+    return dannan::identity::KeySource::typed_passphrase(
+        [] {
+          const std::string phrase = "dagda";
+          return dannan::identity::Secret(std::span(reinterpret_cast<const uint8_t*>(phrase.data()), phrase.size()));
+        },
+        dannan::identity::Argon2Costs{1024, 1, 1});
+  }
   std::chrono::milliseconds dead_after() const { return _dead_after; }
   std::vector<dannan::net::Endpoint> seeds_for(const ClusterNode& node) const {
     std::vector<dannan::net::Endpoint> out;
@@ -301,6 +329,7 @@ class Cluster {
  private:
   dannan::test::TempDir _dir;
   dannan::identity::ClusterKey _key;
+  dannan::identity::CertificateAuthority _ca;
   const std::chrono::milliseconds _dead_after;
   ClusterIo _io;
   std::vector<std::unique_ptr<ClusterNode>> _nodes;
@@ -331,10 +360,23 @@ inline void ClusterNode::start() {
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;
+  // Custody made once, the certificate issued over its key for this start.
+  const auto source = Cluster::custody_source();
+  if (!dannan::identity::KeyCustody::exists(config.state_path)) (void)dannan::identity::KeyCustody::create(config.state_path, source);
+  {
+    const auto id = dannan::identity::load_or_create_node_id(config.state_path);
+    const auto public_key = dannan::identity::KeyCustody::open(config.state_path, source).node_key().public_key();
+    config.custody = source;
+    config.ca_certificate = _cluster.ca().certificate();
+    config.certificate = _cluster.ca().issue(id, public_key, static_cast<uint64_t>(id.bytes[0]) + 1, config.wall->unix_ms() - 1000);
+    config.use_cluster_key = true;
+  }
   _node = std::make_unique<dannan::Node>(_cluster.io().context, config);
   auto& context = _node->context();
   _id = context.identity().id();
   store::message::register_types(context.routes());
+  _wrap = domain::WrapKey::derive(context.identity());
+  domain::advertise_wrap_key(context, *_wrap);
 
   const auto key = known_answer_key();
   const store::LocalStore::Services services{context.threads(),
@@ -417,6 +459,7 @@ inline void ClusterNode::stop() {
   _cache.reset();
   _control.reset();
   _data.reset();
+  _wrap.reset();
   _node.reset();
 }
 
