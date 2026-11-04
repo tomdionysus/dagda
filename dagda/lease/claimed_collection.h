@@ -156,13 +156,15 @@ class ClaimedCollection {
   }
 
   // Tombstones past the retention window at `now_unix_ms`: what the sweep
-  // erases. Kept as Macha computes it (unsigned, strictly past the window).
+  // erases, strictly past the window. A stamp from a clock ahead of this
+  // one is fresh (the maintainer, 2026-11-04): Macha's unsigned `now - removed` wrapped
+  // and swept it at once.
   std::vector<Key> expired(uint64_t now_unix_ms) const {
     const auto window = static_cast<uint64_t>(std::chrono::milliseconds(Traits::retention).count());
     std::vector<Key> out;
     for (const auto& [key, record] : _records) {
       const uint64_t removed = Traits::removed_unix_ms(record);
-      if (removed && now_unix_ms - removed > window) out.push_back(key);
+      if (removed && now_unix_ms > removed && now_unix_ms - removed > window) out.push_back(key);
     }
     return out;
   }
@@ -265,6 +267,8 @@ class ClaimedCollection {
     for (const auto& key : delta.erasures) Traits::encode_key(writer, key);
   }
   // Throws dannan::net::DecodeError past max_records on either side, for a
+  // record with no key (the maintainer, 2026-11-04: what the snapshot refuses, the
+  // delta refuses too, or a head holds what it cannot read back), for a
   // record written twice, or for a key both written and erased.
   static Delta decode_delta(dannan::net::Reader& reader) {
     Delta delta;
@@ -273,7 +277,8 @@ class ClaimedCollection {
     for (uint32_t i = 0; i < upserts; ++i) {
       auto record = Traits::decode(reader);
       auto key = Traits::key_of(record);
-      if (!delta.upserts.emplace(std::move(key), std::move(record)).second) throw dannan::net::DecodeError("duplicate claimed collection record in delta");
+      if (key == Key{} || !delta.upserts.emplace(std::move(key), std::move(record)).second)
+        throw dannan::net::DecodeError("bad claimed collection key in delta");
     }
     const auto erasures = reader.u32();
     if (erasures > Traits::max_records) throw dannan::net::DecodeError("too many claimed collection erasures in delta");
