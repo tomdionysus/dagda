@@ -86,7 +86,7 @@ int64_t unix_ms_of(std::filesystem::file_time_type time) {
 
 StorageLock::StorageLock(const std::filesystem::path& root) {
   std::filesystem::create_directories(root);
-  const auto path = root / ".macha.lock";
+  const auto path = root / std::string(storage_lock_name);
   _fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
   if (_fd < 0) throw std::runtime_error("cannot open storage lock: " + std::string(std::strerror(errno)));
   if (::flock(_fd, LOCK_EX | LOCK_NB) != 0) {

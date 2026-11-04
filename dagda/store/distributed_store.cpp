@@ -2075,6 +2075,29 @@ bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const 
   return local_retained;
 }
 
+void DistributedStore::retain(contract::RetentionClass type, std::vector<ObjectId> ids, contract::RetentionDot dot, WriteScope writer, ClaimScope scope,
+                              boost::asio::any_io_executor executor, RetainDone done) {
+  auto job = [this, type, ids, dot, writer = std::move(writer), scope, executor, done]() {
+    RetainOutcome outcome;
+    try {
+      if (type == contract::RetentionClass::data) {
+        outcome.unheld = retain_data(ids, dot, writer);
+      } else {
+        outcome.held_here = retain_control(ids, dot, scope, writer);
+      }
+      outcome.ran = true;
+    } catch (const std::exception& error) {
+      outcome.why = error.what();
+    }
+    boost::asio::post(executor, [done, outcome = std::move(outcome)] { done(outcome); });
+  };
+  if (!submit(std::move(job))) {
+    RetainOutcome refused;
+    refused.why = "the store is stopping";
+    boost::asio::post(executor, [done = std::move(done), refused = std::move(refused)] { done(refused); });
+  }
+}
+
 // ---- Admission -------------------------------------------------------------
 
 std::optional<DataAdmission> DistributedStore::admit_data(FrameType frame, uint64_t bytes, std::chrono::milliseconds wait, std::atomic_bool* cancelled) const {

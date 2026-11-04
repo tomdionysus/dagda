@@ -73,6 +73,25 @@ std::optional<Marker> parse_marker(const std::string& text, const std::filesyste
 
 }  // namespace
 
+std::optional<std::string> backend_refusal_v18(const std::filesystem::path& state, const std::filesystem::path& backend) {
+  const auto marker = backend / backend_marker_name;
+  std::error_code ec;
+  if (!std::filesystem::exists(marker, ec)) return std::nullopt;
+  std::string text;
+  try {
+    text = read_text(marker);
+  } catch (const std::exception&) {
+    // Unreadable: the pool's own open reports it.
+    return std::nullopt;
+  }
+  try {
+    (void)parse_marker(text, state);
+  } catch (const std::exception& error) {
+    return "backend " + backend.string() + ": " + error.what();
+  }
+  return std::nullopt;
+}
+
 std::string backend_key_check(const domain::StorageKey& key, const domain::DomainId& domain, const NodeId& token) {
   Bytes message(key_check_label.begin(), key_check_label.end());
   message.insert(message.end(), domain.bytes.begin(), domain.bytes.end());
@@ -290,9 +309,15 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
     } else {
       // A directory without a versioned backend marker is adoptable only when
       // empty, so a foreign layout is never read as current DATA.
-      const auto first = std::filesystem::directory_iterator(options.path, ec);
+      // The store's lock file aside: the node takes the lock before it opens
+      // the pool.
+      bool empty = true;
+      for (std::filesystem::directory_iterator it(options.path, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename() != storage_lock_name) empty = false;
       if (ec) throw std::runtime_error("cannot inspect unversioned backend: " + ec.message());
-      if (first != std::filesystem::directory_iterator()) throw std::runtime_error("non-empty unversioned storage backend; 0.18 requires an empty backend");
+      if (!empty)
+        throw std::runtime_error("backend " + options.path.string() +
+                                 " holds files but no backend marker, so it is not a Dagda backend: the pool adopts only an empty directory");
       token = NodeId::random();
       token_known = true;
       const auto check = _key ? backend_key_check(*_key, _sealing.domain, token) : std::string(backend_blind_check);

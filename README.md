@@ -124,8 +124,9 @@ checked, not decorative.
 
 ### Link it
 
-A hosted system links `dagda::dagda` and builds its store from the Dannan `Context` the
-node gives it:
+A hosted system links `dagda::dagda`, opens a `dagda::Node` on its Dannan node before
+that node starts (name `dagda::readiness_planes()` in its `NodeConfig::planes`), and
+holds the node's `dagda::Context`:
 
 ```cmake
 find_package(dagda 0.1 CONFIG REQUIRED)
@@ -133,16 +134,22 @@ target_link_libraries(my_system PRIVATE dagda::dagda)
 ```
 
 ```cpp
-#include "dagda/store/distributed_store.h"
+#include "dagda/context.h"
+#include "dagda/node.h"
 
-// `context` is the node's dannan::Context; the stores are this node's DATA
-// pool, CONTROL store, cache and claims.
-dagda::store::DistributedStore store(context, stores, options);
+dagda::NodeOptions options;
+options.state = state_path / "dagda";
+options.key = std::make_shared<const dagda::domain::StorageKey>(dagda::domain::StorageKey::derive_v1(cluster_key));
+options.pool.backends.push_back({data_path, limit_bytes, reserve_bytes});
+dagda::Node node(dannan_node.context(), options);  // registers Dagda's message types
+dannan_node.start();
 
-dagda::store::WriteOptions write;
-write.level = dagda::store::Durability::replicated;  // on disk on k nodes
-store.write(id, bytes, write, executor, [](dagda::store::WriteEvidence evidence) {
-  // evidence.acknowledged, evidence.pending, evidence.ticket
+auto& store = node.context();
+store.require_version(dagda::context_version);
+dagda::WriteOptions write;
+write.level = dagda::Durability::replicated;  // on disk on k nodes
+store.objects().write(bytes, write, std::chrono::seconds(10), executor, [](dagda::WriteEvidence evidence) {
+  // evidence.id, evidence.replicas (by node id), evidence.ticket
 });
 ```
 

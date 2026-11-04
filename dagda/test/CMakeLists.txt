@@ -15,6 +15,7 @@ target_compile_definitions(dagda_test_fixtures INTERFACE DANNAN_TEST_TEMP_ROOT="
 
 add_executable(dagda_tests
   version_test.cpp
+  context_test.cpp
   contract_gates_test.cpp
   contract_include_direction_test.cpp
   domain_cluster_keys_test.cpp
@@ -40,6 +41,7 @@ add_executable(dagda_tests
   ledger_unreferenced_since_test.cpp
   migrate_legacy_v18_test.cpp
   migrate_migrate_test.cpp
+  node_test.cpp
   store_control_store_test.cpp
   store_data_work_test.cpp
   store_distributed_store_test.cpp

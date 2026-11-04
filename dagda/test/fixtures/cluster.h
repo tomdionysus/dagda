@@ -8,12 +8,14 @@
 #pragma once
 
 // An in-process cluster of Dagda nodes on Dannan's node: each a
-// dannan::Node on loopback with its own state, DATA pool, control store,
-// cache, claims, storage server and distributed store. What Macha's
-// StoreBench and StorageClusterNode were (tests/test_backend_support.hpp,
-// develop 5a06d3c), on real Dannan nodes rather than a fake transport: a
-// test interposes on a node's requests (to hold, refuse or count them) in
-// front of its storage server.
+// dannan::Node on loopback with a dagda::Node on it, which opens its state,
+// DATA pool, control store, cache, claims, storage server and distributed
+// store (step 7a; before it this fixture assembled them by hand). What
+// Macha's StoreBench and StorageClusterNode were
+// (tests/test_backend_support.hpp, develop 5a06d3c), on real Dannan nodes
+// rather than a fake transport: a test interposes on a node's requests (to
+// hold, refuse or count them) in front of its storage server, through the
+// node's `front`.
 
 #include <gtest/gtest.h>
 
@@ -31,12 +33,13 @@
 #include <thread>
 #include <vector>
 
+#include "dagda/context.h"
 #include "dagda/contract/reachability.h"
 #include "dagda/domain/storage_key.h"
 #include "dagda/domain/wrap.h"
-#include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/retention_ledger.h"
+#include "dagda/node.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/data_work.h"
@@ -107,6 +110,15 @@ struct ClusterNodeOptions {
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
   store::RepairOptions repair;
+  // Step 7a's node cases: a node with no key custody (refused), and another
+  // node's Dagda state or DATA backend in place of this node's own.
+  bool custody = true;
+  // Whether the Dannan node declares Dagda's readiness planes.
+  bool planes = true;
+  std::filesystem::path state{};
+  std::filesystem::path data{};
+  // The node's open and stop stages, as dagda::Node reports them.
+  std::function<void(std::string_view)> trace;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -129,11 +141,14 @@ class ClusterNode {
   ClusterNode(const ClusterNode&) = delete;
   ClusterNode& operator=(const ClusterNode&) = delete;
 
-  // Builds the node and its store, then starts the node, which bootstraps
-  // from every other node's port.
+  // Builds the Dannan node and the Dagda node on it, then starts the Dannan
+  // node, which bootstraps from every other node's port. A Dagda node that
+  // is refused leaves nothing running and the refusal is rethrown.
   void start();
-  // Stops the store, then the node, then closes the stores, as a process
-  // exiting cleanly would.
+  // As start(), but the Dannan node is left unstarted.
+  void open();
+  // Stops the Dagda node (its stores close in order), then the Dannan node,
+  // as a process exiting cleanly would.
   void stop();
   void restart() {
     stop();
@@ -143,34 +158,41 @@ class ClusterNode {
 
   dannan::Node& node() { return *_node; }
   dannan::Context& context() { return _node->context(); }
+  dagda::Node& dagda_node() { return *_dagda; }
+  dagda::Context& api() { return _dagda->context(); }
   dannan::identity::NodeId id() const { return _id; }
   uint16_t port() const { return _port; }
   const std::string& name() const { return _name; }
-  store::DistributedStore& store() { return *_store; }
-  store::StorageServer& server() { return *_server; }
-  store::StoragePool& data() { return *_data; }
-  store::LocalStore& control() { return *_control; }
-  store::PersistentBlockCache& cache() { return *_cache; }
-  ledger::RetentionStore& claims() { return *_claims; }
+  store::DistributedStore& store() { return _dagda->store(); }
+  store::StorageServer& server() { return _dagda->server(); }
+  store::StoragePool& data() { return _dagda->data(); }
+  store::LocalStore& control() { return _dagda->control(); }
+  store::PersistentBlockCache& cache() { return _dagda->cache(); }
+  ledger::RetentionStore& claims() { return _dagda->claims(); }
   // Null when the node runs without admission.
-  store::DataResourceArbiter* credit() { return _credit.get(); }
-  store::IoReserve* io() { return _io.get(); }
-  ledger::RetentionLedger& ledger() { return *_ledger; }
-  store::AvailabilityService& availability() { return *_availability; }
-  store::Repair& repair() { return *_repair; }
-  // Publishes the inventory `provider` answers now, as the node's collector
-  // would: what the survey and repair take as referenced.
+  store::DataResourceArbiter* credit() { return _dagda->credit(); }
+  store::IoReserve* io() { return _dagda->io(); }
+  ledger::RetentionLedger& ledger() { return _dagda->ledger(); }
+  store::AvailabilityService& availability() { return _dagda->availability(); }
+  store::Repair& repair() { return _dagda->repair(); }
+  // Publishes the inventory `provider` answers now, through the node's
+  // registered provider, as the node's collector would: what the survey and
+  // repair take as referenced.
   void publish_inventory(contract::ReachabilityProvider& provider) {
-    ledger::NodeHorizonBuilder builder(provider, context().logger("dagda.horizon"));
-    _ledger->publish(builder.inventory());
+    _dagda->register_reachability(domain::domain_v1, provider);
+    _dagda->publish_inventory();
+    _dagda->unregister_reachability(domain::domain_v1);
   }
-  std::filesystem::path backend() const { return _dir / "data"; }
+  std::filesystem::path backend() const { return _options.data.empty() ? _dir / "data" : _options.data; }
+  std::filesystem::path state() const { return _options.state.empty() ? _dir / "state" : _options.state; }
   ClusterNodeOptions& options() { return _options; }
+  // The dagda::NodeOptions this node is opened with.
+  dagda::NodeOptions node_options();
   // What the node logged, every level.
   RecordingSink& log() { return *_sink; }
   // The node's keys from its custody (step 6): its wrap key, advertised on
   // its record at start, and its node-local domain key.
-  const domain::WrapKey& wrap_key() const { return *_wrap; }
+  const domain::WrapKey& wrap_key() const { return _dagda->wrap_key(); }
   domain::StorageKey node_local_key() { return domain::StorageKey::require_node_local(context().identity()); }
 
   // Requests of the store's types this node was asked, and the hook in
@@ -198,21 +220,9 @@ class ClusterNode {
   const std::filesystem::path _dir;
   const uint16_t _port;
   dannan::identity::NodeId _id;
-  dannan::supervise::StartupProgress _progress;
   std::shared_ptr<RecordingSink> _sink = std::make_shared<RecordingSink>();
   std::unique_ptr<dannan::Node> _node;
-  std::optional<domain::WrapKey> _wrap;
-  std::unique_ptr<store::StoragePool> _data;
-  std::unique_ptr<store::LocalStore> _control;
-  std::unique_ptr<store::PersistentBlockCache> _cache;
-  std::unique_ptr<ledger::RetentionStore> _claims;
-  std::unique_ptr<store::DataResourceArbiter> _credit;
-  std::unique_ptr<store::IoReserve> _io;
-  std::unique_ptr<ledger::RetentionLedger> _ledger;
-  std::unique_ptr<store::StorageServer> _server;
-  std::unique_ptr<store::DistributedStore> _store;
-  std::unique_ptr<store::AvailabilityService> _availability;
-  std::unique_ptr<store::Repair> _repair;
+  std::unique_ptr<dagda::Node> _dagda;
   mutable dannan::contract::Mutex _mutex;
   std::map<dannan::net::MessageType, size_t> _calls DANNAN_GUARDED_BY(_mutex);
   std::map<dannan::net::MessageType, std::set<dannan::sched::FrameType>> _frames DANNAN_GUARDED_BY(_mutex);
@@ -340,7 +350,59 @@ inline ClusterNode::ClusterNode(Cluster& cluster, std::string name, ClusterNodeO
   std::filesystem::create_directories(_dir);
 }
 
+inline dagda::NodeOptions ClusterNode::node_options() {
+  dagda::NodeOptions out;
+  out.state = state();
+  out.key = known_answer_key();
+  if (_options.hosts_extents || _options.keeps_backend) out.pool.backends.push_back({backend(), _options.limit, 0});
+  out.pool.durability_batch_window = _options.durability_window;
+  if (!_options.packed) {
+    out.pool.pack_threshold = 0;
+    out.pool.pack_target_size = 0;
+  }
+  out.cache = _options.cache;
+  if (_options.admission) {
+    dagda::AdmissionOptions admission;
+    admission.data_inflight_bytes = _options.data_inflight_bytes;
+    admission.foreground_reserve_bytes = _options.foreground_reserve_bytes;
+    admission.background_concurrency = _options.background_concurrency;
+    admission.no_progress = _options.no_progress;
+    admission.io = _options.io;
+    out.admission = admission;
+  } else {
+    out.admission.reset();
+  }
+  out.server.hosts_extents = _options.hosts_extents;
+  out.server.refresh_interval = std::chrono::milliseconds(500);
+  out.server.admission_wait = _options.admission_wait;
+  out.store = _options.store;
+  out.store.admission_wait = _options.admission_wait;
+  out.availability = _options.availability;
+  out.repair = _options.repair;
+  out.status_interval = std::chrono::milliseconds(200);
+  out.trace = _options.trace;
+  // In front of the server: count, then let the test answer instead.
+  out.front = [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame,
+                     const dannan::net::Message& request) -> std::optional<dannan::net::Handled> {
+    Interpose hook;
+    {
+      dannan::contract::Lock lock(_mutex);
+      ++_calls[request.type];
+      _frames[request.type].insert(frame);
+      hook = _interpose;
+    }
+    if (hook) return hook(request.type, peer, request);
+    return std::nullopt;
+  };
+  return out;
+}
+
 inline void ClusterNode::start() {
+  if (!_node) open();
+  _node->start();
+}
+
+inline void ClusterNode::open() {
   if (_node) return;
   dannan::NodeConfig config;
   config.state_path = _dir / "node";
@@ -360,10 +422,11 @@ inline void ClusterNode::start() {
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;
+  if (_options.planes) config.planes = dagda::readiness_planes();
   // Custody made once, the certificate issued over its key for this start.
-  const auto source = Cluster::custody_source();
-  if (!dannan::identity::KeyCustody::exists(config.state_path)) (void)dannan::identity::KeyCustody::create(config.state_path, source);
-  {
+  if (_options.custody) {
+    const auto source = Cluster::custody_source();
+    if (!dannan::identity::KeyCustody::exists(config.state_path)) (void)dannan::identity::KeyCustody::create(config.state_path, source);
     const auto id = dannan::identity::load_or_create_node_id(config.state_path);
     const auto public_key = dannan::identity::KeyCustody::open(config.state_path, source).node_key().public_key();
     config.custody = source;
@@ -372,97 +435,20 @@ inline void ClusterNode::start() {
     config.use_cluster_key = true;
   }
   _node = std::make_unique<dannan::Node>(_cluster.io().context, config);
-  auto& context = _node->context();
-  _id = context.identity().id();
-  store::message::register_types(context.routes());
-  _wrap = domain::WrapKey::derive(context.identity());
-  domain::advertise_wrap_key(context, *_wrap);
-
-  const auto key = known_answer_key();
-  // Every ledger the node keeps of its own is under its node-local key.
-  const auto node_local = std::make_shared<const domain::StorageKey>(domain::StorageKey::require_node_local(context.identity()));
-  const store::LocalStore::Services services{context.threads(),
-                                             context.observations(),
-                                             _progress,
-                                             context.logger("dagda.pool"),
-                                             dannan::contract::steady_time_source(),
-                                             dannan::contract::system_wall_clock()};
-  store::StoragePoolOptions pool;
-  if (_options.hosts_extents || _options.keeps_backend) {
-    std::filesystem::create_directories(backend());
-    pool.backends.push_back({backend(), _options.limit, 0});
+  _id = _node->context().identity().id();
+  try {
+    _dagda = std::make_unique<dagda::Node>(_node->context(), node_options());
+  } catch (...) {
+    _node->stop();
+    _node.reset();
+    throw;
   }
-  pool.durability_batch_window = _options.durability_window;
-  if (!_options.packed) {
-    pool.pack_threshold = 0;
-    pool.pack_target_size = 0;
-  }
-  pool.ledger_key = node_local;
-  _data = std::make_unique<store::StoragePool>(_dir / "state", _id, context.identity().durability_epoch(), pool, key, services);
-  _control = store::open_control_store(_dir / "state", {}, key, node_local, services);
-  _cache = std::make_unique<store::PersistentBlockCache>(_options.cache, key, services);
-  _claims = std::make_unique<ledger::RetentionStore>(_dir / "state", node_local, context.logger("dagda.claims"));
-  _ledger = std::make_unique<ledger::RetentionLedger>(*_claims, *_data, *_control);
-  if (_options.admission) {
-    const auto quiet = _options.repair.foreground_quiet;
-    _credit = std::make_unique<store::DataResourceArbiter>(
-        _options.data_inflight_bytes, _options.foreground_reserve_bytes, _options.background_concurrency, _options.no_progress,
-        [&context, quiet] { return context.activity().recently_active(dannan::sched::WorkClass::foreground, quiet); }, context.logger("dagda.credit"));
-    _credit->observe_device(&_data->service_monitor(), 1);
-    _io = std::make_unique<store::IoReserve>(_options.io);
-  }
-
-  store::StorageServerOptions server;
-  server.extent_size = _options.store.extent_size;
-  server.hosts_extents = _options.hosts_extents;
-  server.refresh_interval = std::chrono::milliseconds(500);
-  server.admission_wait = _options.admission_wait;
-  _server = std::make_unique<store::StorageServer>(context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get()}, server,
-                                                   store::StorageServerAdmission{_credit.get(), _io.get()});
-  // In front of the server: count, then let the test answer instead.
-  for (const auto type : store::StorageServer::served())
-    context.routes().bind(type, [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request) {
-      Interpose hook;
-      {
-        dannan::contract::Lock lock(_mutex);
-        ++_calls[request.type];
-        _frames[request.type].insert(frame);
-        hook = _interpose;
-      }
-      if (hook)
-        if (auto answer = hook(request.type, peer, request)) return std::move(*answer);
-      return _server->handle(peer, frame, request);
-    });
-  auto store_options = _options.store;
-  store_options.admission_wait = _options.admission_wait;
-  _store = std::make_unique<store::DistributedStore>(context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get()},
-                                                     store_options);
-  _availability = std::make_unique<store::AvailabilityService>(context, *_ledger, _options.availability);
-  auto repair = _options.repair;
-  repair.extent_size = _options.store.extent_size;
-  _repair = std::make_unique<store::Repair>(context, *_store, *_availability, *_ledger, repair);
-  _node->start();
 }
 
 inline void ClusterNode::stop() {
   if (!_node) return;
-  // Admission first: a request waiting for it gives up rather than hold the
-  // server's unbinding.
-  if (_credit) _credit->stop();
-  if (_io) _io->stop();
-  _repair.reset();
-  _availability.reset();
-  _store.reset();
-  _server.reset();
+  _dagda.reset();
   _node->stop();
-  _ledger.reset();
-  _io.reset();
-  _credit.reset();
-  _claims.reset();
-  _cache.reset();
-  _control.reset();
-  _data.reset();
-  _wrap.reset();
   _node.reset();
 }
 
