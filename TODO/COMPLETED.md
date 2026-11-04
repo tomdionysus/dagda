@@ -3,6 +3,28 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: the repin to Dannan 0.4.0 and a race (`feature/dannan-0.4`)
+
+Dannan 0.4.0 (`d657a9b`; needs yaml-cpp to build) installed into
+`build/deps/prefix`; the pin, the bootstrap and the README moved to 0.4.
+Three commits:
+
+- A race, found by step 7a: `LocalStore::put_sealed` returned before its
+  record reached the held ledger, so once the ledger was seeded `has()`
+  could say no to an object just stored (`put` already flushed). It now
+  flushes. `StoreLayoutV19.ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked`
+  failed 33 assertions over 30 runs before, none over 30 after.
+- `StorageLock` is Dannan's `identity::StateLock` under the store's name
+  (`.macha.lock`), its own implementation gone (rule 3).
+- `domain/wrap`: `identity::x25519_public` replaces the base-point call;
+  the membership test's fake `Nodes` gains `certificate()`.
+- Not yet taken: `Nodes::certificate(node)` and
+  `Identity::ca_certificate()` to shrink the wrap advert for peers met by
+  certificate (the DER stays as the fallback for a peer never talked to);
+  `Principal::operator==` where Dagda compares by hand. Small; with the
+  next domain work.
+- Gate: `dagda_tests` 376 passing, 1 disabled, unchanged.
+
 ## 2026-11-04 night: step 7a, the node, everything but heads (`feature/node`)
 
 Gate: `dagda_tests` 376 passing, 1 disabled (was 367 and 1; 9 added, none
