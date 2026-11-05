@@ -3,6 +3,16 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: the first `dagda-migrate` over a state Macha wrote
+
+A smoke test, not a gate: a private copy of `../macha/build/macha-fixtures/state-scratch/a` (two
+real processes, under a minute old, no library, no backend) under the fixture's cluster key and a
+custody made for it. Dry run, run and `--reverse` all exit 0; `metadata/` and everything else not
+named is untouched, the case the tool used to refuse; two markers change and come back byte for
+byte. It proves little else: 0 objects, 6 of 6 ledgers empty, no backend. One finding: a dry run
+leaves a `.macha.lock` in `metadata-objects/`, taking the store's lock, so "writes nothing" means
+no data. `docs/migration.md` should say so.
+
 ## 2026-11-05: Macha 0.92.4's shapes
 
 A delete marks its object and unlinks holding no stripe, in the GC sweep, `erase_all`, a peer's

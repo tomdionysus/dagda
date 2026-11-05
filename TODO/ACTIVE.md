@@ -45,9 +45,12 @@ by eye. Nothing in them has been run against Macha.
 2026-11-05: "Macha has a working, tested codebase, this shouldn't be modified until they're
 ready.").** The libraries do the port's work; Macha's code does not change. Macha can still produce
 artefacts and answer questions. So:
-- **From the Macha session, asked for in this order:** a real state directory, metadata included;
-  `macha-metadata-dump` output from it; the config and Status goldens and the route list. They are
-  read from `../macha/build/macha-fixtures/`.
+- **From the Macha session, read from `../macha/build/macha-fixtures/`:** the goldens are in
+  `goldens/`, from two real processes: Status with a 161-path mask, 381 of 494 keys reached at most;
+  the config dump is 46 fields by hand, not all of `Config`; `routes.txt` is read from source, not
+  captured. Still wanted, waiting on the maintainer, since a consistent copy stops a node: a real state
+  directory with a DATA sample, a dry run at its end, `macha-metadata-dump` output, and there and
+  back under Macha's own code.
 - **Dagda's own, as well:** `git archive cac5998` into `build/macha-cac5998/`, built and run there,
   never in Macha's tree. It lets Dagda generate as many small states as a test needs, and have
   Macha's own code open a disk after `--reverse`. This machine has no FFmpeg development files, so
