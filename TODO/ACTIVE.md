@@ -35,10 +35,10 @@ by eye. Nothing in them has been run against Macha.
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | Tom, for predicates |
 | P3 | The node's parity for step S: second-cutover B1 to B15 but B11, about 28 `dagda.*` figures, the config keys and defaults | `test_maintenance_trace`, and S.4's named cases and VALIDATION sections | Tom, for the trace fixtures |
 | P4 | 0.92.4's shapes: done. Macha is frozen, so nothing further lands unless Tom rules | Macha's case, in the shape of its fix | Tom |
-| P5 | Heads S1: the cache seed, its migration pass, `NodeOptions::heads` off | Heads plan 2.1 and 2.2 | Tom, for before the merge |
+| P5 | Heads S1: the cache seed, its migration pass, `NodeOptions::heads` off | Heads plan 2.1 and 2.2 | Nothing |
 | P6 | `dagda-migrate` over a state Macha's code wrote, there and back with Macha's code opening the result; then the rehearsal and macnessa's window | Second-cutover "Migration plan": every object `has` and `get` true against a listing taken before; inverbeg's time measured, not assumed | P0; Tom, for the rehearsal on the live nodes |
 | P7 | Steps S, 8a and 8b on the flag day | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover's soak |
-| P8 | Heads S2 to S7, then 8c and 8d | Heads plan section 3; 8c.4, 8d.4; `macha-metadata-dump` identical | Macha's merge. 95 gap-heads cases each get a session or a named retirement |
+| P8 | Heads S2 to S7, then 8c and 8d, against `cac5998` | Heads plan section 3, re-read at `cac5998`; 8c.4, 8d.4; `macha-metadata-dump` identical | 95 gap-heads cases each get a session or a named retirement |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
 **Macha is frozen at `cac5998` until the libraries are ready (Tom, relayed by the Macha session,
@@ -59,9 +59,13 @@ artefacts and answer questions. So:
   deletion marks and the `not_held` pause have no Macha fix to match yet. A later Macha fix or a
   ruling may rename or reshape them. The inventory walk's stop check will not appear in Macha
   during the freeze unless Tom says otherwise, so P4 has nothing further to wait for.
-- **Not assumed:** how the freeze applies to the tree-native merge is open with Tom. P5 is planned
-  to work without it; P8 waits on it, and every test name and form in the heads plan is read from
-  `b080c38` until it is answered.
+- **No tree-native merge (the Macha session, 2026-11-05, from the code and the live nodes):** heads
+  is built against `cac5998` as it runs. Both live heads are tree-backed SM19; live deltas are DLT5.
+  Genesis is `genesis_metadata()` (`metadata.cpp:2294`), an inline record built at runtime, not a
+  constant, and `b080c38` does not change that. A new cluster at `cac5998` founds inline, so the
+  scratch state must not gate a tree-era tool. An unchanged mutation commits, about 26 empty 61-byte
+  deltas a minute live, and that is the requirement until Tom rules. The heads plan's `b080c38`
+  citations and "settled at the merge" marks are to be re-read at `cac5998`.
 
 **Macha 0.92.4 (`cac5998`, tag on `70cf4a4`), taken:** the claim deletion mark and the
 survey's stop (`COMPLETED.md`). The inventory's walk has no stop check yet in Macha either.
@@ -707,16 +711,13 @@ callable one by one. Recommended: Macha's loop stays until its heads move (8c), 
 catalogue and metadata stages cannot move before then, and the node's loop stays for a
 Dagda-only node. This reopens a decision, so it is Tom's.
 
-**Does the freeze hold the tree-native merge?** Asked by the Macha session. Heads S2 to S7 wait on
-it, because genesis and the head forms settle there.
-
 From the replan, each with a recommendation in its document:
 
 1. Must the flag day wait for heads? Recommended no: heads S1 only, with Dagda pinned at
    a commit that does not claim `Context` v1 is frozen (heads plan Q1).
 2. Does 8c change `<state>/metadata/`? Recommended no: Dagda reads Macha's files as they
    stand, and any move is a later release (heads plan Q2, second-cutover question 1).
-3. May heads S1 start before Macha's merge? Recommended yes: it touches no tree form (Q9).
+3. (Answered: no merge is coming, per the Macha session, so heads S1 can start.)
 4. Do `test_maintenance_trace`'s fixtures stand? Recommended yes: the node takes Macha's
    order and a trace (second-cutover question 3).
 5. One state directory or two? Recommended one (second-cutover question 4).
