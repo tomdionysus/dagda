@@ -14,6 +14,7 @@
 #include <cstring>
 #include <future>
 #include <limits>
+#include <tuple>
 #include <utility>
 
 #include "dagda/store/messages.h"
@@ -1090,6 +1091,56 @@ void DistributedStore::wait_complete(Ticket ticket, std::chrono::milliseconds de
 }
 
 void DistributedStore::wait_until(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done) {
+  auto record = arm_wait(ticket, complete, deadline, std::move(executor), std::move(done));
+  if (record) submit([this, record = std::move(record), deadline] { run_barriers({record}, deadline); });
+}
+
+void DistributedStore::wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done) {
+  if (tickets.empty()) {
+    boost::asio::post(executor, [done = std::move(done)] { done({}); });
+    return;
+  }
+  // Each slot is written by its own completion; the last to finish reads them.
+  struct Gathered {
+    std::vector<WriteEvidence> evidence;
+    std::atomic<size_t> left;
+    boost::asio::any_io_executor executor;
+    ManyDone done;
+  };
+  auto gathered = std::make_shared<Gathered>();
+  gathered->evidence.resize(tickets.size());
+  gathered->left = tickets.size();
+  gathered->executor = std::move(executor);
+  gathered->done = std::move(done);
+  std::vector<std::shared_ptr<TicketRecord>> due;
+  for (size_t i = 0; i < tickets.size(); ++i) {
+    auto record = arm_wait(tickets[i], false, deadline, _executor, [gathered, i](WriteEvidence evidence) {
+      gathered->evidence[i] = std::move(evidence);
+      if (gathered->left.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+      boost::asio::post(gathered->executor, [gathered] { gathered->done(std::move(gathered->evidence)); });
+    });
+    if (record) due.push_back(std::move(record));
+  }
+  // Only once every ticket is in: the one job sees them all.
+  if (!due.empty()) submit([this, due = std::move(due), deadline] { run_barriers(due, deadline); });
+}
+
+std::vector<WriteEvidence> DistributedStore::wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline) {
+  auto promise = std::make_shared<std::promise<std::vector<WriteEvidence>>>();
+  auto future = promise->get_future();
+  wait(tickets, deadline, _executor, [promise](std::vector<WriteEvidence> evidence) { promise->set_value(std::move(evidence)); });
+  // The deadline answers first; the margin only covers the executor.
+  if (future.wait_for(deadline + std::chrono::seconds(5)) == std::future_status::ready) return future.get();
+  std::vector<WriteEvidence> out;
+  for (const auto& ticket : tickets) {
+    auto evidence = status(ticket);
+    out.push_back(evidence ? std::move(*evidence) : WriteEvidence{});
+  }
+  return out;
+}
+
+std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::arm_wait(Ticket ticket, bool complete, std::chrono::milliseconds deadline,
+                                                                           boost::asio::any_io_executor executor, WriteDone done) {
   std::shared_ptr<TicketRecord> record;
   {
     Lock lock(_shared->mutex);
@@ -1100,7 +1151,7 @@ void DistributedStore::wait_until(Ticket ticket, bool complete, std::chrono::mil
     WriteEvidence unknown;
     unknown.settled = true;
     boost::asio::post(executor, [done = std::move(done), unknown] { done(unknown); });
-    return;
+    return nullptr;
   }
   auto waiter = std::make_shared<Waiter>();
   waiter->executor = executor;
@@ -1118,7 +1169,7 @@ void DistributedStore::wait_until(Ticket ticket, bool complete, std::chrono::mil
     if (complete ? evidence.complete : evidence.settled) {
       lock.unlock();
       tell(waiter, evidence);
-      return;
+      return nullptr;
     }
     record->waiters.push_back(waiter);
   }
@@ -1133,7 +1184,7 @@ void DistributedStore::wait_until(Ticket ticket, bool complete, std::chrono::mil
       tell(waiter, evidence);
     });
   });
-  if (barriers) submit([this, record, deadline] { run_barriers(record, deadline); });
+  return barriers ? record : nullptr;
 }
 
 std::optional<WriteEvidence> DistributedStore::wait(Ticket ticket, std::chrono::milliseconds deadline) {
@@ -1159,111 +1210,134 @@ std::optional<WriteEvidence> DistributedStore::wait_complete(Ticket ticket, std:
   return evidence;
 }
 
-void DistributedStore::run_barriers(const std::shared_ptr<TicketRecord>& record, std::chrono::milliseconds deadline) {
-  std::vector<std::pair<NodeId, DurabilityTicket>> due;
-  {
+void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketRecord>>& records, std::chrono::milliseconds deadline) {
+  // One place, and every ticket with a copy awaiting its barrier there.
+  struct Place {
+    NodeId node;
+    DurabilityTicket ticket;
+    std::vector<std::shared_ptr<TicketRecord>> records;
+  };
+  using PlaceKey = std::tuple<NodeId, NodeId, uint64_t, uint64_t>;
+  std::map<PlaceKey, std::shared_ptr<Place>> places;
+  for (const auto& record : records) {
     Lock lock(record->mutex);
-    for (auto& replica : record->replicas)
-      if (replica.awaiting == Awaiting::barrier && !replica.running && replica.evidence.durability) {
-        replica.running = true;
-        due.emplace_back(replica.evidence.node, *replica.evidence.durability);
+    for (auto& replica : record->replicas) {
+      if (replica.awaiting != Awaiting::barrier || replica.running || !replica.evidence.durability) continue;
+      replica.running = true;
+      const auto& ticket = *replica.evidence.durability;
+      auto& place = places[{replica.evidence.node, ticket.epoch, ticket.domain, ticket.backend_instance}];
+      if (!place) {
+        place = std::make_shared<Place>();
+        place->node = replica.evidence.node;
+        place->ticket = ticket;
       }
+      place->ticket.generation = std::max(place->ticket.generation, ticket.generation);
+      place->records.push_back(record);
+    }
   }
-  const auto id = record->id;
   // A refusal because a peer's process or backend changed means "your ticket
   // is dead", not "your bytes are gone" (discipline 1): asked again with the
-  // id, the peer answers from disk with a fresh ticket.
+  // ids, the peer answers from disk with fresh tickets.
   const auto transient = [](ReplicaRecord& replica, const std::string& why) {
     replica.evidence.why = "awaiting barrier: " + why;
     replica.running = false;
+  };
+  const auto refuse = [](ReplicaRecord& replica, const std::string& why) {
+    replica.evidence.state = ReplicaState::refused;
+    replica.evidence.why = why;
+    replica.awaiting = Awaiting::none;
+    replica.running = false;
+  };
+  const auto each = [](const std::vector<std::shared_ptr<TicketRecord>>& tickets, const NodeId& node, const auto& change) {
+    for (const auto& record : tickets) update(record, node, change);
   };
   // Remote barriers go out first, so the local one's batch window does not
   // serialise them.
   std::map<NodeId, NodeRecord> peers;
   for (const auto& peer : _context.nodes().roster()) peers.emplace(peer.id, peer);
-  for (const auto& [node, ticket] : due) {
-    if (node == _self) continue;
-    const auto found = peers.find(node);
+  for (const auto& [key, place] : places) {
+    if (place->node == _self) continue;
+    const auto found = peers.find(place->node);
     if (found == peers.end()) {
-      update(record, node, [](ReplicaRecord& replica) {
-        replica.evidence.state = ReplicaState::refused;
-        replica.evidence.why = "unknown node";
-        replica.awaiting = Awaiting::none;
-        replica.running = false;
-      });
+      each(place->records, place->node, [&](ReplicaRecord& replica) { refuse(replica, "unknown node"); });
       continue;
     }
     const auto peer = found->second;
-    message::BarrierRequest request{ticket, {}};
+    message::BarrierRequest request{place->ticket, {}};
     _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(request), FrameType::loader, deadline, _executor,
-                           [this, weak = std::weak_ptr<Shared>(_shared), record, node, peer, ticket, id, deadline, transient](CallOutcome outcome) {
+                           [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each](CallOutcome outcome) {
                              if (outcome.reply && outcome.reply->type == dannan::net::message::ok) {
-                               update(record, node, [](ReplicaRecord& replica) { acknowledge(replica); });
+                               each(asked->records, asked->node, [](ReplicaRecord& replica) { acknowledge(replica); });
                                return;
                              }
                              if (!refused_with(outcome, 409)) {
                                const auto why = outcome_text(outcome);
-                               update(record, node, [&](ReplicaRecord& replica) { transient(replica, why); });
+                               each(asked->records, asked->node, [&](ReplicaRecord& replica) { transient(replica, why); });
                                return;
                              }
                              const auto shared = weak.lock();
                              if (!shared) return;
                              ReadLock alive(shared->alive);
                              if (!shared->store) {
-                               update(record, node, [](ReplicaRecord& replica) { replica.running = false; });
+                               each(asked->records, asked->node, [](ReplicaRecord& replica) { replica.running = false; });
                                return;
                              }
-                             message::BarrierRequest probe{ticket, {id}};
-                             _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), FrameType::loader, deadline,
-                                                    _executor, [record, node, id, transient](CallOutcome answer) {
-                                                      if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
-                                                        const auto why = outcome_text(answer);
-                                                        update(record, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
-                                                        return;
-                                                      }
-                                                      try {
-                                                        const auto fresh = message::decode_probe_answer(answer.reply->payload);
-                                                        for (const auto& [present, durability] : fresh.present)
-                                                          if (present == id) {
-                                                            update(record, node, [&](ReplicaRecord& replica) { acknowledge(replica, durability); });
-                                                            return;
+                             // One probe with every id that named this place, as many as a
+                             // request may carry.
+                             for (size_t start = 0; start < asked->records.size(); start += message::max_barrier_probe) {
+                               const auto count = std::min<size_t>(message::max_barrier_probe, asked->records.size() - start);
+                               std::vector<std::shared_ptr<TicketRecord>> part(asked->records.begin() + static_cast<std::ptrdiff_t>(start),
+                                                                               asked->records.begin() + static_cast<std::ptrdiff_t>(start + count));
+                               message::BarrierRequest probe{asked->ticket, {}};
+                               for (const auto& record : part) probe.probe.push_back(record->id);
+                               _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), FrameType::loader, deadline,
+                                                      _executor, [part, node = asked->node, transient, refuse, each](CallOutcome answer) {
+                                                        if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
+                                                          const auto why = outcome_text(answer);
+                                                          each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
+                                                          return;
+                                                        }
+                                                        try {
+                                                          const auto fresh = message::decode_probe_answer(answer.reply->payload);
+                                                          const std::map<ObjectId, DurabilityTicket> present(fresh.present.begin(), fresh.present.end());
+                                                          for (const auto& record : part) {
+                                                            const auto held = present.find(record->id);
+                                                            // Definitive when absent: the peer no longer holds it. Put it again.
+                                                            update(record, node, [&](ReplicaRecord& replica) {
+                                                              if (held != present.end())
+                                                                acknowledge(replica, held->second);
+                                                              else
+                                                                refuse(replica, "absent on the peer after its restart");
+                                                            });
                                                           }
-                                                        // Definitive: the peer no longer holds it. Put it again.
-                                                        update(record, node, [](ReplicaRecord& replica) {
-                                                          replica.evidence.state = ReplicaState::refused;
-                                                          replica.evidence.why = "absent on the peer after its restart";
-                                                          replica.awaiting = Awaiting::none;
-                                                          replica.running = false;
-                                                        });
-                                                      } catch (const std::exception& error) {
-                                                        const std::string why = error.what();
-                                                        update(record, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
-                                                      }
-                                                    });
+                                                        } catch (const std::exception& error) {
+                                                          const std::string why = error.what();
+                                                          each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
+                                                        }
+                                                      });
+                             }
                            });
   }
-  for (const auto& [node, ticket] : due) {
-    if (node != _self) continue;
+  for (const auto& [key, place] : places) {
+    if (place->node != _self) continue;
     try {
-      _data.durability_barrier(ticket, DurabilityUrgency::batchable);
-      update(record, node, [](ReplicaRecord& replica) { acknowledge(replica); });
+      _data.durability_barrier(place->ticket, DurabilityUrgency::batchable);
+      each(place->records, place->node, [](ReplicaRecord& replica) { acknowledge(replica); });
     } catch (const StaleDurabilityTicket&) {
       // This node's backend reopened under the ticket: the same answer from
       // disk, no call.
-      const auto fresh = _data.reassert_durable(id);
-      update(record, node, [&](ReplicaRecord& replica) {
-        if (fresh) {
-          acknowledge(replica, fresh);
-          return;
-        }
-        replica.evidence.state = ReplicaState::refused;
-        replica.evidence.why = "absent here after the backend changed";
-        replica.awaiting = Awaiting::none;
-        replica.running = false;
-      });
+      for (const auto& record : place->records) {
+        const auto fresh = _data.reassert_durable(record->id);
+        update(record, place->node, [&](ReplicaRecord& replica) {
+          if (fresh)
+            acknowledge(replica, fresh);
+          else
+            refuse(replica, "absent here after the backend changed");
+        });
+      }
     } catch (const std::exception& error) {
       const std::string why = error.what();
-      update(record, node, [&](ReplicaRecord& replica) { transient(replica, why); });
+      each(place->records, place->node, [&](ReplicaRecord& replica) { transient(replica, why); });
     }
   }
 }
