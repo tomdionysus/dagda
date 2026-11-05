@@ -277,9 +277,10 @@ TEST(Node, DeclaresItsOwnReadinessPlanes) {
   a.stop();
 }
 
-// A node that opens with every backend offline is not ready, and goes ready
-// once one comes online.
-TEST(Node, TheDataPlaneGoesReadyWhenABackendComesOnline) {
+// A node that opens with every backend offline is ready but degraded, and says
+// so: it must not crash-loop on a startup timeout (Tom, 2026-11-05). A backend
+// coming online clears it.
+TEST(Node, NoBackendOnlineIsReadyButDegraded) {
   Cluster cluster;
   const auto bad = cluster.dir() / "bad";
   std::filesystem::create_directories(bad);
@@ -289,13 +290,17 @@ TEST(Node, TheDataPlaneGoesReadyWhenABackendComesOnline) {
   auto& a = cluster.add("a", options);
   a.start();
   auto& node = a.dagda_node();
+  const auto degraded = [&] {
+    node.publish_status();
+    return std::get<bool>(a.context().status().snapshot().values.at("dagda.storage.degraded"));
+  };
   EXPECT_TRUE(a.data().degraded());
-  EXPECT_FALSE(a.context().readiness().complete());
+  EXPECT_TRUE(degraded());
+  EXPECT_TRUE(a.context().readiness().complete());
   auto backends = node.options().pool.backends;
   backends[0].path = cluster.dir() / "good";
   node.reconfigure({backends, {}});
-  EXPECT_FALSE(a.data().degraded());
-  node.publish_status();
+  EXPECT_FALSE(degraded());
   EXPECT_TRUE(a.context().readiness().complete());
   a.stop();
 }

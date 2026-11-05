@@ -3,6 +3,13 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: read errors and no storage, on Tom's ruling
+
+A read that fails on the device (`ObjectReadError`: open, stat or read failing, or a short read) keeps the
+object, in `StoragePool::get` and `scrub_step`; only bytes that read and do not open are removed. A node with
+every backend offline is ready but degraded, so it does not crash-loop on a startup timeout. Both ruled for
+Macha too, and Dagda conforms to Macha's shape when it lands.
+
 ## 2026-11-05: the first dry run over real state
 
 The Macha session ran `dagda-migrate --dry-run` (Dagda `db2ba92`) on macnessa over a scratch copy of the

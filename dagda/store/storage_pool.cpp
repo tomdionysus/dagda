@@ -734,6 +734,9 @@ std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
                                " bytes=" + std::to_string(data ? data->size() : 0) + " ms=" + std::to_string(elapsed.count()));
       observe_get(data ? data->size() : 0, static_cast<uint64_t>(elapsed.count()));
       return data;
+    } catch (const ObjectReadError& error) {
+      // The device, not the object: it stays, and the next backend is asked.
+      _services.logger.warn("unreadable local object " + to_string(id) + " on " + path.string() + " kept (read failed): " + error.what());
     } catch (const std::exception& error) {
       // Corrupt content is an object failure, not a backend failure, once the
       // key is known to be the disk's; before that it may be the key.
@@ -1083,6 +1086,8 @@ StoragePool::MaintenanceResult StoragePool::scrub_step(uint64_t budget_bytes, si
         timer.note_bytes(data ? data->size() : 0);
       }
       if (data) result.bytes += data->size();
+    } catch (const ObjectReadError& error) {
+      _services.logger.warn("unreadable local object " + to_string(item->id) + " on " + item->path.string() + " kept (read failed): " + error.what());
     } catch (const std::exception& error) {
       if (!key_checked(item->backend)) {
         _services.logger.warn("unreadable local object " + to_string(item->id) + " on " + item->path.string() + " kept (key unchecked): " + error.what());

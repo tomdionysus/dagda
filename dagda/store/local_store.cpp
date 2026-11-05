@@ -513,7 +513,7 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
   try {
     Unlocked unlocked(lock, _mutex);
     const auto payload = _files.read_at(entry.file, entry.payload_offset, static_cast<size_t>(entry.payload_size));
-    if (!payload) throw std::runtime_error("short packed object read");
+    if (!payload) throw ObjectReadError("short packed object read");
     plain = open_object(*_key, _sealing, id, entry.nonce, entry.tag, *payload, entry.plain_size);
   } catch (...) {
     release_reader();

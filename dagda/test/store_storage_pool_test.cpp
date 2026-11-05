@@ -828,5 +828,38 @@ TEST(StoreStoragePool, DataStoreHasBaseline) {
   EXPECT_EQ(missing, rounds * object_count);
 }
 
+// A read that fails on the device says nothing about the object, so neither a
+// read nor the scrub deletes it (Tom, 2026-11-05). Only bytes that were read and
+// do not open are removed. A directory where the file was makes read(2) fail.
+TEST(StoreStoragePool, AReadErrorKeepsTheObject) {
+  StoreBed bed;
+  const auto state = bed.dir.path() / "state";
+  const auto disk = bed.dir.path() / "disk";
+  std::filesystem::create_directories(disk);
+  auto pool = bed.pool(state, {{disk, 64 * mib}}, 500ms, NodeId::random());
+  ASSERT_EQ(pool->online_backends(), 1u);
+  const auto data = pattern(2 * mib);
+  const auto id = object_id(data);
+  ASSERT_TRUE(pool->put(id, data));
+  const auto file = test::object_path(disk, id);
+  ASSERT_TRUE(std::filesystem::is_regular_file(file));
+  const auto aside = bed.dir.path() / "aside";
+  std::filesystem::rename(file, aside);
+  std::filesystem::create_directory(file);
+  EXPECT_FALSE(pool->get(id).has_value());
+  EXPECT_TRUE(pool->has(id));
+  for (int slices = 0; slices < 8; ++slices)
+    if (pool->scrub_step(0, 16).complete) break;
+  EXPECT_TRUE(pool->has(id));
+  EXPECT_TRUE(std::filesystem::is_directory(file));
+  std::filesystem::remove(file);
+  std::filesystem::rename(aside, file);
+  EXPECT_EQ(pool->get(id), std::optional<Bytes>(data));
+  // Bytes that read and do not open still go.
+  corrupt_object(disk, id);
+  EXPECT_FALSE(pool->get(id).has_value());
+  EXPECT_FALSE(pool->has(id));
+}
+
 }  // namespace
 }  // namespace dagda::store

@@ -970,7 +970,8 @@ it first.
 | Allocations sized from the wire | A reserve sized only by a constant from the wire | `metadata.cpp:1951` | Nothing: heads |
 | Settings reload | SIGHUP refuses replicas; a `write_copies` change is accepted and ignored | `service/service_config.cpp:23-25`, `cluster/cluster.cpp:1144-1152` | Backends and cache live, the rest at restart (M5). The old text here asked every setting to reload; that is withdrawn unless Tom rules it |
 | I/O control reserve | No disk I/O reserve for control work | `cluster/data_work.hpp:23-24` | **Differs:** `IoReserve` exists. Tom ruled the control store's 256 MiB free-space reserve (taken by Macha at the port); the device reserve is on Macha's list |
-| Zero storage reported healthy | `data_storage` ready with no backend online | `local_state.cpp:85` | **Differs:** the plane stays unready with every backend offline. Sent to Macha; follows the ruling |
+| Zero storage reported healthy | `data_storage` ready with no backend online, and nothing says so | `local_state.cpp:85` | Ruled (Tom, 2026-11-05): ready, but degraded, in both. Built here: `Node.NoBackendOnlineIsReadyButDegraded` |
+| A read error deleting a good object | Any read exception removes the object | `storage_pool.cpp:603` | Ruled (Tom, 2026-11-05): a read failing on I/O keeps it, in both. Built here: `StoreStoragePool.AReadErrorKeepsTheObject`; to conform to Macha's shape when it lands |
 | Non-associative three-way torrent merge | Three concurrent duplicates settle only at the next merge | `5.4` | Kept in the template for byte identity |
 | The lease fence | No epoch fence in Macha | `5.4` | **Differs:** Dagda's `LeaseKeeper` has one (new). Follows the ruling |
 | The local barrier's deadline | `StoragePool::durability_barrier` waits with none | `storage/storage_pool.*` | Kept as Macha's, no deadline (M4) |
