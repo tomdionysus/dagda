@@ -97,5 +97,43 @@ TEST(ReplicaSelector, SpeculationAvoidsPeersBusyWithForegroundWork) {
   EXPECT_EQ(selector.stats(node(2).id).foreground_in_flight, 0u);
 }
 
+// Macha (tests/test_hydration_catalogue.cpp): test_replica_selector, what the
+// cases above leave out. Speculative work rotates over the whole set when
+// nothing is measured; its own work in flight makes an equal peer less useful;
+// a success clears the failure penalty without erasing the failure's history.
+TEST(ReplicaSelector, SpeculativeWorkSpreadsAndASuccessKeepsTheFailureCount) {
+  ReplicaSelector selector;
+  const std::vector<NodeRecord> nodes{node(1), node(2), node(3)};
+  const auto first = [&](size_t stripe, ReplicaWorkClass work) { return selector.order(nodes, stripe, work).front().id.bytes[0]; };
+
+  EXPECT_EQ(first(0, ReplicaWorkClass::speculative), 1u);
+  EXPECT_EQ(first(1, ReplicaWorkClass::speculative), 2u);
+  EXPECT_EQ(first(2, ReplicaWorkClass::speculative), 3u);
+
+  selector.started(nodes[0].id, ReplicaWorkClass::speculative);
+  EXPECT_NE(first(0, ReplicaWorkClass::speculative), 1u);
+  selector.finished(nodes[0].id, ReplicaWorkClass::speculative, 1024, 100ms, true);
+
+  // Foreground reads optimise latency rather than symmetry.
+  selector.started(nodes[0].id, ReplicaWorkClass::foreground);
+  selector.finished(nodes[0].id, ReplicaWorkClass::foreground, 1024, 20ms, true);
+  selector.started(nodes[1].id, ReplicaWorkClass::foreground);
+  selector.finished(nodes[1].id, ReplicaWorkClass::foreground, 1024, 200ms, true);
+  EXPECT_EQ(first(0, ReplicaWorkClass::foreground), 1u);
+
+  // Speculative work yields to foreground traffic when a replica is idle.
+  selector.started(nodes[0].id, ReplicaWorkClass::foreground);
+  EXPECT_NE(first(0, ReplicaWorkClass::speculative), 1u);
+  selector.finished(nodes[0].id, ReplicaWorkClass::foreground, 1024, 20ms, true);
+
+  selector.started(nodes[1].id, ReplicaWorkClass::foreground);
+  selector.finished(nodes[1].id, ReplicaWorkClass::foreground, 0, 10ms, false);
+  EXPECT_EQ(selector.stats(nodes[1].id).failures, 1u);
+  EXPECT_NE(first(0, ReplicaWorkClass::foreground), 2u);
+  selector.started(nodes[1].id, ReplicaWorkClass::foreground);
+  selector.finished(nodes[1].id, ReplicaWorkClass::foreground, 1024, 25ms, true);
+  EXPECT_EQ(selector.stats(nodes[1].id).failures, 1u);
+}
+
 }  // namespace
 }  // namespace dagda::store
