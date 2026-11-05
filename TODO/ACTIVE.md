@@ -31,7 +31,7 @@ by eye. Nothing in them has been run against Macha.
 
 | # | Work | Gate | Waits on |
 |---|---|---|---|
-| P1 | Scale and platform (M10): Linux on live-a with `syncfs`, sanitizers, a trie of 1 million ids, 100,000 objects across packs | Whole suite on Linux aarch64; ASan, UBSan and TSan clean; the two scale cases' figures recorded | Nothing |
+| P1 | Scale and platform (M10): Linux done once (below); sanitizers, a trie of 1 million ids, 100,000 objects across packs | ASan, UBSan and TSan clean; the two scale cases' figures recorded | Nothing |
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | The maintainer, for predicates |
 | P3 | The node's parity for step S: second-cutover B1 to B15 but B11, about 28 `dagda.*` figures, the config keys and defaults | `test_maintenance_trace`, and S.4's named cases and VALIDATION sections | The maintainer, for the trace fixtures |
 | P4 | The hung stop and Macha's other P0 | Macha's case, in the shape of its fix | Macha |
