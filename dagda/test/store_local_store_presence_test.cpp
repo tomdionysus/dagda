@@ -78,7 +78,9 @@ TEST(StoreLocalStorePresence, HasAnswersAPutInProgressWithoutWaitingForIt) {
   }
   cv.notify_all();
   ASSERT_TRUE(put.get());
-  if (answered) EXPECT_FALSE(asked.get());
+  if (answered) {
+    EXPECT_FALSE(asked.get());
+  }
   EXPECT_TRUE(store->has(id));
 }
 

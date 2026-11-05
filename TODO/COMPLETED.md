@@ -3,6 +3,17 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: the first Linux run (M10, part)
+
+On macnessa (Tom's choice: Debian 13, aarch64, g++ 14.2, kernel 6.18), under
+`/home/tom/dagda-linux` at lowest priority with 2 compile jobs, against Dannan 0.4.1, Boost
+1.87 and GoogleTest 1.17 in a private prefix: `dagda_tests` 418 passing, 1 disabled, one run,
+145 s, on the NVMe root. GCC found one compile error and warnings Clang had not; one warning, in the
+standard library's `vector`, remains. The Linux code ran for the first time: `DurabilityDomain`'s `syncfs`
+(`durability_domain.cpp:157`), with the durability cases counting its barriers, and the
+Linux-only case in `store_durability_domain_test.cpp:218`. Macha was running on the node and the node's load reached 10 by the end, its other
+work included. Not sanitizers, not repeated, not on the USB DATA disks.
+
 ## 2026-11-04 night: M5, M6 and M7 (`feature/port-respec`)
 
 M5: `Node::reconfigure` takes Macha's live reload, backends and cache, locking a
