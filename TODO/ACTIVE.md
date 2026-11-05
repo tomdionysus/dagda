@@ -30,7 +30,7 @@ by eye. Nothing in them has been run against Macha.
 | # | Work | Gate | Waits on |
 |---|---|---|---|
 | P0 | The port's artefacts at `cac5998` (below): the Macha session's real state, dump output and goldens; Dagda's export of Macha for small generated states | Macha's own code produced them, at a named commit | The Macha session |
-| P1 | Scale and platform (M10): done on the Mac (`COMPLETED.md`); Linux rerun of this version and the scale cases on a Pi | Whole suite on Linux aarch64; the scale figures recorded | Nothing |
+| P1 | Scale and platform (M10): done, Mac and live-a (`COMPLETED.md`). Left: TSan on Linux, for the Boost report only, and the USB disk, which the rehearsal measures | Whole suite on Linux aarch64; the scale figures recorded | Nothing |
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | The maintainer, for predicates |
 | P3 | The node for the first stage under Macha's loop: its stages callable one by one, B1, B3, B6, B7, B8, B10 of second-cutover C, about 28 `dagda.*` figures, config keys and defaults. Dagda's scheduling, parking and trace wait for the later stage | S.4's named cases and VALIDATION sections | Nothing |
 | P4 | Match Macha 0.92.6 when it lands: the three findings, the inventory walk's stop; read errors and ready-degraded in Dagda now | Macha's cases, in the shape of its fix | The Macha session |
