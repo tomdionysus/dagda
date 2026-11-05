@@ -44,8 +44,9 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
 - `--control DIR`: the control store's path when it is not
   `<state>/metadata-objects`.
 - `--cache DIR`: the persistent cache's path, if the node keeps one.
-- `--dry-run`: classify and report; write nothing. The refusals are the
-  same as a real run's.
+- `--dry-run`: classify and report; change no data. It still takes each
+  store's lock, which can leave an empty lock file. The refusals are the same
+  as a real run's.
 
 Every refusal comes before the first write: the node id, the key (proved
 on the first record that opens), a retention checkpoint from before the
