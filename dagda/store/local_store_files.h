@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,14 @@
 #include "dannan/contract/thread_safety.h"
 
 namespace dagda::store {
+
+// An object's bytes could not be read: the device failed, or the file could not
+// be opened. Nothing is known about the object, so it is never a reason to
+// delete it (the maintainer, 2026-11-05): only bytes that were read and do not open are.
+class ObjectReadError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 // The device work behind LocalStore's object reads, object writes and pack
 // compaction, which the store does with its index mutex released. Handed to

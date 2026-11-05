@@ -167,12 +167,11 @@ void Node::open() {
   pool.ledger_key = _node_local;
   pool.ledger_cache_bytes = ledger_cache_share(cache_bytes, LedgerShare::data_held);
   _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, services("dagda.pool"));
-  // A pool whose every backend is offline holds nothing it should: it says
-  // so rather than report itself ready.
-  if (_data->degraded())
-    _logger.warn("data storage degraded: every configured backend is offline");
-  else
-    ready(plane_data);
+  // A pool whose every backend is offline holds nothing it should: ready, but
+  // degraded, and it says so (the maintainer, 2026-11-05), so a node whose only disk is
+  // offline does not crash-loop on its startup timeout.
+  if (_data->degraded()) _logger.warn("data storage degraded: every configured backend is offline");
+  ready(plane_data);
 
   if (_options.admission) {
     step("open admission");
@@ -698,9 +697,6 @@ void Node::stop_maintenance() {
 //   admission.pressure_refusals, admission.data_in_flight,
 //   admission.control_in_flight.
 void Node::publish_status() {
-  // A pool that opened with every backend offline goes ready when one returns,
-  // by a refresh or a reload.
-  if (!_data->degraded()) ready(plane_data);
   auto& surface = _context.status();
   const auto put = [&](const std::string& name, dannan::status::Surface::Value value) { surface.publish("dagda." + name, std::move(value)); };
   put("context_version", u64(context_version));

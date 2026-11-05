@@ -210,8 +210,8 @@ class NodeRefused final : public std::runtime_error {
 // its admission, the control store, the cache, the claims and the reference
 // counts, the distributed store, availability, repair and the storage
 // server. Each readiness plane is reported ready as its part opens; a pool
-// that holds nothing it should (every backend offline) leaves data_storage
-// unready. The node then publishes its figures to Dannan's Status surface,
+// that holds nothing it should (every backend offline) is ready but degraded
+// (dagda.storage.degraded). The node then publishes its figures to Dannan's Status surface,
 // at once and every status_interval. stop() closes it in the reverse order,
 // admission first so a waiting request gives up, and releases the locks
 // last.
