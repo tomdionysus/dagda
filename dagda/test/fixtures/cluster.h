@@ -136,6 +136,8 @@ struct ClusterNodeOptions {
   // Step 7a's node cases: a node with no key custody (refused), and another
   // node's Dagda state or DATA backend in place of this node's own.
   bool custody = true;
+  // The node in two parts: a case calls open_store() once the Dannan node runs.
+  bool open_later = false;
   std::filesystem::path state{};
   std::filesystem::path data{};
   // The node's open and stop stages, as dagda::Node reports them.
@@ -468,7 +470,10 @@ inline void ClusterNode::open() {
   _node = std::make_unique<dannan::Node>(_cluster.io().context, config);
   _id = _node->context().identity().id();
   try {
-    _dagda = std::make_unique<dagda::Node>(_node->context(), node_options());
+    if (_options.open_later)
+      _dagda = std::make_unique<dagda::Node>(_node->context(), node_options(), dagda::Node::OpenLater{});
+    else
+      _dagda = std::make_unique<dagda::Node>(_node->context(), node_options());
   } catch (...) {
     _node->stop();
     _node.reset();

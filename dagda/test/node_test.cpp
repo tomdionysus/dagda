@@ -305,5 +305,56 @@ TEST(Node, NoBackendOnlineIsReadyButDegraded) {
   a.stop();
 }
 
+// Macha's node answers while its store recovers: the Dannan node starts first, so
+// Status and its roster work and the store's planes read as not ready, then the
+// store opens with the node already running.
+TEST(Node, OpensInTwoPartsWithTheDannanNodeAlreadyRunning) {
+  Cluster cluster;
+  auto& peer = cluster.add("peer");
+  ClusterNodeOptions options;
+  options.open_later = true;
+  auto& late = cluster.add("late", options);
+  cluster.start_all();
+  EXPECT_FALSE(late.dagda_node().running());
+  EXPECT_FALSE(late.context().readiness().has("data_storage"));
+  EXPECT_FALSE(late.context().readiness().complete());
+  EXPECT_TRUE(test::wait_until([&] { return late.context().nodes().active().size() == 2u; }));
+
+  late.dagda_node().open_store();
+  EXPECT_TRUE(late.dagda_node().running());
+  EXPECT_TRUE(late.context().readiness().has("data_storage"));
+  EXPECT_TRUE(late.context().readiness().complete());
+  EXPECT_THROW(late.dagda_node().open_store(), std::logic_error);
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = test::pattern(4096, 61);
+  EXPECT_TRUE(peer.store().put(store::object_id(bytes), bytes));
+  EXPECT_TRUE(late.store().get(store::object_id(bytes)).has_value());
+}
+
+// A store that cannot open is refused at open_store, the node stays up to say why,
+// and stopping it is safe. Stopping one that never opened is too.
+TEST(Node, ALateOpenCanBeRefusedOrNeverHappen) {
+  Cluster cluster;
+  ClusterNodeOptions never;
+  never.open_later = true;
+  auto& a = cluster.add("never", never);
+  a.start();
+  EXPECT_FALSE(a.dagda_node().running());
+  a.stop();
+
+  ClusterNodeOptions refused;
+  refused.open_later = true;
+  auto& b = cluster.add("refused", refused);
+  b.start();
+  // Another process holds the state.
+  {
+    store::StorageLock held(b.state());
+    EXPECT_THROW(b.dagda_node().open_store(), NodeRefused);
+  }
+  EXPECT_TRUE(b.context().readiness().failed());
+  EXPECT_FALSE(b.dagda_node().running());
+  b.stop();
+}
+
 }  // namespace
 }  // namespace dagda
