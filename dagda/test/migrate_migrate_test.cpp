@@ -401,7 +401,9 @@ TEST(MigrateLoose, OnlyTheTagMoves) {
   const auto before = unhex(loose_v18_hex);
   ASSERT_EQ(after.size(), before.size());
   for (size_t i = 0; i < after.size(); ++i)
-    if (i < loose_tag_offset || i >= loose_tag_offset + 16) EXPECT_EQ(after[i], before[i]) << i;
+    if (i < loose_tag_offset || i >= loose_tag_offset + 16) {
+      EXPECT_EQ(after[i], before[i]) << i;
+    }
   EXPECT_EQ(report.loose_migrated, 1u);
   EXPECT_EQ(report.bytes_written, 16u);
   report = {};
@@ -461,7 +463,9 @@ TEST(MigratePack, OnlyTheTagAndChecksumMoveAndAPackMachaWroteOpens) {
   const auto after = legacy::read_file(file);
   EXPECT_EQ(hex(after), hex(expected));
   for (size_t i = 0; i < after.size(); ++i)
-    if (i < pack_tag_offset || i >= pack_header_size) EXPECT_EQ(after[i], pack[i]) << i;
+    if (i < pack_tag_offset || i >= pack_header_size) {
+      EXPECT_EQ(after[i], pack[i]) << i;
+    }
   ASSERT_TRUE(decode_pack_header(std::span<const uint8_t>(after).first(pack_header_size)).has_value());
   report = {};
   migrate_pack_file(file, *bed.key, v1, report, proved, {});

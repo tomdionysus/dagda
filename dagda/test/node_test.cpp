@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <variant>
@@ -273,6 +274,29 @@ TEST(Node, DeclaresItsOwnReadinessPlanes) {
   for (const auto* plane : {"data_storage", "control_storage", "cache", "retention"}) EXPECT_TRUE(readiness.has(plane)) << plane;
   EXPECT_TRUE(readiness.complete());
   EXPECT_FALSE(readiness.failed());
+  a.stop();
+}
+
+// A node that opens with every backend offline is not ready, and goes ready
+// once one comes online.
+TEST(Node, TheDataPlaneGoesReadyWhenABackendComesOnline) {
+  Cluster cluster;
+  const auto bad = cluster.dir() / "bad";
+  std::filesystem::create_directories(bad);
+  std::ofstream(bad / store::backend_marker_name) << "not a marker\n";
+  ClusterNodeOptions options;
+  options.data = bad;
+  auto& a = cluster.add("a", options);
+  a.start();
+  auto& node = a.dagda_node();
+  EXPECT_TRUE(a.data().degraded());
+  EXPECT_FALSE(a.context().readiness().complete());
+  auto backends = node.options().pool.backends;
+  backends[0].path = cluster.dir() / "good";
+  node.reconfigure({backends, {}});
+  EXPECT_FALSE(a.data().degraded());
+  node.publish_status();
+  EXPECT_TRUE(a.context().readiness().complete());
   a.stop();
 }
 

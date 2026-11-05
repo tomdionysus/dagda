@@ -68,7 +68,7 @@ TEST(StoreDurabilityTicket, RefusesATruncatedTicket) {
   dannan::net::Writer writer;
   encode(writer, sample());
   const auto bytes = writer.take();
-  dannan::net::Reader reader(std::span(bytes).first(bytes.size() - 1));
+  dannan::net::Reader reader{std::span<const uint8_t>(bytes).first(bytes.size() - 1)};
   EXPECT_THROW((void)decode_durability_ticket(reader), dannan::net::DecodeError);
 }
 
