@@ -2492,6 +2492,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     if (state.push_after) state.spans_change = true;
     state.push_source = lists.lacks;
     state.push_generation = generation;
+    // A new list has not been walked, whatever became of the last one.
+    state.push_complete = false;
     state.listed = lacks && lacks->complete && lacks->generation == generation;
     state.push_list.clear();
     state.pushed.clear();
@@ -2506,6 +2508,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   if (lists.pull != state.pull_source) {
     if (state.pull_after) state.spans_change = true;
     state.pull_source = lists.pull;
+    state.pull_complete = false;
   }
   if (pull_list.empty()) state.pull_complete = true;
   if (state.push_list.empty() && !state.push_after) state.push_complete = true;
