@@ -20,6 +20,11 @@ Scale cases, disabled by default (`Scale.*`), Intel Mac, internal disk:
   a pack compaction slice 394 ms.
 Not at Macha's scale in every way: no 1.03M loose objects, no USB disk, no cluster. `dagda_tests` 422 passing, 3 disabled.
 
+On macnessa (Linux aarch64, NVMe, `8361c8b`, lowest priority beside the live node, load about 1): 422 of 422, 74 s.
+Scale: trie built in 38.7 s, lookups 12 us, walked in 0.75 s; 100,000 objects written in 7.4 s, reopened in 0.48 s, `get`
+30 us, a compaction slice 239 ms. Faster than the Mac throughout, so these are no ceiling for the USB disks, which
+are not measured.
+
 ## 2026-11-05: read errors and no storage, on Tom's ruling
 
 A read that fails on the device (`ObjectReadError`: open, stat or read failing, or a short read) keeps the
