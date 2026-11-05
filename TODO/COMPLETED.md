@@ -3,6 +3,23 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: sanitizers and scale (M10, part)
+
+On the Intel Mac, Dannan 0.4.1 and Dagda both instrumented. ASan and UBSan: 422 of 422, no report, with
+`detect_container_overflow=0`, since the check stops the run at a `std::string` in the test logger (uninstrumented
+gtest in the same process, taken to be a false alarm, not proven). TSan: 422 of 422, twice, with
+`report_thread_leaks=0 exitcode=0 abort_on_error=0`, because the crash cases' forked children exit on purpose,
+and TSan turns that into exit 66. One report remains, twice each run: a race in Boost's macOS reactor
+(`kqueue_reactor.ipp:494`, against `allocate_descriptor_state`), no Dagda frame, code Linux does not use. Not
+explained: one abort, `mutex lock failed: Invalid argument`, in the first TSan run's output only, which three
+later runs did not repeat. It may have been a forked child's; left open.
+
+Scale cases, disabled by default (`Scale.*`), Intel Mac, internal disk:
+- A trie of 1,000,000 ids: built in 44.6 s, 59.9 MB of nodes, opened at once, 10,000 lookups 15 us each, walked whole in 0.87 s.
+- 100,000 objects of 4 KiB across packs: written deferred in 18.2 s, reopened in 7.1 s, `has` under 1 us, `get` 114 us,
+  a pack compaction slice 394 ms.
+Not at Macha's scale in every way: no 1.03M loose objects, no USB disk, no cluster. `dagda_tests` 422 passing, 3 disabled.
+
 ## 2026-11-05: read errors and no storage, on Tom's ruling
 
 A read that fails on the device (`ObjectReadError`: open, stat or read failing, or a short read) keeps the
