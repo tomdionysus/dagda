@@ -142,6 +142,12 @@ struct ClusterNodeOptions {
   std::filesystem::path data{};
   // The node's open and stop stages, as dagda::Node reports them.
   std::function<void(std::string_view)> trace;
+  // The owner's startup progress, handed to the node when given.
+  dannan::supervise::StartupProgress* startup_progress = nullptr;
+  // The control store's, and the node's time (a stepped one, for a case that
+  // moves a durability window or an activity clock by hand).
+  store::ControlStoreOptions control;
+  const dannan::contract::TimeSource* time = nullptr;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -415,6 +421,10 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   if (_options.wall) out.wall = _options.wall;
   out.status_interval = std::chrono::milliseconds(200);
   out.trace = _options.trace;
+  out.startup_progress = _options.startup_progress;
+  out.control = _options.control;
+  out.startup_progress = _options.startup_progress;
+  out.control = _options.control;
   // In front of the server: count, then let the test answer instead.
   out.front = [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame,
                      const dannan::net::Message& request) -> std::optional<dannan::net::Handled> {
@@ -456,6 +466,8 @@ inline void ClusterNode::open() {
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;
+  if (_options.time) config.time = _options.time;
+  if (_options.time) config.time = _options.time;
   // Custody made once, the certificate issued over its key for this start.
   if (_options.custody) {
     const auto source = Cluster::custody_source();

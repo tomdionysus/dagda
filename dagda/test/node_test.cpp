@@ -16,8 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <mutex>
 #include <string>
 #include <variant>
@@ -27,6 +29,9 @@
 #include "dagda/store/messages.h"
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/legacy_v18.h"
+#include "dannan/supervise/startup.h"
+#include "dannan/test/fixtures/gate.h"
+#include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda {
 namespace {
@@ -34,6 +39,7 @@ namespace {
 using test::Cluster;
 using test::ClusterNode;
 using test::ClusterNodeOptions;
+using namespace std::chrono_literals;
 
 // The stages a node reports, in order.
 struct Stages {
@@ -354,6 +360,145 @@ TEST(Node, ALateOpenCanBeRefusedOrNeverHappen) {
   EXPECT_TRUE(b.context().readiness().failed());
   EXPECT_FALSE(b.dagda_node().running());
   b.stop();
+
+// Macha (tests/test_storage_v18.cpp): test_unversioned_state_is_refused, over a
+// whole node. A state holding files and no marker is refused, saying a store
+// begins only in an empty directory, and left as it was. A DATA backend holding an old layout's files
+// leaves the node up with control ready and nothing online: where Macha reports
+// data storage ready over no backends, Dagda's plane stays not ready, which
+// waits on Tom (the mapping's answers); it opens either way.
+TEST(Node, AnUnversionedStateIsRefusedAndAnUnversionedBackendLeavesItsPlaneNotReady) {
+  Cluster cluster;
+  auto& old_state = cluster.add("old-state");
+  std::filesystem::create_directories(old_state.state());
+  std::ofstream(old_state.state() / "metadata.bin") << "old namespace";
+  const auto why = refusal_of(old_state);
+  EXPECT_NE(why.find("no storage-layout marker"), std::string::npos) << why;
+  EXPECT_NE(why.find("begins only in an empty state directory"), std::string::npos) << why;
+  EXPECT_FALSE(old_state.running());
+  EXPECT_FALSE(std::filesystem::exists(old_state.state() / "storage-layout"));
+
+  auto& boundary = cluster.add("fresh-boundary");
+  std::filesystem::create_directories(boundary.backend() / "objects");
+  std::ofstream(boundary.backend() / "objects" / "legacy") << "old namespace";
+  boundary.start();
+  EXPECT_TRUE(boundary.context().readiness().control_plane_online());
+  EXPECT_TRUE(boundary.data().degraded());
+  EXPECT_FALSE(boundary.context().readiness().complete());
+  EXPECT_FALSE(boundary.context().readiness().failed());
+  EXPECT_EQ(boundary.data().online_backends(), 0u);
+  EXPECT_EQ(boundary.data().limit(), 0u);
+  boundary.stop();
+}
+
+// Macha (tests/test_root_parts.cpp):
+// test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure. Law 3
+// as the node wires it: under device pressure the loader yields only while a
+// foreground user has been active within the quiet window, read from the node's
+// activity clock on the node's time. Stopped, it admits nothing.
+TEST(Node, TheLoaderYieldsToARecentForegroundUserUnderPressure) {
+  using dannan::sched::FrameType;
+  dannan::test::SteppedTime time;
+  const store::DataWorkContext loader(FrameType::loader);
+  std::optional<store::DataResourceArbiter::Lease> first;
+  store::DataResourceArbiter* credit = nullptr;
+  std::optional<bool> admitted_once_stopped;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.time = &time;
+  options.background_concurrency = 8;
+  options.repair.foreground_quiet = 2s;
+  options.trace = [&](std::string_view stage) {
+    // Admission stopped first, and the credit lives until after the server.
+    if (stage != "stop storage-server" || !credit) return;
+    first.reset();
+    admitted_once_stopped = credit->try_acquire(loader, 4096).has_value();
+  };
+  auto& a = cluster.add("a", options);
+  a.open();
+  credit = a.credit();
+  ASSERT_NE(credit, nullptr);
+
+  a.data().service_monitor().note(2000ms, 4096);
+  ASSERT_TRUE(a.data().service_monitor().pressured());
+
+  // One loader lease is always admitted; the pressure gate judges the next.
+  first = credit->try_acquire(loader, 4096);
+  ASSERT_TRUE(first.has_value());
+
+  // No foreground user: pressure alone does not hold an import back.
+  EXPECT_TRUE(credit->try_acquire(loader, 4096).has_value());
+  EXPECT_EQ(credit->stats().pressure_refusals, 0u);
+
+  // A foreground read within the window: the loader is refused.
+  a.context().activity().note(FrameType::foreground, 1);
+  time.advance(1999ms);
+  EXPECT_FALSE(credit->try_acquire(loader, 4096).has_value());
+  EXPECT_EQ(credit->stats().pressure_refusals, 1u);
+
+  // The window passes with no more activity: admitted again.
+  time.advance(1ms);
+  EXPECT_TRUE(credit->try_acquire(loader, 4096).has_value());
+  EXPECT_EQ(credit->stats().pressure_refusals, 1u);
+
+  a.stop();
+  EXPECT_EQ(admitted_once_stopped, std::optional<bool>{false});
+}
+
+// Macha (tests/test_rpc_cluster.cpp): test_service_startup_gate_spares_progress_
+// and_ends_a_stall, what the owner needs of Node::open (the Macha session's
+// answers, 2026-11-05: StartupStageHook). The gate itself is the owner's, over
+// dannan::supervise::StartupStallGate. A stage may hold the open; the owner's
+// progress spares it through three windows while recovery ticks; silence for
+// the window ends it; let go, the open goes on. A real open's recovery ticks the
+// same progress.
+TEST(Node, AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  dannan::supervise::StartupProgress progress;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.startup_progress = &progress;
+  options.trace = [&](std::string_view stage) {
+    if (stage == "open storage-pool") gate.enter_and_wait();
+  };
+  auto& a = cluster.add("a", options);
+
+  dannan::supervise::StartupStallGate stall(400ms, 0ms, time.now(), progress.value());
+  auto opening = std::async(std::launch::async, [&] { a.open(); });
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+
+  // Recovery ticks for three windows: the gate holds.
+  for (int tick = 0; tick < 24; ++tick) {
+    progress.note();
+    time.advance(50ms);
+    EXPECT_FALSE(stall.stalled(time.now(), progress.value()));
+  }
+  // Silence: the gate fires at the window and no sooner.
+  EXPECT_FALSE(stall.stalled(time.now(), progress.value()));
+  time.advance(399ms);
+  EXPECT_FALSE(stall.stalled(time.now(), progress.value()));
+  time.advance(1ms);
+  EXPECT_TRUE(stall.stalled(time.now(), progress.value()));
+  EXPECT_EQ(opening.wait_for(0ms), std::future_status::timeout);
+
+  gate.open();
+  ASSERT_EQ(opening.wait_for(30s), std::future_status::ready);
+  opening.get();
+  ASSERT_TRUE(a.running());
+
+  const auto data = test::numbered(11);
+  store::WriteOptions write;
+  write.level = store::Durability::persisted;
+  ASSERT_TRUE(a.store().write(store::object_id(data), data, write).met);
+  a.stop();
+  // No clean checkpoint to trust: the open's accounting scan walks the store,
+  // on its own thread.
+  std::filesystem::remove(a.backend() / ".macha.accounting");
+  const auto before = progress.value();
+  a.open();
+  EXPECT_TRUE(test::wait_until([&] { return progress.value() > before; }));
+  a.stop();
 }
 
 }  // namespace

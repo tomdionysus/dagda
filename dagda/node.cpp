@@ -168,7 +168,8 @@ void Node::open() {
   domain::advertise_wrap_key(_context, *_wrap);
 
   const auto services = [&](std::string scope) {
-    return store::LocalStore::Services{_context.threads(),       _context.observations(), _progress, _context.logger(std::move(scope)),
+    auto& progress = _options.startup_progress ? *_options.startup_progress : _progress;
+    return store::LocalStore::Services{_context.threads(),       _context.observations(), progress, _context.logger(std::move(scope)),
                                        _context.time().source(), *_options.wall};
   };
   const auto cache_bytes = _options.ledger_cache_bytes;

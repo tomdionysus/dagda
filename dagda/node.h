@@ -179,8 +179,14 @@ struct NodeOptions {
                                                     const dannan::net::Message& request)>
       front;
   // Each stage as it opens and stops ("open storage-pool", "stop
-  // storage-pool"), as the node logs it.
+  // storage-pool"), as the node logs it, on the thread opening or stopping the
+  // node. An open stage is told before its work, and the node waits for the
+  // call: Macha's StartupStageHook, which may hold a stage to stall a startup.
   std::function<void(std::string_view)> trace;
+  // Ticked by each unit of recovery as the stores open: an owner's, outliving
+  // the node, for its stall gate over the construction (Macha's
+  // service_startup_no_progress). Nothing: only the node sees them.
+  dannan::supervise::StartupProgress* startup_progress = nullptr;
 };
 
 // What a node takes while running: Macha's live reload (LocalState::reconfigure),
