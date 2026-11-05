@@ -1,6 +1,6 @@
 # Macha to Dagda: the test mapping
 
-Status: written 2026-11-05 for the port. Nothing here has been done: no case is retired yet.
+Status: written 2026-11-05 for the port. No Macha case has been removed; the gaps closed since are RETIRE below (see "Closing the gaps").
 
 **Scope.** Every case in every test file under `../macha/tests` at `00861dd` (0.92.3, `develop`): the store, ledger, retention, availability, io_pressure, presence and storage_v18 cases, and every other case that stands on the store. Heads and metadata cases are included as GAP-HEADS. Transport cases with no store under them are KEEP here; Dannan's mapping deals with them.
 
@@ -32,10 +32,10 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 
 | Fate | Cases |
 |---|---|
-| RETIRE | 143 |
+| RETIRE | 161 |
 | REWRITE | 167 |
 | KEEP | 354 |
-| GAP | 27 |
+| GAP | 9 |
 | GAP-HEADS | 95 |
 
 432 cases are not KEEP. That is above the Macha session's estimate of 238 to 282, mainly because this count includes the 95 GAP-HEADS and every case whose fixture holds the store, whatever its subject. Against the estimate's samples: `test_storage_metadata.cpp` 52 of 68 (estimated 54 of 67), `test_invariants.cpp` 34 of 40 (26), `test_rpc_cluster.cpp` 73 of 114 (46).
@@ -50,16 +50,16 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_book_conversion.cpp | 3 | 0 | 0 | 3 | 0 | 0 |
 | test_catalogue_maintenance.cpp | 15 | 0 | 13 | 2 | 0 | 0 |
 | test_claim_walk.cpp | 8 | 8 | 0 | 0 | 0 | 0 |
-| test_contract.cpp | 17 | 0 | 2 | 14 | 1 | 0 |
+| test_contract.cpp | 17 | 1 | 2 | 14 | 0 | 0 |
 | test_epub_metadata.cpp | 24 | 0 | 0 | 24 | 0 | 0 |
 | test_filesystem_fuse.cpp | 17 | 0 | 13 | 3 | 1 | 0 |
-| test_foundations.cpp | 47 | 0 | 0 | 41 | 6 | 0 |
+| test_foundations.cpp | 47 | 4 | 0 | 41 | 2 | 0 |
 | test_fuse_subsystem.cpp | 7 | 0 | 7 | 0 | 0 | 0 |
 | test_horizon_builder.cpp | 6 | 1 | 5 | 0 | 0 | 0 |
 | test_http_compression.cpp | 3 | 0 | 0 | 3 | 0 | 0 |
 | test_http_server.cpp | 16 | 0 | 0 | 16 | 0 | 0 |
-| test_hydration_catalogue.cpp | 44 | 0 | 26 | 16 | 1 | 1 |
-| test_invariants.cpp | 40 | 13 | 13 | 6 | 6 | 2 |
+| test_hydration_catalogue.cpp | 44 | 1 | 26 | 16 | 0 | 1 |
+| test_invariants.cpp | 40 | 19 | 13 | 6 | 0 | 2 |
 | test_io_pressure.cpp | 13 | 13 | 0 | 0 | 0 | 0 |
 | test_ledger_gates.cpp | 7 | 7 | 0 | 0 | 0 | 0 |
 | test_lifecycle_record.cpp | 2 | 0 | 2 | 0 | 0 | 0 |
@@ -76,20 +76,20 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_observation.cpp | 17 | 0 | 1 | 16 | 0 | 0 |
 | test_predicates.cpp | 5 | 0 | 0 | 0 | 5 | 0 |
 | test_presence.cpp | 9 | 9 | 0 | 0 | 0 | 0 |
-| test_root_parts.cpp | 5 | 0 | 0 | 1 | 4 | 0 |
+| test_root_parts.cpp | 5 | 4 | 0 | 1 | 0 | 0 |
 | test_rpc_cluster.cpp | 114 | 25 | 23 | 41 | 0 | 25 |
 | test_runtime_dependencies.cpp | 14 | 0 | 1 | 13 | 0 | 0 |
 | test_service_root.cpp | 12 | 0 | 12 | 0 | 0 | 0 |
 | test_session.cpp | 10 | 0 | 5 | 5 | 0 | 0 |
 | test_storage_metadata.cpp | 68 | 11 | 5 | 16 | 0 | 36 |
-| test_storage_v18.cpp | 21 | 17 | 2 | 0 | 2 | 0 |
+| test_storage_v18.cpp | 21 | 19 | 2 | 0 | 0 | 0 |
 | test_subsystem_supervisor.cpp | 4 | 0 | 1 | 3 | 0 | 0 |
 | test_torrent_disk_io.cpp | 21 | 0 | 1 | 20 | 0 | 0 |
 | test_transcode_timeline.cpp | 4 | 0 | 0 | 4 | 0 | 0 |
 | test_users.cpp | 12 | 0 | 4 | 8 | 0 | 0 |
 | test_web_api.cpp | 8 | 0 | 0 | 8 | 0 | 0 |
 | test_work_class.cpp | 4 | 1 | 0 | 3 | 0 | 0 |
-| Total | 786 | 143 | 167 | 354 | 27 | 95 |
+| Total | 786 | 161 | 167 | 354 | 9 | 95 |
 
 **Files that do not touch the store, no table below.** 87 cases, all KEEP, with no store-bearing fixture in the file: `test_book_conversion.cpp` (3), `test_epub_metadata.cpp` (24), `test_http_compression.cpp` (3), `test_http_server.cpp` (16), `test_mobi_metadata.cpp` (29), `test_transcode_timeline.cpp` (4), `test_web_api.cpp` (8).
 
@@ -177,7 +177,7 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_work_may_allow_itself_less_never_more | KEEP | contract vocabulary, Dannan's sched and contract; no store |
 | test_wait_guard_records_or_throws | KEEP | contract vocabulary, Dannan's sched and contract; no store |
 | test_work_context_deadline_and_cancellation | KEEP | contract vocabulary, Dannan's sched and contract; no store |
-| test_data_work_context_is_the_data_specialisation | GAP | StoreIoPressure.ControlCannotEnterTheDataArbiterAtAll covers the control refusal, not quantum_bytes nor frame_type through the WorkContext base |
+| test_data_work_context_is_the_data_specialisation | RETIRE | StoreDataWork.TheContextIsTheDataSpecialisation, StoreIoPressure.ControlCannotEnterTheDataArbiterAtAll |
 | test_budget_bounds_are_spent_exactly | KEEP | contract vocabulary, Dannan's sched and contract; no store |
 | test_a_yield_source_is_destroyed_through_its_interface | KEEP | contract vocabulary, Dannan's sched and contract; no store |
 | test_budget_stop_precedence_over_every_combination | KEEP | contract vocabulary, Dannan's sched and contract; no store |
@@ -218,8 +218,8 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 |---|---|---|
 | test_spool_retirement_rate_is_aggregate | KEEP | FUSE spool estimator (fuse_frontend.hpp), no store |
 | test_weighted_loader_service_is_work_conserving_and_non_starving | KEEP | FUSE loader share (fuse_frontend.hpp), no store; Dagda's Repair::Share is its own file-local copy |
-| test_data_resource_arbiter_background_effort_ceiling | GAP | StoreDataWork.ACreditWaitGivesUpWhenNothingIsMoving covers a loader at the ceiling, not speculative counted, foreground exempt, nor background_limit/active/peak stats |
-| test_data_resource_arbiter_reserves_viewer_headroom | GAP | StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit covers headroom, not oversized refusal, loader served before speculative on release, or class stats |
+| test_data_resource_arbiter_background_effort_ceiling | RETIRE | StoreDataWork.TheBackgroundCeilingCountsLoaderAndSpeculativeNotForeground |
+| test_data_resource_arbiter_reserves_viewer_headroom | RETIRE | StoreDataWork.TheForegroundReserveHoldsAndALoaderIsServedBeforeSpeculation |
 | test_miniupnpc_igd_status_compatibility | KEEP | NAT compatibility, no store |
 | test_codec_and_crypto | KEEP | codec, telemetry and primitives, no store; crypto tail mirrored by StoreSealing.MachaCodecAndCryptoSealOpenAndRefuseAFlippedBit, rest not Dagda's |
 | test_membership_identity_reset_tombstone | KEEP | membership roster, Dannan's mapping; no store |
@@ -259,8 +259,8 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_message_routes_answer_only_while_bound | KEEP | transport, no store |
 | test_rpc_refusals_say_whether_asking_again_may_help | KEEP | transport, no store |
 | test_node_events_count_each_kind | KEEP | Macha's NodeEvents counter, pure, no store |
-| test_write_behind_acts_once_per_window | GAP | StoreWriteBehind.AWindowFillsThenStartsAgain covers filling and restarting, not that an overfill leaves no carry (window_filled(0) false after a large write) |
-| test_write_behind_leaves_what_was_written_intact | GAP | StoreWriteBehind.WritebackLeavesTheFileAsWritten checks only file size, never reads the bytes back; the content comparison is missing |
+| test_write_behind_acts_once_per_window | RETIRE | StoreWriteBehind.ActsOncePerWindowAndAnOverfillLeavesNoCarry |
+| test_write_behind_leaves_what_was_written_intact | RETIRE | StoreWriteBehind.LeavesWhatWasWrittenIntact |
 | test_a_connectivity_probe_holds_no_reader_of_the_status | KEEP | public connectivity, no store |
 | test_a_roster_being_written_holds_no_reader_of_membership | KEEP | membership roster, Dannan's mapping; no store |
 
@@ -293,7 +293,7 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 |---|---|---|
 | test_hydration_scheduler_orders_runs_and_follows_playback | KEEP | pure hydration scheduler and tracker, Macha's, no store |
 | test_catalogue_three_way_merge | KEEP | catalogue merge over snapshots, no store |
-| test_replica_selector | GAP | ReplicaSelector.* cover foreground rotation, promotion, penalty. Missing: speculative rotation, speculative in-flight load on equal peers, failures count kept after success. |
+| test_replica_selector | RETIRE | ReplicaSelector.SpeculativeWorkSpreadsAndASuccessKeepsTheFailureCount, with ReplicaSelector.EqualCandidatesRotateByStripe, FailuresPushAPeerBackUntilItSucceeds, SpeculationAvoidsPeersBusyWithForegroundWork |
 | test_cache_hydrator_fetches_to_persistent_cache | REWRITE | Macha's CacheHydrator over DistributedStore and block cache; BareNode. Hydration is not in Dagda |
 | test_media_probe_and_metadata_providers | KEEP | media probe and metadata providers over fake HTTP, no store |
 | test_musicbrainz_release_tracks | KEEP | provider parsing over fake HTTP, no store |
@@ -356,13 +356,13 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_open_fuse_inodes_keep_their_identity | REWRITE | FUSE inode identity over FS on CatalogueBench (TestNode) |
 | test_catalogue_keeps_what_the_namespace_holds | REWRITE | Catalogue rollback, scan fences, GC liveness on CatalogueBench; also uses DistributedStore::DurabilityBatch, which Dagda lacks (see Uncertain) |
 | test_http_connections_are_bounded_and_reused | KEEP | HttpServer lifecycle, no store |
-| test_replica_repair_does_not_count_corrupt_remote_as_healthy | GAP | A sender's repair healing a corrupt remote copy unscrubbed. DistributedStore.HealsABadLocalCopyFromAPeer covers scrub then pull on the corrupt node, not this (see Uncertain) |
+| test_replica_repair_does_not_count_corrupt_remote_as_healthy | RETIRE | StoreRepair.ACorruptRemoteCopyIsRestoredByItsScrubThenTheDiff (scrub then diff, per the answers) |
 | test_rebalance_reads_nothing_with_one_backend_online | RETIRE | StoreStoragePool.RebalanceReadsNothingWithOneBackendOnline |
 | test_rebalance_never_deletes_last_valid_copy_for_corrupt_preferred_copy | RETIRE | StoreStoragePool.RebalanceNeverDeletesTheLastValidCopyForACorruptPreferredOne |
 | test_rpc_pre_auth_admission_is_bounded | KEEP | transport, no store |
 | test_a_durability_barrier_is_timed_per_filesystem | RETIRE | StoreDurabilityDomain.ABarrierIsTimedPerFilesystem |
 | test_authoritative_deferred_generation_batches_stable_storage_barriers | RETIRE | StoreLocalStoreDurability.DeferredGenerationsBatchStableStorageBarriers |
-| test_durability_batch_retains_exact_nondominated_frontier | GAP | Dagda has no DurabilityBatch or DurabilityRequirement type and no test of a nondominated frontier over per-object replica generations; nearest is none (see Uncertain) |
+| test_durability_batch_retains_exact_nondominated_frontier | RETIRE | StoreDurabilityBarrier.AWaitOverManyTicketsAsksEachPeerForOneBarrier, EachPeerIsAskedOnceWhicheverObjectsItHolds, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt, AWaitOverManyTicketsPostsItsEvidenceInOrder (tickets replace the batch; no frontier type here) |
 | test_accounting_dirty_marker_is_process_session_scoped | RETIRE | StoreLocalStoreDurability.TheAccountingDirtyMarkIsOncePerSession |
 | test_clean_accounting_checkpoint_is_trusted_with_packs | RETIRE | StoreLocalStoreDurability.ACleanAccountingCheckpointIsTrustedWithPacks |
 | test_unclean_accounting_recovery_establishes_durable_baseline | RETIRE | StoreLocalStoreDurability.UncleanAccountingRecoveryEstablishesADurableBaseline |
@@ -374,11 +374,11 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_immediate_reaffirmation_flushes_provisional_generation | RETIRE | StoreLocalStoreDurability.AnImmediateReaffirmationFlushesTheProvisionalGeneration |
 | test_claims_owed_to_slow_peers_stay_within_their_bound | GAP-HEADS:H15,H22 | Replicator backlog of commit claim ids bounded at 32 MB with oldest dropped and newest head offered; needs commits and the replicator |
 | test_publication_generation_barrier_precedes_metadata_commit | REWRITE | FS writer commit with WriteDurability::publication_generation: one barrier at commit, none during write, on TestNode |
-| test_persistent_cache_is_explicitly_ephemeral | GAP | Macha counts fsync and syncfs calls, zero. StorePersistentCache.TheCacheIsExplicitlyEphemeral covers stats, eviction, no barrier recorded and no accounting file; a raw fsync in the cache would pass (see Uncertain) |
+| test_persistent_cache_is_explicitly_ephemeral | RETIRE | StorePersistentCache.TheCacheMakesNoCallForStableStorage (the interposed count), StorePersistentCache.TheCacheIsExplicitlyEphemeral |
 | test_control_plane_hint_admission_is_storage_durable | KEEP | CatalogueHintQueue fsyncs on its own files, no store |
-| test_deferred_object_barrier_rejects_stale_process_epoch | GAP | Direct refusal of a stale barrier and put reply epoch equal to the server's. DistributedStore.ADeferredWritesBarrierAcrossPeerRestarts covers refusal only indirectly, through its re-probe |
-| test_rpc_durability_barrier_group_commits_independent_publications | GAP | One physical barrier for three barrier calls over the wire. StoreLocalStoreDurability.ADomainGroupCommitsIndependentPublications covers it in process, not through storage_server |
-| test_rpc_durability_barrier_reuses_already_covered_generation | GAP | Barrier calls over the wire: covered generation costs none, newer costs one. StoreLocalStoreDurability.ABarrierRemembersTheWholeCut covers it in process, not through storage_server |
+| test_deferred_object_barrier_rejects_stale_process_epoch | RETIRE | StoreDurabilityBarrier.AStaleProcessEpochIsRefused |
+| test_rpc_durability_barrier_group_commits_independent_publications | RETIRE | StoreDurabilityBarrier.IndependentPublicationsGroupCommitOverTheWire |
+| test_rpc_durability_barrier_reuses_already_covered_generation | RETIRE | StoreDurabilityBarrier.ACoveredGenerationCostsNoBarrierOverTheWire |
 | test_authenticated_receiver_enforces_transport_lane | KEEP | transport, no store |
 
 ### test_io_pressure.cpp
@@ -648,10 +648,10 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 
 | case | fate | dagda case or reason |
 |---|---|---|
-| test_control_fetch_stores_only_the_object_it_asked_for | GAP | No Dagda case drives ControlObjectFetch with wrong answers: other reply type, other id, bad hash, truncated; nor the speculative frame and peers_asked log |
-| test_control_fetch_passes_over_a_failing_peer | GAP | DistributedStore.ControlObjectsRecoverOntoAReplicaFromAnother covers a successful pull, not passing a dead peer, the observer, or asking nobody on a second pull |
-| test_control_fetch_fails_when_the_store_cannot_take_the_object | GAP | No Dagda case: a good answer the control store refuses is a failed pull, observed once, not valid locally, and logged |
-| test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure | GAP | StoreIoPressure.TheLoaderYieldsToAForegroundUserOnASlowDevice uses an injected signal; dagda::Node's foreground_quiet boundary and admit-nothing after stop are unproved (see Uncertain) |
+| test_control_fetch_stores_only_the_object_it_asked_for | RETIRE | StoreControlFetch.StoresOnlyTheObjectItAskedFor |
+| test_control_fetch_passes_over_a_failing_peer | RETIRE | StoreControlFetch.PassesOverAFailingPeer, StoreControlFetch.AFailingPeerAheadOfTheHolderIsAskedOnceAndPassed |
+| test_control_fetch_fails_when_the_store_cannot_take_the_object | RETIRE | StoreControlFetch.FailsWhenTheStoreCannotTakeTheObject |
+| test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure | RETIRE | Node.TheLoaderYieldsToARecentForegroundUserUnderPressure |
 | test_recovery_progress_keeps_the_first_failure_and_wakes_its_waiters | KEEP | RecoveryProgress is Dannan's mechanism (requirement S31), pure; no store |
 
 ### test_rpc_cluster.cpp
@@ -907,12 +907,12 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 | test_held_device_io_blocks_only_its_own_object | RETIRE | StoreLocalStore.HeldDeviceIoBlocksOnlyItsOwnObject |
 | test_presence_is_known_without_reading_objects | RETIRE | StoreLocalStore.PresenceIsKnownWithoutReadingObjects |
 | test_metadata_control_store_is_independent_of_data_quota | RETIRE | StoreControlStore.AControlWriteIsNotBlockedByDataExhaustion, DistributedStore.AFullPreferredNodeSpillsDataButNotControl |
-| test_unversioned_state_is_refused | GAP | Refusal covered by StoreStateLayout.ANonEmptyUnversionedStateIsRefused, pool by StoreStoragePool.ANonEmptyUnversionedBackendIsRefused; no Node up over such a backend, control ready (see Uncertain) |
+| test_unversioned_state_is_refused | RETIRE | Node.AnUnversionedStateIsRefusedAndAnUnversionedBackendLeavesItsPlaneNotReady, StoreStateLayout.ANonEmptyUnversionedStateIsRefused, StoreStoragePool.ANonEmptyUnversionedBackendIsRefused |
 | test_a_full_preferred_node_spills_data_but_not_control | REWRITE | Catalogue artwork spill, root delivery, reader follows head and reads artwork; store half is DistributedStore.AFullPreferredNodeSpillsDataButNotControl |
 | test_repair_passes_unavailable_and_counts_unsourceable_objects | RETIRE | StoreRepair.RepairPassesUnavailableAndCountsUnsourceable |
 | test_a_busy_peer_still_says_what_it_does_not_hold | RETIRE | StoreRepair.ABusyPeerStillSaysWhatItDoesNotHold |
 | test_durability_barrier_across_peer_restarts | RETIRE | DistributedStore.ADeferredWritesBarrierAcrossPeerRestarts (see Uncertain) |
-| test_min_write_two_uses_fallback_when_preferred_replica_is_full | GAP | Macha put() seeks write_copies copies; Dagda put() defaults to persisted, floor 1 (distributed_store.cpp:710). DistributedStore.WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull proves write() at replicated only (see Uncertain) |
+| test_min_write_two_uses_fallback_when_preferred_replica_is_full | RETIRE | StoreDistributedStore.APutSeeksWriteCopiesThroughAFallback, StoreDistributedStore.MachasFormsSeekWriteCopies, DistributedStore.WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull |
 | test_min_write_floor_publishes_then_repair_converges_to_r2 | RETIRE | StoreRepair.AWriteAtTheFloorConvergesToTwoCopiesThroughRepair |
 | test_nodes_replicating_to_each_other_do_not_hold_their_slots_across_the_peer | RETIRE | StoreRepair.NodesReplicatingToEachOtherDoNotHoldTheirSlotsAcrossThePeer |
 | test_retain_data_batches_a_large_publication_within_bounded_time | RETIRE | StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime |
@@ -986,47 +986,21 @@ Status: written 2026-11-05 for the port. Nothing here has been done: no case is 
 
 ## GAPS
 
-27 cases: work Dagda owes, or a question to settle first where the entry says so. Nothing here retires until its case exists.
+9 cases left, of the 27 first listed; the 18 closed on 2026-11-05 are RETIRE in the tables. Work Dagda owes, or a question to settle first where the entry says so. Nothing here retires until its case exists. The Macha session's answers below settle the placement cases, the predicates and the maintenance loop case.
 
-**Write path and durability.**
-
-- `test_storage_v18.cpp` `test_min_write_two_uses_fallback_when_preferred_replica_is_full`: Macha put() seeks write_copies copies; Dagda put() defaults to persisted, floor 1 (distributed_store.cpp:710). DistributedStore.WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull proves write() at replicated only
-- `test_invariants.cpp` `test_persistent_cache_is_explicitly_ephemeral`: Macha counts fsync and syncfs calls, zero. StorePersistentCache.TheCacheIsExplicitlyEphemeral covers stats, eviction, no barrier recorded and no accounting file; a raw fsync in the cache would pass
-- `test_invariants.cpp` `test_durability_batch_retains_exact_nondominated_frontier`: Dagda has no DurabilityBatch or DurabilityRequirement type and no test of a nondominated frontier over per-object replica generations; nearest is none
-- `test_invariants.cpp` `test_deferred_object_barrier_rejects_stale_process_epoch`: Direct refusal of a stale barrier and put reply epoch equal to the server's. DistributedStore.ADeferredWritesBarrierAcrossPeerRestarts covers refusal only indirectly, through its re-probe
-- `test_invariants.cpp` `test_rpc_durability_barrier_group_commits_independent_publications`: One physical barrier for three barrier calls over the wire. StoreLocalStoreDurability.ADomainGroupCommitsIndependentPublications covers it in process, not through storage_server
-- `test_invariants.cpp` `test_rpc_durability_barrier_reuses_already_covered_generation`: Barrier calls over the wire: covered generation costs none, newer costs one. StoreLocalStoreDurability.ABarrierRemembersTheWholeCut covers it in process, not through storage_server
-- `test_foundations.cpp` `test_write_behind_acts_once_per_window`: StoreWriteBehind.AWindowFillsThenStartsAgain covers filling and restarting, not that an overfill leaves no carry (window_filled(0) false after a large write)
-- `test_foundations.cpp` `test_write_behind_leaves_what_was_written_intact`: StoreWriteBehind.WritebackLeavesTheFileAsWritten checks only file size, never reads the bytes back; the content comparison is missing
 
 **Repair and maintenance.**
 
-- `test_invariants.cpp` `test_replica_repair_does_not_count_corrupt_remote_as_healthy`: A sender's repair healing a corrupt remote copy unscrubbed. DistributedStore.HealsABadLocalCopyFromAPeer covers scrub then pull on the corrupt node, not this
 - `test_filesystem_fuse.cpp` `test_disconnected_maintenance_sleeps_until_peer_event`: No Dagda case or code: maintenance_loop polls each interval (node.cpp:657-659), no peer-event wake. NodeMaintenance.TheNodesThreadRunsThePassesOnItsOwn covers running, not parking.
 
-**Arbiter and work context.**
 
-- `test_contract.cpp` `test_data_work_context_is_the_data_specialisation`: StoreIoPressure.ControlCannotEnterTheDataArbiterAtAll covers the control refusal, not quantum_bytes nor frame_type through the WorkContext base
-- `test_foundations.cpp` `test_data_resource_arbiter_background_effort_ceiling`: StoreDataWork.ACreditWaitGivesUpWhenNothingIsMoving covers a loader at the ceiling, not speculative counted, foreground exempt, nor background_limit/active/peak stats
-- `test_foundations.cpp` `test_data_resource_arbiter_reserves_viewer_headroom`: StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit covers headroom, not oversized refusal, loader served before speculative on release, or class stats
-- `test_root_parts.cpp` `test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure`: StoreIoPressure.TheLoaderYieldsToAForegroundUserOnASlowDevice uses an injected signal; dagda::Node's foreground_quiet boundary and admit-nothing after stop are unproved
-
-**Control fetch.**
-
-- `test_root_parts.cpp` `test_control_fetch_stores_only_the_object_it_asked_for`: No Dagda case drives ControlObjectFetch with wrong answers: other reply type, other id, bad hash, truncated; nor the speculative frame and peers_asked log
-- `test_root_parts.cpp` `test_control_fetch_passes_over_a_failing_peer`: DistributedStore.ControlObjectsRecoverOntoAReplicaFromAnother covers a successful pull, not passing a dead peer, the observer, or asking nobody on a second pull
-- `test_root_parts.cpp` `test_control_fetch_fails_when_the_store_cannot_take_the_object`: No Dagda case: a good answer the control store refuses is a failed pull, observed once, not valid locally, and logged
 
 **Placement and selection.**
 
 - `test_foundations.cpp` `test_placement`: StorePlacementVectors.DataOrderIsMachasOnEveryVector pins determinism and domain diversity by known answer, not stability when a node is added
 - `test_foundations.cpp` `test_capacity_placement`: StorePlacementVectors.DataOrderIsMachasOnEveryVector pins orders and logical capacity on fixed sets, not the small node's exact shard boundary nor R=1 monotonic stealing
 - `test_models.cpp` `test_capacity_placement_invariants_model`: StorePlacementVectors.DataOrderIsMachasOnEveryVector pins orders on fixed sets, not the R=1 monotonic rule when a node is added, nor distinct domains at every R on six nodes
-- `test_hydration_catalogue.cpp` `test_replica_selector`: ReplicaSelector.* cover foreground rotation, promotion, penalty. Missing: speculative rotation, speculative in-flight load on equal peers, failures count kept after success.
 
-**Node over an old state.**
-
-- `test_storage_v18.cpp` `test_unversioned_state_is_refused`: Refusal covered by StoreStateLayout.ANonEmptyUnversionedStateIsRefused, pool by StoreStoragePool.ANonEmptyUnversionedBackendIsRefused; no Node up over such a backend, control ready
 
 **Predicates (Dagda has none; settle whether they move before writing cases).**
 
@@ -1061,12 +1035,12 @@ For the Macha session to confirm. Each case keeps the fate shown in its table un
 | test_storage_v18 test_durability_barrier_across_peer_restarts | RETIRE | Dagda restarts the peer before the first wait; Macha re-asks a settled batch. filesystem.cpp:1297 clears the batch on success, catalogue callers ask once: confirm no caller re-asks. |
 | test_storage_v18 test_edge_node_never_owns_and_its_writes_land_on_owners | RETIRE | Not in Dagda: inbound_capable (test_rpc_cluster.cpp:6733, Dannan's) and hosts_extents auto from no backends (test_foundations.cpp:1731, Macha config). Both tested elsewhere; confirm they stay. |
 | test_filesystem_fuse test_coalesced_delete_burst_wakes_at_exact_garbage_grace | REWRITE | If the pass moves to dagda::Node the exact-grace wake is a GAP: its loop polls (node.cpp:657-659). |
-| test_invariants test_catalogue_keeps_what_the_namespace_holds | REWRITE | Artwork block needs a replacement for DurabilityBatch; see test_durability_batch_retains_exact_nondominated_frontier. |
+| test_invariants test_catalogue_keeps_what_the_namespace_holds | REWRITE | Answered: the artwork block's DurabilityBatch becomes DistributedStore::wait over its tickets. |
 | test_maintenance_trace test_trace_quiet_node | REWRITE | Needs dagda::Node to expose the collector's trace and a manual clock; it passes no Trace today (node.cpp:413). |
 | test_maintenance_trace test_trace_claimed_objects_lost | REWRITE | Fixture wants claim-walk lines (Dagda's ClaimWalk emits no trace) and no repair until an unrelated write; Dagda's thread passes on an interval. Does this step still hold? |
 | test_namespace_migration test_a_migrated_node_serves_and_writes_its_library | REWRITE | Does the map-to-tree migration survive the v19 no-compat ruling, or does dagda-migrate replace it? If gone, all migration cases here need a ruling. |
 | test_rpc_cluster test_store_control_objects_take_no_data_credit_and_commit_alone | REWRITE | Could the Macha rewrite keep only the for_commit half, since the credit half is proved in Dagda? |
-| test_rpc_cluster test_service_startup_gate_spares_progress_and_ends_a_stall | REWRITE | Stall is injected at Service's data-storage stage: does that hook survive over dagda::Node open? |
+| test_rpc_cluster test_service_startup_gate_spares_progress_and_ends_a_stall | REWRITE | Answered: the hook is NodeOptions::trace, with NodeOptions::startup_progress; Dagda's half is Node.AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery. |
 | test_rpc_cluster test_replication_policy_change_on_restart | REWRITE | Once repair is cited as retired here, should the snapshot policy half become a head-space case under H20? |
 | test_rpc_cluster test_a_joining_node_pulls_its_objects_through_maintenance | REWRITE | Neither side isolates pull from push; Macha asserts only that the joiner holds the ids. Moved from RETIRE on review: no Dagda test cites it and neither has a Service-level provider. |
 | test_storage_metadata test_metadata_codec_and_replica | REWRITE | Split at the port: replica half (journal tail, quarantine, compaction; H5, H16, H25) is owed by heads; codec half stays Macha's. Agreed? |
@@ -1078,18 +1052,18 @@ For the Macha session to confirm. Each case keeps the fate shown in its table un
 | test_filesystem_fuse test_disconnected_maintenance_sleeps_until_peer_event | GAP | Does Service's pass stay in Macha? If so this is REWRITE on Service; floor forming is H28 either way. |
 | test_foundations test_placement | GAP | Dannan placement_test covers this function's properties; may it retire against dannan_tests? |
 | test_foundations test_capacity_placement | GAP | Dannan Placement.ANewcomerOnlyTakesShardsItWins covers monotonic stealing; retire there for that part? |
-| test_invariants test_replica_repair_does_not_count_corrupt_remote_as_healthy | GAP | Repair is diff only since 2026-11-04, so a corrupt remote reads as held until its own scrub. Does this case become scrub then diff, or is healing without scrub still required? |
-| test_invariants test_durability_batch_retains_exact_nondominated_frontier | GAP | Does the frontier stay on Macha's side of the contract, over tickets from Dagda, which would make this KEEP or REWRITE? |
-| test_invariants test_persistent_cache_is_explicitly_ephemeral | GAP | Moved from RETIRE on review. No raw fsync in the source today; the owed case is an interposed count. |
+| test_invariants test_replica_repair_does_not_count_corrupt_remote_as_healthy | RETIRE | Answered: closed, see the table. |
+| test_invariants test_durability_batch_retains_exact_nondominated_frontier | RETIRE | Answered: closed, see the table. |
+| test_invariants test_persistent_cache_is_explicitly_ephemeral | RETIRE | Answered: closed, see the table. |
 | test_models test_capacity_placement_invariants_model | GAP | Dannan Placement tests prove these properties; may it retire against dannan_tests? |
 | test_predicates test_each_predicate_is_its_row_over_every_combination_of_facts | GAP | Macha query() has no production caller (predicates.hpp:11). Port predicates into Dagda, or does the maintainer retire them as dead code? |
 | test_predicates test_each_query_pages_to_the_predicate_over_the_whole_set | GAP | Macha query() has no production caller (predicates.hpp:11). Port predicates into Dagda, or does the maintainer retire them as dead code? |
 | test_predicates test_queries_without_horizons_examine_nothing | GAP | Macha query() has no production caller (predicates.hpp:11). Port predicates into Dagda, or does the maintainer retire them as dead code? |
 | test_predicates test_garbage_is_not_queryable_at_stage_0 | GAP | Macha query() has no production caller (predicates.hpp:11). Port predicates into Dagda, or does the maintainer retire them as dead code? |
 | test_predicates test_a_cancelled_budget_stops_a_query_before_it_examines | GAP | Macha query() has no production caller (predicates.hpp:11). Port predicates into Dagda, or does the maintainer retire them as dead code? |
-| test_root_parts test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure | GAP | Does NodeResources survive in Macha, or is dagda::Node the only wiring? |
-| test_storage_v18 test_unversioned_state_is_refused | GAP | Macha CHECKs data_storage_ready true with 0 backends; dagda node.cpp:172 leaves the plane not ready (section 7). status_api startup line changes: accepted? |
-| test_storage_v18 test_min_write_two_uses_fallback_when_preferred_replica_is_full | GAP | Moved from RETIRE on review. Should put() honour a configured write_copies above 1, or does the port pass replicated? Macha default and both deployed configs are 1. |
+| test_root_parts test_node_resources_yield_the_loader_to_a_recent_viewer_under_pressure | RETIRE | Answered: closed, see the table. |
+| test_storage_v18 test_unversioned_state_is_refused | RETIRE | Answered: closed, see the table. |
+| test_storage_v18 test_min_write_two_uses_fallback_when_preferred_replica_is_full | RETIRE | Answered: closed, see the table. |
 | test_hydration_catalogue test_metadata_decoded_cache_ttl_recovers_missed_notice | GAP-HEADS:H7,H21,H24 | No H row names the decoded view TTL itself; should it get one? |
 | test_invariants test_metadata_availability_logs_only_transitions | GAP-HEADS | Is the log text and cluster_status Macha-visible (then REWRITE over Dagda heads evidence) or the head layer's own? |
 | test_namespace_migration test_tombstones_live_in_batches_in_a_tree_backed_head | GAP-HEADS:H23 | H23 is FS plus Generalise: does Macha keep a rewrite of the FS-delete half once Dagda owns batch retirement? |
@@ -1122,6 +1096,20 @@ The mapping is confirmed from Macha's side, with these. They outrank the tables 
 - Step 4 owes: `test_replication_policy_change_on_restart`'s policy half as an H20 case; `test_metadata_codec_and_replica` split; `test_metadata_delta_state_model` on a neutral owner; an H row for the decoded view's TTL. The legacy PREPARE journal is read by the migration only.
 - For the maintainer: `test_unversioned_state_is_refused` and zero storage (a node whose only disk is offline at start must not crash-loop on a startup timeout, so Macha may need "ready, degraded"); the predicates (the Macha session recommends retiring them in Macha as dead code).
 - Depends on the maintainer's answer about the maintenance loop (`ACTIVE.md`, "Waiting on the maintainer"): `test_coalesced_delete_burst_wakes_at_exact_garbage_grace`, `test_trace_quiet_node`, `test_trace_claimed_objects_lost`, `test_disconnected_maintenance_sleeps_until_peer_event`, `test_manual_clock_*`, `test_system_clock_*`, `test_convergence_demand_coalesces_*`, which the Macha session rewrites over its own pass if that loop stays.
+
+## Closing the gaps, 2026-11-05
+
+Against Macha `808fa0f`. Each closed gap is RETIRE in its table, against the named cases.
+
+- `test_durability_batch_retains_exact_nondominated_frontier`: Dagda did not coalesce: each `wait()` made its own barrier call. `DistributedStore::wait` over a vector of tickets now does, by node, epoch, domain and instance, at the highest generation, with one probe per dead place. The frontier type itself does not exist here: a ticket per object replaces it, and memory per ticket is bounded by `max_tickets`.
+- `test_catalogue_keeps_what_the_namespace_holds` stays REWRITE; the replacement for its artwork block's `DurabilityBatch` is that wait.
+- `test_service_startup_gate_spares_progress_and_ends_a_stall` stays REWRITE, on Service. Dagda's half is `Node.AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery`: `NodeOptions::trace` is the stage hook, told before each open stage's work and waited for, and `NodeOptions::startup_progress` is new. The stage is named `open storage-pool`, not `data-storage`: Macha's Service matches the new name. The gate stays the owner's.
+- `test_unversioned_state_is_refused`: the case pins Dagda's answer, a data plane not ready over a refused backend, where Macha reports ready over no backends. The maintainer's answer on zero storage may change that assertion.
+- `test_control_fetch_stores_only_the_object_it_asked_for`: a reply of another type is logged by number (`reply type 1`), where Macha logs its name (`ok`). Dagda's message types have no names; left as it is.
+- `test_control_fetch_passes_over_a_failing_peer`: a stopped node's request never arrives, so its call count cannot be read. The stopped peer is proved by the log line, and the count by a peer that refuses.
+- The barrier counts are the domain's `physical_barriers`, on any platform, where Macha counts `syncfs`, Linux only. The cache's count is the interposed one.
+- `test_replica_repair_does_not_count_corrupt_remote_as_healthy`: writing it found a defect in Dagda. A push or pull list arriving after an empty one was passed over by the step that first saw it, and the repair pass then rested on those same lists until an event. Fixed: a new list is not complete; pinned by `StoreRepair.TheStepThatFirstSeesANewListWalksIt`.
+- Still not closed, by decision: the placement cases (the answers retire them against Dannan), the predicates (the maintainer), `test_disconnected_maintenance_sleeps_until_peer_event` (Macha's pass, the maintainer).
 
 ## Macha 0.92.4 (`cac5998`)
 

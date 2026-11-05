@@ -39,6 +39,18 @@ object, in `StoragePool::get` and `scrub_step`; only bytes that read and do not 
 every backend offline is ready but degraded, so it does not crash-loop on a startup timeout. Both ruled for
 Macha too, and Dagda conforms to Macha's shape when it lands.
 
+## 2026-11-05: the test mapping's gaps (`feature/test-gaps`)
+
+18 of the mapping's 27 GAP cases closed, each now RETIRE against a named case; the mapping's "Closing the gaps" has the notes. Left, by decision: the placement cases, the predicates, the maintenance loop case. Gate: `dagda_tests` 444 passing, 24 of them new and none removed, so 420 before, one disabled as before; built and run on macOS with clang only, not yet under GCC on Linux.
+
+Changed in Dagda's code:
+
+- `DistributedStore::wait` over many tickets, both forms: one barrier call per node, epoch, domain and backend instance, at the highest generation, and one probe per dead place (Macha's `durability_barrier`). A wait on one ticket is the same path.
+- Repair: a new push or pull list is not complete. Before, a list arriving after an empty one was passed over and the pass rested on it until an event (found by `StoreRepair.ACorruptRemoteCopyIsRestoredByItsScrubThenTheDiff`; Macha's push does not have this).
+- `NodeOptions::startup_progress`, and `NodeOptions::trace` documented as Macha's stage hook.
+
+New in the fixtures: `dagda/test/fixtures/sync_count.*`, the interposed count of calls for stable storage (a library of its own on macOS, the executable's own definitions on Linux, which has not been run); `ClusterNodeOptions::time`, `control` and `startup_progress`.
+
 ## 2026-11-05: the first dry run over real state
 
 The Macha session ran `dagda-migrate --dry-run` (Dagda `db2ba92`) on live-a over a scratch copy of the
