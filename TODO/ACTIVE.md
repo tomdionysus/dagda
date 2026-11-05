@@ -48,9 +48,9 @@ artefacts and answer questions. So:
 - **From the Macha session, read from `../macha/build/macha-fixtures/`:** the goldens are in
   `goldens/`, from two real processes: Status with a 161-path mask, 381 of 494 keys reached at most;
   the config dump is 46 fields by hand, not all of `Config`; `routes.txt` is read from source, not
-  captured. Still wanted, waiting on Tom, since a consistent copy stops a node: a real state
-  directory with a DATA sample, a dry run at its end, `macha-metadata-dump` output, and there and
-  back under Macha's own code.
+  captured. Coming today from macnessa's stop (Tom): a real state directory with a DATA sample. Then
+  a dry run on macnessa with the key staying there, `macha-metadata-dump` output, and there and back
+  under Macha's own code. The source to build is at `/home/tom/dagda-linux/dagda-develop` there.
 - **Dagda's own, as well:** `git archive cac5998` into `build/macha-cac5998/`, built and run there,
   never in Macha's tree. It lets Dagda generate as many small states as a test needs, and have
   Macha's own code open a disk after `--reverse`. This machine has no FFmpeg development files, so
@@ -59,8 +59,8 @@ artefacts and answer questions. So:
   deletion marks and the `not_held` pause have no Macha fix to match yet. A later Macha fix or a
   ruling may rename or reshape them. The inventory walk's stop check will not appear in Macha
   during the freeze unless Tom says otherwise, so P4 has nothing further to wait for.
-- **No tree-native merge (the Macha session, 2026-11-05, from the code and the live nodes):** heads
-  is built against `cac5998` as it runs. Both live heads are tree-backed SM19; live deltas are DLT5.
+- **No tree-native merge under the freeze (the Macha session's finding, 2026-11-05, not a ruling):** heads
+  is built against `cac5998` as it runs, and 0.92.5 when it lands. Both nodes run 0.92.4. Both live heads are tree-backed SM19; live deltas are DLT5.
   Genesis is `genesis_metadata()` (`metadata.cpp:2294`), an inline record built at runtime, not a
   constant, and `b080c38` does not change that. A new cluster at `cac5998` founds inline, so the
   scratch state must not gate a tree-era tool. An unchanged mutation commits, about 26 empty 61-byte
@@ -700,30 +700,42 @@ asking:
 
 ## Waiting on Tom
 
-**The maintenance loop: which runs a Macha node?** Tom ruled that maintenance moves into the
-node (2026-11-04 night, step 7b). The Macha session now says Macha's own pass must stay the one
-loop on a Macha node, owning the inventory, survey, claim walk, gates, scrub, verify, rebalance,
-compaction, exact-grace wake, event parking, manual clock and trace hooks, with Dagda's stages
-as steps it calls. `MaintenanceOptions::automatic = false` already turns Dagda's thread off, so
-nothing is removed either way. It decides most of P3: if Macha's loop stays, event parking, the
-exact-grace wake and the trace are not Dagda's to build, and the node's stages need to be
-callable one by one. Recommended: Macha's loop stays until its heads move (8c), since the
-catalogue and metadata stages cannot move before then, and the node's loop stays for a
-Dagda-only node. This reopens a decision, so it is Tom's.
+Rationalised 2026-11-05 with the Macha session, which marked each as ruled or open.
 
-From the replan, each with a recommendation in its document:
+**Ruled, relayed by the Macha session, in his words:** the real state comes from macnessa ("No, use
+macnessa"), copied today in the 0.92.5 install's stop: whole `state_path`, then a DATA sample; not
+`cluster.key`, `initial-root-password`, `sessions/` or `users/`. Macha is frozen ("apart from
+producing artefacts for their plans"), with one exception: the empty mutations, "Yes fix now", as
+0.92.5. Pi baselines are Macha's, later, at his word.
 
-1. Must the flag day wait for heads? Recommended no: heads S1 only, with Dagda pinned at
-   a commit that does not claim `Context` v1 is frozen (heads plan Q1).
-2. Does 8c change `<state>/metadata/`? Recommended no: Dagda reads Macha's files as they
-   stand, and any move is a later release (heads plan Q2, second-cutover question 1).
-3. (Answered: no merge is coming, per the Macha session, so heads S1 can start.)
-4. Do `test_maintenance_trace`'s fixtures stand? Recommended yes: the node takes Macha's
-   order and a trace (second-cutover question 3).
-5. One state directory or two? Recommended one (second-cutover question 4).
-6. Custody's key source on the nodes; where the 583 GB rehearsal copy lives; which node
-   returns first; the soak's length (second-cutover questions 2, 6, 7, 8).
-7. Do the predicates move, given `query()` has no production caller (test mapping)?
+**Still open, Dagda's to raise, recommendations here:**
+
+1. **The maintenance loop.** Tom ruled maintenance into the node (step 7b); the Macha session proposed
+   Macha's pass stays the one loop on a Macha node, which reopens that. `automatic = false` already
+   turns Dagda's thread off, so nothing is removed either way. It decides most of P3. Recommended:
+   Macha's loop until heads move at 8c; Dagda's for a Dagda-only node.
+2. **Must the flag day wait for heads?** Recommended no: heads S1 only.
+3. **Does 8c change `<state>/metadata/` on disk?** Recommended no: read Macha's files as they stand,
+   and move them in a later release. Otherwise the second cutover is two disk events.
+4. **Key material.** Until ruled, the key stays on the node and `dagda-migrate` runs on macnessa against
+   the copy there, and only the key-free copy comes to the laptop. Recommended: keep that.
+5. **The rehearsal:** who runs it, and where a copy of inverbeg's data lives (about 670 GB and filling).
+   Recommended: the Macha session, in place on inverbeg if there is no spare disk.
+6. **Flag-day details:** custody's key source (recommended a systemd credential, so a node restarts
+   unattended), one state directory or two (recommended one), which node returns first (recommended both
+   wait for the slower), and the soak's length (no recommendation).
+
+**Open in Macha's list, and Dagda follows:** the rethrow, multiset and `not_held` pause; the inventory
+walk's stop check; zero storage or "ready, degraded"; predicates (recommended retired as dead code);
+policy commits with no dot; an unchanged mutation still committing its clock (the requirement until
+ruled); a read failure deleting a good object (`storage_pool.cpp:603` in Macha). Dagda has that last one
+too: `StoragePool::get` and `scrub_step` remove on any exception where the backend's key check passed, and
+step M3 turned the scrub on in the node. It is Macha's behaviour, so it stays until ruled.
+
+**Settled by facts:** `test_maintenance_trace`'s fixtures stand unchanged at `cac5998` and 0.92.5, which
+matters only if Dagda's loop is the one that must match them.
+`test_unversioned_state_is_refused` is no question: Dagda already refuses a state with files and no
+marker, and owes only the case.
 
 Earlier: the seven items of 2026-11-04 were all answered that evening
 (see Decisions, "Tom, 2026-11-04 evening") and done the same evening
@@ -733,21 +745,6 @@ refused unkeyed delta record. The device reserve was already
 `IoReserveOptions` with those defaults; an operator reaches it through the
 node's options at step 7. For Macha at the port (8b): the tombstone and
 the unkeyed-record fixes, the same.
-
-**What blocks further work** (needs Macha):
-- Step 4 (heads), and with it retained values and the heads part of
-  `dagda::Context` (step 7), wait on Macha's tree-native branch merging
-  (its order is the operator's). The parts of steps 6 and 7 that need
-  no head are done.
-
-**For the domain catalogue (step 6, with heads):** whether the wrap advert
-keeps its certificate. An advert is one gossiped value, so it cannot carry
-the certificate for some peers and not others. Either it stays and a
-verifier prefers the certificate Dannan's `Nodes::certificate` proved, or
-it goes and a verifier that has never met the peer calls it first.
-Nothing outside the tests verifies an advert until the catalogue does, so
-this is decided with that caller, with the certificate's real size in
-gossip in hand. Recommended then: keep it, prefer the proved one.
 
 Decided by the Dagda session under the rules (step 5): a lease's
 `scope` is the head space its record lives in (plan 163); three
