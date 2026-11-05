@@ -41,6 +41,16 @@ by eye. Nothing in them has been run against Macha.
 | P8 | Heads S2 to S7, then 8c and 8d | Heads plan section 3; 8c.4, 8d.4; `macha-metadata-dump` identical | Macha's merge. 95 gap-heads cases each get a session or a named retirement |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
+**From Macha 0.92.4 (`feature/loop-2`, not merged; take the shapes when it lands), P4:**
+- The hung stop: the survey's walks take a pause that throws a stopping exception, which the
+  pass catches.
+- The claim guard: a claim holds its batch's stripes across the presence check and the
+  journal write; a delete holds the stripe only to check no claim stands and mark the id,
+  unlinks under the mark, and a claim finding the mark treats the object as not present. No
+  DATA-device wait under a stripe. Chunking at 4096 is Dagda's to keep or drop.
+- A note for P1: Macha's trace flake has a suspected mechanism, credit scaled by real CPU
+  against a manual clock. Dagda's pacing has the same shape; the cluster fixture turns it off.
+
 **Open differences from Macha, kept until the maintainer rules there:** the device I/O reserve, the
 data plane not ready with no backend online, the lease epoch fence, the claims guard held
 4096 ids at a time. Requirements section 7 has them.
@@ -671,6 +681,17 @@ asking:
 - (2026-11-03 night, the maintainer) Dagda is its own project, with its own agent.
 
 ## Waiting on the maintainer
+
+**The maintenance loop: which runs a Macha node?** The maintainer ruled that maintenance moves into the
+node (2026-11-04 night, step 7b). The Macha session now says Macha's own pass must stay the one
+loop on a Macha node, owning the inventory, survey, claim walk, gates, scrub, verify, rebalance,
+compaction, exact-grace wake, event parking, manual clock and trace hooks, with Dagda's stages
+as steps it calls. `MaintenanceOptions::automatic = false` already turns Dagda's thread off, so
+nothing is removed either way. It decides most of P3: if Macha's loop stays, event parking, the
+exact-grace wake and the trace are not Dagda's to build, and the node's stages need to be
+callable one by one. Recommended: Macha's loop stays until its heads move (8c), since the
+catalogue and metadata stages cannot move before then, and the node's loop stays for a
+Dagda-only node. This reopens a decision, so it is the maintainer's.
 
 From the replan, each with a recommendation in its document:
 
