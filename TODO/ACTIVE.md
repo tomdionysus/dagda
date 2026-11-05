@@ -1,6 +1,6 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-05. Dagda's plan follows Macha's code: `develop` at `cac5998` (0.92.4), not the 2026-11-02 design
+Last updated: 2026-11-05. Dagda's plan follows Macha's code as it lands (0.92.5 is live; old-code removal is under way there), not the 2026-11-02 design
 and not the `5a06d3c` baseline (the maintainer, 2026-11-05). Where the design and Macha's code
 differ, Macha's behaviour is the plan and Dagda is reshaped to it. `COMPLETED.md` is
 the record.
@@ -33,11 +33,13 @@ by eye. Nothing in them has been run against Macha.
 | P1 | Scale and platform (M10): done, Mac and live-a (`COMPLETED.md`). Left: TSan on Linux, for the Boost report only, and the USB disk, which the rehearsal measures | Whole suite on Linux aarch64; the scale figures recorded | Nothing |
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | The maintainer, for predicates |
 | P3 | The node for the first stage under Macha's loop: its stages callable one by one, B1, B3, B6, B7, B8, B10 of second-cutover C, about 28 `dagda.*` figures, config keys and defaults. Dagda's scheduling, parking and trace wait for the later stage | S.4's named cases and VALIDATION sections | Nothing |
-| P4 | Match Macha 0.92.6 when it lands: the three findings, the inventory walk's stop; read errors and ready-degraded in Dagda now | Macha's cases, in the shape of its fix | The Macha session |
+| P4 | Match Macha as it lands: old-code removal, then 0.92.6 (the three findings, the inventory walk's stop, the `followed` table, the exact read-failure shape), then its baselines | Macha's cases, in the shape of its fix | The Macha session |
+| P4b | Rebuild `DataResourceArbiter` and `IoReserve` on Dannan's class admission once a tag has it. Required before stage one | `test_io_pressure` as moved; `DataResourceStats` keeps its meanings | Dannan's tag |
 | P5 | Heads S1: the cache seed's migration, moved to 8c with the metadata files, as the maintainer ruled | Heads plan 2.2 | P8 |
-| P6 | `dagda-migrate` over a state Macha's code wrote, there and back with Macha's code opening the result; then the rehearsal and live-a's window | Second-cutover "Migration plan": every object `has` and `get` true against a listing taken before; live-b's time measured, not assumed | P0; the maintainer, for the rehearsal on the live nodes |
+| P6 | Dropped for now (the maintainer: "I'll decide later"): the real run, there and back, the rehearsal. The dry run over live-a's real state stands as done | Second-cutover "Migration plan", when he decides | The maintainer |
 | P7 | First stage: S, 8a and 8b, one disk event | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover |
 | P8 | Later stage: heads S2 to S7, 8c with `dagda-migrate` moving `<state>/metadata/` and the seed, Dagda's loop with `test_maintenance_trace`, then 8d, against `808fa0f` | Heads plan section 3, re-read at `808fa0f`; 8c.4, 8d.4; `macha-metadata-dump` output identical | 95 gap-heads cases each get a session or a named retirement |
+| P8b | An independent review of Dagda's work by fresh agents, which is the gate the maintainer set | The review's findings closed | P1 to P8 as they land |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
 **Macha is frozen at `cac5998` until the libraries are ready (the maintainer, relayed by the Macha session,
@@ -587,6 +589,18 @@ Steps 5 and the parts of 6 that need no heads go first.
   document, "Waiting on the maintainer" 1).
 
 ## Decisions
+
+**The maintainer, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
+this is the later word:**
+- The real migration on a second copy, the there-and-back and the live-b rehearsal are dropped for now: "No drop
+  that, I'll decide later." Nothing in the plan may wait on them.
+- Old-code removal in Macha comes first, "right now, before anything else": found as a tree, `mutate()` and the
+  migration tool out, genesis no longer decoded inline, inline encoders and decoders out, legacy authority out.
+  Then 0.92.6 (the four exceptions, the `followed` table fix, predicates retired), then baselines, then Dagda's work
+  on that, then an independent review by fresh agents, which is the gate. So Macha's code is not frozen at
+  `cac5998` or `808fa0f`, and Dagda's baseline moves with each commit Macha sends.
+- Dagda builds nothing on legacy forms: SM5 to SM13, SM15, SM18, `required == 0` and the inline map are going.
+- Dannan's generic class admission is required before stage one.
 
 **The maintainer, 2026-11-05, directly, in answer to the outstanding questions:**
 - **The cutover is in stages, as many stops as needed.** "Honestly we don't need to be so worried about a Flag
