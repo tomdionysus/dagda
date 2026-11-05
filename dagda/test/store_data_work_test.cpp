@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "dagda/store/data_work.h"
+#include "dagda/test/fixtures/store.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda::store {
@@ -29,6 +30,7 @@ namespace {
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
 using dannan::sched::FrameType;
+using test::wait_until;
 
 // Macha: test_data_credit_wait_gives_up_when_nothing_is_moving. A DATA
 // credit wait with no deadline gives up only when the arbiter is wholly
@@ -187,6 +189,101 @@ TEST(StoreDataWork, StoppingRefusesEveryWaiter) {
   ASSERT_EQ(credit_waiter.wait_for(5s), std::future_status::ready);
   EXPECT_FALSE(slot_waiter.get().has_value());
   EXPECT_FALSE(credit_waiter.get().has_value());
+}
+
+// Macha (tests/test_contract.cpp): test_data_work_context_is_the_data_
+// specialisation. Through the base it is the same work; its quantum is its own;
+// control is refused at construction.
+TEST(StoreDataWork, TheContextIsTheDataSpecialisation) {
+  const DataWorkContext data(FrameType::speculative, 4096);
+  const dannan::sched::WorkContext& general = data;
+  EXPECT_EQ(general.frame_type(), FrameType::speculative);
+  EXPECT_EQ(data.quantum_bytes(), 4096u);
+  EXPECT_THROW((void)DataWorkContext(FrameType::control), std::invalid_argument);
+}
+
+// Macha (tests/test_foundations.cpp):
+// test_data_resource_arbiter_background_effort_ceiling. Byte capacity would
+// admit four loader leases; the effort ceiling admits two at a time, counts
+// speculative work with them and never counts foreground work.
+TEST(StoreDataWork, TheBackgroundCeilingCountsLoaderAndSpeculativeNotForeground) {
+  DataResourceArbiter arbiter(64, 8, 2, 1h);
+  const DataWorkContext loader(FrameType::loader, 1);
+  auto first = arbiter.try_acquire(loader, 1);
+  auto second = arbiter.try_acquire(loader, 1);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_FALSE(arbiter.try_acquire(loader, 1).has_value());
+  EXPECT_FALSE(arbiter.try_acquire(DataWorkContext(FrameType::speculative, 1), 1).has_value());
+  const auto foreground = arbiter.try_acquire(DataWorkContext(FrameType::foreground, 1), 1);
+  EXPECT_TRUE(foreground.has_value());
+  auto stats = arbiter.stats();
+  EXPECT_EQ(stats.background_limit, 2u);
+  EXPECT_EQ(stats.background_active, 2u);
+  EXPECT_EQ(stats.peak_background_active, 2u);
+  first.reset();
+  const auto third = arbiter.try_acquire(loader, 1);
+  EXPECT_TRUE(third.has_value());
+  EXPECT_EQ(arbiter.stats().background_active, 2u);
+}
+
+// Macha (tests/test_foundations.cpp):
+// test_data_resource_arbiter_reserves_viewer_headroom. What is larger than a
+// class may ever hold is refused at once. Lower classes cannot consume the
+// reserved byte, so a late foreground request starts at once. A deadline ends a
+// wait on the injected time. A release serves the waiting loader before
+// speculative work. The waits are seen in the arbiter's own figures, never
+// waited out.
+TEST(StoreDataWork, TheForegroundReserveHoldsAndALoaderIsServedBeforeSpeculation) {
+  dannan::test::SteppedTime time;
+  DataResourceArbiter arbiter(4, 1, 0, 1h, {}, std::nullopt, time);
+  EXPECT_FALSE(arbiter.acquire(DataWorkContext(FrameType::loader), 4).has_value());
+  EXPECT_FALSE(arbiter.acquire(DataWorkContext(FrameType::foreground), 5).has_value());
+  const DataWorkContext loader(FrameType::loader, 1);
+  auto first = arbiter.acquire(loader, 1);
+  auto second = arbiter.acquire(loader, 1);
+  auto third = arbiter.acquire(loader, 1);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  ASSERT_TRUE(third.has_value());
+
+  auto blocked_loader = std::async(std::launch::async, [&] { return arbiter.acquire(loader, 1); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 1; }));
+  auto blocked_speculative = std::async(std::launch::async, [&] { return arbiter.acquire(DataWorkContext(FrameType::speculative, 1), 1); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().speculative_waits == 1; }));
+
+  auto foreground = arbiter.acquire(DataWorkContext(FrameType::foreground, 1), 1);
+  ASSERT_TRUE(foreground.has_value());
+  EXPECT_EQ(blocked_loader.wait_for(0ms), std::future_status::timeout);
+  foreground.reset();
+
+  auto expiring = std::async(std::launch::async, [&] { return arbiter.acquire(DataWorkContext(FrameType::loader, 1, time.now() + 20ms), 1); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 2; }));
+  time.advance(21ms);
+  arbiter.time_advanced();
+  ASSERT_EQ(expiring.wait_for(10s), std::future_status::ready);
+  EXPECT_FALSE(expiring.get().has_value());
+
+  first.reset();
+  ASSERT_EQ(blocked_loader.wait_for(10s), std::future_status::ready);
+  auto admitted_loader = blocked_loader.get();
+  ASSERT_TRUE(admitted_loader.has_value());
+  EXPECT_EQ(blocked_speculative.wait_for(0ms), std::future_status::timeout);
+  second.reset();
+  ASSERT_EQ(blocked_speculative.wait_for(10s), std::future_status::ready);
+  auto admitted_speculative = blocked_speculative.get();
+  ASSERT_TRUE(admitted_speculative.has_value());
+
+  const auto stats = arbiter.stats();
+  EXPECT_EQ(stats.capacity_bytes, 4u);
+  EXPECT_EQ(stats.foreground_reserve_bytes, 1u);
+  EXPECT_EQ(stats.peak_used_bytes, 4u);
+  EXPECT_EQ(stats.foreground_admissions, 1u);
+  EXPECT_EQ(stats.loader_admissions, 4u);
+  EXPECT_EQ(stats.loader_waits, 2u);
+  EXPECT_EQ(stats.speculative_admissions, 1u);
+  EXPECT_EQ(stats.speculative_waits, 1u);
+  EXPECT_EQ(stats.cancelled_waits, 1u);
 }
 
 }  // namespace
