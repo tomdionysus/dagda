@@ -1233,6 +1233,72 @@ TEST(StoreRepair, ADiskComingBackIsSurveyedWithNothingReferencedChanging) {
 
 // ---- New --------------------------------------------------------------------
 
+// test_replica_repair_does_not_count_corrupt_remote_as_healthy, as scrub then
+// diff (the Macha session's answers, 2026-11-05; repair is diff only, the maintainer,
+// 2026-11-04). A corrupt copy reads as held until its own node's scrub, so a
+// peer's repair sends nothing, and it is never served: valid_on says it is not
+// intact. The scrub discards it, and the sender's next pass, from the diff
+// alone, restores the bytes: only the sender runs a pass here, and it sends the
+// copy from the first list that names it, with no event in between.
+TEST(StoreRepair, ACorruptRemoteCopyIsRestoredByItsScrubThenTheDiff) {
+  Cluster cluster;
+  auto& sender = cluster.add("sender", options(2, 2));
+  auto& corrupt = cluster.add("corrupt", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(128 * 1024, 9);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(sender.store().put(id, bytes));
+  ASSERT_TRUE(corrupt.data().has(id));
+  test::corrupt_object(corrupt.backend(), id);
+
+  auto provider = referring_to({id});
+  sender.publish_inventory(provider);
+  corrupt.publish_inventory(provider);
+  const auto puts = corrupt.calls_of(message::put_object);
+  for (int pass = 0; pass < 4; ++pass) (void)sender.run_maintenance_once();
+  EXPECT_EQ(corrupt.calls_of(message::put_object), puts);
+  const auto valid = sender.store().valid_on(record_of(sender, corrupt.id()), {id});
+  const auto said = valid.find(id);
+  EXPECT_TRUE(said == valid.end() || !said->second);
+
+  (void)corrupt.data().scrub_step(128ULL * 1024 * 1024, 256);
+  EXPECT_FALSE(corrupt.data().has(id));
+  EXPECT_TRUE(wait_until(
+      [&] {
+        (void)sender.run_maintenance_once();
+        return corrupt.data().has(id);
+      },
+      30s));
+  EXPECT_EQ(corrupt.data().get(id), std::optional<Bytes>{bytes});
+  EXPECT_GT(corrupt.calls_of(message::put_object), puts);
+}
+
+// A list that arrives after an empty one is walked by the step that first sees
+// it (Macha's reset of its completed pass leaves the push not complete). A step
+// that passed over it would report a whole pass with nothing done, the pass
+// would rest on these very lists, and nothing would move until an event.
+TEST(StoreRepair, TheStepThatFirstSeesANewListWalksIt) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto pushed = pattern(64 * 1024, 71);
+  const auto pulled = pattern(64 * 1024, 72);
+  ASSERT_TRUE(node.data().put(object_id(pushed), pushed));
+  ASSERT_TRUE(peer.data().put(object_id(pulled), pulled));
+  const auto inventory = inventory_of({object_id(pushed), object_id(pulled)});
+
+  const RepairLists empty{inventory, list_of({}), lacks_of({{peer.id(), {}}}), {}};
+  EXPECT_TRUE(node.store().repair_step(empty, 128ULL * 1024 * 1024, 0).complete);
+
+  const RepairLists named{inventory, list_of({object_id(pulled)}), lacks_of({{peer.id(), {object_id(pushed)}}}), {}};
+  (void)node.store().repair_step(named, 128ULL * 1024 * 1024, 0);
+  EXPECT_EQ(peer.data().get(object_id(pushed)), std::optional<Bytes>{pushed});
+  EXPECT_EQ(node.data().get(object_id(pulled)), std::optional<Bytes>{pulled});
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
