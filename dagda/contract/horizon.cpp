@@ -90,8 +90,11 @@ std::vector<ObjectId> ReferencedSets::not_held(RetentionClass type, std::span<co
   std::vector<ObjectId> viewed;
   if (set.view) ledger::records_not_held(*set.view, held, [&](const ledger::ObjectTrie::Record& record) { viewed.push_back(record.first); }, pause);
   std::vector<ObjectId> others;
-  for (const auto& id : set.others)
+  size_t seen = 0;
+  for (const auto& id : set.others) {
+    if (pause && ++seen % 4096 == 0) pause();
     if (std::none_of(held.begin(), held.end(), [&](const ledger::ObjectTrie::Snapshot& part) { return part.get(id).has_value(); })) others.push_back(id);
+  }
   std::vector<ObjectId> out;
   out.reserve(viewed.size() + others.size());
   std::set_union(viewed.begin(), viewed.end(), others.begin(), others.end(), std::back_inserter(out));

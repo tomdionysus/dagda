@@ -238,8 +238,10 @@ TEST(StoreLayoutV19, AV19DiskIsRefusedWithoutItsKeyUnlessOpenedBlind) {
     // still whole, which is all valid() can say with no key.
     const auto file = object_path(disk, id);
     std::fstream altered(file, std::ios::in | std::ios::out | std::ios::binary);
+    // Flipped, not set: the byte might already be any given value.
+    altered.seekg(-1, std::ios::end);
+    const char byte = static_cast<char>(altered.get() ^ 0x01);
     altered.seekp(-1, std::ios::end);
-    const char byte = 0x5a;
     altered.write(&byte, 1);
     altered.close();
     EXPECT_NE(pool->held_digest(id), digest);

@@ -1116,5 +1116,64 @@ TEST(StoreDistributedStore, RetainDataBatchesALargePublicationWithinBoundedTime)
   }
 }
 
+// Macha's test_a_delete_marks_its_object_and_holds_no_stripe.
+TEST(StoreClaimLocks, ADeleteMarksItsObjectAndHoldsNoStripe) {
+  ClaimLocks locks;
+  const auto id = object_id(pattern(64));
+  {
+    auto deletion = locks.deletion(id, [] { return false; });
+    EXPECT_FALSE(deletion.claimed());
+    // The stripe is free while the delete goes, or this would deadlock: a claim
+    // path gets it and finds the mark.
+    const auto guard = locks.lock(std::span<const ObjectId>(&id, 1));
+    EXPECT_TRUE(locks.deleting(id));
+  }
+  EXPECT_FALSE(locks.deleting(id));
+  // Moved, the mark lasts as long as the new owner.
+  {
+    auto first = locks.deletion(id, [] { return false; });
+    auto second = std::move(first);
+    EXPECT_TRUE(locks.deleting(id));
+  }
+  EXPECT_FALSE(locks.deleting(id));
+  // A standing claim refuses the delete and marks nothing.
+  const auto refused = locks.deletion(id, [] { return true; });
+  EXPECT_TRUE(refused.claimed());
+  EXPECT_FALSE(locks.deleting(id));
+  // Two deletes at once: the first to finish does not end the second's mark.
+  {
+    auto first = locks.deletion(id, [] { return false; });
+    {
+      auto second = locks.deletion(id, [] { return false; });
+    }
+    EXPECT_TRUE(locks.deleting(id));
+  }
+  EXPECT_FALSE(locks.deleting(id));
+}
+
+// A claim, local or from a peer, finds a marked object not present.
+TEST(StoreClaimLocks, AClaimFindsAMarkedObjectNotPresent) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(4096, 51);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(a.data().put(id, bytes));
+  ASSERT_TRUE(b.data().put(id, bytes));
+  const contract::RetentionDot dot{a.id(), 7};
+  {
+    const auto on_a = a.data().claim_locks().deletion(id, [] { return false; });
+    const auto on_b = b.data().claim_locks().deletion(id, [] { return false; });
+    (void)a.store().retain_data({id}, dot);
+    EXPECT_FALSE(a.claims().retained(contract::RetentionClass::data, id));
+    EXPECT_FALSE(b.claims().retained(contract::RetentionClass::data, id));
+  }
+  (void)a.store().retain_data({id}, dot);
+  EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, id));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
+}
+
 }  // namespace
 }  // namespace dagda::store

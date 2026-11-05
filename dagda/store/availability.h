@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,8 @@ struct AvailabilityOptions {
   std::chrono::milliseconds retry_floor{1000};
   std::chrono::milliseconds retry_ceiling{300000};
 };
+
+using ledger::MaintenanceStopping;
 
 // One survey's result: immutable once published.
 struct AvailabilitySnapshot {

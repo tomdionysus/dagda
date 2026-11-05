@@ -40,11 +40,10 @@ Not one of these is done at the commits above:
    `tests/test_support.hpp` have been split behind a facade by that cutover. Paths in
    `src/cluster/` may have moved by then, so each step's file list is re-checked when
    its branch is cut.
-2. **Macha's two open P0s** (`../macha/TODO/ACTIVE.md`, "Open, in order", 1 and 2):
-   `test_trace_backend_offline_and_back` intermittent on live-a, and a stop hanging
-   60 s inside the first survey's whole-namespace walk. The second is in code that moves
-   here (`dagda::Node::stop_maintenance` joins the same way, `TODO/ACTIVE.md`, "Waiting
-   on Macha's fix"), and Dagda takes the shape of Macha's fix when it lands.
+2. **Macha's two P0s are fixed in 0.92.4** (`cac5998`): the trace flake, in the fixture,
+   and the stop hanging in the survey's walk. Dagda has taken the stop's shape and the
+   claim deletion mark; two follow-ups are with the maintainer through Macha (`TODO/ACTIVE.md`).
+   Macha's goldens, then its tree-native merge, come next.
 3. **Macha's tree-native merge** (`feature/tree-native-namespace`, `b080c38`, not an
    ancestor of develop). Step 8c and every fixture wait on it, and test names in step
    8c change with it: `tests/test_namespace_migration.cpp` becomes

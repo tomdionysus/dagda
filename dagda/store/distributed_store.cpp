@@ -1885,7 +1885,7 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
     if (!slot) return false;
     const auto claim = [&](std::span<const ObjectId> part) {
       for (const auto& id : part)
-        if (!(object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id))) return false;
+        if (!(object_class == contract::RetentionClass::data ? !_data.claim_locks().deleting(id) && _data.has(id) : _control.has(id))) return false;
       _claims.retain_batch(object_class, std::vector<ObjectId>(part.begin(), part.end()), dot);
       return true;
     };
@@ -2307,9 +2307,9 @@ void DistributedStore::erase_all(const ObjectId& id) {
       if (target.id == _self) {
         const auto admitted = admit_data(FrameType::speculative, _options.extent_size, _options.admission_wait);
         if (admitted) {
-          // No claim may land between the check and the delete.
-          const auto guard = _data.claim_locks().lock(std::span<const ObjectId>(&id, 1));
-          if (!_claims.retained(contract::RetentionClass::data, id)) (void)_data.remove(id);
+          // The claim check marks the object for the delete.
+          const auto deletion = _data.claim_locks().deletion(id, [&] { return _claims.retained(contract::RetentionClass::data, id); });
+          if (!deletion.claimed()) (void)_data.remove(id);
         }
         (void)_cache.remove(id);
       } else {
