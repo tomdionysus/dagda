@@ -460,6 +460,10 @@ history truncation (`:1146`, gated on `!busy`).
 - **M6. No change in Dagda.** The file Macha keeps is its path table, which is
   Macha's (`availability_service.cpp:252-269`, `availability.h:53`), and Macha's
   topology event is place and membership, no advert (`cluster.cpp:222-224`, `:890`).
+  The Macha session accepted this and M5's narrowing, and confirmed
+  `membership_changed` (`cluster.cpp:867-871`) counts no capacity or used. It does
+  count `metadata_write_replicas_required`, an advert here, which Dannan's
+  membership event leaves out: not a re-ask here until heads make it matter.
 - **M7. Torrent-request known answers.** Settled by Tom: they stay in Macha's
   tests; Dagda pins the template on its neutral record.
 - **M8. The claims guard bounded.** Confirmed
@@ -470,6 +474,12 @@ history truncation (`:1146`, gated on `!busy`).
   `capacity_placement_nodes` with failure domains.
 - **M10. Scale and platform.** A trie of 1 million ids, 100,000 objects
   across packs; a Linux run with `syncfs`; sanitizers before `0.1.0`.
+
+**Waiting on Macha's fix (reported 2026-11-05):** a stop during a long walk waits
+for the whole walk. Caught on macnessa: the pass inside per-object `held()` lookups
+(`held_view`, `TrieUnion::get`, `ObjectTrie::find`) and the stop joining it. Dagda's
+repair and survey use the same held view, and `Node::stop_maintenance` joins the
+same way. Under Tom's ruling Dagda takes the shape of Macha's fix when it lands.
 
 **Disputed with the Macha session:** "a pass is not skipped while loader
 work is present" is not Macha's behaviour. `busy` includes the loader
