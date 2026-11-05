@@ -907,7 +907,7 @@ Status: written 2026-11-05 for the port. No Macha case has been removed; the gap
 | test_held_device_io_blocks_only_its_own_object | RETIRE | StoreLocalStore.HeldDeviceIoBlocksOnlyItsOwnObject |
 | test_presence_is_known_without_reading_objects | RETIRE | StoreLocalStore.PresenceIsKnownWithoutReadingObjects |
 | test_metadata_control_store_is_independent_of_data_quota | RETIRE | StoreControlStore.AControlWriteIsNotBlockedByDataExhaustion, DistributedStore.AFullPreferredNodeSpillsDataButNotControl |
-| test_unversioned_state_is_refused | RETIRE | Node.AnUnversionedStateIsRefusedAndAnUnversionedBackendLeavesItsPlaneNotReady, StoreStateLayout.ANonEmptyUnversionedStateIsRefused, StoreStoragePool.ANonEmptyUnversionedBackendIsRefused |
+| test_unversioned_state_is_refused | RETIRE | Node.AnUnversionedStateIsRefusedAndAnUnversionedBackendIsReadyButDegraded, StoreStateLayout.ANonEmptyUnversionedStateIsRefused, StoreStoragePool.ANonEmptyUnversionedBackendIsRefused |
 | test_a_full_preferred_node_spills_data_but_not_control | REWRITE | Catalogue artwork spill, root delivery, reader follows head and reads artwork; store half is DistributedStore.AFullPreferredNodeSpillsDataButNotControl |
 | test_repair_passes_unavailable_and_counts_unsourceable_objects | RETIRE | StoreRepair.RepairPassesUnavailableAndCountsUnsourceable |
 | test_a_busy_peer_still_says_what_it_does_not_hold | RETIRE | StoreRepair.ABusyPeerStillSaysWhatItDoesNotHold |

@@ -360,14 +360,14 @@ TEST(Node, ALateOpenCanBeRefusedOrNeverHappen) {
   EXPECT_TRUE(b.context().readiness().failed());
   EXPECT_FALSE(b.dagda_node().running());
   b.stop();
+}
 
 // Macha (tests/test_storage_v18.cpp): test_unversioned_state_is_refused, over a
 // whole node. A state holding files and no marker is refused, saying a store
-// begins only in an empty directory, and left as it was. A DATA backend holding an old layout's files
-// leaves the node up with control ready and nothing online: where Macha reports
-// data storage ready over no backends, Dagda's plane stays not ready, which
-// waits on the maintainer (the mapping's answers); it opens either way.
-TEST(Node, AnUnversionedStateIsRefusedAndAnUnversionedBackendLeavesItsPlaneNotReady) {
+// begins only in an empty directory, and left as it was. A DATA backend holding an
+// old layout's files leaves the node up with nothing online: ready but degraded
+// (the maintainer, 2026-11-05).
+TEST(Node, AnUnversionedStateIsRefusedAndAnUnversionedBackendIsReadyButDegraded) {
   Cluster cluster;
   auto& old_state = cluster.add("old-state");
   std::filesystem::create_directories(old_state.state());
@@ -384,7 +384,7 @@ TEST(Node, AnUnversionedStateIsRefusedAndAnUnversionedBackendLeavesItsPlaneNotRe
   boundary.start();
   EXPECT_TRUE(boundary.context().readiness().control_plane_online());
   EXPECT_TRUE(boundary.data().degraded());
-  EXPECT_FALSE(boundary.context().readiness().complete());
+  EXPECT_TRUE(boundary.context().readiness().complete());
   EXPECT_FALSE(boundary.context().readiness().failed());
   EXPECT_EQ(boundary.data().online_backends(), 0u);
   EXPECT_EQ(boundary.data().limit(), 0u);
