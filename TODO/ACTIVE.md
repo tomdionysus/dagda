@@ -48,8 +48,9 @@ artefacts and answer questions. So:
 - **From the Macha session, read from `../macha/build/macha-fixtures/`:** the goldens are in
   `goldens/`, from two real processes: Status with a 161-path mask, 381 of 494 keys reached at most;
   the config dump is 46 fields by hand, not all of `Config`; `routes.txt` is read from source, not
-  captured. Coming today from live-a's stop (the maintainer): a real state directory with a DATA sample. Then
-  a dry run on live-a with the key staying there, `macha-metadata-dump` output, and there and back
+  captured. Taken from live-a's stop (the maintainer): `/root/macha-state-20261105T145340Z` on the node, 3.0 GB of state and a
+  257 MB DATA sample, at 0.92.4 (its `ORIGIN.txt` says what was copied stopped and what after), with
+  `macha-metadata-dump.txt` beside it. Next: a dry run on live-a with the key staying there, `macha-metadata-dump` output, and there and back
   under Macha's own code. The source to build is at `~/dagda-linux/dagda-develop` there.
 - **Dagda's own, as well:** `git archive cac5998` into `build/macha-cac5998/`, built and run there,
   never in Macha's tree. It lets Dagda generate as many small states as a test needs, and have
@@ -67,11 +68,11 @@ artefacts and answer questions. So:
   deltas a minute live, and that is the requirement until the maintainer rules. The heads plan's `b080c38`
   citations and "settled at the merge" marks are to be re-read at `cac5998`.
 
-**Macha 0.92.5 (`808fa0f`, local, gated, not deployed):** a stale tombstone held in a batch is
+**Macha 0.92.5 (`808fa0f`, the baseline now, live on both nodes):** a stale tombstone held in a batch is
 erased: the batch is dropped and the rest written again at its own retirement time, and a batch the
 erase dropped is not dropped again as matured (`maintenance.cpp`, `test_a_stale_tombstone_in_a_batch_is_erased_once`).
 No Dagda code changes: Dagda has no tombstone batches yet. It joins heads row H23 and the retirement
-provider's case at S4 or S5. Heads are read at `808fa0f` once it is on `develop`.
+provider's case at S4 or S5. Empty commits went from about 20 a minute to 0 on the nodes.
 
 **Macha 0.92.4 (`cac5998`, tag on `70cf4a4`), taken:** the claim deletion mark and the
 survey's stop (`COMPLETED.md`). The inventory's walk has no stop check yet in Macha either.
