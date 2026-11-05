@@ -641,7 +641,10 @@ void Node::maintenance_loop(std::stop_token stop) {
       }
       if (now >= next_repair) {
         try {
-          (void)_repair->pass();
+          (void)_repair->pass(stop);
+        } catch (const store::MaintenanceStopping&) {
+          // Asked to stop inside a long walk: the loop's condition ends it.
+          return;
         } catch (const std::exception& error) {
           _logger.debug(std::string("repair pass: ") + error.what());
         }

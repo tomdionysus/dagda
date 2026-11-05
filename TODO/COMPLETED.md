@@ -3,6 +3,15 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: Macha 0.92.4's shapes
+
+A delete marks its object and unlinks holding no stripe, in the GC sweep, `erase_all`, a peer's
+`delete_object` and the instant delete; a claim finding the mark treats the object as not
+present. The survey's walks stop through a pause that throws `MaintenanceStopping`, and
+`Repair::pass` takes the stop. Two things differ and went to Macha first: the survey's per-peer
+`catch (std::exception)` would swallow the stop, so it rethrows; and marks are a multiset. Also
+fixed: `StoreLayoutV19`'s corruption set a fixed byte, a 1 in 256 flake, seen once today.
+
 ## 2026-11-05: the first Linux run (M10, part)
 
 On macnessa (Tom's choice: Debian 13, aarch64, g++ 14.2, kernel 6.18), under

@@ -79,7 +79,7 @@ RepairGates Repair::gates() const {
   return out;
 }
 
-RepairPass Repair::pass() {
+RepairPass Repair::pass(std::stop_token stop) {
   RepairPass out;
   const auto now = _time.now();
   // Credit: the link's rate, a fraction of it, banked to a burst.
@@ -92,7 +92,9 @@ RepairPass Repair::pass() {
   const double cpu_scale = _cpu.scale(seconds, _options.cpu_target);
   _credit = std::min(burst, _credit + bandwidth * _options.idle_bandwidth_fraction * cpu_scale * std::max(0.0, seconds));
 
-  out.surveyed = _availability.refresh();
+  out.surveyed = _availability.refresh([&stop] {
+    if (stop.stop_requested()) throw MaintenanceStopping{};
+  });
   auto& activity = _context.activity();
   if (activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet)) out.paced_by |= paced_by_foreground;
   if (activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet)) out.paced_by |= paced_by_loader;

@@ -1128,11 +1128,11 @@ StoragePool::MaintenanceResult StoragePool::gc_step(const contract::IdLookup& li
     }
 
     try {
-      // Checked again just before the irreversible delete, under the
-      // object's claim guard: a claim may land after this slice took its
-      // inventory, but not between this check and the delete.
-      const auto guard = _claim_locks.lock(std::span<const ObjectId>(&id, 1));
-      if (claimed && claimed(id)) continue;
+      // Checked again just before the irreversible delete, and the object
+      // marked: a claim may land after this slice took its inventory, but not
+      // between this check and the delete, which holds no stripe.
+      const auto deletion = _claim_locks.deletion(id, [&] { return claimed && claimed(id); });
+      if (deletion.claimed()) continue;
       // Age is the orphan grace for DATA no committed reference reached yet.
       // A put of an object already held refreshes it, so a new write cannot
       // race an ancient orphan with identical bytes.

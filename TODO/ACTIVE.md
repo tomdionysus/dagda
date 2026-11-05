@@ -1,12 +1,11 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-05. Dagda's plan follows Macha's code: `develop` at `00861dd`
-(0.92.3, running on both live nodes, macnessa and inverbeg), not the 2026-11-02 design
+Last updated: 2026-11-05. Dagda's plan follows Macha's code: `develop` at `cac5998` (0.92.4), not the 2026-11-02 design
 and not the `5a06d3c` baseline (Tom, 2026-11-05). Where the design and Macha's code
 differ, Macha's behaviour is the plan and Dagda is reshaped to it. `COMPLETED.md` is
 the record.
 
-## The plan, re-based on Macha `00861dd` (Tom, 2026-11-05)
+## The plan, re-based on Macha `00861dd` and `cac5998` (Tom, 2026-11-05)
 
 The goal is the second cutover: Macha's store onto Dagda, one flag day with the disk
 migration, after the transport cutover has soaked. Everything is ordered by what that
@@ -34,22 +33,20 @@ by eye. Nothing in them has been run against Macha.
 | P1 | Scale and platform (M10): Linux done once (below); sanitizers, a trie of 1 million ids, 100,000 objects across packs | ASan, UBSan and TSan clean; the two scale cases' figures recorded | Nothing |
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | Tom, for predicates |
 | P3 | The node's parity for step S: second-cutover B1 to B15 but B11, about 28 `dagda.*` figures, the config keys and defaults | `test_maintenance_trace`, and S.4's named cases and VALIDATION sections | Tom, for the trace fixtures |
-| P4 | The hung stop and Macha's other P0 | Macha's case, in the shape of its fix | Macha |
+| P4 | Macha's fixes as they land. 0.92.4's are in; the inventory walk's stop check when Macha has it | Macha's case, in the shape of its fix | Macha |
 | P5 | Heads S1: the cache seed, its migration pass, `NodeOptions::heads` off | Heads plan 2.1 and 2.2 | Tom, for before the merge |
 | P6 | `dagda-migrate` over the real state; the rehearsal; macnessa's window | Second-cutover "Migration plan": every object `has` and `get` true against a listing taken before; inverbeg's time measured, not assumed | Macha's merge, then its fixtures |
 | P7 | Steps S, 8a and 8b on the flag day | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover's soak |
 | P8 | Heads S2 to S7, then 8c and 8d | Heads plan section 3; 8c.4, 8d.4; `macha-metadata-dump` identical | Macha's merge. 95 gap-heads cases each get a session or a named retirement |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
-**From Macha 0.92.4 (`feature/loop-2`, not merged; take the shapes when it lands), P4:**
-- The hung stop: the survey's walks take a pause that throws a stopping exception, which the
-  pass catches.
-- The claim guard: a claim holds its batch's stripes across the presence check and the
-  journal write; a delete holds the stripe only to check no claim stands and mark the id,
-  unlinks under the mark, and a claim finding the mark treats the object as not present. No
-  DATA-device wait under a stripe. Chunking at 4096 is Dagda's to keep or drop.
-- A note for P1: Macha's trace flake has a suspected mechanism, credit scaled by real CPU
-  against a manual clock. Dagda's pacing has the same shape; the cluster fixture turns it off.
+**Macha 0.92.4 (`cac5998`, tag on `70cf4a4`), taken:** the claim deletion mark and the
+survey's stop (`COMPLETED.md`). The inventory's walk has no stop check yet in Macha either.
+Macha's trace flake was not credit or CPU, as first thought: a commit ahead of the survey flips
+repair's push, and each flip owes a pass; the fixture was fixed, and no Dagda plan rests on the
+old explanation. Sent to Macha and confirmed by its reading, going to Tom: the survey's per-peer
+catch swallows the stop, and two deletes of one id share a mark. Dagda already has the rethrow
+and a multiset, the shapes Macha will recommend; the exception's name and place may follow Tom.
 
 **Open differences from Macha, kept until Tom rules there:** the device I/O reserve, the
 data plane not ready with no backend online, the lease epoch fence, the claims guard held
@@ -515,12 +512,6 @@ history truncation (`:1146`, gated on `!busy`).
   `capacity_placement_nodes` with failure domains.
 - **M10. Scale and platform.** A trie of 1 million ids, 100,000 objects
   across packs; a Linux run with `syncfs`; sanitizers before `0.1.0`.
-
-**Waiting on Macha's fix (reported 2026-11-05):** a stop during a long walk waits
-for the whole walk. Caught on macnessa: the pass inside per-object `held()` lookups
-(`held_view`, `TrieUnion::get`, `ObjectTrie::find`) and the stop joining it. Dagda's
-repair and survey use the same held view, and `Node::stop_maintenance` joins the
-same way. Under Tom's ruling Dagda takes the shape of Macha's fix when it lands.
 
 **Disputed with the Macha session:** "a pass is not skipped while loader
 work is present" is not Macha's behaviour. `busy` includes the loader

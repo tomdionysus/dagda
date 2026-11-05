@@ -266,9 +266,9 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       const auto admitted = admit_data(frame, extent, false);
       if (!admitted) return busy();
       {
-        // No claim may land between the check and the delete.
-        const auto guard = _data.claim_locks().lock(std::span<const ObjectId>(&id, 1));
-        if (_claims.retained(contract::RetentionClass::data, id)) return Handled::failed(409, "claimed", "object has an active retention claim");
+        // The claim check marks the object for the delete.
+        const auto deletion = _data.claim_locks().deletion(id, [&] { return _claims.retained(contract::RetentionClass::data, id); });
+        if (deletion.claimed()) return Handled::failed(409, "claimed", "object has an active retention claim");
         (void)_data.remove(id);
       }
       if (_cache) (void)_cache->remove(id);
@@ -313,12 +313,13 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       // finds later corruption. The claim's journal is control work. Under
       // the objects' claim guard, a sub-batch at a time, so no instant delete
       // removes a copy between this check and the claim and a large
-      // publication does not stop every delete behind it.
+      // publication does not stop every delete behind it. One a delete has
+      // marked is not present.
       const auto slot = admit_control();
       if (!slot) return busy();
       const auto claim = [&](std::span<const ObjectId> part) {
         for (const auto& id : part)
-          if (!(retain.object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id))) return false;
+          if (!(retain.object_class == contract::RetentionClass::data ? !_data.claim_locks().deleting(id) && _data.has(id) : _control.has(id))) return false;
         _claims.retain_batch(retain.object_class, std::vector<ObjectId>(part.begin(), part.end()), retain.dot);
         return true;
       };

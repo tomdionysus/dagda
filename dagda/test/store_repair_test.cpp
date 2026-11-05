@@ -1479,5 +1479,25 @@ TEST(StoreRepair, ALoaderSaturatingDataLeavesControlWithinABound) {
   EXPECT_TRUE(node.claims().retained(contract::RetentionClass::data, claimed));
 }
 
+// A stop during the survey's walk ends it, rather than waiting for every lookup
+// (Macha's hung stop, 0.92.4). The pass throws, and the same pass without a stop
+// runs to the end.
+TEST(StoreRepair, AStopEndsTheSurveysWalk) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  (void)cluster.add("peer", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto held = test::numbered(1);
+  ASSERT_TRUE(node.data().put(object_id(held), held));
+  auto provider = referring_to({object_id(held)});
+  node.publish_inventory(provider);
+  ASSERT_TRUE(wait_until([&] { return node.data().held_view().identity.complete; }));
+  std::stop_source stop;
+  stop.request_stop();
+  EXPECT_THROW((void)node.repair().pass(stop.get_token()), MaintenanceStopping);
+  EXPECT_NO_THROW((void)node.repair().pass());
+}
+
 }  // namespace
 }  // namespace dagda::store

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stop_token>
 
 #include "dagda/contract/object_ledger.h"
 #include "dagda/ledger/claim_walk.h"
@@ -101,7 +102,9 @@ class Repair {
   Repair& operator=(const Repair&) = delete;
 
   static constexpr dannan::sched::Waits pass_waits = AvailabilityService::refresh_waits | dannan::sched::Waits::data_device;
-  RepairPass pass();
+  // Throws MaintenanceStopping out of the survey's walks once `stop` is
+  // requested.
+  RepairPass pass(std::stop_token stop = {});
   RepairGates gates() const;
 
  private:

@@ -78,6 +78,8 @@ AvailabilitySurvey survey_by_diff(const std::shared_ptr<const TrieUnion>& mine, 
           pause);
       survey.rounds += cost.rounds;
       survey.nodes_asked += cost.prefixes;
+    } catch (const MaintenanceStopping&) {
+      throw;
     } catch (const std::exception& error) {
       ++survey.peers_failed;
       peers[i].why = error.what();

@@ -63,27 +63,35 @@ std::vector<RemovedObject> remove_here(const RemoveReplica& replica, std::vector
   if (ids.empty()) return out;
   out.reserve(ids.size());
 
-  // No claim lands between the check below and the delete: a claim takes the
-  // same guard for its presence check and its journal write.
-  const auto guard = replica.data.claim_locks().lock(ids);
-  (void)replica.claims.release_observed(contract::RetentionClass::data, ids, observed);
-  // The inventory as published now: what the owner's state refers to on this
-  // node. One that could not be read whole may refer to anything.
-  const auto inventory = replica.ledger ? replica.ledger->inventory() : nullptr;
-  for (const auto& id : ids) {
-    RemovedObject entry;
-    entry.id = id;
-    const auto claims = replica.claims.claims(contract::RetentionClass::data, id);
-    if (!claims.adds.empty()) {
-      entry.state = RemoveState::kept_by_claim;
-      for (const auto& [origin, sequence] : claims.adds) entry.claims.push_back({origin, sequence});
-    } else if (inventory && (!inventory->complete() || inventory->referenced(contract::RetentionClass::data, id))) {
-      entry.state = RemoveState::kept_referenced;
-    } else {
-      entry.state = replica.data.remove(id) ? RemoveState::removed : RemoveState::absent;
-      if (replica.cache) (void)replica.cache->remove(id);
+  // No claim lands between the check below and the delete: under the guard a
+  // claim takes for its presence check and journal write, each object to go is
+  // marked, and it unlinks under the mark alone, holding no stripe.
+  std::vector<std::pair<size_t, ClaimDeletion>> going;
+  {
+    const auto guard = replica.data.claim_locks().lock(ids);
+    (void)replica.claims.release_observed(contract::RetentionClass::data, ids, observed);
+    // The inventory as published now: what the owner's state refers to on this
+    // node. One that could not be read whole may refer to anything.
+    const auto inventory = replica.ledger ? replica.ledger->inventory() : nullptr;
+    for (const auto& id : ids) {
+      RemovedObject entry;
+      entry.id = id;
+      const auto claims = replica.claims.claims(contract::RetentionClass::data, id);
+      if (!claims.adds.empty()) {
+        entry.state = RemoveState::kept_by_claim;
+        for (const auto& [origin, sequence] : claims.adds) entry.claims.push_back({origin, sequence});
+      } else if (inventory && (!inventory->complete() || inventory->referenced(contract::RetentionClass::data, id))) {
+        entry.state = RemoveState::kept_referenced;
+      } else {
+        going.emplace_back(out.size(), replica.data.claim_locks().begin_deleting(id));
+      }
+      out.push_back(std::move(entry));
     }
-    out.push_back(std::move(entry));
+  }
+  for (const auto& [index, deletion] : going) {
+    auto& entry = out[index];
+    entry.state = replica.data.remove(entry.id) ? RemoveState::removed : RemoveState::absent;
+    if (replica.cache) (void)replica.cache->remove(entry.id);
   }
   return out;
 }

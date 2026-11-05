@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -58,13 +59,35 @@ class ObjectLocks {
   mutable std::map<ObjectId, std::weak_ptr<dannan::contract::IoMutex>> _mutexes DANNAN_GUARDED_BY(_map_mutex);
 };
 
-// One node's guard over each object's claims against its copy: a claim's
-// presence check and its journal write, and an instant delete's release, its
-// check that no claim remains and its delete, each hold the object's guard,
-// so no claim lands between a delete's check and its delete. Striped by the
-// id's first byte; a batch takes its stripes in ascending order, so two
-// batches never deadlock. Holders wait on the state and DATA devices.
-// Thread-safe.
+class ClaimLocks;
+
+// A delete's leave to go (Macha 0.92.4): `claimed()` when a claim stood at the
+// check, so the delete must not go; otherwise the id is marked until this goes.
+class ClaimDeletion {
+ public:
+  ClaimDeletion() = default;
+  ClaimDeletion(ClaimDeletion&& other) noexcept : _locks(other._locks), _id(other._id), _claimed(other._claimed) { other._locks = nullptr; }
+  ClaimDeletion& operator=(ClaimDeletion&&) = delete;
+  ClaimDeletion(const ClaimDeletion&) = delete;
+  ClaimDeletion& operator=(const ClaimDeletion&) = delete;
+  inline ~ClaimDeletion();
+  bool claimed() const noexcept { return _claimed; }
+
+ private:
+  friend class ClaimLocks;
+  ClaimLocks* _locks = nullptr;
+  ObjectId _id{};
+  bool _claimed = false;
+};
+
+// One node's guard over each object's claims against its copy, so no claim
+// lands between a delete's check that none stands and the delete. A claim's
+// presence check and its journal write hold the object's stripe. A delete holds
+// it only to check and to mark the id, then unlinks under the mark alone, so a
+// claim path never waits on the DATA device: a claim that arrives meanwhile
+// finds the mark and treats the object as not present. Striped by the id's
+// first byte; a batch takes its stripes in ascending order, so two batches never
+// deadlock. Holders wait on the state device. Thread-safe.
 class ClaimLocks {
  public:
   static constexpr size_t stripes = 64;
@@ -80,6 +103,37 @@ class ClaimLocks {
     Guard() = default;
     std::vector<std::unique_lock<std::mutex>> _held;
   };
+
+  // Under the id's stripe: whether a delete has it.
+  bool deleting(const ObjectId& id) const {
+    dannan::contract::Lock lock(_deleting_mutex);
+    return _deleting.contains(id);
+  }
+
+  // Under the id's stripe: marks it until the result goes.
+  ClaimDeletion begin_deleting(const ObjectId& id) {
+    {
+      dannan::contract::Lock lock(_deleting_mutex);
+      _deleting.insert(id);
+    }
+    ClaimDeletion out;
+    out._locks = this;
+    out._id = id;
+    return out;
+  }
+
+  // Takes the id's stripe, asks `claimed`, and marks it if not; the stripe is
+  // let go before this returns. Waits on what `claimed` waits on.
+  template <typename Check>
+  ClaimDeletion deletion(const ObjectId& id, Check&& claimed) DANNAN_EXCLUDES(dannan::contract::no_io) {
+    const auto guard = lock(std::span<const ObjectId>(&id, 1));
+    if (claimed()) {
+      ClaimDeletion out;
+      out._claimed = true;
+      return out;
+    }
+    return begin_deleting(id);
+  }
 
   // Ids a batch holds its stripes for at once. A claim's journal write is
   // under them, and a batch may be a million ids.
@@ -117,7 +171,21 @@ class ClaimLocks {
   }
 
  private:
+  friend class ClaimDeletion;
+  void end_deleting(const ObjectId& id) noexcept {
+    dannan::contract::Lock lock(_deleting_mutex);
+    if (const auto found = _deleting.find(id); found != _deleting.end()) _deleting.erase(found);
+  }
+
   std::array<dannan::contract::IoMutex, stripes> _stripes;
+  mutable dannan::contract::Mutex _deleting_mutex;
+  // A multiset: two deletes of one id at once each hold a mark, so the first to
+  // finish does not end the second's.
+  std::multiset<ObjectId> _deleting DANNAN_GUARDED_BY(_deleting_mutex);
 };
+
+inline ClaimDeletion::~ClaimDeletion() {
+  if (_locks) _locks->end_deleting(_id);
+}
 
 }  // namespace dagda::store

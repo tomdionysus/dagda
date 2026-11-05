@@ -1123,3 +1123,9 @@ The mapping is confirmed from Macha's side, with these. They outrank the tables 
 - For Tom: `test_unversioned_state_is_refused` and zero storage (a node whose only disk is offline at start must not crash-loop on a startup timeout, so Macha may need "ready, degraded"); the predicates (the Macha session recommends retiring them in Macha as dead code).
 - Depends on Tom's answer about the maintenance loop (`ACTIVE.md`, "Waiting on Tom"): `test_coalesced_delete_burst_wakes_at_exact_garbage_grace`, `test_trace_quiet_node`, `test_trace_claimed_objects_lost`, `test_disconnected_maintenance_sleeps_until_peer_event`, `test_manual_clock_*`, `test_system_clock_*`, `test_convergence_demand_coalesces_*`, which the Macha session rewrites over its own pass if that loop stays.
 
+## Macha 0.92.4 (`cac5998`)
+
+- New: `test_a_delete_marks_its_object_and_holds_no_stripe` RETIRE against `StoreClaimLocks.ADeleteMarksItsObjectAndHoldsNoStripe`, with `StoreClaimLocks.AClaimFindsAMarkedObjectNotPresent` for the claim's half.
+- The hung stop has no Macha case; `StoreRepair.AStopEndsTheSurveysWalk` is Dagda's.
+- Nothing else in the tables moves: the two held-ledger tests still map as they did, and `TracedNode::advance` changed no fixture file. The maintenance trace rows stay held on the loop question.
+
