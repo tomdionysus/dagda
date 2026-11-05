@@ -1,7 +1,9 @@
 # Macha's store: what Dagda must do
 
-Status: requirements, 2026-11-03, night. Written by the Dagda session from a
-read of `../macha` and the Dannan design documents. Nothing here is built.
+Status: requirements, 2026-11-03 night, re-based 2026-11-05 on Macha's `develop`
+at `00861dd` (0.92.3, both live nodes, macnessa and inverbeg). Macha's code as it
+is outranks the design documents: where they differ, Macha's behaviour is the
+requirement (Tom, 2026-11-05). What is built is in `COMPLETED.md`.
 This is Dagda's specification for its first customer: Tom's intent is that
 Dagda replaces Macha's distributed store (its DHT) by extracting how
 Macha's store works and generalising it, so that Lugh and Lir can use it
@@ -12,19 +14,21 @@ that Dagda's shape must also carry (`2026-11-03-stack.md`, "Waiting on Tom"
 
 ## 0. How to read this
 
-**Which Macha.** Macha's `develop` is `5a06d3c` (0.91.5). The checkout in
-`../macha` is on the unmerged branch `feature/tree-native-namespace`
-(`8fc5a68`, work in progress, 20 tests failing). The branch differs from
-`develop` only in `src/metadata/*`, `src/contract/metadata_view.hpp`,
-`src/service/node_services.cpp` and `src/service/service.hpp`.
+**Which Macha.** Macha's `develop` is `00861dd` (0.92.3). This document was
+first written against `5a06d3c` (0.91.5); between them the store changed only in
+0.92.3 (section 2). Macha's unmerged `feature/tree-native-namespace` was at
+`8fc5a68` when written and is now at `b080c38`, green, merging after Macha's two
+P0s; genesis and the final head forms settle at that merge.
 
 **How to read a citation.**
 - A citation is `file:line` under `../macha/src/` unless another root is
   named.
-- Line numbers are `develop`'s. For every file outside the four above they
-  equal the checkout's.
+- Line numbers are `5a06d3c`'s, and move in the files 0.92.3 changed:
+  `storage/local_store.*`, `storage/storage_pool.*`, `contract/object_ledger.hpp`,
+  `cluster/distributed_store.cpp`, `cluster/storage_server.cpp`. Read those by
+  symbol at `00861dd`. The rows of section 3.7 cite `00861dd`.
 - A citation marked **branch:** is at `8fc5a68` and names the branch's
-  direction, which this document specifies (section 2).
+  direction, which this document specifies (section 2). Re-read at the merge.
 - Tests are named by file and case. Lines are given where known; for
   `test_rpc_cluster.cpp`, `test_storage_metadata.cpp` and
   `test_catalogue_maintenance.cpp` they are the checkout's.
@@ -49,8 +53,9 @@ that Dagda's shape must also carry (`2026-11-03-stack.md`, "Waiting on Tom"
      - the legacy metadata authority: write floor 0, `metadata_voters`, the `cas`, `seed` and `install_committed_delta` write API, and the floor-0 upgrade in `maybe_reconfigure`;
      - whole-snapshot `mutate()`;
      - the offline namespace migration tool.
-2. **No layout bump and no protocol bump** are planned on Macha's side:
-   layout v18, protocol 23.
+2. ~~**No layout bump and no protocol bump** are planned on Macha's side:
+   layout v18, protocol 23.~~ Superseded: layout v19 by `dagda-migrate` (Tom,
+   2026-11-04 night), and wire v1 by the transport cutover.
 3. **Do not reproduce** the defects listed in section 7.
 
 ## 1. What Macha's store is, in one page
@@ -247,6 +252,10 @@ change on `develop` either.
 Dagda specifies the branch's direction: tree only, exact deltas only, the
 store required, and genesis a constant.
 
+**Since `5a06d3c`, re-based 2026-11-05.** Nothing in the store changed from
+`5a06d3c` to `5776392` (0.92.0 to 0.92.2 are books). 0.92.3 (`8e0308e`, merged
+at `00861dd`) changed it, fixing what the port found; its rows are section 3.7.
+
 ## 3. Requirements by Dagda subsystem
 
 Each row is a behaviour Dagda must provide. **Where** is Macha's location,
@@ -339,6 +348,11 @@ and the specification of the `dagda_tests` case written before the code.
 
 ### 3.4 `heads/`
 
+Re-read at Macha's merge. `2026-11-05-heads-plan.md` section 1 corrects the proof cells of
+H1, H12, H15, H16 and H25, and names the rows with no case (H20, H29, H30). In particular
+`test_metadata_history_checkpoint_concurrent_proposers_converge` does not exist at
+`00861dd` or `b080c38`.
+
 In the table, the head record is the store's and the FS state is the
 owner's blob, as divided at extraction seam 8. Line numbers are develop's
 unless marked.
@@ -400,6 +414,22 @@ unless marked.
 | C3 | A reachability provider registered per space or domain (`register_reachability`). | `ledger/node_horizon_builder.*` | seam 7 gates | **Generalise** (section 5.3) |
 | C4 | Status: storage, cache, metadata and repair figures, published into Dannan's one Status surface. Macha's Status JSON is unchanged. | `api/status_api.cpp`; `telemetry.hpp` | the Status golden | **Generalise**: Dagda publishes; Macha's facade renders. |
 | C5 | Message types registered on Dannan's route table: lanes, classes, notification and `ordered`. | `net.cpp:407-452`, `:819-831`, `:2027-2037`, `:3805-3819` | seam 4 gate | **Generalise** (section 4.2) |
+
+### 3.7 Macha 0.92.3 (`00861dd`)
+
+Behaviour Macha gained by fixing defects Dagda found. Dagda matches these shapes
+(Tom, 2026-11-04 night). Proof names Macha's case where 0.92.3 added or changed one.
+
+| Row | Behaviour | Where (`00861dd`) | Proof | Dagda |
+|---|---|---|---|---|
+| S34 | A writer waits for the accounting scan before it takes the object's lock, in put, remove and remove-if-older | `storage/local_store.cpp` `await_accounting`, `put_impl`, `remove`, `remove_if_older_than` | No new case; `test_verification_resumes_after_a_restart` adjusted | Built: `LocalStore::await_accounting` |
+| S35 | The held ledger is built before the scan thread starts | `storage/local_store.cpp` constructor | No case | Built |
+| S36 | The scan's completion and failure are flagged under the mutex, and the wait takes the stop token | `storage/local_store.cpp` `mark_scan_failed` | No case | Built |
+| L25 | A seed installs what was queued, then writes the durable marker, then sets the flag, under the flush lock | `HeldLedger::seed` | No case | Built, no case: the window needs a fault seam |
+| L26 | A striped claim guard (64 stripes) is held across every no-claim check and its delete, and every presence check and its claim | `contract/claim_store.hpp`, `contract/object_ledger.hpp`; `gc_step`, CONTROL sweep, `erase_all`, `delete_object`, `retain_objects`, the two local retains | No case | Built: `ClaimLocks`. Dagda also bounds it to 4096 ids at a time (M8), which Macha's holds for a whole batch. Sent to Macha |
+| S37 | Repair tells a refilled list from the last by a version, never a buffer address | `DistributedStore::repair_step` `pull_version`, `push_version` | No case | Equivalent: lists held by `shared_ptr` identity |
+| L27 | A removal stamped by a clock ahead is fresh, not expired | the torrent tombstone in `storage/` metadata | `test_torrent_requests_ride_the_snapshot_and_its_deltas` | Built: `LeaseClaimedCollection.ATombstoneFromAClockAheadIsKeptItsWindow` |
+| L28 | The delta decoder refuses a request with no id, as the snapshot decoder does | DLT9 decoder | `test_a_delta_refuses_a_torrent_request_with_no_id` | Built: `LeaseClaimedCollection.ADeltaCannotInstallARecordTheSnapshotRefuses` |
 
 ## 4. Formats
 
@@ -639,8 +669,8 @@ The decision is Tom's (`ACTIVE.md`, Waiting on Tom 6; stack document, 9).
 - Macha's port is then a migration of state and backends, which Macha's
   rule refuses (`docs/storage.md:178-182`: "not a live migration layer").
   It would need either a one-time conversion tool (the operator has just
-  removed one, `5f6101c`) or a fresh cluster. With one live node (fi-1) and
-  about 2 TB of DATA, a re-seal of every object is the cost.
+  removed one, `5f6101c`) or a fresh cluster. With the node live when this was written and
+  about 2 TB of DATA (now macnessa, 4 TB, and inverbeg, 583 GB), a re-seal of every object is the cost.
 - A middle course:
   - keep the object formats (loose, pack, the object-id AAD) for Macha's
     domain, so DATA is not rewritten;
@@ -885,7 +915,7 @@ Two items of that gate change under Dannan's wire v1:
     divergence merged, the result identical from either side;
   - a space opened at `replicas: 3` on a five-node in-process cluster,
     proving H20 (extraction 477-481);
-  - fi-1 for the period the extraction names.
+  - the soak on macnessa and inverbeg (fi-1 no longer runs Macha).
 
 ### Step 8d: the context as the API (extraction seam 9)
 
@@ -922,73 +952,27 @@ It needs its own gate, proposed here:
 
 ## 7. Do not reproduce
 
-The Macha session lists these as wrong or owing a fix. Dagda specifies the
-fix, not the behaviour.
+Revisited 2026-11-05. **Fixed in Macha 0.92.3, so no longer here:** the accounting
+deadlock and scan races, the seed order, the claim check-then-delete windows, the
+repair list identity, the future tombstone and the unkeyed delta record (section
+3.7).
 
-1. **Policy disagreement loops.** With `dht.replicas` 1 on one node and 2
-   on another, each committed its own value back about 150 times a minute
-   (760 commits in 5 minutes) until the configs matched
-   (`../macha/TODO/ACTIVE.md:14-18`). Both `mutate_delta` and
-   `maybe_reconfigure` treat the policy scalars as head state that each
-   node rewrites to its own config (branch: `metadata_manager.cpp:1749-1768`,
-   `:1373`), and the merge takes the max (`metadata_merge.cpp:95-96`).
-   **Dagda:** a space's policy has one answer that every node accepts, and
-   a node whose config disagrees reports the disagreement and never commits
-   it.
-   - Proposed: policy is set once at `open()`, changed only by an explicit
-     policy commit, and joined by a deterministic rule.
-   - The write-floor advertisement mismatch (H28) is the same problem.
-   - Case: two nodes configured differently produce at most one policy
-     commit.
-2. **Settings that need a restart.** SIGHUP refuses `dht.replicas` and
-   `dht.metadata_write_copies` (`service/service_config.cpp:23-25`). A
-   `write_copies` change is accepted and silently not applied, because
-   `reconfigure_local` copies only backends, cache, hydration and read-ahead
-   (`cluster/cluster.cpp:1144-1152`). Spool and journal paths apply only on
-   restart (`../macha/TODO/ACTIVE.md:8-13`). **Dagda:** every store setting
-   reloads, including backends, quotas, replicas, write copies, a space's
-   floor and paths. A setting that cannot apply now is refused with a
-   reason, never accepted and ignored.
-3. **Per-delta whole-state encode, and bounds that grow with the library.**
-   - `MetadataReplica::materialized_locked` deep-copies the parent snapshot
-     (`metadata.cpp:3720`) and re-encodes and rehashes the whole snapshot
-     for every delta in a chain (`:3757-3758`).
-   - `store_commit` does the same (`:4225-4242`).
-   - Full `decode_snapshot` runs only to read `merge_parents` (`:2306-2320`,
-     `:719`, `:4197`, `:3600`), and `own_head` decodes every head
-     (`metadata_manager.cpp:1019`).
-   - The 0.91.6 CHANGELOG records 21 MB at 1.6 TB, pinning a core.
+**What remains waits on Tom's ruling in Macha, and Dagda follows the result**
+(Tom, 2026-11-04 night). Where a ruling changes a format or an answer, Macha takes
+it first.
 
-   **Dagda:**
-   - Verifying a delta is O(delta): the delta names its parent's hash and
-     the successor's tree root.
-   - Parents and generation are in the commit header, never in the codec's
-     payload.
-   - No record, verification, replay or merge costs O(state). Discipline 4
-     (`docs/metadata.md:110-113`) is a tested bound: a cost baseline in
-     `dagda_tests` that fails if commit or verify cost grows with the number
-     of keys.
-   - This conflicts with v18 byte compatibility, where replay re-encodes to
-     check the hash (open question 5).
-4. **No disk I/O control reserve.** Ingest can starve health
-   (`../macha/TODO/BACKLOG.md:87-90`). `DataResourceArbiter` reserves only
-   for viewers and CONTROL never enters it (`cluster/data_work.hpp:23-24`).
-   The control store has no `reserve_free` (`local_state.cpp:134`).
-   **Dagda:**
-   - Each device's I/O admission keeps a reserve for control work (state
-     journals, claims, head commits), so a loader cannot delay a commit or a
-     health answer.
-   - The control store has a free-space reserve.
-   - Case: a saturating loader on the device shared by the state path and a
-     DATA backend does not move control-class commit latency past a bound.
-
-Also not reproduced (Macha's own `BACKLOG.md`):
-- **Zero storage reported healthy.** `data_storage` is ready whether or not
-  a backend is online (`local_state.cpp:85`). Dagda reports a plane with no
-  online backend as degraded.
-- **Allocations sized only by a constant from the wire**
-  (`metadata.cpp:1951`). Dagda bounds every reserve by the remaining bytes,
-  as the SM decoder does for garbage.
+| Item | What Macha does | Where | What Dagda has now |
+|---|---|---|---|
+| Policy disagreement loops | Each node commits its own `dht.replicas` back, about 150 times a minute until configs match | `../macha/TODO/ACTIVE.md`; branch: `metadata_manager.cpp:1749-1768` | Nothing: heads |
+| O(state) per delta | Replay and commit re-encode and rehash the whole snapshot | `metadata.cpp:3720`, `:3757-3758`, `:4225-4242` | Nothing: heads. Baselines are planned regardless |
+| Allocations sized from the wire | A reserve sized only by a constant from the wire | `metadata.cpp:1951` | Nothing: heads |
+| Settings reload | SIGHUP refuses replicas; a `write_copies` change is accepted and ignored | `service/service_config.cpp:23-25`, `cluster/cluster.cpp:1144-1152` | Backends and cache live, the rest at restart (M5). The old text here asked every setting to reload; that is withdrawn unless Tom rules it |
+| I/O control reserve | No disk I/O reserve for control work | `cluster/data_work.hpp:23-24` | **Differs:** `IoReserve` exists. Tom ruled the control store's 256 MiB free-space reserve (taken by Macha at the port); the device reserve is on Macha's list |
+| Zero storage reported healthy | `data_storage` ready with no backend online | `local_state.cpp:85` | **Differs:** the plane stays unready with every backend offline. Sent to Macha; follows the ruling |
+| Non-associative three-way torrent merge | Three concurrent duplicates settle only at the next merge | `5.4` | Kept in the template for byte identity |
+| The lease fence | No epoch fence in Macha | `5.4` | **Differs:** Dagda's `LeaseKeeper` has one (new). Follows the ruling |
+| The local barrier's deadline | `StoragePool::durability_barrier` waits with none | `storage/storage_pool.*` | Kept as Macha's, no deadline (M4) |
+| Wall versus steady age | The CONTROL step compares a wall-clock age with a steady span | `COMPLETED.md`, findings | Kept as Macha's |
 
 ## 8. Open questions and contradictions
 

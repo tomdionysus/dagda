@@ -1,30 +1,59 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-04, night. `develop` is pushed to
-`git@github.com:tomdionysus/dagda.git`, on Dannan 0.4.1, gate
-`dagda_tests` 389 (1 disabled). Steps 1 to 3, 5, the parts of 6 and 7
-that need no heads, 6b (`dagda-migrate`) and 7b (maintenance in the node,
-the instant delete) are done (`COMPLETED.md`). What remains waits on
-Macha: step 4 (heads) on its tree-native merge, which completes and
-freezes `dagda::Context` v1; 6b's gate on the Macha session's v18
-fixture; step 8 (the port) on Tom.
+Last updated: 2026-11-05. Dagda's plan follows Macha's code: `develop` at `00861dd`
+(0.92.3, running on both live nodes, macnessa and inverbeg), not the 2026-11-02 design
+and not the `5a06d3c` baseline (Tom, 2026-11-05). Where the design and Macha's code
+differ, Macha's behaviour is the plan and Dagda is reshaped to it. `COMPLETED.md` is
+the record.
 
-Dagda's specification is
-[`2026-11-03-macha-store-requirements.md`](2026-11-03-macha-store-requirements.md):
-Macha's store as it is (develop `5a06d3c` plus the tree-native branch's
-direction, tree form only), 92 requirement rows by subsystem, the formats,
-the FS seams to cut, the port steps, what not to reproduce, and open
-questions for Tom (its section 8).
+## The plan, re-based on Macha `00861dd` (Tom, 2026-11-05)
 
-The design is Tom's, 2026-11-02: "Dannan: Distributed Substrate Library
-Plan" (the store sections) and "Macha Core Extraction Plan", both Claude
-Docs and the masters, rendered in `../dannan/TODO/2026-11-02-*.md`. The
-store rows of `../dannan/TODO/2026-11-03-macha-function-inventory.md`
-say what Macha does today; they do not decide Dagda's design.
+The goal is the second cutover: Macha's store onto Dagda, one flag day with the disk
+migration, after the transport cutover has soaked. Everything is ordered by what that
+needs. Nothing Lugh or Lir needs is on this path (P7).
 
-How Dannan, Dagda and Lugh divide the work and fit as a stack is
-[`2026-11-03-stack.md`](2026-11-03-stack.md), the one copy for all three
-projects, with recommendations for Tom.
+**The documents, each the detail of a part of this plan:**
+- [`2026-11-03-macha-store-requirements.md`](2026-11-03-macha-store-requirements.md):
+  re-based; 0.92.3's rows are section 3.7, section 7 revisited.
+- [`2026-11-05-second-cutover.md`](2026-11-05-second-cutover.md): steps S, 8a, 8b, 8c, 8d,
+  each with Macha's files, Status keys, config keys and gate; the migration plan; what is
+  MISSING in Dagda (A Status, B config, C behaviours B1 to B15).
+- [`2026-11-05-test-mapping.md`](2026-11-05-test-mapping.md): all 786 of Macha's cases:
+  143 retire, 167 rewrite, 354 keep, 27 gap, 95 wait for heads. For the Macha session to
+  confirm; 49 uncertain ones are listed.
+- [`2026-11-05-heads-plan.md`](2026-11-05-heads-plan.md): step 4 from `b080c38`: H1 to H30
+  with gates, sessions S1 to S7, Lugh's and Lir's L1 to L9, the re-check list at the merge.
+
+These were drafted from reading, with citations checked by script and spot-read, not all
+by eye. Nothing in them has been run against Macha.
+
+**The order.** Each gate is named in the document cited.
+
+| # | Work | Gate | Waits on |
+|---|---|---|---|
+| P1 | Scale and platform (M10): Linux on macnessa with `syncfs`, sanitizers, a trie of 1 million ids, 100,000 objects across packs | Whole suite on Linux aarch64; ASan, UBSan and TSan clean; the two scale cases' figures recorded | Nothing |
+| P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | Tom, for predicates |
+| P3 | The node's parity for step S: second-cutover B1 to B15 but B11, about 28 `dagda.*` figures, the config keys and defaults | `test_maintenance_trace`, and S.4's named cases and VALIDATION sections | Tom, for the trace fixtures |
+| P4 | The hung stop and Macha's other P0 | Macha's case, in the shape of its fix | Macha |
+| P5 | Heads S1: the cache seed, its migration pass, `NodeOptions::heads` off | Heads plan 2.1 and 2.2 | Tom, for before the merge |
+| P6 | `dagda-migrate` over the real state; the rehearsal; macnessa's window | Second-cutover "Migration plan": every object `has` and `get` true against a listing taken before; inverbeg's time measured, not assumed | Macha's merge, then its fixtures |
+| P7 | Steps S, 8a and 8b on the flag day | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover's soak |
+| P8 | Heads S2 to S7, then 8c and 8d | Heads plan section 3; 8c.4, 8d.4; `macha-metadata-dump` identical | Macha's merge. 95 gap-heads cases each get a session or a named retirement |
+| P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
+
+**Open differences from Macha, kept until Tom rules there:** the device I/O reserve, the
+data plane not ready with no backend online, the lease epoch fence, the claims guard held
+4096 ids at a time. Requirements section 7 has them.
+
+**Known gaps found by the plan, in P2 or P3:** maintenance polls where Macha parks and wakes
+on a peer event (`node.cpp` `maintenance_loop`); GC rests on a fixed interval rather than
+events or an exact grace time; no decision trace through the node; a stale inventory on a
+node that stays busy; a corrupt remote copy reads as held until its own scrub, where Macha
+heals it from the sender.
+
+Dagda's specification is the requirements document above. How Dannan, Dagda and Lugh divide
+the work is [`2026-11-03-stack.md`](2026-11-03-stack.md), the one copy for all three. The
+2026-11-02 design documents are history; they do not decide anything.
 
 ## Dannan, as Dagda finds it (from the Dannan session, 2026-11-03 night)
 
@@ -156,7 +185,9 @@ TODO in `store/storage_pool.h` stays.
   `develop`): Dannan defines no `dagda` target, and its gate is
   `dannan_tests` alone.
 
-## The plan (approved by Tom, 2026-11-04)
+## The earlier plan (approved by Tom, 2026-11-04), now the record of steps 0 to 7
+
+Steps done are in `COMPLETED.md`. What remains of it is in the table above.
 
 Bottom up, in the order Macha's store depends on itself, so each step
 has a gate before the next starts. One step per session and `feature/`
@@ -523,6 +554,9 @@ Steps 5 and the parts of 6 that need no heads go first.
 
 ## Decisions
 
+(Tom, 2026-11-05) macnessa runs Dagda's Linux tests, under one scratch directory at lowest
+priority. Relayed by the Macha session: replan from Macha's `00861dd`, as above.
+
 (Tom, 2026-11-04 night, relayed by the Macha session) Macha's tests keep pinning
 the torrent bytes and are the port gate; Dagda pins only the template on its
 neutral record and holds no torrent code. The reverse migration is kept but gates
@@ -638,8 +672,19 @@ asking:
 
 ## Waiting on Tom
 
-From the port respec: M10, which Linux machine runs the tests. Recommended:
-inverbeg, whose data is replaceable from macnessa. Both Pis are live.
+From the replan, each with a recommendation in its document:
+
+1. Must the flag day wait for heads? Recommended no: heads S1 only, with Dagda pinned at
+   a commit that does not claim `Context` v1 is frozen (heads plan Q1).
+2. Does 8c change `<state>/metadata/`? Recommended no: Dagda reads Macha's files as they
+   stand, and any move is a later release (heads plan Q2, second-cutover question 1).
+3. May heads S1 start before Macha's merge? Recommended yes: it touches no tree form (Q9).
+4. Do `test_maintenance_trace`'s fixtures stand? Recommended yes: the node takes Macha's
+   order and a trace (second-cutover question 3).
+5. One state directory or two? Recommended one (second-cutover question 4).
+6. Custody's key source on the nodes; where the 583 GB rehearsal copy lives; which node
+   returns first; the soak's length (second-cutover questions 2, 6, 7, 8).
+7. Do the predicates move, given `query()` has no production caller (test mapping)?
 
 Earlier: the seven items of 2026-11-04 were all answered that evening
 (see Decisions, "Tom, 2026-11-04 evening") and done the same evening
