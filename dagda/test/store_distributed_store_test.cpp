@@ -990,40 +990,61 @@ TEST(DistributedStore, AReadNamesTheNodeThatServedIt) {
   EXPECT_EQ(local.served_by, peer.id());
 }
 
-// Macha's forms return on one copy where write() and the Context seek two: a
-// peer that never answers does not hold them up.
-TEST(StoreDistributedStore, MachasFormsAreOneCopyWithTheRestOwed) {
-  EXPECT_EQ(WriteOptions{}.level, Durability::replicated);
-  EXPECT_EQ(persisted_write().level, Durability::persisted);
+// Macha's forms seek write_copies before they return (distributed_store.cpp:226,
+// docs/durability.md:7): at Macha's default of 1 a peer that never answers does
+// not hold them up and the rest is owed; at 2 they wait for it. put_deferred_here
+// is one copy here either way.
+TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
   dannan::test::Gate gate;
   Cluster cluster;
-  auto& writer = cluster.add("writer", options(2, 2));
-  auto& peer = cluster.add("peer", options(2, 2));
+  auto& writer = cluster.add("writer", options(2, 1));
+  auto& peer = cluster.add("peer", options(2, 1));
+  auto& careful = cluster.add("careful", options(3, 2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  peer.interpose([&gate](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+  const auto held = [&gate](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
     if (seen == message::put_object || seen == message::put_object_deferred) gate.enter_and_wait();
     return std::nullopt;
-  });
+  };
+  peer.interpose(held);
+  writer.interpose(held);
+
   const auto bytes = pattern(32 * 1024, 41);
-  auto put = std::async(std::launch::async, [&] { return writer.store().put(object_id(bytes), bytes); });
-  const bool returned = put.wait_for(10s) == std::future_status::ready;
-  const auto deferred_bytes = pattern(32 * 1024, 42);
-  auto deferred = std::async(std::launch::async, [&] { return writer.store().put_deferred_here(object_id(deferred_bytes), deferred_bytes); });
-  const bool deferred_returned = deferred.wait_for(10s) == std::future_status::ready;
+  auto one = std::async(std::launch::async, [&] {
+    const auto evidence = careful.store().put_deferred_here(object_id(bytes), bytes);
+    return evidence;
+  });
+  const bool deferred_returned = one.wait_for(10s) == std::future_status::ready;
+  const auto two_bytes = pattern(32 * 1024, 42);
+  auto two = std::async(std::launch::async, [&] { return careful.store().put(object_id(two_bytes), two_bytes); });
+  const bool waited = two.wait_for(300ms) == std::future_status::timeout;
   gate.open();
-  EXPECT_TRUE(returned);
-  EXPECT_TRUE(put.get());
   EXPECT_TRUE(deferred_returned);
-  const auto evidence = deferred.get();
+  EXPECT_TRUE(waited);
+  EXPECT_TRUE(two.get());
+  const auto evidence = one.get();
   EXPECT_TRUE(evidence.deferred);
   EXPECT_EQ(evidence.level, Durability::persisted);
-  ASSERT_TRUE(writer.data().has(object_id(deferred_bytes)));
-  const auto settled = writer.store().wait(evidence.ticket, 10s);
+  EXPECT_TRUE(careful.data().has(object_id(bytes)));
+  const auto settled = careful.store().wait(evidence.ticket, 10s);
   ASSERT_TRUE(settled.has_value());
   EXPECT_GE(settled->holders(), 1u);
-  // The rest is owed, and arrives.
-  EXPECT_TRUE(wait_until([&] { return peer.data().has(object_id(bytes)) && peer.data().has(object_id(deferred_bytes)); }));
+
+  // write_copies 1: returned on the one copy, whoever else is held.
+  dannan::test::Gate second_gate;
+  peer.interpose([&second_gate](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::put_object) second_gate.enter_and_wait();
+    return std::nullopt;
+  });
+  writer.interpose({});
+  careful.interpose({});
+  const auto one_copy = pattern(32 * 1024, 43);
+  auto quick = std::async(std::launch::async, [&] { return writer.store().put(object_id(one_copy), one_copy); });
+  const bool returned = quick.wait_for(10s) == std::future_status::ready;
+  second_gate.open();
+  EXPECT_TRUE(returned);
+  EXPECT_TRUE(quick.get());
+  EXPECT_TRUE(writer.data().has(object_id(one_copy)));
 }
 
 // A large publication goes through the guard a part at a time: the first part

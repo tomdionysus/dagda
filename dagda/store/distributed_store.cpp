@@ -1014,15 +1014,17 @@ ObjectId DistributedStore::put_deferred(std::span<const uint8_t> data, WriteOpti
 }
 
 WriteEvidence DistributedStore::put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, FrameType frame) {
-  auto options = persisted_write();
+  WriteOptions options;
   options.deferred = true;
   options.frame = frame;
-  // Persisted seeks one copy, and this node is tried first when it hosts.
+  // Here is one copy, and this node is tried first; on a node that hosts none,
+  // as put_deferred.
+  if (holds_extents()) options.level = Durability::persisted;
   return write(id, data, options);
 }
 
 bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> data, FrameType frame) {
-  auto options = persisted_write();
+  WriteOptions options;
   options.frame = frame;
   if (!holds_extents()) return put(id, data, options);
   check_write(id, data);
