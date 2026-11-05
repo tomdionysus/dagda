@@ -48,6 +48,7 @@ add_executable(dagda_tests
   store_control_store_test.cpp
   store_data_work_test.cpp
   store_distributed_store_test.cpp
+  store_durability_barrier_test.cpp
   store_durability_domain_test.cpp
   store_durability_ticket_test.cpp
   store_io_pressure_test.cpp

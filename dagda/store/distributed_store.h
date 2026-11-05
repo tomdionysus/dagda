@@ -420,6 +420,16 @@ class DistributedStore final : public ControlObjectSource {
   std::optional<WriteEvidence> status(Ticket ticket) const;
   void wait(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
   std::optional<WriteEvidence> wait(Ticket ticket, std::chrono::milliseconds deadline);
+  // A wait over many tickets (Macha's DurabilityBatch and its one
+  // durability_barrier): one evidence for each ticket, in the order given, a
+  // forgotten one's holding no ticket. Generations are cumulative within one
+  // node, process epoch, domain and backend instance, so each such place is
+  // asked for one barrier, at the highest generation any of the tickets names,
+  // and a place whose process has changed is probed once with every id that
+  // named it. Each ticket keeps its own level and evidence.
+  using ManyDone = std::function<void(std::vector<WriteEvidence>)>;
+  void wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done);
+  std::vector<WriteEvidence> wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline);
   // As wait(), but until no member is pending at all (WriteEvidence::
   // complete): the report a ticket makes again once repair or prompt
   // replication has landed the last copy it was owed.
@@ -538,8 +548,13 @@ class DistributedStore final : public ControlObjectSource {
   void note_acknowledged(const ObjectId& id, const dannan::identity::NodeId& node);
   void on_roster(const dannan::RosterChange& change);
   void catch_up(const ObjectId& id, const dannan::membership::NodeRecord& node);
-  void run_barriers(const std::shared_ptr<TicketRecord>& record, std::chrono::milliseconds deadline);
+  // Asks for what the tickets' copies awaiting a barrier owe, one barrier a
+  // place (wait(), over many tickets).
+  void run_barriers(const std::vector<std::shared_ptr<TicketRecord>>& records, std::chrono::milliseconds deadline);
   void wait_until(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, WriteDone done);
+  // Sets the wait going; the ticket when its barriers are still to be asked for.
+  std::shared_ptr<TicketRecord> arm_wait(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                                         WriteDone done);
 
   // Admission for this node's devices: DATA credit and a DATA slot, waited
   // for up to `wait`; a control slot.
