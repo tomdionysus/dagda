@@ -3,6 +3,18 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: paused, and the mapping's test gaps merged
+
+18 of the mapping's 27 gaps closed (`dagda_tests` 448 passing, 3 disabled, three whole runs on the Mac; not yet on
+Linux or under GCC, and the interposed sync count's Linux half has never compiled). The other 9 are retired or stay
+Macha's by decision. Code changed by them: `wait` over many tickets makes one barrier call per place; a repair list
+arriving after an empty one is walked by the step that first sees it (`StoreRepair.TheStepThatFirstSeesANewListWalksIt`);
+`NodeOptions::startup_progress`. The rebase left intermediate commits that may not build; the head does.
+
+**Paused (Tom, relayed by the Macha session, 2026-11-05: "Pause until it lands"):** no port work until Macha's old-code
+removal lands. The Macha session will send the commit and the forms that remain. On resuming: re-read the baseline,
+conform the read-failure shape to 0.92.6, run this tree on macnessa under GCC. Left on macnessa: `/home/tom/dagda-linux`.
+
 ## 2026-11-05: the node opens in two parts (second-cutover B1)
 
 `Node(context, options, Node::OpenLater{})` checks the contract, declares the planes and registers the message

@@ -5,6 +5,9 @@ and not the `5a06d3c` baseline (Tom, 2026-11-05). Where the design and Macha's c
 differ, Macha's behaviour is the plan and Dagda is reshaped to it. `COMPLETED.md` is
 the record.
 
+**PAUSED (Tom, relayed by the Macha session, 2026-11-05: "Pause until it lands"):** no port work until Macha's old-code
+removal lands. See `COMPLETED.md` for where it stopped and what to do on resuming.
+
 ## The plan, re-based on Macha `00861dd` and `cac5998` (Tom, 2026-11-05)
 
 The goal is the second cutover: Macha's store onto Dagda, in stages (Decisions, 2026-11-05), after the
