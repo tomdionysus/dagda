@@ -695,6 +695,9 @@ void Node::stop_maintenance() {
 //   admission.pressure_refusals, admission.data_in_flight,
 //   admission.control_in_flight.
 void Node::publish_status() {
+  // A pool that opened with every backend offline goes ready when one returns,
+  // by a refresh or a reload.
+  if (!_data->degraded()) ready(plane_data);
   auto& surface = _context.status();
   const auto put = [&](const std::string& name, dannan::status::Surface::Value value) { surface.publish("dagda." + name, std::move(value)); };
   put("context_version", u64(context_version));
