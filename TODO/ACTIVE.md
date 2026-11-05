@@ -67,6 +67,12 @@ artefacts and answer questions. So:
   deltas a minute live, and that is the requirement until Tom rules. The heads plan's `b080c38`
   citations and "settled at the merge" marks are to be re-read at `cac5998`.
 
+**Macha 0.92.5 (`808fa0f`, local, gated, not deployed):** a stale tombstone held in a batch is
+erased: the batch is dropped and the rest written again at its own retirement time, and a batch the
+erase dropped is not dropped again as matured (`maintenance.cpp`, `test_a_stale_tombstone_in_a_batch_is_erased_once`).
+No Dagda code changes: Dagda has no tombstone batches yet. It joins heads row H23 and the retirement
+provider's case at S4 or S5. Heads are read at `808fa0f` once it is on `develop`.
+
 **Macha 0.92.4 (`cac5998`, tag on `70cf4a4`), taken:** the claim deletion mark and the
 survey's stop (`COMPLETED.md`). The inventory's walk has no stop check yet in Macha either.
 Macha's trace flake was not credit or CPU, as first thought: a commit ahead of the survey flips
