@@ -3,6 +3,13 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: the node opens in two parts (second-cutover B1)
+
+`Node(context, options, Node::OpenLater{})` checks the contract, declares the planes and registers the message
+types before the Dannan node starts, waiting on no device; `open_store()` opens the rest after it starts, on the
+owner's thread, as Macha's recovery does (`service.cpp:582-586`). A node can answer peers and Status meanwhile.
+The one-part constructor is unchanged.
+
 ## 2026-11-05: sanitizers and scale (M10, part)
 
 On the Intel Mac, Dannan 0.4.1 and Dagda both instrumented. ASan and UBSan: 422 of 422, no report, with

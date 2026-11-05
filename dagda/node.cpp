@@ -64,9 +64,20 @@ struct Node::StatusTimer {
   Node* node DANNAN_GUARDED_BY(mutex) = nullptr;
 };
 
-Node::Node(dannan::Context& context, NodeOptions options) : _context(context), _options(std::move(options)), _logger(context.logger("dagda.node")) {
+Node::Node(dannan::Context& context, NodeOptions options) : Node(context, std::move(options), OpenLater{}) { open_store(); }
+
+Node::Node(dannan::Context& context, NodeOptions options, OpenLater) : _context(context), _options(std::move(options)), _logger(context.logger("dagda.node")) {
+  refusing([this] { prepare(); });
+}
+
+void Node::open_store() {
+  if (_server) throw std::logic_error("the store is open already");
+  refusing([this] { open(); });
+}
+
+void Node::refusing(const std::function<void()>& part) {
   try {
-    open();
+    part();
   } catch (const std::exception& error) {
     const std::string why = error.what();
     _logger.error("node refused: " + why);
@@ -86,7 +97,7 @@ void Node::step(std::string_view what) {
 
 void Node::ready(const std::string& plane) { _context.readiness().ready(plane); }
 
-void Node::open() {
+void Node::prepare() {
   if (_context.version() != dannan::context_version)
     throw NodeRefused("the Dannan node serves dannan::Context version " + std::to_string(_context.version()) + " and Dagda was built against version " +
                       std::to_string(dannan::context_version));
@@ -102,7 +113,6 @@ void Node::open() {
     throw NodeRefused("a blind node's store waits on the catalogue (step 4): domain " + domain::to_string(_options.domain.id) + " is " +
                       domain::role_name(_options.domain.role) + " here");
   if (!_options.key) throw NodeRefused("no key for domain " + domain::to_string(_options.domain.id) + ", of which this node is a member");
-  const auto scheme = store::SealingScheme::v19(_options.domain.id);
 
   // Before the node starts, so a hosted system cannot forget it (C5).
   step("open message-types");
@@ -113,6 +123,10 @@ void Node::open() {
   } catch (const std::logic_error& error) {
     throw NodeRefused(std::string("Dagda's message types are registered before the Dannan node starts: ") + error.what());
   }
+}
+
+void Node::open() {
+  const auto scheme = store::SealingScheme::v19(_options.domain.id);
 
   // The state first: its lock, then nothing else on it until its layout is
   // accepted. A v18 backend is refused here too, before anything is written.
@@ -697,6 +711,7 @@ void Node::stop_maintenance() {
 //   admission.pressure_refusals, admission.data_in_flight,
 //   admission.control_in_flight.
 void Node::publish_status() {
+  if (!_data) return;
   auto& surface = _context.status();
   const auto put = [&](const std::string& name, dannan::status::Surface::Value value) { surface.publish("dagda." + name, std::move(value)); };
   put("context_version", u64(context_version));

@@ -234,6 +234,18 @@ class Node {
   // node without custody, or a part that cannot open. Declares its own
   // readiness planes (data_storage, control_storage, cache, retention).
   Node(dannan::Context& context, NodeOptions options);
+
+  // In two parts, for an owner whose node must answer peers and Status while the
+  // store recovers, as Macha's does (service.cpp:582-586): this constructor checks
+  // the contract, declares the planes and registers the message types, which must
+  // come before the Dannan node starts, and opens nothing, so it waits on no device.
+  // open_store() is everything else, after the Dannan node starts, on a thread of
+  // the owner's: a request meanwhile finds no handler, as a peer's would on a node
+  // still recovering. Each throws NodeRefused as the constructor above does; once
+  // refused, the node is stopped. open_store() twice throws std::logic_error.
+  struct OpenLater {};
+  Node(dannan::Context& context, NodeOptions options, OpenLater);
+  void open_store();
   ~Node();
   Node(const Node&) = delete;
   Node& operator=(const Node&) = delete;
@@ -346,6 +358,8 @@ class Node {
     uint64_t verify_passes = 0;
   };
 
+  void refusing(const std::function<void()>& part);
+  void prepare();
   void open();
   void step(std::string_view what);
   void ready(const std::string& plane);
