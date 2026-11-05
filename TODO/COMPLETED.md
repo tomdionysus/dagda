@@ -36,10 +36,12 @@ ran on an Intel Mac; Apple Silicon's 53-bit `long double` has not been run. Gate
 
 ## 2026-11-04 night: M4, Macha's write forms (`feature/port-respec`)
 
-`put`, `put_deferred` and `put_here` are persisted when the caller names no level,
-returning on one copy with the rest owed; `write()` and the Context stay replicated
-(k 2, the maintainer's). `put_deferred_here` added, its ticket in place of Macha's batch. The
-local barrier's deadline waits on the maintainer's ruling in Macha. Gate: `dagda_tests` 411.
+`put_deferred_here` added, its ticket in place of Macha's batch. The local barrier's
+deadline waits on the maintainer's ruling in Macha. Corrected the next day: the put forms were
+first made persisted by default, which matches Macha only at `write_copies` 1 and
+was wrong (the test mapping found it; `distributed_store.cpp:226`). They seek
+`write_copies`, and the facade passes Macha's default of 1. Case:
+`StoreDistributedStore.MachasFormsSeekWriteCopies`. Gate at the time: `dagda_tests` 411.
 
 ## 2026-11-04 night: matching Macha's fixed shapes (`feature/port-respec`)
 
