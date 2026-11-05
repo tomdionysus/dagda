@@ -56,6 +56,7 @@ add_executable(dagda_tests
   store_local_store_durability_test.cpp
   store_local_store_ledger_test.cpp
   store_local_store_presence_test.cpp
+  scale_test.cpp
   store_local_store_test.cpp
   store_placement_vectors_test.cpp
   store_messages_test.cpp
