@@ -66,6 +66,10 @@ Not one of these is done at the commits above:
    mapping names where it says RETIRE. A GAP case stays until Dagda has written what the mapping
    says it owes. The lists below are by step; the mapping is by case.
 
+**Superseded (the maintainer, 2026-11-05, `TODO/ACTIVE.md` Decisions):** the cutover is in stages, as many stops as
+needed, moving on when tests pass; `<state>/metadata/` is migrated at 8c; Macha's loop runs until 8c.
+What follows on a single flag day, questions 1 to 8 and the soak are read with that.
+
 **How the steps deploy.** A v19 disk is refused by anything but Dagda and Dagda refuses
 v18 (`dagda/node.cpp:128-129`), so the flag day is the deployment of step S. But
 `dagda::Node` without a provider removes nothing (`dagda/node.cpp:398-408`), and Macha's
