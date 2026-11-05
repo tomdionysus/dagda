@@ -3,6 +3,23 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-05: the first dry run over real state
+
+The Macha session ran `dagda-migrate --dry-run` (Dagda `db2ba92`) on live-a over a scratch copy of the
+node's state stopped at 0.92.4, on NVMe, with a throwaway custody: exit 0, no refusal, 12 s, 3.15 GB read,
+nothing written, no existing file changed, three empty lock files new. Loose objects 3,809 and pack records
+314,390 all open under v18, 0 unreadable, 0 damaged spans, 0 torn tails; 9 ledgers would re-seal; 3 markers.
+Output at `../macha/build/macha-fixtures/migrate-dryrun/`.
+
+What it proves: real v18 records and ledgers open under the tool's rules, and it refuses nothing. What it does
+not: no real run and no there and back on this state, the ledgers re-sealed only in classification, DATA only a
+sample (one pack, 48 loose objects), and the time says nothing about 4 TB on the USB disk.
+
+The 1,883,019 unsealed records are all touches, none tombstones, all in the control store: read from the copy's
+headers, 41 packs, 2.7 GB, 2026-11-01 to -05, 311,000 ids, one touched 28,104 times. A touch is 125 bytes, so
+about 235 MB, 9% of those packs. The tool passes over them correctly. Whether the rate fell with 0.92.5 is
+not measured.
+
 ## 2026-11-05: the first `dagda-migrate` over a state Macha wrote
 
 A smoke test, not a gate: a private copy of `../macha/build/macha-fixtures/state-scratch/a` (two
