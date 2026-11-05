@@ -183,6 +183,14 @@ struct NodeOptions {
   std::function<void(std::string_view)> trace;
 };
 
+// What a node takes while running: Macha's live reload (LocalState::reconfigure),
+// its DATA backends and its cache. Everything else in NodeOptions takes a restart,
+// as Macha's replicas and intervals do.
+struct NodeReload {
+  std::vector<store::StorageBackendOptions> backends;
+  store::CacheOptions cache;
+};
+
 // Why a node did not open. Nothing it opened is left open, and nothing on a
 // disk is changed by a refusal before the state layout is accepted.
 class NodeRefused final : public std::runtime_error {
@@ -291,6 +299,14 @@ class Node {
   // the last, and held by activity. Serialised with the thread's passes.
   LocalStages run_local_stages();
 
+  // Takes `reload` now: a new backend is locked and opened, a removed one goes
+  // offline and its lock with it, a changed limit reopens one, and the cache
+  // follows at once. Throws NodeRefused, with nothing changed, for a v18 backend
+  // or a root another process holds. Serialised with the maintenance passes;
+  // not with a reader of options(), which it updates. Waits on the devices.
+  static constexpr dannan::sched::Waits reconfigure_waits = run_maintenance_waits;
+  void reconfigure(const NodeReload& reload);
+
   // Publishes the node's figures to context.status() now (the names are
   // listed in node.cpp, every one under "dagda."). Waits on the stores'
   // locks only.
@@ -353,6 +369,9 @@ class Node {
   std::vector<std::string> _opened;
 
   std::vector<std::unique_ptr<store::StorageLock>> _locks;
+  // The roots a reload can change, by path: written at open and under
+  // _maintenance_mutex, released with the rest at stop.
+  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks;
   std::shared_ptr<const domain::StorageKey> _node_local;
   std::optional<domain::WrapKey> _wrap;
   std::unique_ptr<store::StoragePool> _data;

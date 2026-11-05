@@ -20,6 +20,7 @@
 #include "dagda/node.h"
 #include "dagda/store/cpu_pacing.h"
 #include "dagda/test/fixtures/cluster.h"
+#include "dagda/test/fixtures/reachability.h"
 #include "dagda/test/fixtures/store.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
@@ -287,6 +288,101 @@ TEST(NodeLocalMaintenance, TheNodesThreadRunsThem) {
   auto& node = cluster.add("node", options);
   cluster.start_all();
   EXPECT_TRUE(test::wait_until([&] { return figure(node, "dagda.maintenance.verify_directories") > 0; }, 15s));
+}
+
+// Macha's live reload: a backend added takes copies, a removed one goes offline
+// and is free for another process, the cache follows, and each refusal leaves the
+// node as it was.
+TEST(NodeReconfigure, BackendsAndCacheFollowALiveReload) {
+  Cluster cluster;
+  auto& node = cluster.add("node", fast_link());
+  cluster.start_all();
+  std::vector<store::ObjectId> ids;
+  for (uint64_t n = 0; n < 48; ++n) ids.push_back(put_one(node, n));
+  auto backends = node.dagda_node().options().pool.backends;
+  const auto second = cluster.dir() / "second";
+
+  // Another process holds it: refused, nothing changed.
+  {
+    std::filesystem::create_directories(second);
+    store::StorageLock held(second);
+    auto wider = backends;
+    wider.push_back({second, 64ULL * 1024 * 1024, 0});
+    EXPECT_THROW(node.dagda_node().reconfigure({wider, {}}), NodeRefused);
+    EXPECT_EQ(node.data().online_backends(), 1u);
+  }
+  EXPECT_FALSE(node.cache().enabled());
+
+  auto wider = backends;
+  wider.push_back({second, 64ULL * 1024 * 1024, 0});
+  store::CacheOptions cache;
+  cache.path = cluster.dir() / "cache";
+  cache.max_blocks = 64;
+  node.dagda_node().reconfigure({wider, cache});
+  EXPECT_EQ(node.data().online_backends(), 2u);
+  EXPECT_TRUE(node.cache().enabled());
+  EXPECT_THROW(store::StorageLock taken(second), std::exception);
+  EXPECT_EQ(node.dagda_node().options().pool.backends.size(), 2u);
+  uint64_t moved = 0;
+  for (int pass = 0; pass < 32; ++pass) moved += node.run_maintenance_once().local.rebalance.objects;
+  EXPECT_GT(moved, 0u);
+  for (const auto& id : ids) EXPECT_TRUE(node.data().has(id));
+
+  // Back again: the second disk's lock goes, and the cache is off.
+  node.dagda_node().reconfigure({backends, {}});
+  EXPECT_EQ(node.data().online_backends(), 1u);
+  EXPECT_FALSE(node.cache().enabled());
+  EXPECT_NO_THROW(store::StorageLock free_again(second));
+}
+
+// Macha's test_replication_policy_change_on_restart: replication is taken at a
+// restart and repair converges content to it, growing and shrinking.
+TEST(NodeReconfigure, AReplicationPolicyChangesOnRestartAndRepairConverges) {
+  auto one = fast_link();
+  one.store.replication = 1;
+  one.store.write_copies = 1;
+  one.store.extent_size = 1024 * 1024;
+  one.repair.extent_size = 1024 * 1024;
+  Cluster cluster;
+  auto& a = cluster.add("a", one);
+  auto& b = cluster.add("b", one);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto input = test::pattern(128 * 1024);
+  const auto id = a.store().put(input);
+  ASSERT_TRUE(a.data().has(id) != b.data().has(id));
+
+  const auto restart_with = [&](size_t replication) {
+    b.stop();
+    a.stop();
+    for (auto* node : {&a, &b}) {
+      node->options().store.replication = replication;
+      node->options().store.metadata_write_copies = replication;
+    }
+    a.start();
+    b.start();
+    ASSERT_TRUE(cluster.converged());
+    EXPECT_EQ(a.dagda_node().options().store.replication, replication);
+  };
+  test::TestProvider provider;
+  provider.answer.data = {id};
+  provider.answer.complete = true;
+  const auto converge = [&](const std::function<bool()>& done) {
+    for (auto* node : {&a, &b}) node->publish_inventory(provider);
+    return test::wait_until(
+        [&] {
+          for (auto* node : {&a, &b}) (void)node->run_maintenance_once();
+          return done();
+        },
+        30s);
+  };
+
+  restart_with(2);
+  EXPECT_TRUE(converge([&] { return a.data().has(id) && b.data().has(id); }));
+
+  // Back to one copy: what was written still reads, from either node.
+  restart_with(1);
+  for (auto* node : {&a, &b}) EXPECT_EQ(node->store().get(id), std::optional<store::Bytes>(input));
 }
 
 }  // namespace

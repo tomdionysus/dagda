@@ -415,6 +415,29 @@ TEST(LeaseClaimedCollection, TheSnapshotAndDeltaFormsRoundTrip) {
   EXPECT_TRUE(Tasks::diff(after, after).empty());
 }
 
+// The template's bytes, pinned on the neutral record: what Macha's own record
+// takes through the same template, whose known answers are Macha's port gate
+// (Tom, 2026-11-04 night). Any change to the sections shows here.
+TEST(LeaseClaimedCollection, TheSectionsBytesArePinned) {
+  auto t1 = task("t1", "s1", 100);
+  t1.lease = Lease{a_node, 1, 110};
+  const auto before = collection_of({t1, task("t2", "s2", 200)});
+  EXPECT_EQ(dannan::identity::hex(encoded(before)),
+            "00000002000000027431000000027331000000000000006400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            "000000000000000001111111111111111111111111111111110000000000000001000000000000006e0000000000000000000000000000000000000000000000000000000002743200"
+            "000002733200000000000000c8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            "0000000000000000000000000000000000000000000000");
+  auto after = before;
+  auto changed = t1;
+  changed.removed_unix_ms = 300;
+  after.join(changed);
+  after.erase("t2");
+  EXPECT_EQ(
+      dannan::identity::hex(encoded(Tasks::diff(before, after))),
+      "00000001000000027431000000027331000000000000006400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      "000000000001111111111111111111111111111111110000000000000001000000000000006e0000000000000000000000000000000000000000000000012c00000001000000027432");
+}
+
 // The template's bounds, in the snapshot and the delta.
 TEST(LeaseClaimedCollection, DecodeKeepsItsBounds) {
   const auto t = task("t1", "s", 100);
