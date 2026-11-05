@@ -7,9 +7,8 @@ the record.
 
 ## The plan, re-based on Macha `00861dd` and `cac5998` (Tom, 2026-11-05)
 
-The goal is the second cutover: Macha's store onto Dagda, one flag day with the disk
-migration, after the transport cutover has soaked. Everything is ordered by what that
-needs. Nothing Lugh or Lir needs is on this path (P7).
+The goal is the second cutover: Macha's store onto Dagda, in stages (Decisions, 2026-11-05), after the
+transport cutover. Everything is ordered by what that needs. Nothing Lugh or Lir needs is on this path (P7).
 
 **The documents, each the detail of a part of this plan:**
 - [`2026-11-03-macha-store-requirements.md`](2026-11-03-macha-store-requirements.md):
@@ -33,12 +32,12 @@ by eye. Nothing in them has been run against Macha.
 | P0 | The port's artefacts at `cac5998` (below): the Macha session's real state, dump output and goldens; Dagda's export of Macha for small generated states | Macha's own code produced them, at a named commit | The Macha session |
 | P1 | Scale and platform (M10): Linux done once (below); sanitizers, a trie of 1 million ids, 100,000 objects across packs | ASan, UBSan and TSan clean; the two scale cases' figures recorded | Nothing |
 | P2 | The mapping's 27 gaps: write path and durability 8, repair and maintenance 2, arbiter 4, control fetch 3, placement and selection 4, old state 1, predicates 5 | The named Macha case, moved to `dagda_tests` | Tom, for predicates |
-| P3 | The node's parity for step S: second-cutover B1 to B15 but B11, about 28 `dagda.*` figures, the config keys and defaults | `test_maintenance_trace`, and S.4's named cases and VALIDATION sections | Tom, for the trace fixtures |
-| P4 | 0.92.4's shapes: done. Macha is frozen, so nothing further lands unless Tom rules | Macha's case, in the shape of its fix | Tom |
-| P5 | Heads S1: the cache seed, its migration pass, `NodeOptions::heads` off | Heads plan 2.1 and 2.2 | Nothing |
+| P3 | The node for the first stage under Macha's loop: its stages callable one by one, B1, B3, B6, B7, B8, B10 of second-cutover C, about 28 `dagda.*` figures, config keys and defaults. Dagda's scheduling, parking and trace wait for the later stage | S.4's named cases and VALIDATION sections | Nothing |
+| P4 | Match Macha 0.92.6 when it lands: the three findings, the inventory walk's stop; read errors and ready-degraded in Dagda now | Macha's cases, in the shape of its fix | The Macha session |
+| P5 | Heads S1: the cache seed's migration, moved to 8c with the metadata files, as Tom ruled | Heads plan 2.2 | P8 |
 | P6 | `dagda-migrate` over a state Macha's code wrote, there and back with Macha's code opening the result; then the rehearsal and macnessa's window | Second-cutover "Migration plan": every object `has` and `get` true against a listing taken before; inverbeg's time measured, not assumed | P0; Tom, for the rehearsal on the live nodes |
-| P7 | Steps S, 8a and 8b on the flag day | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover's soak |
-| P8 | Heads S2 to S7, then 8c and 8d, against `cac5998` | Heads plan section 3, re-read at `cac5998`; 8c.4, 8d.4; `macha-metadata-dump` identical | 95 gap-heads cases each get a session or a named retirement |
+| P7 | First stage: S, 8a and 8b, one disk event | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover |
+| P8 | Later stage: heads S2 to S7, 8c with `dagda-migrate` moving `<state>/metadata/` and the seed, Dagda's loop with `test_maintenance_trace`, then 8d, against `808fa0f` | Heads plan section 3, re-read at `808fa0f`; 8c.4, 8d.4; `macha-metadata-dump` output identical | 95 gap-heads cases each get a session or a named retirement |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
 **Macha is frozen at `cac5998` until the libraries are ready (Tom, relayed by the Macha session,
@@ -589,6 +588,26 @@ Steps 5 and the parts of 6 that need no heads go first.
 
 ## Decisions
 
+**Tom, 2026-11-05, directly, in answer to the outstanding questions:**
+- **The cutover is in stages, as many stops as needed.** "Honestly we don't need to be so worried about a Flag
+  Day. We've control over the entire cluster, its availability isn't critical." First stage: the store, the
+  reachability provider and the lease template, with Macha's loop still running. Later stage: heads, the metadata
+  migration and Dagda's loop together. Two disk events are fine. Each stage moves on as soon as its tests pass;
+  there is no calendar soak. This supersedes "one flag day".
+- **The loop:** Macha's pass runs a Macha node until heads move at 8c, calling Dagda's stages as steps; then
+  Dagda's. Dagda's own loop serves a Dagda-only node meanwhile, off through `automatic = false`.
+- **`<state>/metadata/` is migrated on disk at 8c**, so everything meets the one layout then.
+- **The cluster key may be copied to this machine for tests**, "but keep it out of the repo, obviously".
+- **The rehearsal:** the Macha session, in place on inverbeg. Custody from a systemd credential. One state
+  directory, Macha's `state_path`.
+- **Macha 0.92.6, a freeze exception:** the three stop and delete findings, and the inventory walk's stop check.
+- **Read errors, fixed in both now:** a read failing on I/O keeps the object; only a record that reads and fails
+  to open is removed.
+- **No storage online:** ready, but degraded, in both, so a node does not crash-loop on its startup timeout.
+- **Predicates:** retired in Macha after the freeze, not moved.
+- **Heads keeps Macha's commit behaviours for now**, written down under "Waiting on Tom".
+- **Pushed** `develop` and `main`, and the real run on a second copy of macnessa's state is to go ahead.
+
 (Tom, 2026-11-05) macnessa runs Dagda's Linux tests, under one scratch directory at lowest
 priority. Relayed by the Macha session: replan from Macha's `00861dd`, as above.
 
@@ -707,42 +726,15 @@ asking:
 
 ## Waiting on Tom
 
-Rationalised 2026-11-05 with the Macha session, which marked each as ruled or open.
+Nothing open from Dagda's list (answered 2026-11-05, see Decisions). In Macha's list, and Dagda follows: the
+remaining design defects there (the torrent merge, the fence on actions under a claim, the local barrier's
+deadline, wall versus steady ages, the policy disagreement loop, O(state) per delta, wire-sized allocations,
+reload ignoring `write_copies`, the I/O and control reserves).
 
-**Ruled, relayed by the Macha session, in his words:** the real state comes from macnessa ("No, use
-macnessa"), copied today in the 0.92.5 install's stop: whole `state_path`, then a DATA sample; not
-`cluster.key`, `initial-root-password`, `sessions/` or `users/`. Macha is frozen ("apart from
-producing artefacts for their plans"), with one exception: the empty mutations, "Yes fix now", as
-0.92.5. Pi baselines are Macha's, later, at his word.
-
-**Still open, Dagda's to raise, recommendations here:**
-
-1. **The maintenance loop.** Tom ruled maintenance into the node (step 7b); the Macha session proposed
-   Macha's pass stays the one loop on a Macha node, which reopens that. `automatic = false` already
-   turns Dagda's thread off, so nothing is removed either way. It decides most of P3. Recommended:
-   Macha's loop until heads move at 8c; Dagda's for a Dagda-only node.
-2. **Must the flag day wait for heads?** Recommended no: heads S1 only.
-3. **Does 8c change `<state>/metadata/` on disk?** Recommended no: read Macha's files as they stand,
-   and move them in a later release. Otherwise the second cutover is two disk events.
-4. **Key material.** Until ruled, the key stays on the node and `dagda-migrate` runs on macnessa against
-   the copy there, and only the key-free copy comes to the laptop. Recommended: keep that.
-5. **The rehearsal:** who runs it, and where a copy of inverbeg's data lives (about 670 GB and filling).
-   Recommended: the Macha session, in place on inverbeg if there is no spare disk.
-6. **Flag-day details:** custody's key source (recommended a systemd credential, so a node restarts
-   unattended), one state directory or two (recommended one), which node returns first (recommended both
-   wait for the slower), and the soak's length (no recommendation).
-
-**Open in Macha's list, and Dagda follows:** the rethrow, multiset and `not_held` pause; the inventory
-walk's stop check; zero storage or "ready, degraded"; predicates (recommended retired as dead code);
-policy commits with no dot; an unchanged mutation still committing its clock (the requirement until
-ruled); a read failure deleting a good object (`storage_pool.cpp:603` in Macha). Dagda has that last one
-too: `StoragePool::get` and `scrub_step` remove on any exception where the backend's key check passed, and
-step M3 turned the scrub on in the node. It is Macha's behaviour, so it stays until ruled.
-
-**Settled by facts:** `test_maintenance_trace`'s fixtures stand unchanged at `cac5998` and 0.92.5, which
-matters only if Dagda's loop is the one that must match them.
-`test_unversioned_state_is_refused` is no question: Dagda already refuses a state with files and no
-marker, and owes only the case.
+**Written down so it is not lost (Tom, 2026-11-05):** two metadata behaviours heads keeps as Macha's for now,
+to change later as a deliberate step, in Macha first: a mutation that changes nothing still commits its clock
+(`metadata_manager.cpp:1919` unreachable); a policy commit carries no dot (`:1376`), so after truncation only a
+merge can collapse it.
 
 Earlier: the seven items of 2026-11-04 were all answered that evening
 (see Decisions, "Tom, 2026-11-04 evening") and done the same evening
