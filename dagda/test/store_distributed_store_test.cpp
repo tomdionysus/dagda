@@ -481,6 +481,25 @@ TEST(DistributedStore, WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull) {
   EXPECT_EQ(evidence.on(a.id())->state, ReplicaState::refused);
 }
 
+// test_min_write_two_uses_fallback_when_preferred_replica_is_full as Macha wrote
+// it: its put(), named no level, seeks write_copies, and a full preferred owner
+// is passed for a fallback before it returns.
+TEST(StoreDistributedStore, APutSeeksWriteCopiesThroughAFallback) {
+  Cluster cluster;
+  constexpr uint64_t node_limit = 2ULL * 1024 * 1024;
+  auto& a = cluster.add("a", options(2, 2, node_limit));
+  auto& b = cluster.add("b", options(2, 2, node_limit));
+  auto& c = cluster.add("c", options(2, 2, node_limit));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  fill_data_store(a.data());
+  const auto data = preferred_for(b, a.id(), 128 * 1024);
+  const auto id = object_id(data);
+  ASSERT_TRUE(b.store().put(id, data));
+  EXPECT_FALSE(a.data().has(id));
+  EXPECT_EQ(static_cast<unsigned>(b.data().has(id)) + static_cast<unsigned>(c.data().has(id)), 2u);
+}
+
 // test_a_control_graph_larger_than_the_connection_budget_still_publishes:
 // claims pipeline their puts, but a connection holds only so many replies; a
 // graph larger than that still publishes, a second claim sends nothing, and

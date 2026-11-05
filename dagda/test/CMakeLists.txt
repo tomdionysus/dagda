@@ -45,6 +45,7 @@ add_executable(dagda_tests
   node_local_maintenance_test.cpp
   node_maintenance_test.cpp
   node_test.cpp
+  store_control_fetch_test.cpp
   store_control_store_test.cpp
   store_data_work_test.cpp
   store_distributed_store_test.cpp
@@ -74,6 +75,15 @@ add_executable(dagda_tests
   store_write_behind_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
+# The count of calls for stable storage interposes on libdagda's: dyld takes an
+# interposing table only from a library, ELF from the executable first.
+if(APPLE)
+  add_library(dagda_test_sync_count SHARED fixtures/sync_count.cpp)
+  target_include_directories(dagda_test_sync_count PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(dagda_tests PRIVATE dagda_test_sync_count)
+else()
+  target_sources(dagda_tests PRIVATE fixtures/sync_count.cpp)
+endif()
 # The include-direction case reads the sources it checks; the migration's
 # runs the tool, which is built beside the tests.
 target_compile_definitions(dagda_tests PRIVATE DAGDA_SOURCE_DIR="${PROJECT_SOURCE_DIR}" DAGDA_BINARY_DIR="${PROJECT_BINARY_DIR}")

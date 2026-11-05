@@ -29,15 +29,19 @@
 #include <optional>
 #include <string>
 
+#include "dagda/store/durability_domain.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/test/fixtures/store.h"
+#include "dagda/test/fixtures/sync_count.h"
 
 namespace dagda::store {
 namespace {
 
 using test::pattern;
 using test::StoreBed;
+
+using test::SyncCount;
 
 bool any_barrier_recorded(dannan::status::Observations& observations) {
   const auto snapshot = observations.snapshot();
@@ -79,6 +83,39 @@ TEST(StorePersistentCache, TheCacheIsExplicitlyEphemeral) {
   // Macha's fsync_calls == 0 and syncfs_calls == 0.
   EXPECT_FALSE(any_barrier_recorded(bed.observations));
   EXPECT_FALSE(std::filesystem::exists(bed.dir.path() / "cache" / ".macha.accounting"));
+}
+
+// Macha: test_persistent_cache_is_explicitly_ephemeral, its fsync_calls and
+// syncfs_calls, by the interposed count (the Macha session's answers,
+// 2026-11-05): opening, three puts, an eviction, a hit, a miss and closing ask
+// nothing of stable storage. A real barrier in the same library is counted, so
+// a count of zero says something.
+TEST(StorePersistentCache, TheCacheMakesNoCallForStableStorage) {
+  StoreBed bed;
+  {
+    const auto root = bed.dir.path() / "barrier";
+    auto domain = bed.domain(root, std::chrono::milliseconds(0));
+    std::ofstream(root / "mutated") << "bytes";
+    SyncCount seen;
+    domain->complete_mutation(root / "mutated", root);
+    domain->flush();
+    ASSERT_GE(seen.count(), 1u) << "the count does not see the library's calls";
+  }
+
+  const auto a = pattern(64 * 1024, 41);
+  const auto b = pattern(64 * 1024, 42);
+  const auto c = pattern(64 * 1024, 43);
+  SyncCount seen;
+  {
+    PersistentBlockCache cache({bed.dir.path() / "cache", 2, true}, bed.key, bed.services());
+    ASSERT_TRUE(cache.put(object_id(a), a));
+    ASSERT_TRUE(cache.put(object_id(b), b));
+    ASSERT_TRUE(cache.put(object_id(c), c));
+    EXPECT_EQ(cache.stats().evictions, 1u);
+    ASSERT_TRUE(cache.get(object_id(c)));
+    EXPECT_FALSE(cache.get(object_id(pattern(1024, 99))));
+  }
+  EXPECT_EQ(seen.count(), 0u);
 }
 
 // Macha (tests/test_storage_metadata.cpp): test_storage_pool_and_persistent_cache,
