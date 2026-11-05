@@ -411,7 +411,7 @@ changes. The evidence is
 
 Order: M2, M3, M4, M8, M9, M6, M5, M10; M1 when Macha merges.
 
-Done so far: M3, M8, M9, M4 but for the barrier's deadline (on Macha's list for
+Done so far: M3, M5, M6, M7, M8, M9, M4 but for the barrier's deadline (on Macha's list for
 The maintainer), and M2 but for the real state directory, which the Macha
 session cuts after its merge (`COMPLETED.md`). Not measured at
 scale: each loose object still takes one fsync, about 1 million on live-a. The Macha session accepted the
@@ -454,9 +454,12 @@ history truncation (`:1146`, gated on `!busy`).
   `persisted` when the caller names none; `Context` keeps naming the level.
   `put_deferred_here` added. A deadline on `StoragePool::durability_barrier`.
 - **M5. Settings reload through the node**, and
-  `test_replication_policy_change_on_restart` moved.
-- **M6. The last survey persisted** (`availability/last-survey.bin`) and
-  re-asked on a peer's advert changes.
+  `test_replication_policy_change_on_restart` moved. Done, to what Macha does:
+  its live reload takes backends and cache (`local_state.cpp` `reconfigure`) and
+  refuses `dht.replicas` (`service_config.cpp:23-25`), so those take a restart.
+- **M6. No change in Dagda.** The file Macha keeps is its path table, which is
+  Macha's (`availability_service.cpp:252-269`, `availability.h:53`), and Macha's
+  topology event is place and membership, no advert (`cluster.cpp:222-224`, `:890`).
 - **M7. Torrent-request known answers.** Settled by the maintainer: they stay in Macha's
   tests; Dagda pins the template on its neutral record.
 - **M8. The claims guard bounded.** Confirmed

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -131,9 +132,16 @@ void Node::open() {
   } catch (const std::exception& error) {
     throw NodeRefused(error.what());
   }
-  for (const auto& backend : _options.pool.backends) lock(backend.path);
+  const auto lock_reloadable = [&](const std::filesystem::path& root) {
+    try {
+      _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
+    } catch (const std::exception& error) {
+      throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
+    }
+  };
+  for (const auto& backend : _options.pool.backends) lock_reloadable(backend.path);
   lock(store::control_store_path(_options.state, _options.control));
-  if (!_options.cache.path.empty()) lock(_options.cache.path);
+  if (!_options.cache.path.empty()) lock_reloadable(_options.cache.path);
 
   step("open node-local-key");
   try {
@@ -318,6 +326,7 @@ void Node::stop() {
   _node_local.reset();
   close("node-local-key", _wrap);
   if (!_locks.empty()) {
+    _reloadable_locks.clear();
     _locks.clear();
     step("stop state-layout");
   }
@@ -439,6 +448,39 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
   // Settled: the sweep went all the way round with nothing left waiting.
   return !busy && !pass.rebuilt_inventory && pass.data && pass.data->permitted && pass.swept_data.complete && !pass.swept_data.deferred &&
          !pass.swept_data.yielded;
+}
+
+void Node::reconfigure(const NodeReload& reload) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_data) throw NodeRefused("the node is not running");
+  std::set<std::filesystem::path> wanted;
+  for (const auto& backend : reload.backends) {
+    if (const auto why = store::backend_refusal_v18(_options.state, backend.path)) throw NodeRefused(*why);
+    wanted.insert(backend.path);
+  }
+  if (!reload.cache.path.empty()) wanted.insert(reload.cache.path);
+  // Every new root locked before anything changes.
+  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> added;
+  for (const auto& root : wanted) {
+    if (_reloadable_locks.contains(root)) continue;
+    try {
+      added.emplace(root, std::make_unique<store::StorageLock>(root));
+    } catch (const std::exception& error) {
+      throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
+    }
+  }
+  _reloadable_locks.merge(added);
+  _data->reconfigure(reload.backends);
+  _data->refresh();
+  auto cache = reload.cache;
+  cache.sealing = store::SealingScheme::v19(_options.domain.id);
+  _cache->reconfigure(cache);
+  // What has been let go, its lock with it.
+  std::erase_if(_reloadable_locks, [&](const auto& entry) { return !wanted.contains(entry.first); });
+  _options.pool.backends = reload.backends;
+  _options.cache = reload.cache;
+  _context.events().notify(dannan::status::NodeEvents::topology);
+  _logger.info("reloaded: " + std::to_string(_data->online_backends()) + " backends online, cache " + (_cache->enabled() ? "on" : "off"));
 }
 
 void Node::persist_scrub_due() {

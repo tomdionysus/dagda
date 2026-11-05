@@ -3,6 +3,23 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-04 night: M5, M6 and M7 (`feature/port-respec`)
+
+M5: `Node::reconfigure` takes Macha's live reload, backends and cache, locking a
+new root before anything changes and letting a removed one's lock go. Replication
+takes a restart, as `service_config.cpp:23-25` refuses it live, and
+`test_replication_policy_change_on_restart` is moved. The audit also listed write
+copies, intervals and grace; Macha does not reload those live, so neither does this.
+
+M6: no change. Macha's `last-survey.bin` is its path table, and its topology event
+has no advert in it; Dagda's trigger already matches (evidence in `ACTIVE.md`).
+
+M7: `LeaseClaimedCollection.TheSectionsBytesArePinned` pins the template's snapshot
+and delta bytes on the neutral record. The pin comes from this code, not from
+Macha; Macha's own tests pin the torrent bytes and are the gate.
+
+Gate: `dagda_tests` 417 passing, 1 disabled, three whole runs.
+
 ## 2026-11-04 night: M8 and M9, the claims guard and placement (`feature/port-respec`)
 
 M8: `ClaimLocks::in_batches` holds a batch's stripes 4096 ids at a time, in stripe
