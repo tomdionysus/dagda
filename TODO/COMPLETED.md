@@ -3,6 +3,16 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: heads S2, the tree over keys (`feature/heads-s2`)
+
+`dagda/heads/`: `tree.{h,cpp}` (build, update, apply, walk, lookup, scan, prefix, paged `entries`, diff, node diff, collect, stats,
+the value codec and child-tree hook; magics, domain strings and limits are parameters), `control_node_store.{h,cpp}` (read, commit,
+replay, local), `reference_census.h`. Moved from Macha at `9a08846`, and it makes every node Macha made in the order Macha made it,
+the unreachable first passes of a packed level included. Bytes: all 25 of `tree-vectors-0.93.4` (20 checked in, 5 too large and
+read from Macha's fixtures under a named skip) and all 19 tree nodes in `state-scratch-0.93.4`'s sealed store. Macha's 21 S2 cases
+are named in the plan's 5.1; C7, C34. Macha's forms live in the test, none in the library. Not run under GCC or on arm64.
+Gate: `dagda_tests` 520 passing, 3 disabled, three whole runs on the Mac.
+
 ## 2026-11-06: additions inert on a Macha node, and activity in Macha's meaning
 
 For Tom's unconditional Yes. `AdmissionOptions::device_reserve` off leaves DATA uncapped, which Macha's facade sets. Claim parts

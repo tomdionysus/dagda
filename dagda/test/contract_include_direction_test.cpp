@@ -105,7 +105,7 @@ TEST(ContractIncludeDirection, TheLedgerAndTheContractKnowNoOwnersTypes) {
   const std::filesystem::path root = DAGDA_SOURCE_DIR;
   size_t scanned = 0;
   std::vector<std::string> found;
-  for (const auto* dir : {"dagda/ledger", "dagda/contract"}) {
+  for (const auto* dir : {"dagda/ledger", "dagda/contract", "dagda/heads"}) {
     for (const auto& entry : std::filesystem::directory_iterator(root / dir)) {
       const auto extension = entry.path().extension();
       if (extension != ".h" && extension != ".cpp") continue;
