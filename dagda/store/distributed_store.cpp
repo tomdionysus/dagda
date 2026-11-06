@@ -568,6 +568,52 @@ bool DistributedStore::has(const ObjectId& id) const { return _data.has(id); }
 
 bool DistributedStore::locally_available(const ObjectId& id) const { return _data.has(id) || _cache.has(id); }
 
+bool DistributedStore::cache_local(const ObjectId& id, std::span<const uint8_t> data) {
+  if (!_cache.enabled()) return false;
+  try {
+    const auto admitted = admit_data(FrameType::speculative, data.size(), _options.admission_wait);
+    return admitted && _cache.put(id, data);
+  } catch (const std::exception& error) {
+    _logger.debug("cache write-through skipped object=" + to_string(id) + " error=" + error.what());
+    return false;
+  }
+}
+
+bool DistributedStore::hydration_available() const { return _cache.enabled(); }
+
+bool DistributedStore::hydrate(const ObjectId& id, ReadOptions options) {
+  if (locally_available(id)) return true;
+  if (!_cache.enabled()) return false;
+  const auto read = get_remote(id, options, false);
+  if (!read.object) return false;
+  const auto admitted = admit_data(options.frame, read.object->bytes.size(), _options.admission_wait);
+  return admitted && _cache.put(id, read.object->bytes);
+}
+
+std::vector<ObjectId> DistributedStore::retain_data_here(const std::vector<ObjectId>& input, const contract::RetentionDot& dot) {
+  auto ids = input;
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  std::vector<ObjectId> elsewhere;
+  (void)_data.claim_locks().in_batches(ids, [&](std::span<const ObjectId> part) {
+    std::vector<ObjectId> held;
+    for (const auto& id : part) {
+      if (!_data.claim_locks().deleting(id) && _data.has(id))
+        held.push_back(id);
+      else
+        elsewhere.push_back(id);
+    }
+    if (!held.empty()) _claims.retain_batch(contract::RetentionClass::data, held, dot);
+    return true;
+  });
+  std::sort(elsewhere.begin(), elsewhere.end());
+  return elsewhere;
+}
+
+uint64_t DistributedStore::reachability_epoch() const noexcept {
+  return (_context.events().count(dannan::status::NodeEvents::membership) << 8) + _data.online_backends();
+}
+
 // ---- Workers ---------------------------------------------------------------
 
 bool DistributedStore::submit(std::function<void()> job, size_t ephemeral_bytes) {

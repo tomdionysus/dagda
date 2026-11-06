@@ -444,6 +444,21 @@ class DistributedStore final : public ControlObjectSource {
   bool has(const ObjectId& id) const;
   // In the pool or the cache.
   bool locally_available(const ObjectId& id) const;
+  // Macha's forms the filesystem and the catalogue call. held_here: as has().
+  // cache_local: a write through to this node's cache, if it has one; a failure
+  // is only that the cache did not take it. hydration_available: the node has a
+  // cache to fill. hydrate: true once the object is here, fetching it into the
+  // cache if not.
+  bool held_here(const ObjectId& id) const { return has(id); }
+  bool cache_local(const ObjectId& id, std::span<const uint8_t> data);
+  bool hydration_available() const;
+  bool hydrate(const ObjectId& id, ReadOptions options = {});
+  // Claims here whichever of `ids` this node holds, and returns the rest, sorted
+  // and unique (Macha's retain_data_here).
+  std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot);
+  // Changes when what this node can reach may have: the membership, or how many of
+  // its disks are online. A write parked as unreachable retries when it moves.
+  uint64_t reachability_epoch() const noexcept;
   // Waits until every opportunistic local copy queued so far is written or
   // dropped.
   void wait_local_copies_settled();

@@ -53,7 +53,8 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _options(options),
       _admission(admission),
       _logger(context.logger("dagda.server")),
-      _storage_event(context.events().kind("storage")) {
+      _storage_event(context.events().kind("storage")),
+      _hosts_extents(options.hosts_extents) {
   refresh();
   for (const auto type : served())
     _context.routes().bind(
@@ -77,11 +78,16 @@ void StorageServer::refresh() {
   if (online > _online_backends.exchange(online, std::memory_order_relaxed)) _context.events().notify(_storage_event);
 }
 
+void StorageServer::set_hosts_extents(bool hosts) {
+  _hosts_extents.store(hosts, std::memory_order_relaxed);
+  advertise();
+}
+
 void StorageServer::advertise() {
   auto& nodes = _context.nodes();
   nodes.advertise(capacity_advert, dannan::membership::u64_advert(_data.limit()));
   nodes.advertise(used_advert, dannan::membership::u64_advert(_data.used()));
-  if (_options.hosts_extents)
+  if (_hosts_extents.load(std::memory_order_relaxed))
     nodes.advertise(extents_advert, Bytes{1});
   else
     nodes.withdraw(extents_advert);

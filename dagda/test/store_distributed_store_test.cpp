@@ -1194,5 +1194,97 @@ TEST(StoreClaimLocks, AClaimFindsAMarkedObjectNotPresent) {
   EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
 }
 
+// Macha's forms over the cache: a write through, hydrating from a peer, and neither
+// without a cache.
+TEST(StoreDistributedStore, CacheLocalAndHydrateFillTheCache) {
+  ClusterNodeOptions cached = options(1);
+  cached.hosts_extents = false;
+  cached.keeps_backend = true;
+  Cluster cluster;
+  auto& reader = [&]() -> ClusterNode& {
+    cached.cache.path = cluster.dir() / "reader-cache";
+    cached.cache.max_blocks = 16;
+    return cluster.add("reader", cached);
+  }();
+  auto& holder = cluster.add("holder", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_TRUE(reader.store().hydration_available());
+  EXPECT_FALSE(holder.store().hydration_available());
+
+  const auto written = pattern(4096, 71);
+  EXPECT_TRUE(reader.store().cache_local(object_id(written), written));
+  EXPECT_TRUE(reader.store().locally_available(object_id(written)));
+  EXPECT_FALSE(reader.store().held_here(object_id(written)));
+  EXPECT_FALSE(holder.store().cache_local(object_id(written), written));
+
+  const auto remote = pattern(4096, 72);
+  ASSERT_TRUE(holder.data().put(object_id(remote), remote));
+  EXPECT_FALSE(holder.store().hydrate(object_id(pattern(4096, 73))));
+  EXPECT_TRUE(holder.store().hydrate(object_id(remote)));
+  EXPECT_TRUE(reader.store().hydrate(object_id(remote)));
+  EXPECT_TRUE(reader.cache().has(object_id(remote)));
+  EXPECT_FALSE(reader.store().hydrate(object_id(pattern(4096, 74))));
+}
+
+// Claims what this node holds and hands back the rest, sorted and unique; one a
+// delete has marked is not held.
+TEST(StoreDistributedStore, RetainDataHereClaimsWhatIsHeldAndReturnsTheRest) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  cluster.start_all();
+  const auto held = pattern(4096, 75);
+  const auto marked = pattern(4096, 76);
+  const auto absent = pattern(4096, 77);
+  ASSERT_TRUE(node.data().put(object_id(held), held));
+  ASSERT_TRUE(node.data().put(object_id(marked), marked));
+  const contract::RetentionDot dot{node.id(), 3};
+  const auto deletion = node.data().claim_locks().deletion(object_id(marked), [] { return false; });
+  auto rest = node.store().retain_data_here({object_id(held), object_id(absent), object_id(absent), object_id(marked)}, dot);
+  std::vector<ObjectId> expected{object_id(absent), object_id(marked)};
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(rest, expected);
+  EXPECT_TRUE(node.claims().retained(contract::RetentionClass::data, object_id(held)));
+  EXPECT_FALSE(node.claims().retained(contract::RetentionClass::data, object_id(marked)));
+  EXPECT_FALSE(node.claims().retained(contract::RetentionClass::data, object_id(absent)));
+}
+
+// What this node can reach changed: a peer gone, or a disk.
+TEST(StoreDistributedStore, TheReachabilityEpochMovesWithMembershipAndDisks) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto first = node.store().reachability_epoch();
+  peer.stop();
+  EXPECT_TRUE(wait_until([&] { return node.store().reachability_epoch() != first; }, 30s));
+  const auto second = node.store().reachability_epoch();
+  auto backends = node.dagda_node().options().pool.backends;
+  backends.push_back({cluster.dir() / "another", 64ULL * 1024 * 1024, 0});
+  node.dagda_node().reconfigure({backends, {}});
+  EXPECT_NE(node.store().reachability_epoch(), second);
+}
+
+// A node stops being a placement candidate and starts again, as `auto` follows the
+// dial-back, without a restart.
+TEST(StoreDistributedStore, HostingExtentsChangesWhileRunning) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_TRUE(node.store().holds_extents());
+  node.server().set_hosts_extents(false);
+  EXPECT_TRUE(wait_until([&] { return !node.store().holds_extents(); }));
+  const auto hosts_on_peer = [&] {
+    const auto hosting = peer.context().nodes().active();
+    return std::any_of(hosting.begin(), hosting.end(), [&](const auto& record) { return record.id == node.id() && record.advert(extents_advert); });
+  };
+  EXPECT_TRUE(wait_until([&] { return !hosts_on_peer(); }));
+  node.server().set_hosts_extents(true);
+  EXPECT_TRUE(wait_until([&] { return node.store().holds_extents() && hosts_on_peer(); }));
+}
+
 }  // namespace
 }  // namespace dagda::store

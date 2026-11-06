@@ -127,6 +127,10 @@ class StorageServer {
   // The messages the server answers, for a wrapper that binds in front.
   static const std::vector<dannan::net::MessageType>& served();
 
+  // Whether this node is a placement candidate from now on: Macha's `auto`, which
+  // follows the dial-back. Copies it holds stay, and repair drains them. Thread-safe.
+  void set_hosts_extents(bool hosts);
+
  private:
   std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, bool wait);
   std::optional<IoReserve::Slot> admit_control();
@@ -147,6 +151,7 @@ class StorageServer {
   const dannan::status::ScopedLogger _logger;
   const dannan::status::NodeEvents::Kind _storage_event;
   std::atomic<size_t> _online_backends{0};
+  std::atomic_bool _hosts_extents;
 
   // The held unions pinned for peers' diffs, newest last.
   struct Pinned {
