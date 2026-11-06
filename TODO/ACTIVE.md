@@ -44,7 +44,7 @@ by eye. Nothing in them has been run against Macha.
 | P6 | Dropped for now (Tom: "I'll decide later"): the real run, there and back, the rehearsal. The dry run over macnessa's real state stands as done | Second-cutover "Migration plan", when he decides | Tom |
 | P7 | First stage: S, 8a and 8b, one disk event | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover |
 | P8 | Later stage: heads S2 to S7, 8c with `dagda-migrate` moving `<state>/metadata/` and the seed, Dagda's loop with `test_maintenance_trace`, then 8d, against `808fa0f` | Heads plan section 3, re-read at `808fa0f`; 8c.4, 8d.4; `macha-metadata-dump` output identical | 95 gap-heads cases each get a session or a named retirement |
-| P8b | An independent review of Dagda's work by fresh agents, which is the gate Tom set | The review's findings closed | P1 to P8 as they land |
+| P8b | The independent review, the gate Tom set: "by fresh agents I meant the library agents, after a clear". This session, its context cleared, reviews Dagda from the code and the nodes only | The review's findings closed | P1 to P8 as they land |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
 **Macha is frozen at `cac5998` until the libraries are ready (Tom, relayed by the Macha session,
@@ -73,6 +73,15 @@ artefacts and answer questions. So:
   scratch state must not gate a tree-era tool. An unchanged mutation commits, about 26 empty 61-byte
   deltas a minute live, and that is the requirement until Tom rules. The heads plan's `b080c38`
   citations and "settled at the merge" marks are to be re-read at `cac5998`.
+
+**Seams with no owner (found 2026-11-06, reading both trees; sent to the Macha session for Tom):**
+1. Custody and certificates: `dagda::Node` refuses a node without custody and `advertise_wrap_key` throws without a
+   certificate, and Dannan's first cutover leaves both off on Macha's nodes. Nobody's plan provisions them. A blocker.
+2. Message numbers: Dannan's first cutover registers Macha's store types at the numbers Dagda takes; nobody says who
+   removes which at stage one.
+3. Adverts: `macha/capacity` and `macha/used` against `dagda/capacity`, `dagda/used`, `dagda/extents`.
+Also: the torrent section leaving the record at 8c changes the "dump identical" gate, and makes more than one space a
+Macha need, which moves part of L2 and L5 onto Macha's path, if Tom confirms that plan.
 
 **Macha 0.92.5 (`808fa0f`, the baseline now, live on both nodes):** a stale tombstone held in a batch is
 erased: the batch is dropped and the rest written again at its own retirement time, and a batch the
