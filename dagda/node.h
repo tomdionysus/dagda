@@ -408,9 +408,13 @@ class Node {
   // passes for its own length only, so what falls between them may take the node's
   // locks. Unlike run_local_stages(), each throws what its stage throws. Rebalance's
   // rest ends on Macha's four events (maintenance_events()); the composite's, on any
-  // event of the node's. A stage
-  // looks at the turn's stop as it starts and, where the work can be cut short by
-  // it, as it ends, and throws contract::MaintenanceStopping, having counted what it did.
+  // event of the node's. A stage looks at the turn's stop as it starts and as it ends,
+  // and throws contract::MaintenanceStopping having counted what it did. Within a
+  // stage it falls where Macha's can, pack compaction's wait for the accounting walk
+  // and its step from one backend to the next, and also between the objects of
+  // rebalance and the scrub, which Macha's does not look at. A pack being rewritten and
+  // the claims' compaction run to their end, as Macha's do, so what a stop interrupts
+  // is whole, and the next run does the rest.
   LocalTurn begin_local_stages(const LocalTurnOptions& options = {});
   // Thread-safe; waits on nothing.
   MaintenanceEvents maintenance_events() const noexcept;

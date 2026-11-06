@@ -626,6 +626,7 @@ void Node::retention_compact_locked(LocalTurn& turn) {
   out.retention_ran = true;
   out.retention_compacted = _claims->compact_if_needed(4096);
   note_local([&](LocalFigures& figures) { figures.retention_compactions += out.retention_compacted ? 1 : 0; });
+  throw_if_stopped(turn);
 }
 
 void Node::compact_packs_locked(LocalTurn& turn) {
@@ -694,6 +695,7 @@ void Node::ledger_verify_locked(LocalTurn& turn) {
     figures.verify_lost += out.verify.lost;
     figures.verify_passes += out.verify.complete ? 1 : 0;
   });
+  throw_if_stopped(turn);
 }
 
 LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
