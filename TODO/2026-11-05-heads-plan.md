@@ -737,17 +737,9 @@ Others of the same kind, found reading, with the same standing: reproduce, do no
 
 ## 8. Torrent
 
-**The maintainer has said torrent is leaving Macha, and not when, and has not ruled on 8c.** Macha's plan (`TODO/2026-11-06-ingest-plugins-torrent-removal-plan.md`, a proposal, at `:59-64`, `:78`) recommends the section leave the record in 8c; that is not a ruling. **This plan does not plan around its removal.** Dagda holds no torrent code, in the library or its tests, by the maintainer's ruling: Macha's bytes for it are proved by Macha's own tests, or as opaque vectors.
+**The maintainer has ruled: torrent moves after all of the port work and is shelved until he asks.** It stays in Macha through the port. The 23 requests stay, the SM19 torrent section and DLT9 stay live, "`macha-metadata-dump` identical" holds as first written, and Macha has one space. Dagda holds no torrent code, in the library or its tests: Macha's bytes for it are proved by Macha's own tests, or as opaque vectors.
 
-- **As planned:** SM16, 17, 19 and DLT9, 10, 11 pass through the owner's codec as Macha writes them. Dagda sees payload bytes and a hash. C46 treats those sections as bytes and parses none. `test_torrent_requests_ride_the_snapshot_and_its_deltas` (SM:4624), `test_a_delta_refuses_a_torrent_request_with_no_id` (SM:4732) and the coordinator's cases stay Macha's. Several gate cases mention torrent only to set `config.torrent.enabled = false`; Dagda's versions have no such line.
-
-**Where the plan would change, if the maintainer rules it leaves at or before 8c:**
-1. **Forms.** A form without the section is a Macha format change first, in the owner's codec. Old frames covered by a hash still need replay, so the old forms stay readable until truncation passes them on every node, or the migration decides. Section 4.2 items 2 to 4 gain that clause. A new form is new bytes for C46.
-2. **A second space,** if the torrent project takes one, as Macha's plan recommends. `NodeOptions::spaces` has it already; S4's policy type has it; its replay gates or does not gate readiness by that list. Then **L1** stops waiting if that coordinator takes a head-backed lease, and 2.4's cases gate that project, not Macha.
-3. **The migration:** the 23 requests Macha's plan cites move or drop (its question 5). A move is a new step in section 4, written by Macha since Dagda cannot parse them.
-4. **Counts:** torrent cases leave Macha's suite. The mapping changes (its torrent rows), these 95 do not: no GAP-HEADS case's subject is torrent.
-5. **Baselines:** the record axis loses a contributor (2.6).
-6. **Before heads move:** if it leaves before 8c, it is a Macha change under the freeze, which moves this baseline; section 1 is re-read at that commit, as here.
+SM16, 17, 19 and DLT9, 10, 11 pass through the owner's codec as Macha writes them. Dagda sees payload bytes and a hash. C46 treats those sections as bytes and parses none. `test_torrent_requests_ride_the_snapshot_and_its_deltas` (SM:4624), `test_a_delta_refuses_a_torrent_request_with_no_id` (SM:4732) and the coordinator's cases stay Macha's. Several gate cases mention torrent only to set `config.torrent.enabled = false`; Dagda's versions have no such line.
 
 ## 9. Fixtures
 
