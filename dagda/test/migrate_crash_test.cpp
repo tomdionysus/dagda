@@ -228,5 +228,41 @@ TEST(MigrateState, AV19StateGivenAV18BackendIsRefusedNotCalledDone) {
   }
 }
 
+// ---- A crash on the way back --------------------------------------------------
+
+// Going back rewrites the markers last, so a crash among its records left a
+// state marked v19 over records part v18: the store opened it and read the moved
+// records as corrupt, and a forward run called it nothing to do. The state says
+// it is on its way back from the first write until the last, the store refuses
+// it, a forward run refuses it, and only going back finishes it.
+TEST(MigrateBack, AStateCrashedOnTheWayBackIsRefusedUntilItIsFinished) {
+  struct Stop {};
+  StoreBed bed;
+  V18State v18(bed);
+  (void)v18.migrate();
+  size_t seen = 0;
+  MigrationOptions options;
+  options.cache = v18.cache;
+  options.after_step = [&](const MigrationReport&) {
+    if (++seen == 3) throw Stop{};
+  };
+  EXPECT_THROW((void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options), Stop);
+  options.after_step = {};
+
+  EXPECT_THROW(store::open_state_layout(v18.state, v1), std::runtime_error);
+  try {
+    (void)v18.migrate();
+    ADD_FAILURE() << "a forward run did not refuse";
+  } catch (const MigrationRefused& error) {
+    EXPECT_NE(std::string(error.what()).find("--reverse"), std::string::npos) << error.what();
+  }
+
+  const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+  EXPECT_EQ(report.loose_already, 3u);
+  EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+  EXPECT_EQ(v18.migrate().loose_migrated, 8u);
+  expect_v19_opens(bed, v18);
+}
+
 }  // namespace
 }  // namespace dagda::migrate

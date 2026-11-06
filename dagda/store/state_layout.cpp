@@ -38,6 +38,9 @@ void open_state_layout(const std::filesystem::path& state, const SealingScheme& 
     if (!input && value.empty()) throw std::runtime_error("cannot read storage layout marker");
     if (value == expected) return;
     if (value == "macha-state-layout-v18") throw std::runtime_error("state " + state.string() + " is " + migrate_first(state));
+    if (value == state_layout_going_back)
+      throw std::runtime_error("state " + state.string() + " stopped on its way back to layout v18: finish it with `dagda-migrate --reverse --state " +
+                               state.string() + " ...`");
     if (value.starts_with(state_layout_v19)) throw std::runtime_error("state is layout v19 of another domain (" + value + "); this store is " + expected);
     throw std::runtime_error("state " + state.string() + " is marked \"" + value + "\", which is " + not_dagda_v19 +
                              ": the store opens layout v19 alone, dagda-migrate moves Macha's v18 to it, and any other layout needs an empty state directory");
