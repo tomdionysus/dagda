@@ -191,6 +191,7 @@ void Node::open() {
   pool.role = _options.domain.role;
   pool.ledger_key = _node_local;
   pool.ledger_cache_bytes = ledger_cache_share(cache_bytes, LedgerShare::data_held);
+  if (_options.admission && _options.admission->device_pressure.slowdown_percent) pool.service_thresholds = _options.admission->device_pressure;
   _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, services("dagda.pool"));
   // A pool whose every backend is offline holds nothing it should: ready, but
   // degraded, and it says so (Tom, 2026-11-05), so a node whose only disk is
@@ -207,7 +208,8 @@ void Node::open() {
         admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
         [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
         _context.time().source());
-    _credit->observe_device(&_data->service_monitor(), admission.min_background_under_pressure);
+    // Device-pressure admission; a zero target turns it off, as Macha's does.
+    if (admission.device_pressure.slowdown_percent) _credit->observe_device(&_data->service_monitor(), admission.min_background_under_pressure);
     if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
   }
 

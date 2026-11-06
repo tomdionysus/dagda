@@ -63,6 +63,9 @@ struct AdmissionOptions {
   std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
   // Background work admitted while the DATA device is slow.
   uint64_t min_background_under_pressure = 1;
+  // What counts as slow, Macha's dht.io_pressure_*. A zero slowdown_percent turns the
+  // gate off, as Macha's does: admission does not watch the device.
+  store::DiskServiceThresholds device_pressure{};
   // Macha has no device reserve: its facade turns this off, so a Macha node's DATA
   // work is not capped by it.
   bool device_reserve = true;

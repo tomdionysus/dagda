@@ -66,6 +66,9 @@ struct StoragePoolOptions {
   // (StorageKey::derive_node_local), whatever the role, never the domain's.
   // Required: a node without custody cannot run a pool.
   std::shared_ptr<const domain::StorageKey> ledger_key{};
+  // What the service monitor counts as a slow device, set before any operation it
+  // could observe.
+  DiskServiceThresholds service_thresholds{};
 };
 
 // A backend's marker, `.macha.backend` in its root, mirrored under

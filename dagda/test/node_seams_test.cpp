@@ -375,6 +375,73 @@ TEST(NodeSeams, TheUnsourceableSampleNamesItsObjects) {
   EXPECT_NE(std::get<std::string>(*text).find(store::to_string(lost)), std::string::npos);
 }
 
+// A node on a Dannan node built here, for what the cluster fixture does not carry.
+struct HandBuiltNode {
+  dannan::test::TempDir dir;
+  test::ClusterIo io;
+  std::unique_ptr<dannan::Node> host;
+  std::unique_ptr<Node> node;
+
+  explicit HandBuiltNode(AdmissionOptions admission) {
+    std::ofstream(dir.path() / "cluster.key") << "seams test";
+    const auto source = dannan::identity::KeySource::typed_passphrase(
+        [] {
+          const std::string phrase = "node";
+          return dannan::identity::Secret(std::span(reinterpret_cast<const uint8_t*>(phrase.data()), phrase.size()));
+        },
+        dannan::identity::Argon2Costs{1024, 1, 1});
+    (void)dannan::identity::KeyCustody::create(dir.path() / "node", source);
+    dannan::NodeConfig config;
+    config.state_path = dir.path() / "node";
+    config.key = dannan::identity::load_cluster_key(dir.path() / "cluster.key");
+    config.listen_host = "127.0.0.1";
+    config.advertise_host = "127.0.0.1";
+    config.port = 0;
+    config.version = "dagda-test";
+    config.custody = source;
+    config.log = std::make_shared<test::RecordingSink>();
+    host = std::make_unique<dannan::Node>(io.context, config);
+    NodeOptions options;
+    options.state = dir.path() / "state";
+    options.key = test::known_answer_key();
+    options.pool.backends.push_back({dir.path() / "data", 64ULL * 1024 * 1024, 0});
+    options.maintenance.automatic = false;
+    options.admission = admission;
+    node = std::make_unique<Node>(host->context(), options);
+  }
+  ~HandBuiltNode() { node->stop(); }
+};
+
+// Macha's dht.io_pressure_*: the figures reach the monitor, and work is judged by
+// them.
+TEST(NodeSeams, TheDevicePressureFiguresReachTheMonitor) {
+  AdmissionOptions admission;
+  admission.device_pressure.overhead = std::chrono::milliseconds(11);
+  admission.device_pressure.per_mib = std::chrono::milliseconds(22);
+  admission.device_pressure.slowdown_percent = 333;
+  admission.device_pressure.release_percent = 44;
+  admission.device_pressure.outlier_percent = 5555;
+  HandBuiltNode built(admission);
+  const auto& thresholds = built.node->data().service_monitor().thresholds();
+  EXPECT_EQ(thresholds.overhead, std::chrono::milliseconds(11));
+  EXPECT_EQ(thresholds.per_mib, std::chrono::milliseconds(22));
+  EXPECT_EQ(thresholds.slowdown_percent, 333u);
+  EXPECT_EQ(thresholds.release_percent, 44u);
+  EXPECT_EQ(thresholds.outlier_percent, 5555u);
+  built.node->data().service_monitor().note(std::chrono::seconds(60), 4096);
+  EXPECT_TRUE(built.node->credit()->stats().device_pressured);
+}
+
+// Macha's zero: admission does not watch the device however slow it is
+// (local_services.cpp:23-25).
+TEST(NodeSeams, AZeroSlowdownTurnsTheDeviceGateOff) {
+  AdmissionOptions admission;
+  admission.device_pressure.slowdown_percent = 0;
+  HandBuiltNode built(admission);
+  built.node->data().service_monitor().note(std::chrono::seconds(60), 4096);
+  EXPECT_FALSE(built.node->credit()->stats().device_pressured);
+}
+
 // A packed node with dead bytes for the compaction to reclaim.
 class LocalStagesBed : public testing::Test {
  protected:
