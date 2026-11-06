@@ -108,20 +108,23 @@ std::optional<Bytes> open_frame(const domain::StorageKey& key, std::span<const u
   }
 }
 
-std::optional<uint64_t> next_frame_from(const std::filesystem::path& path, uint64_t file_size, uint64_t from, const domain::StorageKey& key,
-                                        std::span<const uint8_t> aad, const std::function<void()>& pause) {
+std::optional<uint64_t> next_frame_from(std::istream& file, uint64_t file_size, uint64_t from, uint64_t max_frame,
+                                        const std::function<std::optional<Bytes>(std::span<const uint8_t>)>& open, bool& read_failed,
+                                        const std::function<void()>& pause) {
   constexpr uint64_t envelope_bytes = 12 + 16 + 4;
   constexpr uint64_t header_bytes = 4 + envelope_bytes;
   constexpr uint64_t window = 1024 * 1024;
-  std::ifstream scan(path, std::ios::binary);
   Bytes buffer(window);
   uint64_t at = from;
   while (at + header_bytes <= file_size) {
     if (pause) pause();
     const auto wanted = std::min(window, file_size - at);
-    scan.clear();
-    scan.seekg(static_cast<std::streamoff>(at), std::ios::beg);
-    if (!scan.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(wanted))) return std::nullopt;
+    file.clear();
+    file.seekg(static_cast<std::streamoff>(at), std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(wanted))) {
+      read_failed = true;
+      return std::nullopt;
+    }
     const std::span<const uint8_t> bytes(buffer.data(), wanted);
     const auto u32_at = [&](uint64_t position) {
       Reader reader(bytes.subspan(position, 4));
@@ -130,16 +133,29 @@ std::optional<uint64_t> next_frame_from(const std::filesystem::path& path, uint6
     const auto positions = wanted - header_bytes + 1;
     for (uint64_t i = 0; i < positions; ++i) {
       const auto length = u32_at(i);
-      if (length < envelope_bytes || length > max_history_frame_bytes || at + i + 4 + length > file_size || u32_at(i + 4 + 12 + 16) != length - envelope_bytes)
-        continue;
+      if (length < envelope_bytes || length > max_frame || at + i + 4 + length > file_size || u32_at(i + 4 + 12 + 16) != length - envelope_bytes) continue;
       Bytes frame(static_cast<size_t>(length));
-      scan.clear();
-      scan.seekg(static_cast<std::streamoff>(at + i + 4), std::ios::beg);
-      if (scan.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(length)) && open_frame(key, aad, frame)) return at + i;
+      file.clear();
+      file.seekg(static_cast<std::streamoff>(at + i + 4), std::ios::beg);
+      if (!file.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(length))) {
+        read_failed = true;
+        return std::nullopt;
+      }
+      if (open(frame)) return at + i;
     }
     at += positions;
   }
   return std::nullopt;
+}
+
+std::optional<uint64_t> next_frame_from(const std::filesystem::path& path, uint64_t file_size, uint64_t from, const domain::StorageKey& key,
+                                        std::span<const uint8_t> aad, const std::function<void()>& pause) {
+  std::ifstream scan(path, std::ios::binary);
+  bool read_failed = false;
+  const auto next = next_frame_from(
+      scan, file_size, from, max_history_frame_bytes, [&](std::span<const uint8_t> frame) { return open_frame(key, aad, frame); }, read_failed, pause);
+  if (read_failed) throw std::runtime_error("cannot read frames from " + path.string());
+  return next;
 }
 
 }  // namespace dagda::heads

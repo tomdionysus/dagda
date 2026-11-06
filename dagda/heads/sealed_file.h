@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <istream>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -80,15 +81,23 @@ inline constexpr uint64_t max_history_frame_bytes = 2ULL * 1024ULL * 1024ULL * 1
 std::optional<Bytes> open_frame(const domain::StorageKey& key, std::span<const uint8_t> aad, std::span<const uint8_t> envelope);
 
 // The next offset at or after `from` in a file of frames holding a frame that
-// authenticates, Macha's load_history at 9153011: a length word is outside the AEAD,
-// so this is how a reader finds its place after damage. Nothing when none does, or a
-// window cannot be read. Also for S7's migration and the comparison tool, which give
-// the key and the associated data of the layout they read.
+// authenticates, Macha's next_history_frame at 98b816d: a length word is outside the
+// AEAD, so this is how a reader finds its place after damage. Nothing when none does.
+// A disk that does not answer says nothing about what is on it, so that is not the same
+// answer: `read_failed` is set, and a reader must cut nothing on it.
 //
-// Reads the file, a 1 MiB window at a time, so it waits on that disk; thread-safe.
-// Linear in the bytes it passes: the two length fields rule out nearly every position
-// before any AES work, and only a position that passes them reads a frame, up to the
-// length it claims. `pause`, if given, runs per window and may throw to stop the walk.
+// Reads the stream, a 1 MiB window at a time, so it waits on that disk; not thread-safe
+// over one stream. Linear in the bytes it passes: the two length fields rule out nearly
+// every position before any AES work, and only a position that passes them reads a
+// frame, up to the length it claims. `pause`, if given, runs per window and may throw
+// to stop the walk.
+std::optional<uint64_t> next_frame_from(std::istream& file, uint64_t file_size, uint64_t from, uint64_t max_frame,
+                                        const std::function<std::optional<Bytes>(std::span<const uint8_t>)>& open, bool& read_failed,
+                                        const std::function<void()>& pause = {});
+
+// The same over a file and a layout's key and associated data, for S7's migration and
+// the comparison tool. A read that fails throws, so it can never read as nothing later.
+// Thread-safe.
 std::optional<uint64_t> next_frame_from(const std::filesystem::path& path, uint64_t file_size, uint64_t from, const domain::StorageKey& key,
                                         std::span<const uint8_t> aad, const std::function<void()>& pause = {});
 
