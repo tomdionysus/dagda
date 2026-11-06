@@ -64,6 +64,118 @@ records migrated, already v19 and unreadable; ledgers re-sealed, already
 and empty; markers rewritten; bytes read and written; and every record left
 as it was, by file and id.
 
+## Proving nothing was lost
+
+There is no copy to hold a migrated disk against, so the proof is two read-only
+passes and a comparison, by the same tool:
+
+```
+dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY [--backend DIR]... \
+              [--control DIR] [--cache DIR] --write-manifest /elsewhere/before        # node stopped
+dagda-migrate --state DIR ... [--backend DIR]...                                      # the migration
+dagda-migrate --state DIR ... [--backend DIR]... --write-manifest /elsewhere/after    # before the node starts
+dagda-migrate --compare-before /elsewhere/before --compare-after /elsewhere/after
+```
+
+The compare's exit code is 0 only when nothing differs and everything was
+checked, and its last line is `RESULT: PASS` or `RESULT: FAIL: N differences, M
+not checked`. Every difference and everything not checked is a line by name. Each
+category is a line with its count on both sides: `SAME`, `DIFFERENT (n)`, `NOT
+CHECKED`, or `ZERO` for a category that held nothing, which is never called the
+same. A manifest that is truncated, altered or has bytes after its end is a
+failure, and so is any manifest taken under another layout, cluster key, node or
+set of stores. `--expect-before` and `--expect-after` (18 or 19) compare other
+journeys: 18 then 18 is there and back, whose tags must be equal too.
+
+**The before pass takes the place of `--dry-run`:** it reads the same bytes and
+refuses the same way, and it leaves no lock files. Take the after pass before the
+node starts: the store truncates torn tails, prunes empty files and rewrites its
+accounting at its first open, and the comparison will report each one.
+
+### What a pass does
+
+It opens every sealed record with AES-GCM and checks the plaintext's size and
+SHA-256 against the id, so an object listed as opened is the object its id names:
+the id is the plaintext hash, and it is checked, not assumed. A pass then records,
+by category:
+
+| Category | What is compared | Named how |
+|---|---|---|
+| objects, per store (DATA, control, cache) | Every loose file: id, plaintext size, file size, nonce, touched time; and that it opened under the manifest's layout | `object <id> is lost`, `... no longer opens: its bytes have changed`, `... is new`, `... is v18 in a manifest of layout v19: not migrated`, `... touched time moved` |
+| | Every pack file and every record at its offset: put, touch or tombstone, its time, id, sizes, nonce; a torn tail or damaged span by length and SHA-256 | `record at pack 2 offset 925 is lost (touch of <id>)` |
+| removed, per store | The ids whose last pack record is a tombstone and that have no loose file, as the store's replay reaches them | `removed object <id> is resurrected` |
+| accounting, per store | The slot in force: sequence, used, operation; and the file's SHA-256 | `used bytes A before and B after` |
+| markers | The state's, each backend's, each mirror: layout (with the v19 key check proved), node, token | `marker ... is lost`, `marker ... says "...", not layout v19` |
+| retention marker | `retention/ledger` | `retention/ledger is lost` |
+| held | Every record of `ledger/control` and `ledger/data-*`, read as a store would with the journal applied; `seeded`, `verify-next` | `object <id> is no longer held` |
+| claims and dots | Every record of `retention/ledger-{data,control}`, decoded; every frame of `retention/claims.log`, whole | `claim on <id> changed from adds {...} removed {...} to ...`, `frame 3 is lost: add class 0 dot ...` |
+| reference counts | Every count in `ledger/referenced/{extents,nodes}`; `state` (root and totals) | `count of <id> changed from 2 to 3` |
+| sightings | Every first sighting of each table, in the clear before and sealed after | `sighting of <id> changed from A to B` |
+| other files | Every other regular file under the state and each store, by size and SHA-256, so nothing is left out for not being known | `file availability/last-survey.bin has changed` |
+| metadata | Heads, certificates and history replay. **NOT CHECKED today, which fails:** heads session S7 adds the reader (`metadata_manifest_reader`, `dagda/migrate/manifest.h`) | |
+
+**What is NOT CHECKED, and so can never pass:** a record that opens on neither
+side, whose plaintext cannot be proved, even though the migration did not hurt it;
+a damaged span in a pack, whose objects cannot even be named; a ledger that does
+not read under the layout's key, or whose journal holds a whole frame that will not
+open; a backend the state's mirrors name and no `--backend` does; anything under a
+store that is not a regular file. A real disk with a rotted object therefore does
+not get a PASS: the operator gets the names and judges them, and a repair from the
+other node's copy can be compared afterwards with the store's own tools.
+
+Torn tails, on a pack or a journal, are what the store's recovery drops. They are
+counted and do not fail. What a crash left beside a file being replaced
+(`<name>.tmp.<pid>.<n>`) is named and not compared: no store reads one, and a second
+run removes it. A stale `nodes-<n>.bin` beside a trie's published generation is
+likewise not read.
+
+### What it must not do
+
+A pass writes nothing under the state, a backend, the control store or the cache:
+not a lock file, not a directory. A node's lock is an exclusive `flock` on
+`.macha.lock`, so the pass opens that file if it exists and holds a shared `flock`
+on it. A node holding it refuses the pass, naming the store; a node starting
+meanwhile refuses to start. Where no lock file exists there is none to hold, so the
+pass fails if one has appeared by its end. The manifest itself is refused anywhere
+inside those trees and over any file that exists. It is written as
+`<manifest>.partial` and renamed when whole, owner-only: it holds object ids, node
+ids and claims in the clear, as v18's file names and sightings already did.
+
+### How big, and how long
+
+A manifest's size follows the records and not their bytes: 89 bytes an item,
+whether the object is 64 bytes or 128 MiB. `dagda_tests
+--gtest_also_run_disabled_tests --gtest_filter='Scale.*Manifest*'` builds a state
+of macnessa's counts and measures it: 1,031,857 loose objects, 59 packs holding
+314,390 + 340,000 puts and 1,883,019 touches and tombstones, a held ledger and a
+claims ledger of a million each. That is 5,646,994 items and **504 MB a manifest**,
+so give the two about 1.2 GB on another disk, with room for reference counts of the
+same order. Its objects are 64 bytes, so its times are what the per-file and
+per-record work costs and say nothing of the bytes. On a Mac's disk: before pass 19.4
+minutes, migration 19.7, after pass 17.8, comparison 32 seconds.
+
+A pass is as slow as the disk, since it reads every byte: 4 TB at 150 MiB/s, if a
+node's USB disk gives that, is about 7.5 hours, more for a million opens on a
+spinning disk, and the node is stopped throughout. What makes that bearable:
+
+- **It resumes.** `--resume` goes on from `<manifest>.partial`, which is made durable
+  every 256 records or 1 GiB, so a stopped pass reads again at most that much (a Pi's
+  power or an operator's ^C costs nothing else). A state that has changed since (a
+  loose file or pack of another size or time, moved accounting) refuses the resume:
+  a manifest built on what is no longer so would lie.
+- **Progress with an end:** the total is known from listing the stores, so every 4096
+  records a line gives records, MiB of the total, the rate and the minutes left. The
+  listing itself is a stat of each file; measure it on the day.
+- **It holds little:** a record at a time, and one listing and one replay a store.
+  The comparison is a merge of two streams and its memory does not grow with them.
+- **One thread.** A Pi 5 has AES and SHA-2 instructions, so the disk should be the
+  bound and threads would buy nothing. This has not been measured on the nodes.
+- **No sampling and no skipping,** by design: nothing is there to trade for time.
+
+Three reads in all, then, with the node stopped: before, the migration's own, after.
+On macnessa, at that guessed rate, about 22 hours, plus 1.03M fsyncs for the
+migration. No figure here has been measured on that disk.
+
 ## Going back
 
 `--reverse` takes a v19 node back to v18, so it can return to Macha 0.92.x. It
@@ -146,9 +258,7 @@ Before writing anything:
 - a cluster key under which the first eight records found open under
   neither layout (the wrong key, or not a Dagda disk).
 
-After the objects, a ledger that opens under neither the node-local key nor
-the domain key (another node's, or damaged) is refused by name; the objects
-already migrated are valid and a second run skips them, and the markers are
-still v18. A single record that opens under neither layout once the key has
+A ledger that opens under neither the node-local key nor the domain key (another
+node's, or damaged) is refused by name, before any write too. A single record that opens under neither layout once the key has
 been proved is not a refusal: it is listed, left as it was, and the store
 treats it as corrupt (repaired from replicas) after the migration.
