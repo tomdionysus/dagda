@@ -1570,8 +1570,11 @@ void DistributedStore::prompt_replication_loop(std::stop_token stop) {
       }
       std::optional<Bytes> data;
       {
-        const auto admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
-        if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
+        std::optional<DataAdmission> admitted;
+        if (_options.prompt_read_admission) {
+          admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
+          if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
+        }
         data = _data.get(*id);
       }
       if (!data) continue;

@@ -249,6 +249,11 @@ struct DistributedStoreOptions {
   size_t max_tickets = 4096;
   // Prompt replication's first retry, doubling (Macha's 30 s).
   std::chrono::milliseconds prompt_retry{30000};
+  // Whether a prompt copy's read of the local object is admitted as speculative
+  // device work: it yields to a waiting foreground request and to device pressure,
+  // counts against the background ceiling and holds a device slot. Macha's takes
+  // none (distributed_store.cpp:1306): its facade turns this off.
+  bool prompt_read_admission = true;
   // Opportunistic local copies queued (cache fill, promotion).
   size_t local_copy_bytes = 256 * 1024 * 1024;
   // How long work here waits for a control slot. DATA work whose caller named

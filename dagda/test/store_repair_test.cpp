@@ -1348,6 +1348,51 @@ TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
   EXPECT_EQ(result.get(), bytes);
 }
 
+// src/cluster/distributed_store.cpp at Macha 9a08846, prompt_replication_loop (:1306):
+// the read for a prompt copy takes no DATA credit, so a node whose credit is taken
+// still sends its copy. The local write fits what is left; the extent a lease
+// would charge does not.
+TEST(StoreRepair, APromptCopyReadsWithoutCreditWhenTheNodeSaysSo) {
+  Cluster cluster;
+  auto machas = waits_on_credit();
+  machas.store.prompt_read_admission = false;
+  auto& a = cluster.add("a", machas);
+  auto& b = cluster.add("b", machas);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto bytes = pattern(64 * 1024, 56);
+  const auto id = object_id(bytes);
+  auto& credit = *a.credit();
+  const auto most = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes - 128 * 1024);
+  ASSERT_TRUE(most.has_value());
+  ASSERT_TRUE(a.store().put_here(id, bytes));
+  EXPECT_TRUE(wait_until([&] { return b.data().has(id); }));
+  EXPECT_EQ(credit.stats().speculative_waits, 0u);
+  EXPECT_EQ(a.store().prompt_replication_stats().copies, 1u);
+}
+
+// Dagda's default for a node that is not Macha's: the read is admitted as other
+// speculative device work is, and waits for credit; the copy follows when it comes.
+TEST(StoreRepair, APromptCopyWaitsForCreditByDefault) {
+  Cluster cluster;
+  auto& a = cluster.add("a", waits_on_credit());
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto bytes = pattern(64 * 1024, 57);
+  const auto id = object_id(bytes);
+  auto& credit = *a.credit();
+  auto most = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes - 128 * 1024);
+  ASSERT_TRUE(most.has_value());
+  ASSERT_TRUE(a.store().put_here(id, bytes));
+  ASSERT_TRUE(wait_until([&] { return credit.stats().speculative_waits == 1; }));
+  EXPECT_FALSE(b.data().has(id));
+  most.reset();
+  EXPECT_TRUE(wait_until([&] { return b.data().has(id); }));
+}
+
 // test_min_write_floor_publishes_then_repair_converges_to_r2 (VALIDATION
 // "Placement and the write floor"): a write at a floor of one publishes on
 // the one node there is, and when a second owner joins, repair by diff
