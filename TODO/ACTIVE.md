@@ -61,7 +61,7 @@ needs them. Tell the Macha session when the answer is Yes.
    the metadata reader to the comparison, must read damaged bytes between good frames, and must never hand a half-migrated `history.log` to this
    reader, which cuts it as one torn tail. Rollback (Macha's rule): Macha's binary returns only after `--reverse` has finished, so `--reverse` is
    proved on a real state before the first live run, whatever else it gates. An object rotted before migration reaches only NOT CHECKED, for the
-   operator to judge by hand. Another Macha fix is pending Tom's commit: a failed read in `load_history` stops the load and cuts nothing.
+   operator to judge by hand. Macha's `98b816d`, mirrored: a failed read in `load_history` stops the load and cuts nothing.
 8. Retirements compared assertion by assertion where they cannot yet run; those that need the port named in the report. The store's
    journal lines mapped against the goldens.
 9. At the repin to Dannan's tag, with class-waits merged: peer calls under a no-progress bound (Dannan's `CallWatch`) in place of the absolute 60 s
@@ -84,7 +84,7 @@ authenticates is the rest a torn tail. Dagda mirrors it from that commit, with `
 and `test_a_torn_history_tail_is_still_cut`. The live nodes stay on 0.93.4 for the baselines. Until the mirror merges Dagda's replica has the old
 shape. The other two read as unreachable and are reproduced: the cache's byte count at `reanchor_history`, and PREPARE then COMMIT with
 no certificate. `set-aside.meta` cannot be cut on Macha's bytes; the report names it as not shown there.
-No on-disk or wire form changes in 0.93.5, so the report names it: forms cut at `9a08846`, behaviour baseline `9153011`,
+No on-disk or wire form changes in 0.93.5, so the report names it: forms cut at `9a08846`, behaviour baseline `98b816d` (0.93.5, on `9153011`),
 and the port branches from that commit. A `history.log` may now hold damaged bytes between good frames, which `dagda-migrate` and the
 comparison tool must read. New words for the journal mapping: Status reads 0.93.5, a torn tail's `reason=` reads "last frame failed
 AES-GCM authentication", and "record too large" is gone from this path.

@@ -3,6 +3,14 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: a failed read of history cuts nothing (Macha `98b816d`)
+
+Mirrors `load_history` and `next_history_frame` from Macha `98b816d`. A read failing in the main loop or the forward scan stops the load: nothing is
+cut or kept aside, `_history_bytes` is the file's size so appends stay correct, and the next open reads the rest. The scan takes a stream; the path form,
+for S7 and the comparison tool, throws on a failed read, so it can never read as nothing later. `ReplicaOptions::history_reader` is a test seam.
+`AFailedReadInTheHistoryScanIsNotNothingLater` is Macha's case. `AFailedReadOfHistoryCutsNothing` runs the whole load at each failure, which Macha has by
+reading for its main loop; it failed before the fix. Not on GCC or arm64.
+
 ## 2026-11-06: a damaged history frame loses only that frame (`feature/history-damage`)
 
 Macha 0.93.5's `load_history` mirrored from its `9153011` (behaviour baseline; forms stay cut at `9a08846`). A frame that does not open looks forward for the
