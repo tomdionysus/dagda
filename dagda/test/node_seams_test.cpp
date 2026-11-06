@@ -12,9 +12,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -375,22 +378,81 @@ TEST(NodeSeams, TheUnsourceableSampleNamesItsObjects) {
   EXPECT_NE(std::get<std::string>(*text).find(store::to_string(lost)), std::string::npos);
 }
 
+// A log a test can act from, on whichever thread writes the line: a line that tells
+// it something, and a line held until released, so a test can act while the work
+// that wrote it is provably in progress.
+class WatchingSink final : public dannan::status::LogSink {
+ public:
+  bool enabled(dannan::status::LogLevel) const noexcept override { return true; }
+  void write(dannan::status::LogLevel, std::string_view, std::string_view message) override {
+    std::function<void()> told;
+    bool hold = false;
+    {
+      const std::scoped_lock lock(_mutex);
+      if (!_told_by.empty() && message.find(_told_by) != std::string_view::npos) told = _told;
+      if (!_held_by.empty() && message.find(_held_by) != std::string_view::npos) {
+        hold = true;
+        _held_by.clear();
+      }
+    }
+    if (told) told();
+    if (hold) {
+      _entered.set_value();
+      _released.wait();
+    }
+  }
+  void tell(std::string text, std::function<void()> told) {
+    const std::scoped_lock lock(_mutex);
+    _told_by = std::move(text);
+    _told = std::move(told);
+  }
+  void hold(std::string text) {
+    const std::scoped_lock lock(_mutex);
+    _held_by = std::move(text);
+  }
+  bool entered() { return _entered_future.wait_for(std::chrono::seconds(10)) == std::future_status::ready; }
+  void release() {
+    if (!_released_once.exchange(true)) _release.set_value();
+  }
+
+ private:
+  std::mutex _mutex;
+  std::string _told_by;
+  std::function<void()> _told;
+  std::string _held_by;
+  std::promise<void> _entered;
+  std::future<void> _entered_future = _entered.get_future();
+  std::promise<void> _release;
+  std::shared_future<void> _released = _release.get_future().share();
+  std::atomic_bool _released_once{false};
+};
+
 // A node on a Dannan node built here, for what the cluster fixture does not carry.
 struct HandBuiltNode {
   dannan::test::TempDir dir;
   test::ClusterIo io;
+  std::shared_ptr<WatchingSink> sink = std::make_shared<WatchingSink>();
+  std::function<void(NodeOptions&)> configure;
   std::unique_ptr<dannan::Node> host;
   std::unique_ptr<Node> node;
 
-  explicit HandBuiltNode(AdmissionOptions admission) {
+  explicit HandBuiltNode(std::function<void(NodeOptions&)> configured) : configure(std::move(configured)) {
     std::ofstream(dir.path() / "cluster.key") << "seams test";
+    open();
+  }
+  explicit HandBuiltNode(AdmissionOptions admission) : HandBuiltNode([admission](NodeOptions& options) { options.admission = admission; }) {}
+  ~HandBuiltNode() {
+    sink->release();
+    close();
+  }
+  void open() {
     const auto source = dannan::identity::KeySource::typed_passphrase(
         [] {
           const std::string phrase = "node";
           return dannan::identity::Secret(std::span(reinterpret_cast<const uint8_t*>(phrase.data()), phrase.size()));
         },
         dannan::identity::Argon2Costs{1024, 1, 1});
-    (void)dannan::identity::KeyCustody::create(dir.path() / "node", source);
+    if (!dannan::identity::KeyCustody::exists(dir.path() / "node")) (void)dannan::identity::KeyCustody::create(dir.path() / "node", source);
     dannan::NodeConfig config;
     config.state_path = dir.path() / "node";
     config.key = dannan::identity::load_cluster_key(dir.path() / "cluster.key");
@@ -399,18 +461,186 @@ struct HandBuiltNode {
     config.port = 0;
     config.version = "dagda-test";
     config.custody = source;
-    config.log = std::make_shared<test::RecordingSink>();
+    config.log = sink;
     host = std::make_unique<dannan::Node>(io.context, config);
     NodeOptions options;
-    options.state = dir.path() / "state";
+    options.state = state();
     options.key = test::known_answer_key();
-    options.pool.backends.push_back({dir.path() / "data", 64ULL * 1024 * 1024, 0});
+    options.pool.backends.push_back({data(), 64ULL * 1024 * 1024, 0});
     options.maintenance.automatic = false;
-    options.admission = admission;
+    if (configure) configure(options);
     node = std::make_unique<Node>(host->context(), options);
   }
-  ~HandBuiltNode() { node->stop(); }
+  void close() {
+    if (node) node->stop();
+    node.reset();
+    host.reset();
+  }
+  std::filesystem::path state() const { return dir.path() / "state"; }
+  std::filesystem::path data() const { return dir.path() / "data"; }
 };
+
+// Half of a run of small objects removed, so packs hold dead bytes beside live ones.
+struct PackedObjects {
+  std::vector<store::ObjectId> live;
+  std::vector<store::ObjectId> dead;
+  uint64_t live_bytes = 0;
+};
+PackedObjects dead_beside_live(store::StoragePool& data) {
+  PackedObjects out;
+  for (uint64_t n = 0; n < 128; ++n) {
+    const auto bytes = test::pattern(16 * 1024 + n, static_cast<uint8_t>(n));
+    const auto id = store::object_id(bytes);
+    EXPECT_TRUE(data.put(id, bytes));
+    if (n % 2) {
+      out.live.push_back(id);
+      out.live_bytes += bytes.size();
+    } else {
+      out.dead.push_back(id);
+    }
+  }
+  (void)data.reassert_durable(out.dead.back());
+  for (const auto& id : out.dead) EXPECT_TRUE(data.remove(id));
+  return out;
+}
+
+void pack_options(NodeOptions& options) {
+  options.pool.pack_threshold = 256 * 1024;
+  options.pool.pack_target_size = 256 * 1024;
+}
+
+// Nothing was lost, and further runs of the stage reclaim what the stop left.
+void expect_compaction_finishes(Node& node, const PackedObjects& objects, uint64_t used_before) {
+  uint64_t used = node.data().used();
+  for (int run = 0; run < 64; ++run) {
+    auto turn = node.begin_local_stages();
+    node.compact_packs(turn);
+    EXPECT_TRUE(turn.stages.packs_ran);
+    const auto now = node.data().used();
+    if (run > 8 && now == used) break;
+    used = now;
+  }
+  EXPECT_LT(used, used_before);
+  // What is left is what lives, and the seals and headers around it.
+  EXPECT_LT(used, objects.live_bytes + objects.live_bytes / 8);
+  for (const auto& id : objects.live) EXPECT_TRUE(node.data().get(id).has_value());
+  for (const auto& id : objects.dead) EXPECT_FALSE(node.data().has(id));
+}
+
+// Macha's stop inside compact_packs where it can fall: while the compaction waits for
+// the accounting walk (local_store.cpp wait_for_accounting at 9a08846). The walk is
+// held by the line it writes as it begins; the stop wakes the wait, comes out of the
+// stage, and the next run, the walk done, finishes the work.
+TEST(NodeSeams, AStopWhileCompactionWaitsForTheWalkComesThroughAndTheNextRunFinishes) {
+  HandBuiltNode built(pack_options);
+  const auto objects = dead_beside_live(built.node->data());
+  const auto used = built.node->data().used();
+  ASSERT_GT(used, objects.live_bytes);
+  built.close();
+  // No accounting to trust: the next open walks the disk.
+  std::filesystem::remove(built.data() / ".macha.accounting");
+  built.sink->hold("storage accounting scan begin path=" + built.data().string());
+  built.open();
+  ASSERT_TRUE(built.sink->entered());
+
+  std::stop_source stop;
+  LocalTurnOptions options;
+  options.stop = stop.get_token();
+  auto turn = built.node->begin_local_stages(options);
+  auto compaction = std::async(std::launch::async, [&] { built.node->compact_packs(turn); });
+  // Still in it: a stage that returned or threw here never waited for the walk.
+  ASSERT_EQ(compaction.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+  stop.request_stop();
+  EXPECT_THROW(compaction.get(), contract::MaintenanceStopping);
+  EXPECT_TRUE(turn.stages.packs_ran);
+
+  built.sink->release();
+  ASSERT_TRUE(test::wait_until([&] {
+    auto next = built.node->begin_local_stages();
+    built.node->compact_packs(next);
+    return built.node->data().used() < used;
+  }));
+  expect_compaction_finishes(*built.node, objects, used);
+}
+
+// Macha's other place in compact_packs: between one backend and the next. The first
+// backend's deferred compaction is what lands the stop. The second is not visited,
+// the stop comes out of the stage, and the next runs finish both.
+TEST(NodeSeams, AStopBetweenBackendsComesThroughAndTheNextRunFinishes) {
+  std::atomic<int> deferred{0};
+  std::stop_source stop;
+  HandBuiltNode built([&](NodeOptions& options) {
+    pack_options(options);
+    options.pool.backends.push_back({options.state.parent_path() / "second", 64ULL * 1024 * 1024, 0});
+  });
+  const auto second = built.dir.path() / "second";
+  ASSERT_EQ(built.node->data().online_backends(), 2u);
+  const auto objects = dead_beside_live(built.node->data());
+  const auto used = built.node->data().used();
+  ASSERT_TRUE(std::filesystem::exists(built.data() / "packs"));
+  ASSERT_TRUE(std::filesystem::exists(second / "packs"));
+  built.sink->tell("DATA pack compaction deferred", [&] {
+    ++deferred;
+    stop.request_stop();
+  });
+  const auto read_only = std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec;
+  std::filesystem::permissions(built.data() / "packs", read_only);
+  std::filesystem::permissions(second / "packs", read_only);
+
+  LocalTurnOptions options;
+  options.stop = stop.get_token();
+  auto turn = built.node->begin_local_stages(options);
+  EXPECT_THROW(built.node->compact_packs(turn), contract::MaintenanceStopping);
+  std::filesystem::permissions(built.data() / "packs", std::filesystem::perms::owner_all);
+  std::filesystem::permissions(second / "packs", std::filesystem::perms::owner_all);
+  EXPECT_EQ(deferred.load(), 1);
+  EXPECT_EQ(built.node->data().used(), used);
+
+  expect_compaction_finishes(*built.node, objects, used);
+}
+
+// The claims' compaction takes no stop, here or in Macha (compact_if_needed(4096) at
+// maintenance.cpp:1128): a stop landing inside it waits for its end. The stage then
+// says so, and what it compacted stands: the next run has nothing left to do, and a
+// reopened node holds every claim.
+TEST(NodeSeams, AStopInsideTheClaimsCompactionWaitsForItsEndThenComesThrough) {
+  std::stop_source stop;
+  HandBuiltNode built(nullptr);
+  const dannan::identity::NodeId origin = [] {
+    dannan::identity::NodeId out;
+    out.bytes.fill(7);
+    return out;
+  }();
+  std::vector<store::ObjectId> ids;
+  for (uint64_t n = 0; n < 4100; ++n) {
+    ids.push_back(store::object_id(test::numbered(n)));
+    built.node->claims().retain(contract::RetentionClass::data, ids.back(), {origin, n + 1});
+  }
+  // The compaction's last act tidies files Macha's older layouts kept. One that cannot
+  // be removed writes a line from inside it, and that lands the stop.
+  const auto held = built.state() / "retention" / "checkpoints" / "held";
+  std::filesystem::create_directories(held);
+  std::ofstream(held / "file") << "x";
+  std::filesystem::permissions(held, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+  built.sink->tell("cannot remove retention checkpoint files", [&] { stop.request_stop(); });
+
+  LocalTurnOptions options;
+  options.stop = stop.get_token();
+  auto turn = built.node->begin_local_stages(options);
+  EXPECT_THROW(built.node->retention_compact(turn), contract::MaintenanceStopping);
+  std::filesystem::permissions(held, std::filesystem::perms::owner_all);
+  std::filesystem::remove_all(held.parent_path());
+  EXPECT_TRUE(stop.stop_requested());
+  EXPECT_TRUE(turn.stages.retention_compacted);
+
+  auto next = built.node->begin_local_stages();
+  built.node->retention_compact(next);
+  EXPECT_TRUE(next.stages.retention_ran);
+  EXPECT_FALSE(next.stages.retention_compacted);
+  built.close();
+  built.open();
+  for (const auto& id : ids) EXPECT_TRUE(built.node->claims().retained(contract::RetentionClass::data, id));
+}
 
 // Macha's dht.io_pressure_*: the figures reach the monitor, and work is judged by
 // them.
