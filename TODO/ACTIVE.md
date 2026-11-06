@@ -57,9 +57,17 @@ needs them. Tell the Macha session when the answer is Yes.
    gone, held tries, claims and dots, retention marker, reference counts, sightings, markers, accounting, and metadata heads,
    certificates and history replay.
 7. Crash cases per migration phase, ready before the first real run on the live disks, in process (a power cut is the nodes' to show).
+   Done but for: `--resume` from a real partial through the command line (a fixture of 64 records never leaves one; durable every 256). S7 adds
+   the metadata reader to the comparison, must read damaged bytes between good frames, and must never hand a half-migrated `history.log` to this
+   reader, which cuts it as one torn tail. Rollback (Macha's rule): Macha's binary returns only after `--reverse` has finished, so `--reverse` is
+   proved on a real state before the first live run, whatever else it gates. An object rotted before migration reaches only NOT CHECKED, for the
+   operator to judge by hand. Another Macha fix is pending Tom's commit: a failed read in `load_history` stops the load and cuts nothing.
 8. Retirements compared assertion by assertion where they cannot yet run; those that need the port named in the report. The store's
    journal lines mapped against the goldens.
-9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
+9. At the repin to Dannan's tag, with class-waits merged: peer calls under a no-progress bound (Dannan's `CallWatch`) in place of the absolute 60 s
+   `write_deadline` and `read_deadline` past the local wait, since Macha has neither and a transfer still moving past 60 s ends in Dagda and
+   goes on in Macha. Read with its own deadline shares a fetch where Macha's is private: check how that looks from outside.
+   Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
 10. Dagda's own measurements on the Pis against Macha's baselines at 0.93.4, `../macha/TODO/2026-11-06-pi-baselines.md`, raw JSON in
     `../macha/build/baselines/results/` (uncommitted). Committed at Macha `9020425`. Its caveats: inverbeg was still filling, and macnessa crashed four times from 17:18Z to 18:11Z with heap
     corruption, cause not found, so its figures may not be a healthy 0.93.4's. Tom (relayed): the corruption is left until after the port, so
