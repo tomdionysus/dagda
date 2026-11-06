@@ -16,6 +16,22 @@ Found, for the Macha session (none fixed): R13, a fold step over two heads neith
 Checked under GCC 15 by `-fsyntax-only` on the changed sources; not linked or run under GCC or on arm64. No mutation testing, by Tom's rule. Only the last code commit (`4c0161d`) was run; the commits before it were not each built.
 Gate: `dagda_tests` 952 passing, 4 disabled, one whole run on the Mac (928 at the start).
 
+## 2026-11-06: the repin to Dannan 0.5.0, class-waits and four differences from Macha (`feature/repin-050`)
+
+Dannan 0.5.0 (`df839fe`) in `build/deps/prefix-0.5.0`; the pin, the README and CONTRIBUTING moved. Class-waits is on the branch: the arbiter and the device
+reserve on `sched::ClassWaits`, with develop's window, Macha's words in the warning and the 100-year test. ClassWaits caps one sleep at 24 hours, not one.
+`write_deadline`, `read_deadline` and `call_horizon` are gone: a peer's put or fetch runs under `CallWatch`, `call_no_progress` (300 s, past a peer's 120 s
+credit wait), its Dannan deadline ten years off. A caller's own deadline stays. Repair's pushes and `put_on` too. CONTROL: the sweep's check marks the object on
+`ClaimLocks` (Macha's `claim_deletion`), and a claim of either class holds the stripe and finds a mark not present; `before_control_removal` is the test's seam.
+With the reserve off a claim was already never refused for admission: shown, not changed. The exchange's stop comment no longer says repair delivers claims.
+Left, none closed here: Dannan marks progress on reply frames only, where Macha's `touch` also counts bytes sent (`net.cpp:1575`), so an upload with no reply
+yet looks idle: a moving put is spilled past at `write_stall` and fails at the window. That needs Dannan: `Session::write_next`'s completion marking the
+fragment's pending call. Macha's silent data call on a live session never fails; Dagda's does at 300 s. `WriteOptions` carries no no-progress budget and shared
+counter (`replicate` `:352-386`, publication's 30 s). A claim or a put from a peer the server's roster does not list yet is 403 (`Identity::verify`), where Macha
+takes any authenticated peer.
+Gate: `dagda_tests` 938 passing, 4 disabled, one whole run on the Mac at the last code commit (928 at the start). `g++-15 -fsyntax-only` clean on the changed
+sources; not linked or run under GCC or on arm64.
+
 ## 2026-11-06: a failed read of history cuts nothing (Macha `98b816d`)
 
 Mirrors `load_history` and `next_history_frame` from Macha `98b816d`. A read failing in the main loop or the forward scan stops the load: nothing is
