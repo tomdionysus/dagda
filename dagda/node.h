@@ -129,6 +129,10 @@ struct MaintenanceOptions {
   // reaches repair and the store unless RepairOptions::trace and
   // DistributedStoreOptions::repair_trace name their own.
   ledger::Collector::Trace trace;
+  // Told each stage a pass reaches, in Macha's names ("metadata-repair", "head-repair",
+  // "history-truncate" and so on), on the thread running it: Macha's enter_stage and its
+  // maintenance_stage_hook. It may hold a stage; one that throws fails the stage.
+  std::function<void(std::string_view)> stage;
 };
 
 // What one pass of the local stages did. A `_ran` is false when its gate held
@@ -144,6 +148,12 @@ struct LocalStages {
   store::StoragePool::MaintenanceResult scrub;
   bool verify_ran = false;
   store::LocalStore::VerifyResult verify;
+  // Between the claims' compaction and DATA packs, each in its own try. Head repair runs
+  // busy or not, a no-op unless a head is flagged; history truncation only when idle.
+  bool heads_repair_ran = false;
+  size_t heads_repaired = 0;
+  bool history_truncate_ran = false;
+  size_t history_truncated = 0;
 };
 
 // What begins a pass's local stages, for an owner running them one by one.
@@ -191,6 +201,8 @@ inline double ledger_verify_credit(double credit, double seconds, bool busy) noe
 // ran ("no reachability provider registered ..."; the provider's error),
 // and the repair pass.
 struct MaintenanceReport {
+  // What metadata repair did first, a turn per space.
+  std::vector<heads::RepairTurn> metadata;
   std::optional<ledger::PassReport> gc;
   std::string gc_skipped;
   store::RepairPass repair;
@@ -259,6 +271,10 @@ struct NodeOptions {
   // the "metadata" plane marked after them, so at once with none. Context::Heads opens
   // further spaces at any time, and those gate nothing.
   std::vector<heads::SpaceSpec> spaces;
+  // What the spaces exchange under, the numbers of their messages among it. An owner
+  // whose own registration of these types stands sets `heads` off, and no type is
+  // registered here; when its stands no more it passes its numbers here.
+  heads::ExchangeOptions exchange;
 };
 
 // What a node takes while running: Macha's live reload (LocalState::reconfigure),
@@ -439,6 +455,12 @@ class Node {
   void compact_packs(LocalTurn& turn);
   void local_scrub(LocalTurn& turn);
   void ledger_verify(LocalTurn& turn);
+  // The heads' stages, as run_local_stages() has them, for an owner running them in its own
+  // pass. A failure is logged, as Macha's are; only a stop comes through.
+  void head_repair(LocalTurn& turn);
+  void history_truncate(LocalTurn& turn);
+  // One turn of metadata repair on each space, first in Macha's pass.
+  std::vector<heads::RepairTurn> metadata_repair(std::stop_token stop = {});
 
   // Takes `reload` now: a new backend is locked and opened, a removed one goes
   // offline and its lock with it, a changed limit reopens one, and the cache
@@ -485,6 +507,8 @@ class Node {
     uint64_t verify_recorded = 0;
     uint64_t verify_lost = 0;
     uint64_t verify_passes = 0;
+    uint64_t heads_repaired = 0;
+    uint64_t history_truncations = 0;
   };
 
   void refusing(const std::function<void()>& part);
@@ -517,6 +541,11 @@ class Node {
   void compact_packs_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
   void local_scrub_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
   void ledger_verify_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void head_repair_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void history_truncate_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  std::vector<heads::RepairTurn> metadata_repair_locked(std::stop_token stop, bool forced) DANNAN_REQUIRES(_maintenance_mutex);
+  void enter_stage(std::string_view stage) const;
+  void wake_maintenance();
   void note_local(const std::function<void(LocalFigures&)>& change);
   void persist_scrub_due() DANNAN_REQUIRES(_maintenance_mutex);
 
@@ -589,6 +618,8 @@ class Node {
   std::optional<dannan::contract::TimePoint> _verify_at DANNAN_GUARDED_BY(_maintenance_mutex);
   dannan::contract::TimePoint _verify_due DANNAN_GUARDED_BY(_maintenance_mutex){};
 
+  // A metadata event since the thread last looked: it wakes for those, and polls the rest.
+  std::atomic_bool _maintenance_kicked{false};
   // Guards nothing; the maintenance thread waits on it.
   std::mutex _maintenance_wait;
   std::condition_variable_any _maintenance_wake;

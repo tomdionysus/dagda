@@ -19,6 +19,7 @@ add_library(dagda SHARED
   domain/wrap.cpp
   heads/cache_seed.cpp
   heads/control_node_store.cpp
+  heads/exchange.cpp
   heads/messages.cpp
   heads/record.cpp
   heads/replica.cpp

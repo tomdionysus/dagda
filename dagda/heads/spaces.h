@@ -23,6 +23,7 @@
 #include "dagda/domain/domain_id.h"
 #include "dagda/domain/storage_key.h"
 #include "dagda/heads/cache_seed.h"
+#include "dagda/heads/exchange.h"
 #include "dagda/heads/space.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/local_store.h"
@@ -37,19 +38,27 @@ namespace dagda::heads {
 // them.
 class StoreClaimBarrier final : public ClaimBarrier {
  public:
-  explicit StoreClaimBarrier(store::DistributedStore& store) : _store(store) {}
+  StoreClaimBarrier(store::DistributedStore& store, std::function<void()> on_claimed) : _store(store), _on_claimed(std::move(on_claimed)) {}
+  void claimed() override {
+    if (_on_claimed) _on_claimed();
+  }
   std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const Dot& dot) override;
   std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const Dot& dot) override;
   bool retain_control_here(const std::vector<ObjectId>& ids, const Dot& dot) override;
+  void retain_on_peers(const Dot& dot, const CommitClaims& claims) override;
 
  private:
   store::DistributedStore& _store;
+  const std::function<void()> _on_claimed;
 };
 
 // The node's head spaces, at <state>/heads/<space id hex>/, and the one thread the
 // Context's asynchronous forms run on: commits wait on devices and locks, which the io
 // context's threads must not. Replay's node store writes every node it is given and
 // fetches what it reads through the store's ensure_control_local.
+//
+// What peers ask of a space comes in here and goes to its Exchange, whichever space the
+// message's id names, and the handler bound for each type is told who asked.
 //
 // Thread-safe. Lock order: _mutex, then a space's; the queue's lock nests in nothing.
 class Spaces {
@@ -68,6 +77,19 @@ class Spaces {
     domain::DomainId domain{};
     std::filesystem::path state;
     const dannan::contract::WallClock* wall = nullptr;
+    ExchangeOptions exchange;
+    // A set-aside head's wait, the domain's.
+    std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
+    // What repair's turns are timed by; none: the node's.
+    const dannan::contract::TimeSource* time = nullptr;
+    // In front of the handlers, as the node's Front is of the storage server's.
+    std::function<std::optional<dannan::net::Handled>(const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame,
+                                                      const dannan::net::Message& request)>
+        front;
+    // Told that a repair turn may be due.
+    std::function<void()> wake;
+    dannan::status::NodeEvents::Kind metadata_event = 0;
+    dannan::status::NodeEvents::Kind claims_event = 0;
   };
 
   explicit Spaces(Services services);
@@ -81,6 +103,10 @@ class Spaces {
   Space& open(SpaceSpec spec) DANNAN_EXCLUDES(_mutex);
   // The open space; null for one not open.
   Space* find(const SpaceId& space) const DANNAN_EXCLUDES(_mutex);
+  // Its exchange; null for one not open.
+  Exchange* exchange(const SpaceId& space) const DANNAN_EXCLUDES(_mutex);
+  // Every exchange, in opening order. Each lives as long as this.
+  std::vector<Exchange*> exchanges() const DANNAN_EXCLUDES(_mutex);
   SpaceId id_of(std::string_view name) const { return space_id(_services.domain, name); }
 
   // Runs `job` on the spaces' thread, unless stopping: false then, and it never runs.
@@ -94,6 +120,12 @@ class Spaces {
 
  private:
   void worker(std::stop_token stop) DANNAN_EXCLUDES(_queue_mutex);
+  // What a peer's request does.
+  dannan::net::Handled handle(const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request);
+  // The exchange a message's space id names, or the space that takes unaddressed ones.
+  Exchange* addressed_to(const std::optional<SpaceId>& space) const DANNAN_EXCLUDES(_mutex);
+  void bind_routes();
+  void unbind_routes();
 
   const Services _services;
   StoreClaimBarrier _barrier;
@@ -104,6 +136,10 @@ class Spaces {
   mutable dannan::contract::IoMutex _mutex;
   std::map<SpaceId, std::unique_ptr<Space>> _spaces DANNAN_GUARDED_BY(_mutex);
   std::map<SpaceId, std::unique_ptr<CacheSeed>> _seeds DANNAN_GUARDED_BY(_mutex);
+  std::map<SpaceId, std::unique_ptr<Exchange>> _exchanges DANNAN_GUARDED_BY(_mutex);
+  std::vector<Exchange*> _opened DANNAN_GUARDED_BY(_mutex);
+  Exchange* _unaddressed DANNAN_GUARDED_BY(_mutex) = nullptr;
+  std::vector<dannan::net::MessageType> _bound;
 
   dannan::contract::Mutex _queue_mutex;
   std::condition_variable_any _queue_changed;

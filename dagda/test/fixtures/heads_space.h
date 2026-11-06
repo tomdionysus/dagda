@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "dagda/contract/reachability.h"
+#include "dagda/heads/messages.h"
 #include "dagda/heads/retirement.h"
 #include "dagda/heads/space.h"
 #include "dagda/test/fixtures/heads.h"
@@ -238,6 +239,51 @@ inline SpaceSpec neutral_spec(std::string name = "test/neutral", std::shared_ptr
   spec.seed_magic = neutral_seed_magic;
   spec.tree = std::make_shared<NeutralTree>(neutral_tree());
   return spec;
+}
+
+// What founding a neutral space makes: the same head from the same entries, as founders
+// configured alike agree. A note past what a delta says keeps a delta smaller than a
+// whole record, as a real head does.
+inline std::function<State(heads::TreeNodeStore&)> neutral_founding(NeutralEntries entries = {{"a", make_group(1)}}, std::string note = {}) {
+  return [entries = std::move(entries), note = std::move(note)](heads::TreeNodeStore& nodes) -> State {
+    auto head = std::make_shared<NeutralHead>();
+    head->floor = 1;
+    head->notes.set("padding", std::string(1024, '.'));
+    if (!note.empty()) head->notes.set("founding", note);
+    head->root = neutral_tree().build(entries, nodes);
+    return head;
+  };
+}
+
+// The space as founded on its node.
+inline SpaceSpec founded_spec(std::string name = "test/neutral") {
+  auto spec = neutral_spec(std::move(name));
+  spec.founding = neutral_founding();
+  return spec;
+}
+
+// The table of the plan's 2.3, which on an owner's node of those numbers takes the place
+// of Dagda's own: 512 plus each number the owner's peers know. Tests hold it; the library
+// does not.
+inline heads::message::Numbers owner_numbers() {
+  const auto at = [](uint16_t number) { return dannan::net::MessageType{static_cast<uint16_t>(512 + number)}; };
+  heads::message::Numbers numbers;
+  numbers.put_history_entry = at(28);
+  numbers.put_commit = at(30);
+  numbers.accept_commit = at(31);
+  numbers.get_history_entry = at(26);
+  numbers.has_history_entry = at(27);
+  numbers.get_heads = at(29);
+  numbers.get_history_record = at(41);
+  numbers.get_committed = at(10);
+  numbers.get_current = at(6);
+  numbers.get_identity = at(21);
+  numbers.notice = at(9);
+  numbers.record_reply = at(105);
+  numbers.identity_reply = at(108);
+  numbers.history_entry_reply = at(111);
+  numbers.heads_reply = at(112);
+  return numbers;
 }
 
 // A space on its own: its replica on a temporary directory, its nodes in memory.

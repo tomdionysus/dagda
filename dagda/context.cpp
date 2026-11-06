@@ -389,6 +389,11 @@ HeadsEvidence Context::Heads::heads(const heads::SpaceId& space) const {
   }
   out.known = true;
   out.report = found->heads();
+  out.owed = found->owed_backlog();
+  if (auto* exchange = spaces->exchange(space)) {
+    out.status = exchange->status();
+    out.convergence = exchange->demand();
+  }
   return out;
 }
 
