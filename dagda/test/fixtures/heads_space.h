@@ -48,6 +48,20 @@ using heads::SpaceServices;
 using heads::SpaceSpec;
 using heads::SpaceView;
 
+// Provenance, for a case whose merge reads it: an item's `tag` names its author, its `stamp` the
+// sequence that wrote it. A plain tag says nothing, as an entry from before provenance does.
+inline constexpr uint32_t provenance_bit = 0x80000000U;
+inline uint32_t author_tag(const NodeId& author) {
+  uint32_t tag = 0;
+  for (const auto byte : author.bytes) tag = tag * 31 + byte;
+  return tag | provenance_bit;
+}
+inline bool carries_provenance(const NeutralItem& item) { return (item.tag & provenance_bit) != 0; }
+inline void stamp_item(NeutralItem& item, const Dot& dot) {
+  item.tag = author_tag(dot.author);
+  item.stamp = static_cast<int64_t>(dot.sequence);
+}
+
 inline constexpr Magic neutral_batch_magic{'N', 'T', 'R', 'L', 'B', 'T', 'C', '1'};
 inline constexpr Magic neutral_seed_magic{'N', 'T', 'R', 'L', 'S', 'E', 'E', 'D'};
 
@@ -102,8 +116,12 @@ using StepLog = std::vector<std::string>;
 
 class NeutralMutation final : public Mutation {
  public:
-  NeutralMutation(const State& parent, NeutralEdit edit, StepLog* steps = nullptr)
-      : _parent(*NeutralCodec::as_head(parent)), _next(std::make_shared<NeutralHead>(_parent)), _edit(std::move(edit)), _steps(steps) {}
+  NeutralMutation(const State& parent, NeutralEdit edit, StepLog* steps = nullptr, bool provenance = false)
+      : _parent(*NeutralCodec::as_head(parent)),
+        _next(std::make_shared<NeutralHead>(_parent)),
+        _edit(std::move(edit)),
+        _steps(steps),
+        _provenance(provenance) {}
 
   void edit(const MutationContext& context) override {
     log("edit");
@@ -114,7 +132,12 @@ class NeutralMutation final : public Mutation {
   }
   void stamp(const MutationContext& context) override {
     log(_next->clock == _parent.clock ? "stamp" : "stamp after the clock moved");
-    for (auto& [key, item] : _delta.upsert_keys) item.stamp = static_cast<int64_t>(context.dot.sequence);
+    for (auto& [key, item] : _delta.upsert_keys) {
+      if (_provenance)
+        stamp_item(item, context.dot);
+      else
+        item.stamp = static_cast<int64_t>(context.dot.sequence);
+    }
   }
   void advance_clock(const MutationContext& context) override {
     log("advance");
@@ -178,10 +201,16 @@ class NeutralMutation final : public Mutation {
   std::vector<ObjectId> _named;
   NeutralEdit _edit;
   StepLog* _steps;
+  const bool _provenance;
 };
 
 inline MutationFactory neutral_mutation(NeutralEdit edit, StepLog* steps = nullptr) {
   return [edit = std::move(edit), steps](const State& parent) { return std::make_unique<NeutralMutation>(parent, edit, steps); };
+}
+
+// A mutation whose keys carry provenance, for a head a merge will read.
+inline MutationFactory stamped_mutation(NeutralEdit edit) {
+  return [edit = std::move(edit)](const State& parent) { return std::make_unique<NeutralMutation>(parent, edit, nullptr, true); };
 }
 
 // A claim barrier a case scripts: what this node holds, what a node present holds,
@@ -405,6 +434,8 @@ class NeutralSpaceProvider final : public contract::ReachabilityProvider {
 
   contract::Reachability latest;
   std::vector<contract::GarbageCollection> collected;
+  // What else the owner's head roots beyond its tree: its conflicts' values, for one.
+  std::function<void(const NeutralHead&, contract::Reachability&)> extra_roots;
 
  private:
   contract::Reachability answer(const NeutralHead& head, const std::function<void()>& pause) {
@@ -419,6 +450,7 @@ class NeutralSpaceProvider final : public contract::ReachabilityProvider {
             if (!ref.gap) out.data.push_back(ref.id);
         },
         pause);
+    if (extra_roots) extra_roots(head, out);
     return out;
   }
 
