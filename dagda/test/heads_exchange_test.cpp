@@ -9,7 +9,7 @@
 // names Macha's case at 9a08846 it comes from and follows it assertion for assertion; where
 // one of Macha's assertions is about its filesystem, its transport's fault injection or its
 // fixture, the comment says what stands in its place. A case keeps its writes sequential
-// where Macha's could fork them, since two heads wait on session S6's reconciler.
+// where Macha's could fork them: the forks are heads_reconcile_test.cpp's.
 
 #include <gtest/gtest.h>
 
@@ -207,7 +207,7 @@ TEST(HeadsFounding, AJoinerRequiresACompleteCheckpointSurvey) {
 }
 
 // C16's first half. maintenance.cpp:467-472: exactly one deterministic founder; followers stay
-// event driven. FoundersConfiguredDifferentlyMerge needs the merge, and is session S6's.
+// event driven. HeadsFounding.FoundersConfiguredDifferentlyMerge is the other half of C16.
 TEST(HeadsFounding, TheLowestActiveNodeFoundsAndFollowersWait) {
   dannan::test::SteppedTime clock_a;
   dannan::test::SteppedTime clock_b;
@@ -636,7 +636,8 @@ TEST(HeadsExchange, CommitReplicasAreOrderedLocalThenNearest) {
 }
 
 // Macha's test_nodes_seeking_different_copy_counts_share_one_namespace (RPC:3060). Macha's two
-// mkdirs may fork, and a merge then joins them; these wait for each other, the fork being S6's.
+// mkdirs may fork, and a merge then joins them; these wait for each other, and
+// HeadsReconcile.NodesSeekingDifferentCopyCountsForkAndMerge is the fork.
 TEST(HeadsExchange, NodesSeekingDifferentCopyCountsShareOneSpace) {
   Cluster cluster;
   auto& a = cluster.add("a", live(1));
@@ -1248,7 +1249,7 @@ TEST(HeadsPolicy, AChangedPolicyOnRestartIsCommittedAndWritesFollowIt) {
 // C37, R2. No dot, its clock its parent's, its merge parents cleared, published to the active set
 // on the control frame, and it runs on reads. "Only a merge collapses it" asserted of what is here:
 // with no edge left two heads a policy commit apart have equal clocks, and neither is dropped; the
-// merge that does collapse them is session S6's, its C39 and C8.
+// merge that does collapse them is HeadsReconcile.AMergeCollapsesWhatAPolicyCommitLeft.
 TEST(HeadsPolicy, APolicyCommitCarriesNoDotAndOnlyAMergeCollapsesIt) {
   auto policy = std::make_shared<std::string>("1");
   Cluster cluster;
@@ -1410,6 +1411,9 @@ TEST(HeadsStatus, StaysWritableThroughPendingReconciliationAndReportsStable) {
                              "head_holders",
                              "head_holders_present",
                              "heads_set_aside",
+                             "reconciliations",
+                             "conflicts_created",
+                             "conflicts_superseded",
                              "mutations",
                              "mutation_retention_ms_total",
                              "mutation_retention_ms_max",

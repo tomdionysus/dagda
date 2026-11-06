@@ -129,7 +129,7 @@ TEST(HeadsCommit, AMutationKeepsMachasOrderAndIsAcceptedHereAlone) {
   EXPECT_EQ(stored->stamp, static_cast<int64_t>(dot_of(outcome).sequence));
 }
 
-// C2, a commit's half (mgr:1834); the merge's is S6's. A delta strictly smaller than
+// C2, a commit's half (mgr:1834); the merge's is HeadsReconcile.AMergeBodyIsADeltaOnlyWhenStrictlySmaller. A delta strictly smaller than
 // the record is the frame's body; equal or larger, the record is.
 HistoryEntry::Body body_with_padding(size_t padding, size_t* delta_bytes = nullptr, size_t* record_bytes = nullptr) {
   SpaceBed bed;
