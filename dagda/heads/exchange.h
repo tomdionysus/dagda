@@ -208,8 +208,10 @@ class Exchange {
   // Starts the replicator, the adverts and the roster watch over `space`, which outlives
   // this. Once.
   void attach(Space& space);
-  // Ends them. What is owed stays owed: the commits are accepted here and repair delivers
-  // them after a restart. A call in flight is cancelled. Idempotent.
+  // Ends them. What is owed stays owed: the commits are accepted here and repair offers their
+  // heads after a restart. Nothing restores a claim record that did not reach a peer:
+  // repair_once offers heads only, and the peer's copies are protected by the head's inventory
+  // and the 30-day gates, as in Macha. A call in flight is cancelled. Idempotent.
   void stop() DANNAN_EXCLUDES(_owed_mutex);
 
   const std::string& name() const noexcept { return _services.name; }
