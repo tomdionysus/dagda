@@ -10,7 +10,39 @@ baseline. Forms remaining: SM14, 16, 17, 19, DLT5 to DLT11, envelope, hash and t
 fixed constant record, new clusters only. Don't invest further in torrent parity: torrent is leaving Macha (its plan:
 `../macha/TODO/2026-11-06-ingest-plugins-torrent-removal-plan.md`). Goldens are to be re-cut on 0.93.4.
 
-## The plan, re-based on Macha `00861dd` and `cac5998` (the maintainer, 2026-11-05)
+## The goal (the maintainer, 2026-11-06, relayed by the Macha session)
+
+"development will continue on them with macha code frozen until they can answer Yes unconditionally, the entire reason
+for their existence is this."
+
+The question: does Macha move onto Dagda with no change in data, functionality, reliability and performance? The only
+answer that counts is Yes, with nothing attached. A bounded claim, an exception list or a tolerance is a No. Macha stays
+frozen at `9a08846`. There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
+needs them. Tell the Macha session when the answer is Yes.
+
+**The work, in this order. Each item is Dagda's to do.**
+
+1. Heads, now, not behind anything: re-read the heads plan at `9a08846`, write the cases for H20, H29 and H30, give every one
+   of the 95 gap-heads cases a session or a named retirement, then S2 to S7 (`2026-11-05-heads-plan.md`).
+2. The metadata and cache seed migration in `dagda-migrate`, with heads.
+3. The steps Macha's loop needs: `Repair::pass` and `Collector::pass` split so Macha's pass can order and trace them, with
+   `test_maintenance_trace`'s fixtures unchanged. Dagda's own loop to the same fixtures at 8c.
+4. Anything Dagda adds is inert on a Macha node: no behaviour Macha lacks. The device reserve off by the facade's option,
+   claim parts no finer than Macha's journal frames, no lease fence on Macha's paths. Check every difference in requirements
+   section 7 the same way.
+5. The arbiter's foreground signal in Macha's meaning: Dannan's clocks count every inbound request, Macha's only object bytes.
+6. The before and after comparison tool: objects by id and plaintext hash across DATA, CONTROL and cache, removed objects staying
+   gone, held tries, claims and dots, retention marker, reference counts, sightings, markers, accounting, and metadata heads,
+   certificates and history replay.
+7. Crash and power-cut cases per migration phase. The migration's fsync cost, if the whole-disk run shows it matters.
+8. Retirements run, not read, wherever a Macha case compiles over the port. Goldens widened: full path, activity, the store's
+   journal lines mapped.
+9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
+10. Baselines against Dagda's own measurements, on the Pis.
+
+**Asked of the maintainer through the Macha session, once (2026-11-06), with what each is for:** see `COMPLETED.md` when answered.
+
+## The earlier table, kept for its gates and details; the goal above decides the order
 
 The goal is the second cutover: Macha's store onto Dagda, in stages (Decisions, 2026-11-05), after the
 transport cutover. Everything is ordered by what that needs. Nothing Lugh or Lir needs is on this path (P7).
