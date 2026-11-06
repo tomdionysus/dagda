@@ -96,7 +96,9 @@ struct RepairGates {
 // Single owner: one thread calls pass(). gates() is thread-safe.
 class Repair {
  public:
-  Repair(dannan::Context& context, DistributedStore& store, AvailabilityService& availability, contract::ObjectLedger& ledger, RepairOptions options = {});
+  // `activity`: the clocks the store notes object work on. None: the node's.
+  Repair(dannan::Context& context, DistributedStore& store, AvailabilityService& availability, contract::ObjectLedger& ledger, RepairOptions options = {},
+         dannan::status::ActivityClocks* activity = nullptr);
   ~Repair();
   Repair(const Repair&) = delete;
   Repair& operator=(const Repair&) = delete;
@@ -114,6 +116,7 @@ class Repair {
   bool peer_foreground_active() const;
 
   dannan::Context& _context;
+  dannan::status::ActivityClocks& _activity;
   DistributedStore& _store;
   AvailabilityService& _availability;
   contract::ObjectLedger& _ledger;

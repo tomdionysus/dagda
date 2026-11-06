@@ -135,9 +135,9 @@ class ClaimLocks {
     return begin_deleting(id);
   }
 
-  // Ids a batch holds its stripes for at once. A claim's journal write is
-  // under them, and a batch may be a million ids.
-  static constexpr size_t batch_ids = 4096;
+  // Ids a batch holds its stripes for at once: one claim journal frame's worth,
+  // as Macha's retention writes them, so the guard parts cost no extra journal sync.
+  static constexpr size_t batch_ids = 65536;
 
   // Calls `step` on `ids` a sub-batch at a time, each under its stripes alone
   // and in stripe order, so a large publication holds only part of the guard

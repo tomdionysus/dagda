@@ -93,7 +93,7 @@ TEST(DistributedStore, APutIsLoaderActivityNotViewerActivity) {
   auto& node = cluster.add("solo", options(1));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  auto& activity = node.context().activity();
+  auto& activity = node.dagda_node().activity();
   for (const auto frame : {FrameType::loader, FrameType::foreground, FrameType::read_ahead}) (void)activity.take_bytes(frame);
   const auto bytes = pattern(256 * 1024, 91);
   ASSERT_EQ(node.store().put(bytes), object_id(bytes));
@@ -1071,7 +1071,8 @@ TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
 TEST(StoreClaimLocks, ABatchHoldsOnlyPartOfTheGuardAtATime) {
   ClaimLocks locks;
   std::vector<ObjectId> ids;
-  for (uint32_t n = 0; n < 2 * ClaimLocks::batch_ids; ++n) ids.push_back(object_id(test::numbered(n)));
+  constexpr size_t part = 4096;
+  for (uint32_t n = 0; n < 2 * part; ++n) ids.push_back(object_id(test::numbered(n)));
   const auto in_stripe = [&](size_t stripe) {
     return *std::find_if(ids.begin(), ids.end(), [&](const ObjectId& id) { return id.bytes[0] % ClaimLocks::stripes == stripe; });
   };
@@ -1082,11 +1083,14 @@ TEST(StoreClaimLocks, ABatchHoldsOnlyPartOfTheGuardAtATime) {
   std::optional<ClaimLocks::Guard> held;
   held.emplace(locks.lock(std::span<const ObjectId>(&high, 1)));
   auto batch = std::async(std::launch::async, [&] {
-    return locks.in_batches(ids, [&](std::span<const ObjectId> part) {
-      seen += part.size();
-      ++parts;
-      return true;
-    });
+    return locks.in_batches(
+        ids,
+        [&](std::span<const ObjectId> ids_in_part) {
+          seen += ids_in_part.size();
+          ++parts;
+          return true;
+        },
+        part);
   });
   ASSERT_TRUE(wait_until([&] { return parts.load() == 1; }));
   auto through = std::async(std::launch::async, [&] { (void)locks.lock(std::span<const ObjectId>(&low, 1)); });
@@ -1284,6 +1288,28 @@ TEST(StoreDistributedStore, HostingExtentsChangesWhileRunning) {
   EXPECT_TRUE(wait_until([&] { return !hosts_on_peer(); }));
   node.server().set_hosts_extents(true);
   EXPECT_TRUE(wait_until([&] { return node.store().holds_extents() && hosts_on_peer(); }));
+}
+
+// Macha's activity means object bytes this store moved. Dannan's clocks count every
+// inbound request, so traffic that is not object work does not read as present here.
+TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  cluster.start_all();
+  auto& store = node.store();
+  const auto before = store.idle_for(dannan::sched::WorkClass::foreground);
+  node.context().activity().note(FrameType::foreground, 4096);
+  EXPECT_GE(store.idle_for(dannan::sched::WorkClass::foreground), before);
+  EXPECT_EQ(store.take_foreground_bytes(), 0u);
+  const auto data = pattern(4096, 81);
+  ASSERT_TRUE(store.put(object_id(data), data));
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  EXPECT_TRUE(store.get(object_id(data), read).has_value());
+  EXPECT_LT(store.idle_for(dannan::sched::WorkClass::foreground), 10s);
+  store.foreground_activity(100);
+  EXPECT_GT(store.take_foreground_bytes(), 0u);
+  EXPECT_EQ(store.take_foreground_bytes(), 0u);
 }
 
 }  // namespace

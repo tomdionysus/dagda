@@ -375,6 +375,10 @@ class DistributedStore final : public ControlObjectSource {
     // The ledger whose published inventory this node's half of an instant
     // delete checks. None: no inventory.
     const contract::ObjectLedger* ledger = nullptr;
+    // When object work of each class was last present, in Macha's meaning: object
+    // bytes this store moved, never every inbound request as Dannan's clocks count.
+    // None: the node's.
+    dannan::status::ActivityClocks* activity = nullptr;
   };
 
   struct PromptReplicationStats {
@@ -444,6 +448,14 @@ class DistributedStore final : public ControlObjectSource {
   bool has(const ObjectId& id) const;
   // In the pool or the cache.
   bool locally_available(const ObjectId& id) const;
+  // Macha's activity forms over the clocks above.
+  void foreground_activity(uint64_t bytes) { _activity.note(dannan::sched::FrameType::foreground, bytes); }
+  void interactive_activity(uint64_t bytes) { _activity.note(dannan::sched::FrameType::read_ahead, bytes); }
+  void loader_activity(uint64_t bytes) { _activity.note(dannan::sched::FrameType::loader, bytes); }
+  uint64_t take_foreground_bytes() { return _activity.take_bytes(dannan::sched::FrameType::foreground); }
+  uint64_t take_interactive_bytes() { return _activity.take_bytes(dannan::sched::FrameType::read_ahead); }
+  uint64_t take_loader_bytes() { return _activity.take_bytes(dannan::sched::FrameType::loader); }
+  std::chrono::milliseconds idle_for(dannan::sched::WorkClass work) const { return _activity.idle_for(work); }
   // Macha's forms the filesystem and the catalogue call. held_here: as has().
   // cache_local: a write through to this node's cache, if it has one; a failure
   // is only that the cache did not take it. hydration_available: the node has a
@@ -602,6 +614,7 @@ class DistributedStore final : public ControlObjectSource {
       const std::map<dannan::identity::NodeId, std::vector<ObjectId>>& ids_by_node);
 
   dannan::Context& _context;
+  dannan::status::ActivityClocks& _activity;
   const boost::asio::any_io_executor _executor;
   StoragePool& _data;
   LocalStore& _control;

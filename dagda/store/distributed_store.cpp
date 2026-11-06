@@ -481,6 +481,7 @@ struct DistributedStore::RepairState {
 
 DistributedStore::DistributedStore(dannan::Context& context, Stores stores, DistributedStoreOptions options)
     : _context(context),
+      _activity(stores.activity ? *stores.activity : context.activity()),
       _executor(context.time().executor()),
       _data(stores.data),
       _control(stores.control),
@@ -716,7 +717,7 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
 }
 
 WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into) {
-  _context.activity().note(options.frame, data.size());
+  _activity.note(options.frame, data.size());
   const auto deadline = Clock::now() + write_deadline_of(options);
   // An ephemeral write runs in the background as the store's ordinary write.
   const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
@@ -1600,7 +1601,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   const bool interactive = foreground || options.frame == FrameType::read_ahead;
   // Foreground demand is recorded before any storage access, so the first
   // read already holds back lower classes.
-  if (foreground) _context.activity().note(options.frame, 0);
+  if (foreground) _activity.note(options.frame, 0);
   const auto wait = options.deadline.count() > 0 ? options.deadline : _options.read_deadline;
   std::optional<Bytes> local;
   {
@@ -1609,7 +1610,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     local = _data.get(id);
   }
   if (local) {
-    if (interactive) _context.activity().note(options.frame, local->size());
+    if (interactive) _activity.note(options.frame, local->size());
     return {buffer_of(std::move(*local)), ReadSource::local, _self, FetchAnswer::ok};
   }
   std::optional<Bytes> cached;
@@ -1619,13 +1620,13 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     cached = _cache.get(id);
   }
   if (cached) {
-    if (interactive) _context.activity().note(options.frame, cached->size());
+    if (interactive) _activity.note(options.frame, cached->size());
     if (should_own(id)) enqueue_local_copy(id, *cached, true);
     return {buffer_of(std::move(*cached)), ReadSource::cache, _self, FetchAnswer::ok};
   }
   if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) return {};
   auto result = get_remote(id, options, interactive);
-  if (result.object && options.frame == FrameType::read_ahead) _context.activity().note(options.frame, result.object->bytes.size());
+  if (result.object && options.frame == FrameType::read_ahead) _activity.note(options.frame, result.object->bytes.size());
   return result;
 }
 
@@ -1706,7 +1707,7 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
     }
   }
   if (abandon) abandon->cancel();
-  if (out.object && foreground) _context.activity().note(options.frame, out.object->bytes.size());
+  if (out.object && foreground) _activity.note(options.frame, out.object->bytes.size());
   return out;
 }
 

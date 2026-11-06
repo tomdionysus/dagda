@@ -62,6 +62,9 @@ struct AdmissionOptions {
   std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
   // Background work admitted while the DATA device is slow.
   uint64_t min_background_under_pressure = 1;
+  // Macha has no device reserve: its facade turns this off, so a Macha node's DATA
+  // work is not capped by it.
+  bool device_reserve = true;
   store::IoReserveOptions io{};
 };
 
@@ -280,7 +283,11 @@ class Node {
   store::StorageServer& server() noexcept { return *_server; }
   // Null when the node admits everything.
   store::DataResourceArbiter* credit() noexcept { return _credit.get(); }
+  // Null with no device reserve.
   store::IoReserve* io() noexcept { return _io.get(); }
+  // When object work of each class was last present: the store's own, in Macha's
+  // meaning. Valid while running().
+  dannan::status::ActivityClocks& activity() noexcept { return *_activity; }
   const domain::WrapKey& wrap_key() const noexcept { return *_wrap; }
   lease::LeaseKeeper& lease_keeper() noexcept { return *_keeper; }
   lease::LeaseRecords& lease_records() noexcept { return _lease_records; }
@@ -397,6 +404,7 @@ class Node {
   std::unique_ptr<store::StoragePool> _data;
   std::unique_ptr<store::DataResourceArbiter> _credit;
   std::unique_ptr<store::IoReserve> _io;
+  std::unique_ptr<dannan::status::ActivityClocks> _activity;
   std::unique_ptr<store::LocalStore> _control;
   std::unique_ptr<store::PersistentBlockCache> _cache;
   std::unique_ptr<ledger::RetentionStore> _claims;

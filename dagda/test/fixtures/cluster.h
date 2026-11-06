@@ -110,6 +110,7 @@ struct ClusterNodeOptions {
   uint64_t background_concurrency = 4;
   std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
   store::IoReserveOptions io;
+  bool device_reserve = true;
   std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
@@ -405,6 +406,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     admission.background_concurrency = _options.background_concurrency;
     admission.no_progress = _options.no_progress;
     admission.io = _options.io;
+    admission.device_reserve = _options.device_reserve;
     out.admission = admission;
   } else {
     out.admission.reset();

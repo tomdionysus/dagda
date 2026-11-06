@@ -54,6 +54,7 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _admission(admission),
       _logger(context.logger("dagda.server")),
       _storage_event(context.events().kind("storage")),
+      _activity(stores.activity ? *stores.activity : context.activity()),
       _hosts_extents(options.hosts_extents) {
   refresh();
   for (const auto type : served())
@@ -226,7 +227,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       if (!data)
         return every_backend && _data.every_backend_online() ? Handled::failed(404, "not_found", "object not found")
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
-      _context.activity().note(frame, data->size());
+      _activity.note(frame, data->size());
       return reply(message::object_reply, message::encode_object(id, *data));
     }
     if (type == message::get_control_object) {
@@ -248,7 +249,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
       const auto admitted = admit_data(frame, object.data.size(), true);
       if (!admitted) return busy();
-      _context.activity().note(frame, object.data.size());
+      _activity.note(frame, object.data.size());
       if (!_data.has(object.id)) _context.events().notify(_storage_event);
       if (type == message::put_object_deferred) {
         // Bound to this process and the backend incarnation that took it: a
