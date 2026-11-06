@@ -5,18 +5,20 @@
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
 //
 
-// The cost baselines S3 and S4 close (the plan's section 2.6): verify, replay, accept
-// and commit. They assert counts, never time: nothing here grows with the keys of the
-// tree. A million-key run stays with the scale pass; merge is S6's.
+// The cost baselines S3, S4 and S6 close (the plan's section 2.6): verify, replay, accept,
+// commit and merge. They assert counts, never time: nothing here grows with the keys of the
+// tree. A million-key run stays with the scale pass. S6 closes merge.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <string>
 
 #include "dagda/heads/replica.h"
 #include "dagda/test/fixtures/heads.h"
+#include "dagda/test/fixtures/heads_merge.h"
 #include "dagda/test/fixtures/heads_space.h"
 
 namespace dagda::heads {
@@ -270,6 +272,103 @@ TEST(HeadsCost, CommitDoesNotGrowWithKeys) {
   EXPECT_LT(large.nodes_written, 64U);
   std::cout << "BENCH name=heads.commit.keys keys=100000 nodes_read=" << large.nodes_read << " nodes_written=" << large.nodes_written
             << " record_bytes_encoded=" << large.encoded << " record_bytes_hashed=" << large.hashed << " decodes=" << large.decodes << '\n';
+}
+
+// Merge keys, and Macha's test_baseline_reconcile_materialised_against_tree (NT:1628): k keys
+// differ between two heads, far apart among 1k and 100k. Reads follow k, as NT:1477; the owner's
+// merge is called on what differs and nothing else. Macha's sizes (8,700 paths, 900,000 extents) and
+// its rename and directory outcomes are its filesystem's; its comparison with the materialising merge
+// is kept, reported here in its BENCH form, with the root the oracle gives asserted.
+struct MergeSpent {
+  Spent cost;
+  uint64_t keys_examined = 0;
+  uint64_t leaves = 0;
+};
+
+MergeSpent merge_at(size_t keys, size_t differing) {
+  CostCounters costs;
+  SharedTreeStore store(&costs);
+  test::NeutralEntries entries;
+  for (size_t i = 0; i < keys; ++i) entries["key/" + std::to_string(i * 7919 % keys) + "/" + std::to_string(i)] = test::make_item(i, 1);
+  const auto writer = store.factory()();
+  NeutralHead origin;
+  origin.notes.set("padding", std::string(1024, '.'));
+  origin.root = test::neutral_tree().build(entries, *writer);
+
+  // A key every `step`, each changed on one side or the other, plus one added on each.
+  auto left = origin;
+  auto right = origin;
+  auto left_entries = entries;
+  auto right_entries = entries;
+  const Dot left_dot{author(1), 1};
+  const Dot right_dot{author(2), 1};
+  left.clock[left_dot.author] = left_dot.sequence;
+  right.clock[right_dot.author] = right_dot.sequence;
+  test::NeutralTree::Delta left_changes;
+  test::NeutralTree::Delta right_changes;
+  const size_t step = keys / differing;
+  size_t at = 0;
+  size_t index = 0;
+  for (const auto& [key, item] : entries) {
+    if (at++ % step) continue;
+    auto changed = item;
+    changed.weight += 4096;
+    test::stamp_item(changed, index % 2 ? left_dot : right_dot);
+    (index % 2 ? left_changes : right_changes).upsert[key] = changed;
+    (index % 2 ? left_entries : right_entries)[key] = changed;
+    ++index;
+  }
+  left.root = test::neutral_tree().apply(*left.root, *writer, left_changes);
+  right.root = test::neutral_tree().apply(*right.root, *writer, right_changes);
+  const auto left_record = record_of(5, Hash256{}, left);
+  const auto right_record = record_of(5, Hash256{}, right);
+  const bool left_primary = left_record.hash < right_record.hash;
+  const auto& primary = left_primary ? left_record : right_record;
+  const auto& secondary = left_primary ? right_record : left_record;
+  const State primary_state = std::make_shared<const NeutralHead>(left_primary ? left : right);
+  const State secondary_state = std::make_shared<const NeutralHead>(left_primary ? right : left);
+
+  const auto report = [](const char* name, std::chrono::steady_clock::duration elapsed) {
+    std::cout << "BENCH name=" << name << " ns_per_op=" << std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() << " ops=1\n";
+  };
+  auto started = std::chrono::steady_clock::now();
+  const auto materialised = test::neutral_merge_over(left, right, left_entries, right_entries, left_record.hash, right_record.hash);
+  heads::MemoryTreeNodeStore rebuilt;
+  const auto expected_root = test::neutral_tree().build(materialised.entries, rebuilt);
+  report("heads.reconcile.materialised", std::chrono::steady_clock::now() - started);
+
+  for (auto* counter : {&costs.tree_nodes_read, &costs.tree_nodes_written}) *counter = 0;
+  test::NeutralMerge merge;
+  const auto reader = store.factory()();
+  const heads::TreePause no_pause;
+  started = std::chrono::steady_clock::now();
+  const auto result = merge.merge(std::nullopt, heads::MergeHeads{primary, secondary, primary_state, secondary_state, *reader, *writer, no_pause});
+  report("heads.reconcile.tree", std::chrono::steady_clock::now() - started);
+  std::cout << "BENCH name=heads.reconcile.tree.node_reads ns_per_op=0 ops=" << costs.tree_nodes_read.load() << " keys=" << keys << '\n';
+  EXPECT_EQ(*test::NeutralCodec::as_head(result.state)->root, expected_root);
+  EXPECT_TRUE(test::neutral_conflicts(*test::NeutralCodec::as_head(result.state)).empty());
+
+  MergeSpent out;
+  out.cost = spent(costs);
+  out.keys_examined = merge.keys_examined.load();
+  out.leaves = test::neutral_tree().stats(origin.root.value(), *reader).leaves;
+  return out;
+}
+
+TEST(HeadsCost, MergeFollowsWhatDiffersAndNotTheKeys) {
+  constexpr size_t differing = 8;
+  const auto small = merge_at(1000, differing);
+  const auto large = merge_at(100000, differing);
+  // The owner's merge sees what differs.
+  EXPECT_EQ(small.keys_examined, differing);
+  EXPECT_EQ(large.keys_examined, differing);
+  // Reads follow k: far fewer than the leaves, and not growing with the keys beyond a level or two.
+  EXPECT_GT(large.leaves, 1000u);
+  EXPECT_LT(large.cost.nodes_read, large.leaves / 4);
+  EXPECT_LE(large.cost.nodes_read, small.cost.nodes_read * 8);
+  EXPECT_LE(large.cost.nodes_written, small.cost.nodes_written * 8);
+  std::cout << "BENCH name=heads.merge.keys keys=100000 differing=" << differing << " nodes_read=" << large.cost.nodes_read
+            << " nodes_written=" << large.cost.nodes_written << " leaves=" << large.leaves << '\n';
 }
 
 // The record's axis reports only (section 2.6): what grows the record is its clock.
