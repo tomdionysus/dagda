@@ -60,7 +60,11 @@ needs them. Tell the Macha session when the answer is Yes.
 8. Retirements compared assertion by assertion where they cannot yet run; those that need the port named in the report. The store's
    journal lines mapped against the goldens.
 9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
-10. Dagda's own measurements on the Pis against Macha's baselines, when they exist. The TV import is cancelled by Tom, so Macha can run them now.
+10. Dagda's own measurements on the Pis against Macha's baselines at 0.93.4, `../macha/TODO/2026-11-06-pi-baselines.md`, raw JSON in
+    `../macha/build/baselines/results/` (uncommitted). Its caveats: inverbeg was still filling, and macnessa crashed four times from 17:18Z
+    to 18:11Z with heap corruption, cause not found, so its figures may not be a healthy 0.93.4's. Tom has not ruled on chasing it or on the
+    comparison rule. No baseline: direct store put and get on USB, claim journal latency alone, GC, scrub and compaction rates; the large
+    publication test is only "over 120 s". If the fault is in code Dagda moved, Dagda has it too, so a Yes waits on its cause.
 11. The capabilities report.
 
 **Macha's freeze exception (Tom, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
