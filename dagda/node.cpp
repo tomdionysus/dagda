@@ -817,11 +817,20 @@ void Node::stop_maintenance() {
 //   context_version; domain, domain.name, domain.role;
 //   storage.used, storage.limit, storage.backends_online, storage.degraded,
 //   storage.barriers (the DATA pool); control.used, control.limit;
-//   cache.enabled, cache.blocks, cache.hits, cache.misses, cache.evictions;
+//   data_store.loose_reaffirmation_fast_paths,
+//   data_store.loose_reaffirmation_full_validations,
+//   data_store.presence_index_entries, data_store.pack_recovery_truncated_tails,
+//   data_store.pack_recovery_skipped_regions, data_store.pack_recovery_skipped_bytes;
+//   cache.enabled, cache.blocks, cache.capacity_bytes, cache.used_bytes, cache.hits,
+//   cache.misses, cache.evictions;
+//   activity.foreground_idle_ms, activity.loader_idle_ms;
 //   references.entries, references.extents;
 //   repair.passes, repair.copies_pushed, repair.copies_pulled,
 //   repair.local_drops, repair.bytes, repair.unsourceable,
-//   repair.local_unreadable; repair.gate.ran, repair.gate.share,
+//   repair.local_unreadable, repair.push_examined, repair.pull_examined,
+//   repair.push_phase_complete, repair.unsourceable_sample (ids, comma-separated),
+//   repair.estimated_network_bps, repair.last_credit_bytes, repair.paced_by (the
+//   RepairPacedBy bits at the last gate); repair.gate.ran, repair.gate.share,
 //   repair.gate.quiescent, repair.gate.credit, repair.gate.last;
 //   maintenance.automatic; maintenance.rebalance_objects,
 //   maintenance.rebalance_bytes, maintenance.retention_compactions,
@@ -838,8 +847,16 @@ void Node::stop_maintenance() {
 //   prompt.queued, prompt.copies, prompt.failures, prompt.skipped_no_room,
 //   prompt.dropped;
 //   and with admission: admission.credit_used, admission.device_pressured,
-//   admission.pressure_refusals, admission.data_in_flight,
-//   admission.control_in_flight.
+//   admission.pressure_refusals, admission.capacity_bytes,
+//   admission.foreground_reserve_bytes, admission.peak_used_bytes,
+//   admission.foreground_admissions, admission.loader_admissions,
+//   admission.speculative_admissions, admission.foreground_waits,
+//   admission.loader_waits, admission.speculative_waits, admission.cancelled_waits,
+//   admission.background_limit, admission.background_active,
+//   admission.peak_background_active, admission.device_service_us,
+//   admission.device_worst_us, admission.device_slowdown_percent,
+//   admission.device_pressure_onsets, admission.no_progress_failures,
+//   admission.data_in_flight, admission.control_in_flight.
 void Node::publish_status() {
   if (!_data) return;
   auto& surface = _context.status();
@@ -857,9 +874,19 @@ void Node::publish_status() {
   put("control.used", u64(_control->used()));
   put("control.limit", u64(_control->limit()));
 
+  const auto data_store = _data->diagnostics();
+  put("data_store.loose_reaffirmation_fast_paths", u64(data_store.loose_reaffirmation_fast_paths));
+  put("data_store.loose_reaffirmation_full_validations", u64(data_store.loose_reaffirmation_full_validations));
+  put("data_store.presence_index_entries", u64(data_store.presence_index_entries));
+  put("data_store.pack_recovery_truncated_tails", u64(data_store.pack_recovery_truncated_tails));
+  put("data_store.pack_recovery_skipped_regions", u64(data_store.pack_recovery_skipped_regions));
+  put("data_store.pack_recovery_skipped_bytes", u64(data_store.pack_recovery_skipped_bytes));
+
   const auto cache = _cache->stats();
   put("cache.enabled", _cache->enabled());
   put("cache.blocks", u64(_cache->blocks()));
+  put("cache.capacity_bytes", u64(_options.cache.max_blocks * _options.store.extent_size));
+  put("cache.used_bytes", u64(_cache->blocks() * _options.store.extent_size));
   put("cache.hits", u64(cache.hits));
   put("cache.misses", u64(cache.misses));
   put("cache.evictions", u64(cache.evictions));
@@ -876,12 +903,24 @@ void Node::publish_status() {
   put("repair.bytes", u64(repair.bytes_transferred));
   put("repair.unsourceable", u64(repair.pull_unsourceable));
   put("repair.local_unreadable", u64(repair.local_unreadable));
+  put("repair.push_examined", u64(repair.push_examined));
+  put("repair.pull_examined", u64(repair.pull_examined));
+  put("repair.push_phase_complete", repair.push_phase_complete);
+  std::string sample;
+  for (const auto& id : repair.unsourceable_sample) sample += (sample.empty() ? "" : ",") + store::to_string(id);
+  put("repair.unsourceable_sample", std::move(sample));
+  put("repair.estimated_network_bps", u64(static_cast<uint64_t>(_store->estimated_network_bps())));
   const auto gates = _repair->gates();
   put("repair.gate.ran", u64(gates.ran));
   put("repair.gate.share", u64(gates.share));
   put("repair.gate.quiescent", u64(gates.quiescent));
   put("repair.gate.credit", u64(gates.credit));
   put("repair.gate.last", std::string(gates.last ? gate_name(*gates.last) : "none"));
+  put("repair.last_credit_bytes", u64(gates.last_credit_bytes));
+  put("repair.paced_by", u64(gates.paced_by));
+  const auto idle_ms = [&](dannan::sched::WorkClass work) { return u64(static_cast<uint64_t>(std::max<int64_t>(0, _store->idle_for(work).count()))); };
+  put("activity.foreground_idle_ms", idle_ms(dannan::sched::WorkClass::foreground));
+  put("activity.loader_idle_ms", idle_ms(dannan::sched::WorkClass::loader));
 
   bool provider = false;
   {
@@ -937,6 +976,24 @@ void Node::publish_status() {
     put("admission.credit_used", u64(credit.used_bytes));
     put("admission.device_pressured", credit.device_pressured);
     put("admission.pressure_refusals", u64(credit.pressure_refusals));
+    put("admission.capacity_bytes", u64(credit.capacity_bytes));
+    put("admission.foreground_reserve_bytes", u64(credit.foreground_reserve_bytes));
+    put("admission.peak_used_bytes", u64(credit.peak_used_bytes));
+    put("admission.foreground_admissions", u64(credit.foreground_admissions));
+    put("admission.loader_admissions", u64(credit.loader_admissions));
+    put("admission.speculative_admissions", u64(credit.speculative_admissions));
+    put("admission.foreground_waits", u64(credit.foreground_waits));
+    put("admission.loader_waits", u64(credit.loader_waits));
+    put("admission.speculative_waits", u64(credit.speculative_waits));
+    put("admission.cancelled_waits", u64(credit.cancelled_waits));
+    put("admission.background_limit", u64(credit.background_limit));
+    put("admission.background_active", u64(credit.background_active));
+    put("admission.peak_background_active", u64(credit.peak_background_active));
+    put("admission.device_service_us", u64(credit.device_service_us));
+    put("admission.device_worst_us", u64(credit.device_worst_us));
+    put("admission.device_slowdown_percent", u64(credit.device_slowdown_percent));
+    put("admission.device_pressure_onsets", u64(credit.device_pressure_onsets));
+    put("admission.no_progress_failures", u64(credit.no_progress_failures));
   }
   if (_io) {
     const auto io = _io->stats();
