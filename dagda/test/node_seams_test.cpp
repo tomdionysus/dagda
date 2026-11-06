@@ -6,7 +6,8 @@
 //
 
 // What Macha's own loop needs of a node while it stays Macha's (until stage 8c):
-// its adverts as the port expects them, and its parts on the pass's clocks.
+// its adverts as the port expects them, its parts on the pass's clocks, its local
+// stages one by one, and its own collector.
 
 #include <gtest/gtest.h>
 
@@ -15,10 +16,14 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <span>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "dagda/contract/stopping.h"
@@ -169,6 +174,86 @@ TEST(NodeSeams, TheLocalStagesRunOnThePassesClocks) {
   EXPECT_FALSE(node.run_maintenance_once().local.scrub_ran);
   wall.advance(std::chrono::hours(2));
   EXPECT_TRUE(node.run_maintenance_once().local.scrub_ran);
+}
+
+// What the decision trace was told, by kind.
+class TraceKinds {
+ public:
+  ledger::Collector::Trace sink() {
+    return [this](std::string_view kind, std::string_view) {
+      const std::scoped_lock lock(_mutex);
+      _kinds.emplace(kind);
+    };
+  }
+  bool saw(const std::string& kind) {
+    const std::scoped_lock lock(_mutex);
+    return _kinds.contains(kind);
+  }
+
+ private:
+  std::mutex _mutex;
+  std::set<std::string> _kinds;
+};
+
+// Macha's loop drives the node's own collector, to its trace.
+TEST(NodeSeams, AnOwnersPassDrivesTheNodesCollectorToItsTrace) {
+  TraceKinds trace;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.trace = trace.sink();
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  auto& dagda = node.dagda_node();
+  EXPECT_EQ(dagda.collector(), nullptr);
+
+  test::TestProvider owner;
+  owner.answer.complete = true;
+  dagda.register_reachability(domain::domain_v1, owner);
+  auto* collector = dagda.collector();
+  ASSERT_NE(collector, nullptr);
+  EXPECT_EQ(dagda.collector(), collector);
+  const auto inventory = collector->inventory_step();
+  EXPECT_TRUE(inventory.rebuilt);
+  EXPECT_EQ(node.ledger().inventory(), inventory.inventory);
+  EXPECT_TRUE(trace.saw("inventory"));
+
+  // The node's own pass uses the same collector, and so the same trace.
+  EXPECT_FALSE(trace.saw("gate.tombstones"));
+  (void)node.run_maintenance_once();
+  EXPECT_TRUE(trace.saw("gate.tombstones"));
+
+  dagda.unregister_reachability(domain::domain_v1);
+  EXPECT_EQ(dagda.collector(), nullptr);
+}
+
+// One hook is the whole of Macha's trace: repair's claim walk is on it too.
+TEST(NodeSeams, TheTraceReachesRepairsClaimWalk) {
+  TraceKinds trace;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.trace = trace.sink();
+  options.repair.initial_bandwidth = 1ULL << 42;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  dannan::identity::NodeId origin;
+  origin.bytes.fill(7);
+  node.claims().retain(contract::RetentionClass::data, store::object_id(test::numbered(1)), {origin, 1});
+  auto& repair = node.repair();
+  const auto now = node.context().time().source().now();
+  (void)repair.earn_credit(now, std::chrono::seconds(60));
+  auto turn = repair.begin_turn(now, 0);
+  (void)repair.claim_walks(turn);
+  EXPECT_TRUE(trace.saw("claim-walk"));
+}
+
+// Two owners would race: the steps are single owner.
+TEST(NodeSeams, TheCollectorIsNotHandedOutWhileTheNodesThreadRuns) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  EXPECT_THROW((void)node.dagda_node().collector(), std::logic_error);
 }
 
 // A packed node with dead bytes for the compaction to reclaim.
