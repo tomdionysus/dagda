@@ -60,8 +60,11 @@
 // from the v18 tag without another pass over the object.
 //
 // A crash leaves each record v18 or v19 (told by which associated data
-// authenticates it) and each ledger file under the old key or the new (told
-// by which key opens it); a second run finishes, skipping what is done. A
+// authenticates it), or for a write the power cut short part one tag and part
+// the other (told by trying what the tear could have left, since the two differ
+// by a value known from the associated data alone), and each ledger file under
+// the old key or the new (told by which key opens it); a second run finishes,
+// skipping what is done. A
 // v19 state is left alone. It refuses, with a reason, a state it does not
 // recognise, a backend with no marker or a marker of another form, a store
 // in use, and a key under which the first records found open under neither
@@ -103,6 +106,10 @@ struct MigrationReport {
   uint64_t loose_migrated = 0;
   uint64_t loose_already = 0;
   uint64_t loose_unreadable = 0;
+  // Records an earlier run's write was cut short on, part old tag and part new,
+  // told apart from damage and finished. They count as migrated too.
+  uint64_t loose_torn_finished = 0;
+  uint64_t pack_records_torn_finished = 0;
   uint64_t packs = 0;
   uint64_t pack_records_migrated = 0;
   uint64_t pack_records_already = 0;

@@ -113,10 +113,15 @@ The markers are rewritten last, so until the run completes the store still
 refuses the disk and names the tool. A state whose layout marker is v19 is
 reported as nothing to do.
 
-A pack record's 48-byte rewrite is one write; if the power goes in the
-middle of it, the header's checksum no longer holds and the store's recovery
-skips the record as a damaged span (its object is repaired from replicas),
-as it would for any torn header. A torn tail on a pack (a crash of Macha's
+A pack record's 48-byte rewrite is one write; if the power goes in the middle
+of it (it crosses a sector edge for about one record in 85), the header's
+checksum no longer holds and the tag on the disk is part old and part new. The
+two differ by a value known from the associated data alone, so the second run
+tries what the tear can have left, and a tag that authenticates finishes the
+record; only a record no such tag opens stays listed as damaged. A loose
+object's tag the same. The report counts them as cut short and finished. Run
+again, then, before the store opens the disk: the store has no such recovery and
+would read that record as a damaged span. A torn tail on a pack (a crash of Macha's
 before the migration) is left for the store to truncate at open; a torn tail
 on a journal is dropped as the ledger's own replay would drop it. Both are
 counted in the report.
