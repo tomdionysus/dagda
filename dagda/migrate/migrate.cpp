@@ -155,6 +155,8 @@ enum class Ledger { skipped, migrated, already, empty };
 
 Ledger migrate_journal(const std::filesystem::path& path, std::array<uint8_t, 8> aad, const domain::StorageKey& from, const domain::StorageKey& to,
                        MigrationReport& report, const MigrationOptions& options) {
+  // A journal of nothing but a torn append holds nothing, under any key.
+  if (ledger::SealedJournal::holds_only_a_torn_frame(path, max_read_frame)) return Ledger::empty;
   const auto under_to = ledger::SealedJournal::probe(path, to, aad, max_read_frame);
   if (!under_to) return Ledger::empty;
   if (*under_to) return Ledger::already;

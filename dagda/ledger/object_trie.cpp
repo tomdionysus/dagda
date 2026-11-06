@@ -595,6 +595,7 @@ std::optional<bool> ObjectTrie::probe(const std::filesystem::path& dir, const do
       if (const auto opens = SealedJournal::probe(nodes, key, nodes_aad, lenient, offset); opens.has_value()) return opens;
     }
   }
+  if (SealedJournal::holds_only_a_torn_frame(dir / "journal.log", lenient)) return std::nullopt;
   return SealedJournal::probe(dir / "journal.log", key, journal_aad, lenient);
 }
 
