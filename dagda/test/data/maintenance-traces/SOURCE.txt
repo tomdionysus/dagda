@@ -1,0 +1,3 @@
+Macha's decision trace fixtures, byte for byte: tests/fixtures/maintenance-traces/*.txt
+at Macha commit 9a08846 (Merge the old-code removal and 0.93.4 into develop). Never
+edited here: a difference is a finding. Read by dagda/test/maintenance_steps_test.cpp.
