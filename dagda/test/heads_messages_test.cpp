@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <mutex>
@@ -595,7 +596,7 @@ TEST_F(HeadsWireFixture, RealHistoryCrossesTheWireAsItIs) {
 }
 
 // The survey, on the wire, for a two-head state: the reply is the file's plaintext, and each head is
-// asked for by hash. The heads stay two: folding them is session S6's.
+// asked for by hash. The heads stay two, as this space's owner gave no merge.
 TEST_F(HeadsWireFixture, ASurveyOfTwoRealHeadsImportsBoth) {
   const auto key = fixture_key();
   const auto directory = macha_fixtures() / "state-scratch-0.93.4-twoheads/a/metadata";
@@ -637,9 +638,9 @@ TEST_F(HeadsWireFixture, ASurveyOfTwoRealHeadsImportsBoth) {
   // the own head with two standing, as Macha's does while its merge cannot be made.
   try {
     (void)target.read_base();
-    ADD_FAILURE() << "two heads stand and no reconciler is built";
+    ADD_FAILURE() << "two heads stand and no merge was given";
   } catch (const HeadsNotReady& error) {
-    EXPECT_NE(std::string(error.what()).find("await the reconciler"), std::string::npos) << error.what();
+    EXPECT_NE(std::string(error.what()).find("gave no merge"), std::string::npos) << error.what();
   }
   EXPECT_EQ(target.space().replica().accepted_heads().size(), 2u);
   const auto asked = at_from.of(numbers.get_heads);
@@ -651,6 +652,97 @@ TEST_F(HeadsWireFixture, ASurveyOfTwoRealHeadsImportsBoth) {
     fetched.insert(message::decode_hash(request));
   }
   for (const auto& certificate : certificates) EXPECT_TRUE(fetched.contains(certificate.hash));
+}
+
+// An owner's merge whose answer is what a real Macha node's merge came to: the reconciler over it
+// has only the two heads and those bytes, and what it mints is measured against what Macha minted.
+class ReplayedMerge final : public heads::Merge {
+ public:
+  ReplayedMerge(Bytes payload, Bytes delta) : _payload(std::move(payload)), _delta(std::move(delta)) {}
+  Result merge(const std::optional<State>&, const heads::MergeHeads&) const override {
+    Result out;
+    out.state = OpaqueCodec().decode_full(_payload);
+    out.delta = _delta;
+    return out;
+  }
+
+ private:
+  const Bytes _payload;
+  const Bytes _delta;
+};
+
+// The fold against Macha's own bytes. -branch: a fork merged by a delta. -markers: a standing conflict
+// and a merge stored whole. Given the two heads and the merge's payload, the reconciler mints Macha's
+// commit: its generation, its previous as the lower hash, so its hash, and one merge parent, the
+// higher. The merge itself is the owner's; nothing here parses it past the fields it must name.
+TEST_F(HeadsWireFixture, TheFoldMintsMachasOwnMergeFromItsTwoHeads) {
+  const auto key = fixture_key();
+  size_t proved = 0;
+  for (const auto* state : {"state-scratch-0.93.4-branch", "state-scratch-0.93.4-markers"}) {
+    for (const auto* node : {"a", "b"}) {
+      const auto directory = macha_fixtures() / state / node / "metadata";
+      if (!std::filesystem::exists(directory / "history.log")) continue;
+      std::map<Hash256, HistoryEntry> entries;
+      const HistoryEntry* found = nullptr;
+      for (const auto& plain : history_plaintexts(read_file(directory / "history.log"), *key)) {
+        auto entry = decode_history_entry(plain);
+        entries[entry.hash] = std::move(entry);
+      }
+      for (const auto& [hash, entry] : entries)
+        if (!entry.merge_parents.empty() && (!found || entry.generation > found->generation)) found = &entry;
+      if (!found) continue;
+      ASSERT_EQ(found->merge_parents.size(), 1u) << state << " " << node << ": Macha's merge names one merge parent";
+      EXPECT_LT(found->previous, found->merge_parents.front()) << state << " " << node << ": its previous is the lower hash";
+      if (!entries.contains(found->previous) || !entries.contains(found->merge_parents.front())) continue;
+      const auto& primary = entries.at(found->previous);
+      const auto& secondary = entries.at(found->merge_parents.front());
+      EXPECT_EQ(found->generation, std::max(primary.generation, secondary.generation) + 1) << state << " " << node;
+      // The merge's record whole somewhere: its frame, or the checkpoint when it is the head.
+      Bytes payload;
+      Bytes delta;
+      if (found->body == HistoryEntry::Body::full) {
+        payload.assign(found->payload.begin(), found->payload.end());
+      } else {
+        delta.assign(found->payload.begin(), found->payload.end());
+        const auto committed = decode_record(open_file(*key, checkpoint_magic, checkpoint_magic, read_file(directory / "checkpoint.meta")));
+        if (committed.hash != found->hash) continue;
+        EXPECT_LT(delta.size(), committed.payload.size()) << state << " " << node;
+        payload.assign(committed.payload.begin(), committed.payload.end());
+      }
+      // A delta only applies under the owner's codec, so minting it here takes two whole parents.
+      if (primary.body != HistoryEntry::Body::full || secondary.body != HistoryEntry::Body::full) continue;
+
+      auto spec = opaque_spec();
+      spec.merge = std::make_shared<ReplayedMerge>(payload, delta);
+      ClusterNodeOptions options;
+      options.spaces = {spec};
+      options.exchange.numbers = test::owner_numbers();
+      options.exchange.write_copies = 1;
+      options.exchange.view_ttl = std::chrono::milliseconds(0);
+      Cluster cluster;
+      auto& from = cluster.add("from", options);
+      from.start();
+      auto& exchange = *from.dagda_node().spaces()->exchange(from.api().heads().id_of("test/opaque"));
+      auto& replica = exchange.space().replica();
+      for (const auto* parent : {&primary, &secondary}) {
+        ASSERT_TRUE(replica.import_history(*parent)) << state << " " << node;
+        ASSERT_TRUE(exchange.space().accept(Acceptance{parent->generation, parent->hash, 1, {from.id()}})) << state << " " << node;
+      }
+      ASSERT_EQ(replica.accepted_heads().size(), 2u) << state << " " << node;
+      const auto minted = exchange.read_base();
+      EXPECT_EQ(minted.generation, found->generation) << state << " " << node;
+      EXPECT_EQ(minted.previous, found->previous) << state << " " << node;
+      EXPECT_EQ(minted.hash, found->hash) << state << " " << node;
+      EXPECT_EQ(minted.payload, payload) << state << " " << node;
+      ASSERT_EQ(replica.accepted_heads().size(), 1u) << state << " " << node;
+      EXPECT_EQ(replica.history_links(minted.hash)->merge_parents, found->merge_parents) << state << " " << node;
+      std::cout << "BENCH name=heads.fixture.merge_minted state=" << state << " node=" << node << " generation=" << minted.generation
+                << " delta=" << !delta.empty() << '\n';
+      ++proved;
+    }
+  }
+  std::cout << "BENCH name=heads.fixture.merges_minted ops=" << proved << '\n';
+  EXPECT_GT(proved, 0u) << "no fixture held a merge over two whole frames";
 }
 
 // A space not the unaddressed one adds exactly its id, on every request, and reaches that space.

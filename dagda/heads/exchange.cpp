@@ -12,6 +12,8 @@
 #include <future>
 #include <limits>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 
 #include "dagda/contract/stopping.h"
 #include "dagda/store/messages.h"
@@ -34,6 +36,15 @@ constexpr auto unacceptable_cooldown = std::chrono::seconds(30);
 // The in-flight window of one history push: requests to one peer run in arrival order at
 // the receiver, so a few overlap latency and appends while bounding what a call holds.
 constexpr size_t transfer_window = 8;
+
+// A merge that cannot be made with what this node can reach now.
+struct MergeUnavailable : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+uint64_t microseconds_since(const dannan::contract::TimeSource& time, dannan::contract::TimePoint from) {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(time.now() - from).count());
+}
 
 std::string default_advert(std::string_view what, const SpaceId& space) {
   return "dagda/heads/" + std::string(what) + "/" + dannan::identity::hex(space.bytes);
@@ -732,16 +743,146 @@ Record Exchange::read_group(const std::vector<Peer>& nodes, FrameType frame, con
     }
   }
 
-  const auto heads = _space->usable_heads();
-  if (heads.empty()) throw HeadsNotReady("metadata accepted-head set is empty");
-  // Macha folds here (mgr:1157-1314): session S6's, which holds reconciliation under its
-  // lock and calls SpaceSpec::merge. Until it does a read falls back to this node's own
-  // head, as Macha's read_record does on any failure, and a run stays dirty.
-  if (heads.size() > 1) throw HeadsNotReady("metadata histories have diverged: " + std::to_string(heads.size()) + " heads await the reconciler");
-  const auto& selected = heads.front();
-  const auto materialized = local.materialized(selected.hash);
-  if (!materialized) throw HeadsNotReady("selected metadata head cannot be materialized");
-  return _space->cache_record(selected, materialized->state);
+  // Taken lazily on seeing more than one head; heads are re-read once held. Guards no state,
+  // so the analysis need not see it held.
+  std::optional<Lock> reconciliation;
+  for (;;) {
+    if (pause) pause();
+    auto heads = _space->usable_heads();
+    if (heads.empty()) throw HeadsNotReady("metadata accepted-head set is empty");
+    std::sort(heads.begin(), heads.end(), [](const Record& a, const Record& b) {
+      if (a.hash != b.hash) return a.hash < b.hash;
+      return a.generation < b.generation;
+    });
+
+    if (heads.size() == 1) {
+      const auto& selected = heads.front();
+      const auto materialized = local.materialized(selected.hash);
+      if (!materialized) throw HeadsNotReady("selected metadata head cannot be materialized");
+      return _space->cache_record(selected, materialized->state);
+    }
+
+    // A read falls back to this node's own head, as Macha's read_record does on any failure,
+    // and a run stays dirty.
+    if (!_space->merge())
+      throw HeadsNotReady("metadata histories have diverged: " + std::to_string(heads.size()) + " heads, and this space's owner gave no merge");
+    if (!reconciliation) {
+      const auto waited = _time.now();
+      reconciliation.emplace(_reconciliation_mutex);
+      _context.observations().record("heads.reconcile_wait_us", microseconds_since(_time, waited));
+      continue;  // The heads again, now that this holds the lock: they may be resolved.
+    }
+
+    // The maximal head set folded deterministically, two branches at a time. A merge that
+    // cannot be made now never holds reads or writes: the head that is not this node's own is
+    // set aside and the loop goes on with the rest. An accepted merge drops its parents from
+    // the head set, so the loop folds what remains into it.
+    const auto aside = [&](std::string_view reason) {
+      const auto own = _space->own_head({heads[0], heads[1]});
+      if (_space->set_aside(own.hash == heads[0].hash ? heads[1] : heads[0], reason)) _heads_set_aside.fetch_add(1, std::memory_order_relaxed);
+    };
+    try {
+      reconcile(nodes, heads[0], heads[1], frame, pause, heads.size() - 1);
+    } catch (const MergeUnavailable& error) {
+      aside(error.what());
+    } catch (const DecodeError& error) {
+      // A tree node of one branch that no node present can supply.
+      aside(error.what());
+    }
+  }
+}
+
+void Exchange::reconcile(const std::vector<Peer>& nodes, const Record& left, const Record& right, FrameType frame, const TreePause& pause, size_t remaining) {
+  const auto started = _time.now();
+  // Where a reconciliation's time goes, stage by stage.
+  auto stage_started = started;
+  const auto stage_ms = [&] {
+    const auto now = _time.now();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - stage_started).count();
+    stage_started = now;
+    return ms;
+  };
+
+  auto& local = _space->replica();
+  const auto& codec = *_space->codec();
+  const auto& merge = *_space->merge();
+  const auto left_materialized = local.materialized(left.hash);
+  const auto right_materialized = local.materialized(right.hash);
+  if (!left_materialized || !right_materialized) throw MergeUnavailable("metadata merge head cannot be materialized");
+  const auto materialise_ms = stage_ms();
+  const auto left_fields = codec.head_fields(left_materialized->state);
+  const auto right_fields = codec.head_fields(right_materialized->state);
+  if (_space->spec().tree && (!left_fields.root || !right_fields.root)) throw MergeUnavailable("a metadata head to merge holds no namespace tree");
+
+  std::optional<State> base;
+  if (merge.reads_base())
+    if (const auto common = local.history_common_ancestor(left.hash, right.hash))
+      if (const auto ancestor = local.materialized(*common)) base = ancestor->state;
+
+  const auto reader = _space->_services.read_nodes();
+  const auto commit_nodes = _space->commit_nodes();
+  // `left` is the primary parent, the lower hash, so every reconciler of the same head pair
+  // produces the same merge commit. A merge is a pure join, not a mutation: a fresh dot of this
+  // node's in its clock would make simultaneous reconcilers mint sibling merges for ever.
+  auto result = merge.merge(base, MergeHeads{left, right, left_materialized->state, right_materialized->state, *reader, *commit_nodes, pause});
+  if (!result.state) throw MergeUnavailable(result.why.empty() ? "the owner's merge gave no state" : result.why);
+  const auto merged_fields = codec.head_fields(result.state);
+  if (merged_fields.merge_parents != std::vector<Hash256>{right.hash}) throw std::logic_error("a merge names exactly its secondary as its merge parent");
+  const auto merge_ms = stage_ms();
+
+  Record reconciliation;
+  reconciliation.generation = std::max(left.generation, right.generation) + 1;
+  reconciliation.previous = left.hash;
+  reconciliation.payload = codec.encode_full(result.state);
+  reconciliation.hash = record_hash(reconciliation.generation, reconciliation.previous, reconciliation.payload);
+  if (auto* costs = _space->_costs) {
+    costs->record_bytes_encoded.fetch_add(reconciliation.payload.size(), std::memory_order_relaxed);
+    costs->record_bytes_hashed.fetch_add(reconciliation.payload.size(), std::memory_order_relaxed);
+  }
+  Bytes delta;
+  if (!result.delta.empty() && result.delta.size() < reconciliation.payload.size()) delta = std::move(result.delta);
+  const auto encode_ms = stage_ms();
+
+  // The merge claims what it introduces before it is published, as a mutation does. This is
+  // one route by which an object regains a claim it has lost. Its dot is a fresh local sequence
+  // the merged clock does not carry (R3), so every reconciler still mints the same commit and
+  // no earlier release here can void the claim; the head that carries this node's next
+  // mutation covers it.
+  if (_space->_services.claims) {
+    const auto dot = local.reserve_mutation_dot(_space->_services.self, merged_fields.clock);
+    Introduced introduced;
+    introduced.data = result.claims.data;
+    introduced.control = result.claims.control;
+    const auto claims = _space->claim(dot, left_fields, merged_fields, introduced, *reader, pause);
+    // A merge is made off every caller's path, so the peers' share is done here too, before
+    // the merge is offered to them.
+    if (_services.claims) {
+      try {
+        _services.claims->retain_on_peers(dot, claims);
+      } catch (const MaintenanceStopping&) {
+        throw;
+      } catch (const std::exception& error) {
+        _logger.debug("metadata merge claims on peers deferred: " + std::string(error.what()));
+      }
+    }
+  }
+  const auto retention_ms = stage_ms();
+  (void)publish_commit(nodes, reconciliation, delta, frame, pause);
+  const auto publish_ms = stage_ms();
+
+  _reconciliations.fetch_add(1, std::memory_order_relaxed);
+  _conflicts_created.fetch_add(result.conflicts_created, std::memory_order_relaxed);
+  _conflicts_superseded.fetch_add(result.conflicts_superseded, std::memory_order_relaxed);
+  const auto took_us = microseconds_since(_time, started);
+  _context.observations().record("heads.reconcile_us", took_us);
+  _logger.info("metadata histories reconciled generation=" + std::to_string(reconciliation.generation) + " ms=" + std::to_string(took_us / 1000) +
+               " materialise_ms=" + std::to_string(materialise_ms) + " merge_ms=" + std::to_string(merge_ms) + " encode_ms=" + std::to_string(encode_ms) +
+               " retention_ms=" + std::to_string(retention_ms) + " publish_ms=" + std::to_string(publish_ms) +
+               " history_body=" + std::string(delta.empty() ? "full" : "delta") +
+               " history_bytes=" + std::to_string(delta.empty() ? reconciliation.payload.size() : delta.size()) +
+               " conflicts=" + std::to_string(result.conflicts_created) + " superseded=" + std::to_string(result.conflicts_superseded) +
+               " standing=" + std::to_string(result.conflicts_standing) + " remaining_heads=" + std::to_string(remaining));
+  merge.published(result, reconciliation);
 }
 
 Exchange::RecoverySurvey Exchange::recover_from_committed_checkpoints(const std::vector<Peer>& active) {
