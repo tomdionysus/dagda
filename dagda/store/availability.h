@@ -40,6 +40,10 @@ struct AvailabilityOptions {
   // ceiling; an answer clears it.
   std::chrono::milliseconds retry_floor{1000};
   std::chrono::milliseconds retry_ceiling{300000};
+  // The clock the survey's pacing and retries run on (a survey's cost is always
+  // real time, as Macha's is). None: the node's. An owner's pass on its own clock
+  // gives it, as Macha's refresh takes its pass's now.
+  const dannan::contract::TimeSource* time = nullptr;
 };
 
 using ledger::MaintenanceStopping;

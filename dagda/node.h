@@ -107,6 +107,15 @@ struct MaintenanceOptions {
   std::chrono::milliseconds scrub_interval{std::chrono::hours(24 * 30)};
   double cpu_target = 0.10;
   store::CpuSource cpu = store::system_cpu_sample;
+  // The clocks a pass runs on, for an owner with its own (Macha's MaintenanceClock,
+  // which its trace fixtures move by hand): the steady one is what the pass's
+  // schedule and credit, the collector, repair (unless RepairOptions::time says
+  // otherwise), the survey (AvailabilityOptions::time likewise), the verify's rest
+  // and the activity clocks read; the wall one dates the sightings, the retirements'
+  // ages and the scrub's campaigns. The stores keep NodeOptions::wall, as Macha's
+  // files keep real time. None: the node's, and NodeOptions::wall.
+  const dannan::contract::TimeSource* time = nullptr;
+  const dannan::contract::WallClock* wall = nullptr;
 };
 
 // What one pass of the local stages did. A `_ran` is false when its gate held
@@ -385,6 +394,9 @@ class Node {
   // with nothing deferred, or nothing to run.
   bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
   bool higher_class_active() const;
+  // The clocks a pass runs on (MaintenanceOptions::time and wall).
+  const dannan::contract::TimeSource& pass_time() const;
+  const dannan::contract::WallClock& pass_wall() const;
   // The local stages, in Macha's order. `forced` as run_maintenance_once says.
   // Throws nothing: a failed stage is logged and the next pass tries again.
   LocalStages local_stages_locked(bool forced, std::stop_token stop) DANNAN_REQUIRES(_maintenance_mutex);
