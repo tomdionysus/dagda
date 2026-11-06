@@ -1617,10 +1617,15 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   // Foreground demand is recorded before any storage access, so the first
   // read already holds back lower classes.
   if (foreground) _activity.note(options.frame, 0);
-  const auto wait = options.deadline.count() > 0 ? std::optional(options.deadline) : no_caller_deadline;
+  // A caller's deadline is one time across the local, cache and remote stages,
+  // as Macha's is: a stage reached past it goes no further.
+  const bool own_deadline = options.deadline.count() > 0;
+  const auto until = _time.now() + options.deadline;
+  const auto past_deadline = [&] { return own_deadline && _time.now() >= until; };
+  const auto wait = [&] { return own_deadline ? std::optional(std::chrono::ceil<std::chrono::milliseconds>(until - _time.now())) : no_caller_deadline; };
   std::optional<Bytes> local;
   {
-    const auto admitted = admit_data(options.frame, _options.extent_size, wait, options.cancelled);
+    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled);
     if (!admitted) return {};
     local = _data.get(id);
   }
@@ -1629,9 +1634,10 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     if (interactive) _activity.note(options.frame, local->size());
     return {buffer_of(std::move(*local)), ReadSource::local, _self, FetchAnswer::ok};
   }
+  if (past_deadline()) return {};
   std::optional<Bytes> cached;
   {
-    const auto admitted = admit_data(options.frame, _options.extent_size, wait, options.cancelled);
+    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled);
     if (!admitted) return {};
     cached = _cache.get(id);
   }
@@ -1641,14 +1647,15 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     if (should_own(id)) enqueue_local_copy(id, *cached, true);
     return {buffer_of(std::move(*cached)), ReadSource::cache, _self, FetchAnswer::ok};
   }
-  if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) return {};
-  auto result = get_remote(id, options, interactive);
+  if (past_deadline() || (options.cancelled && options.cancelled->load(std::memory_order_relaxed))) return {};
+  auto result = get_remote(id, options, interactive, own_deadline ? std::optional(until) : std::nullopt);
   if (result.object && options.frame == FrameType::read_ahead) _activity.note(options.frame, result.object->bytes.size());
   return result;
 }
 
-ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist) {
-  const auto deadline = _time.now() + (options.deadline.count() > 0 ? options.deadline : _options.read_deadline);
+ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
+                                        std::optional<dannan::contract::TimePoint> until) {
+  const auto deadline = until ? *until : _time.now() + (options.deadline.count() > 0 ? options.deadline : _options.read_deadline);
   const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;

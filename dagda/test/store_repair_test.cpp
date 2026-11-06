@@ -1250,6 +1250,104 @@ TEST(StoreRepair, AWriteWithItsOwnDeadlineGivesUpAtIt) {
   EXPECT_EQ(credit.stats().no_progress_failures, 0u);
 }
 
+// src/cluster/distributed_store.cpp at Macha 9a08846, get_shared (:1741, :1770, :1801-1804)
+// and get_remote (:1445): one absolute deadline across the local stage, the cache
+// stage and the remote stage. Four seconds in each of the first two, and the
+// remote stage has what is left of ten, not ten.
+TEST(StoreRepair, AReadsDeadlineIsOneTimeAcrossItsStages) {
+  dannan::test::SteppedTime time;
+  // Stepping the reader's clock must not make its peer look dead.
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.store.read_trace = [&](std::string_view) { time.advance(4s); };
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 53);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  // The peer holds its answer back: the remote stage waits on it.
+  auto& held_up = *b.credit();
+  const auto full = held_up.try_acquire(DataWorkContext(FrameType::foreground, 0), held_up.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  read.deadline = 10s;
+  auto result = std::async(std::launch::async, [&] { return a.store().get(id, read).has_value(); });
+  ASSERT_TRUE(wait_until([&] { return held_up.stats().foreground_waits == 1; }));
+  time.advance(3s);
+  const bool ended_at_its_deadline = result.wait_for(5s) == std::future_status::ready;
+  // However that went, nothing is left waiting for the test's end.
+  time.advance(1h);
+  EXPECT_TRUE(ended_at_its_deadline);
+  EXPECT_FALSE(result.get());
+}
+
+// The same code: a read past its deadline as a stage ends goes no further, at
+// either stage (:1741-1745, :1770-1774, :1801-1802), and no peer is asked.
+TEST(StoreRepair, AReadPastItsDeadlineGoesNoFurther) {
+  for (const std::string_view stage : {"local", "cache"}) {
+    SCOPED_TRACE(stage);
+    dannan::test::SteppedTime time;
+    std::vector<std::string> stages;
+    // Stepping the reader's clock must not make its peer look dead.
+    Cluster cluster(std::chrono::hours(24));
+    auto reader = waits_on_credit();
+    reader.time = &time;
+    reader.store.read_trace = [&](std::string_view ended) {
+      stages.emplace_back(ended);
+      if (ended == stage) time.advance(11s);
+    };
+    auto& a = cluster.add("a", reader);
+    auto& b = cluster.add("b", waits_on_credit());
+    cluster.start_all();
+    ASSERT_TRUE(cluster.converged());
+    const auto bytes = pattern(64 * 1024, 54);
+    const auto id = object_id(bytes);
+    ASSERT_TRUE(b.data().put(id, bytes));
+    const auto asked = b.calls_of(message::get_object);
+    ReadOptions read;
+    read.frame = FrameType::foreground;
+    read.deadline = 10s;
+    EXPECT_FALSE(a.store().get(id, read).has_value());
+    EXPECT_EQ(b.calls_of(message::get_object), asked);
+    EXPECT_EQ(stages.back(), stage);
+  }
+}
+
+// A read with no deadline names none for its admissions, and still has a bound on
+// its remote stage alone: read_deadline starts there, however long the local wait.
+TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
+  dannan::test::SteppedTime time;
+  // Stepping the reader's clock must not make its peer look dead.
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.no_progress = 120s;
+  reader.store.read_deadline = 60s;
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 55);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  auto& credit = *a.credit();
+  auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
+  ASSERT_TRUE(wait_until([&] { return credit.stats().foreground_waits == 1; }));
+  time.advance(61s);
+  credit.time_advanced();
+  full.reset();
+  ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
+  EXPECT_EQ(result.get(), bytes);
+}
+
 // test_min_write_floor_publishes_then_repair_converges_to_r2 (VALIDATION
 // "Placement and the write floor"): a write at a floor of one publishes on
 // the one node there is, and when a second owner joins, repair by diff

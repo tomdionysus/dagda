@@ -174,7 +174,8 @@ enum class ReadSource : uint8_t { none, local, cache, remote };
 
 struct ReadOptions {
   dannan::sched::FrameType frame = dannan::sched::FrameType::foreground;
-  // Zero: the store's read_deadline.
+  // One time across the local, cache and remote stages. Zero: admission waits
+  // under the arbiter's window, and the remote stage has the store's read_deadline.
   std::chrono::milliseconds deadline{0};
   // Rotates equal-scored replicas, so a file's stripes spread over them.
   size_t stripe = 0;
@@ -597,7 +598,9 @@ class DistributedStore final : public ControlObjectSource {
 
   bool put_on(const dannan::membership::NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame);
   ReadResult read_impl(const ObjectId& id, const ReadOptions& options);
-  ReadResult get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist);
+  // `until`: the deadline a read's earlier stages already ran on.
+  ReadResult get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
+                        std::optional<dannan::contract::TimePoint> until = std::nullopt);
   void fetch_next(const std::shared_ptr<SharedFetch>& fetch);
   void fetched(const std::shared_ptr<SharedFetch>& fetch, const dannan::membership::NodeRecord& target, ReplicaWorkClass work,
                std::chrono::steady_clock::time_point started, dannan::net::CallOutcome outcome);
