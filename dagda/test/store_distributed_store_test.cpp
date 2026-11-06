@@ -24,10 +24,14 @@
 #include <future>
 #include <thread>
 
+#include "dagda/ledger/collector.h"
+#include "dagda/ledger/unreferenced_since.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/messages.h"
 #include "dagda/test/fixtures/cluster.h"
+#include "dagda/test/fixtures/reachability.h"
 #include "dannan/test/fixtures/gate.h"
+#include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda::store {
 namespace {
@@ -1196,6 +1200,134 @@ TEST(StoreClaimLocks, AClaimFindsAMarkedObjectNotPresent) {
   (void)a.store().retain_data({id}, dot);
   EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, id));
   EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
+}
+
+// A node's CONTROL sweep driven by the case, on the node's own stores and claims.
+struct ControlSweep {
+  explicit ControlSweep(ClusterNode& swept, std::function<void(const ObjectId&)> before_removal = {}) : node(swept) {
+    const auto key = std::make_shared<const domain::StorageKey>(node.node_local_key());
+    data_seen = std::make_unique<ledger::UnreferencedSince>(node.state() / "sweep-data.bin", key, node.context().logger("sweep"));
+    control_seen = std::make_unique<ledger::UnreferencedSince>(node.state() / "sweep-control.bin", key, node.context().logger("sweep"));
+    ledger::CollectorOptions swept_options;
+    swept_options.before_control_removal = std::move(before_removal);
+    collector = std::make_unique<ledger::Collector>(node.ledger(), provider, node.data(), node.control(), *data_seen, *control_seen, swept_options,
+                                                    ledger::CollectorServices{node.context().logger("sweep"), node.context().observations(), time});
+    provider.epoch = contract::ControlEpoch{1, time.now()};
+  }
+
+  // First seen unreferenced in one epoch, so the next can take it.
+  void see_unreferenced() {
+    (void)step();
+    provider.epoch = contract::ControlEpoch{2, time.now()};
+  }
+  size_t step() {
+    size_t removed = 0;
+    for (int i = 0; i < 4; ++i) removed += collector->control_gc_step(std::vector<ObjectId>{}, 0ms, 64, nullptr, 0);
+    return removed;
+  }
+
+  ClusterNode& node;
+  dannan::test::SteppedTime time;
+  test::TestProvider provider;
+  std::unique_ptr<ledger::UnreferencedSince> data_seen;
+  std::unique_ptr<ledger::UnreferencedSince> control_seen;
+  std::unique_ptr<ledger::Collector> collector;
+};
+
+dannan::net::CallOutcome ask_claim(ClusterNode& asker, ClusterNode& asked, contract::RetentionClass object_class, const ObjectId& id) {
+  for (const auto& record : asker.context().nodes().active())
+    if (record.id == asked.id())
+      return asker.context().routes().call_and_wait(record, message::retain_objects,
+                                                    message::encode_retain({object_class, {asker.id(), 9}, {id}, std::nullopt}), FrameType::loader, 10s);
+  throw std::runtime_error("the asker does not see that node");
+}
+
+bool claimed(const dannan::net::CallOutcome& outcome) { return outcome.reply && outcome.reply->type == dannan::net::message::ok; }
+
+// src/catalogue/catalogue.cpp at Macha 98b816d (:2650-2653) and the handler
+// (src/cluster/storage_server.cpp :374-381): the sweep's check marks the object, every
+// class. Held past the check, a peer's claim finds it not present, so no claim stands
+// with no object.
+TEST(StoreClaimLocks, APeersClaimOnAControlObjectAboutToGoIsRefused) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(4096, 52);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.control().put(id, bytes));
+  ASSERT_TRUE(wait_until([&] { return b.control().older_than(id, 2ms); }));
+  bool asked = false;
+  ControlSweep sweep(b, [&](const ObjectId& going) {
+    if (going != id) return;
+    asked = true;
+    const auto outcome = ask_claim(a, b, contract::RetentionClass::control, id);
+    EXPECT_FALSE(claimed(outcome));
+    ASSERT_TRUE(outcome.reply.has_value());
+    const auto refusal = dannan::net::refusal_of(*outcome.reply);
+    ASSERT_TRUE(refusal.has_value());
+    EXPECT_EQ(refusal->status, 409);
+  });
+  sweep.see_unreferenced();
+  EXPECT_EQ(sweep.step(), 1u);
+  EXPECT_TRUE(asked);
+  EXPECT_FALSE(b.control().has(id));
+  EXPECT_FALSE(b.claims().retained(contract::RetentionClass::control, id));
+}
+
+// This node's own claim, at the same point (distributed_store.cpp :811-825).
+TEST(StoreClaimLocks, ALocalClaimOnAControlObjectAboutToGoIsRefused) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  node.start();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(4096, 53);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(node.control().put(id, bytes));
+  ASSERT_TRUE(wait_until([&] { return node.control().older_than(id, 2ms); }));
+  bool asked = false;
+  ControlSweep sweep(node, [&](const ObjectId& going) {
+    if (going != id) return;
+    asked = true;
+    EXPECT_FALSE(node.store().retain_control({id}, contract::RetentionDot{node.id(), 9}, DistributedStore::ClaimScope::here));
+  });
+  sweep.see_unreferenced();
+  (void)sweep.step();
+  EXPECT_TRUE(asked);
+  EXPECT_FALSE(node.claims().retained(contract::RetentionClass::control, id));
+}
+
+// The other side: a claim that holds the object's stripe keeps the sweep's check
+// waiting, and the check then finds the claim. A peer's CONTROL claim takes the same
+// stripe.
+TEST(StoreClaimLocks, AControlClaimInProgressHoldsTheSweepsCheckBack) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(4096, 54);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.control().put(id, bytes));
+  ASSERT_TRUE(wait_until([&] { return b.control().older_than(id, 2ms); }));
+  ControlSweep sweep(b);
+  sweep.see_unreferenced();
+  std::future<size_t> swept;
+  std::future<dannan::net::CallOutcome> peers;
+  {
+    const auto guard = b.data().claim_locks().lock(std::span<const ObjectId>(&id, 1));
+    swept = std::async(std::launch::async, [&] { return sweep.step(); });
+    peers = std::async(std::launch::async, [&] { return ask_claim(a, b, contract::RetentionClass::control, id); });
+    // Neither gets past the stripe while it is held.
+    EXPECT_EQ(swept.wait_for(200ms), std::future_status::timeout);
+    EXPECT_EQ(peers.wait_for(200ms), std::future_status::timeout);
+    b.claims().retain_batch(contract::RetentionClass::control, {id}, contract::RetentionDot{b.id(), 1});
+  }
+  EXPECT_EQ(swept.get(), 0u);
+  EXPECT_TRUE(claimed(peers.get()));
+  EXPECT_TRUE(b.control().has(id));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::control, id));
 }
 
 // Macha's forms over the cache: a write through, hydrating from a peer, and neither

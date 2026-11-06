@@ -2039,11 +2039,11 @@ bool DistributedStore::retain_on(const NodeRecord& target, contract::RetentionCl
     if (!slot) return false;
     const auto claim = [&](std::span<const ObjectId> part) {
       for (const auto& id : part)
-        if (!(object_class == contract::RetentionClass::data ? !_data.claim_locks().deleting(id) && _data.has(id) : _control.has(id))) return false;
+        if (_data.claim_locks().deleting(id) || !(object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id))) return false;
       _claims.retain_batch(object_class, std::vector<ObjectId>(part.begin(), part.end()), dot);
       return true;
     };
-    return object_class == contract::RetentionClass::data ? _data.claim_locks().in_batches(ids, claim) : claim(ids);
+    return _data.claim_locks().in_batches(ids, claim);
   }
   const auto outcome = _context.routes().call_and_wait(target, message::retain_objects, message::encode_retain({object_class, dot, ids, writer}),
                                                        FrameType::loader, _options.control_call);

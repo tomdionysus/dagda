@@ -325,20 +325,19 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       // A claim says "this node holds the object": index presence, not a
       // read. The bytes were verified when put and on every read; scrub
       // finds later corruption. The claim's journal is control work. Under
-      // the objects' claim guard, a sub-batch at a time, so no instant delete
-      // removes a copy between this check and the claim and a large
+      // the objects' claim guard, either class, a sub-batch at a time, so no
+      // delete removes a copy between this check and the claim and a large
       // publication does not stop every delete behind it. One a delete has
       // marked is not present.
       const auto slot = admit_control();
       if (!slot) return busy();
       const auto claim = [&](std::span<const ObjectId> part) {
         for (const auto& id : part)
-          if (!(retain.object_class == contract::RetentionClass::data ? !_data.claim_locks().deleting(id) && _data.has(id) : _control.has(id))) return false;
+          if (_data.claim_locks().deleting(id) || !(retain.object_class == contract::RetentionClass::data ? _data.has(id) : _control.has(id))) return false;
         _claims.retain_batch(retain.object_class, std::vector<ObjectId>(part.begin(), part.end()), retain.dot);
         return true;
       };
-      const bool claimed = retain.object_class == contract::RetentionClass::data ? _data.claim_locks().in_batches(retain.ids, claim) : claim(retain.ids);
-      if (!claimed) return Handled::failed(409, "not_present", "retention object is not durably present");
+      if (!_data.claim_locks().in_batches(retain.ids, claim)) return Handled::failed(409, "not_present", "retention object is not durably present");
       return Handled::processed();
     }
     if (type == message::remove_objects) {

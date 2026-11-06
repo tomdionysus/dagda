@@ -315,7 +315,12 @@ size_t Collector::control_gc_step(const contract::IdLookup& live, std::chrono::m
     (void)_provider.within_control_epoch(epoch->sequence, [&] {
       auto [seen, inserted] = _unreferenced_epoch.emplace(*id, epoch->sequence);
       if (inserted || seen->second == epoch->sequence) return;
-      if (!waited || _ledger.retained(RetentionClass::control, *id)) return;
+      if (!waited) return;
+      // The check marks the object, as a DATA delete's does: a claim arriving before
+      // the unlink finds it not present (Macha's claim_deletion, catalogue.cpp:2650).
+      const auto deletion = _data.claim_locks().deletion(*id, [&] { return _ledger.retained(RetentionClass::control, *id); });
+      if (deletion.claimed()) return;
+      if (_options.before_control_removal) _options.before_control_removal(*id);
       if (_control.remove_if_older_than(*id, grace)) {
         _unreferenced_epoch.erase(seen);
         if (sightings) sightings->forget(*id);

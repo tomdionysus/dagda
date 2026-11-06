@@ -52,6 +52,8 @@ struct CollectorOptions : CollectorBudgets {
   // unreferenced and unclaimed for this long, on its own clock, and a
   // retirement is collectable this long after it was stamped.
   std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
+  // A test's seam: told as a CONTROL object is about to go, past every check.
+  std::function<void(const store::ObjectId&)> before_control_removal;
 };
 
 // What the collector runs on, each one per node and injected.
