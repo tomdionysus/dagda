@@ -33,7 +33,7 @@ needs them. Tell the Macha session when the answer is Yes.
   and saying plainly what could not be shown without a running port. "you are the review", to the Macha session: its judgement of
   that report is the review, and the review by this session after a clear is gone.
 - The Macha session builds the port, once satisfied, "which will be frozen during the port": Dagda frozen, `../macha` read only for
-  Dagda. Macha stays at `9a08846` (0.92.5 tag aside: 808fa0f is older; its live code is 0.93.4) until the port starts.
+  Dagda. Macha stays at `9a08846` until the port starts.
 - A defect the port finds: "The port will pause until the relevant agent has identified and fixed the fault, with testing. The port
   will then continue with the relevant codebase frozen again."
 - Proof on the nodes: "We will convert macnessa and inverbeg store backends and install there to test, prove and iterate." The real
@@ -44,7 +44,7 @@ needs them. Tell the Macha session when the answer is Yes.
 
 1. Heads, now, not behind anything: S2 tree over keys (done), S3 replica on disk, S4 one node commits, S5 exchange, S6 reconciler, S7
    conformance (`2026-11-05-heads-plan.md`, re-based on `9a08846`: H1 to H30 with gates, cases C2 to C46 Dagda must write, all
-   95 gap-heads cases assigned). L1 to L9 wait: Macha needs none, unless torrent gets its own space.
+   95 gap-heads cases assigned). L1 to L9 wait: Macha needs none, and torrent stays in Macha's one space.
 2. The metadata and cache seed migration in `dagda-migrate`, in S7. It reports "nothing to do" under a v19 marker today, so
    it needs a later pass.
 3. The steps Macha's loop needs: `Repair::pass` and `Collector::pass` split so Macha's pass can order and trace them, with
@@ -60,10 +60,10 @@ needs them. Tell the Macha session when the answer is Yes.
 8. Retirements compared assertion by assertion where they cannot yet run; those that need the port named in the report. The store's
    journal lines mapped against the goldens.
 9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
-10. Dagda's own measurements on the Pis against Macha's baselines, when the TV import has finished and they exist.
+10. Dagda's own measurements on the Pis against Macha's baselines, when they exist. The TV import is cancelled by Tom, so Macha can run them now.
 11. The capabilities report.
 
-**Asked of Tom (2026-11-06), all answered above but R5, the baselines, which wait on the TV import.**
+**Asked of Tom (2026-11-06), all answered above but R5, the baselines, which Macha runs now the TV import is cancelled.**
 
 ## The earlier table, kept for its gates and details; the goal above decides the order
 
@@ -135,8 +135,8 @@ artefacts and answer questions. So:
 2. Message numbers: Dannan's first cutover registers Macha's store types at the numbers Dagda takes; nobody says who
    removes which at stage one.
 3. Adverts: `macha/capacity` and `macha/used` against `dagda/capacity`, `dagda/used`, `dagda/extents`.
-Also: the torrent section leaving the record at 8c changes the "dump identical" gate, and makes more than one space a
-Macha need, which moves part of L2 and L5 onto Macha's path, if Tom confirms that plan.
+Tom ruled it does not: torrent moves after all of the port work, so the "dump identical" gate stands and Macha has one
+space.
 
 **Macha 0.92.5 (`808fa0f`, the baseline now, live on both nodes):** a stale tombstone held in a batch is
 erased: the batch is dropped and the rest written again at its own retirement time, and a batch the
