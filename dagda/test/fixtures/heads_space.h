@@ -253,6 +253,7 @@ struct SpaceBed {
   SpaceSpec spec = neutral_spec();
   std::function<void(const Acceptance&, bool, const Record&)> accepted;
   std::function<uint64_t()> membership;
+  std::function<Record()> converge;
 
   std::unique_ptr<Space> open(const std::string& name = "space", bool pristine = true) {
     auto replica = bed.options(name);
@@ -270,6 +271,7 @@ struct SpaceBed {
     services.space = neutral_space();
     services.membership_stamp = membership;
     services.accepted = accepted;
+    services.converge = converge;
     auto named = spec;
     named.codec = bed.codec;
     return std::make_unique<Space>(std::move(named), std::move(replica), std::move(services));

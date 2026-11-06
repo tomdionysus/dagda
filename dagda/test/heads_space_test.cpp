@@ -227,6 +227,54 @@ TEST(HeadsCommit, ARetryKeepsItsDotAndAnAcceptedAttemptIsNotMadeTwice) {
   EXPECT_EQ(next.record.generation, 4U);
 }
 
+// The dot is kept whatever the next attempt finds: here its own commit has been set aside,
+// so the head it extends does not cover the dot, and it commits again under the same one
+// rather than reserve another (mgr:1693-1695).
+TEST(HeadsCommit, ARetryThatFindsItsDotUncoveredCommitsUnderTheSameDot) {
+  SpaceBed bed;
+  Space* holder = nullptr;
+  int publishes = 0;
+  bed.accepted = [&](const Acceptance& acceptance, bool, const Record&) {
+    if (!holder || publishes++ != 0) return;
+    EXPECT_TRUE(holder->set_aside(*holder->replica().historical(acceptance.hash), "as if it could not be merged"));
+    throw HeadsNotReady("interrupted after acceptance");
+  };
+  auto space = bed.open();
+  bed.found(*space);
+  const auto base = space->replica().committed();
+  auto other = *NeutralCodec::as_head(space->converged().state);
+  auto sibling = other;
+  other.clock[author(2)] = 1;
+  commit_record(space->replica(), record_after(base, neutral_payload(other)));
+  sibling.clock[author(3)] = 1;
+  commit_record(space->replica(), record_after(base, neutral_payload(sibling)));
+  holder = space.get();
+  std::vector<Dot> dots;
+  const auto outcome = space->mutate_delta(neutral_mutation([&](NeutralEditing& editing) { dots.push_back(editing.context.dot); }));
+  ASSERT_EQ(dots.size(), 2U);
+  EXPECT_EQ(dots[0], dots[1]);
+  EXPECT_EQ(outcome.kind, CommitOutcome::Kind::committed);
+  EXPECT_EQ(outcome.attempts, 2U);
+  EXPECT_EQ(outcome.dot, dots[1]);
+}
+
+// R10, D3: a corrupt author.meta throws out of the reservation, and every mutation with
+// it: Macha has no recovery, while reads go on.
+TEST(HeadsCommit, ACorruptAuthorRecordStopsMutationsAndNotReads) {
+  SpaceBed bed;
+  Record head;
+  {
+    auto space = bed.open();
+    bed.found(*space);
+    head = space->mutate_delta(neutral_mutation([](NeutralEditing&) {})).record;
+  }
+  test::flip_byte_at(bed.bed.path() / "author.meta", 20);
+  auto space = bed.open();
+  EXPECT_ANY_THROW(space->mutate_delta(neutral_mutation([](NeutralEditing&) {})));
+  EXPECT_EQ(space->replica().committed().hash, head.hash);
+  EXPECT_EQ(space->local().hash, head.hash);
+}
+
 TEST(HeadsCommit, RetriesSpentRaiseWhatInterruptedThem) {
   SpaceBed bed;
   bool interrupt = true;
@@ -854,6 +902,27 @@ TEST(HeadsSpace, AReadClearsASetAsideOnceTheMembershipMoves) {
   membership = 2;
   EXPECT_EQ(space->usable_heads().size(), 2U);
   EXPECT_EQ(space->replica().set_aside_generation(), 0U);
+}
+
+// A stop from what a read stands on goes through it: it is not a failure to serve from
+// this node's own head instead (mgr:1492-1507 catches everything else).
+TEST(HeadsSpace, AStopInAReadPassesThroughItsFallback) {
+  SpaceBed bed;
+  bool stop = false;
+  bed.converge = [&]() -> Record {
+    if (stop) throw contract::MaintenanceStopping();
+    throw HeadsNotReady("no peer answered");
+  };
+  auto space = bed.open();
+  bed.found(*space);
+  // Any other failure serves this node's own head.
+  EXPECT_EQ(space->converged().generation, 2U);
+  (void)space->replica().committed();
+  auto next = *NeutralCodec::as_head(space->converged().state);
+  next.clock[author(2)] = 1;
+  commit_record(space->replica(), record_after(space->replica().committed(), neutral_payload(next)));
+  stop = true;
+  EXPECT_THROW((void)space->converged(), contract::MaintenanceStopping);
 }
 
 // R6: a read may commit a policy (mgr:1483), and it carries no dot (R2: C37 is S5's, with

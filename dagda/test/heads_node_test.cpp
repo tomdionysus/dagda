@@ -285,12 +285,17 @@ TEST(NodeHeads, TheContractCompletesOnTheCallersExecutorAndByTheDeadline) {
   boost::asio::io_context executor;
   const auto keep_running = boost::asio::make_work_guard(executor);
   std::optional<MutationEvidence> evidence;
+  std::thread::id completed_on;
   heads.mutate_delta(id, neutral_mutation([](NeutralEditing& editing) { editing.set_note("k", "v"); }), deadline, executor.get_executor(),
-                     [&](MutationEvidence got) { evidence = std::move(got); });
+                     [&](MutationEvidence got) {
+                       completed_on = std::this_thread::get_id();
+                       evidence = std::move(got);
+                     });
   // Not answered until the executor runs it, here on this thread.
   EXPECT_FALSE(evidence);
   for (int i = 0; i < 2000 && !evidence; ++i) (void)executor.run_one_for(10ms);
   ASSERT_TRUE(evidence);
+  EXPECT_EQ(completed_on, std::this_thread::get_id());
   ASSERT_TRUE(evidence->finished) << evidence->why;
   EXPECT_EQ(evidence->outcome->kind, CommitOutcome::Kind::committed);
   EXPECT_EQ(evidence->outcome->record.generation, 3U);
@@ -498,8 +503,18 @@ TEST(NodeHeads, ARestartReplaysThroughTheControlStoreAndTheSeedRecovers) {
   const auto directory = heads::space_directory(a.state(), id);
   const auto seed_file = a.options().cache.path / "metadata" / (dannan::identity::hex(id.bytes) + ".meta");
   EXPECT_TRUE(std::filesystem::exists(seed_file));
-
-  a.restart();
+  // Each commit that moves the committed record is remembered as it happens.
+  heads::CacheSeed seed(a.cache(), a.dagda_node().options().key, a.dagda_node().options().domain.id, test::neutral_seed_magic, test::quiet_logger());
+  const auto remembered = seed.load(id);
+  ASSERT_TRUE(remembered);
+  EXPECT_EQ(remembered->hash, head.hash);
+  const auto seeded = std::filesystem::last_write_time(seed_file);
+  a.stop();
+  // Written at open from the committed record, as well as on each commit that moves it.
+  std::filesystem::remove(seed_file);
+  a.start();
+  EXPECT_TRUE(std::filesystem::exists(seed_file));
+  EXPECT_GE(std::filesystem::last_write_time(seed_file), seeded);
   {
     auto& reopened = space_on(a);
     EXPECT_EQ(reopened.replica().committed().hash, head.hash);
