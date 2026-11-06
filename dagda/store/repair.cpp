@@ -8,6 +8,7 @@
 #include "dagda/store/repair.h"
 
 #include <algorithm>
+#include <string>
 
 #include "dannan/contract/thread_safety.h"
 
@@ -19,10 +20,19 @@ using dannan::contract::TimePoint;
 // claimed object, which may be fetched, needs an extent of credit.
 class Repair::Restorer final : public ledger::ClaimRestorer {
  public:
-  Restorer(DistributedStore& store, double& credit, uint64_t extent) : _store(store), _credit(credit), _extent(extent) {}
+  Restorer(DistributedStore& store, double& credit, uint64_t extent, const RepairTrace& trace)
+      : _store(store), _credit(credit), _extent(extent), _trace(trace) {}
   Outcome restore(contract::RetentionClass type, const ObjectId& id) override {
-    if (_credit < static_cast<double>(_extent)) return Outcome::waiting_for_credit;
+    const std::string walked = std::string(type == contract::RetentionClass::data ? "data " : "control ") + to_string(id);
+    const auto trace = [&](const char* outcome) {
+      if (_trace) _trace("claim-walk", walked + " " + outcome);
+    };
+    if (_credit < static_cast<double>(_extent)) {
+      trace("waiting-for-credit");
+      return Outcome::waiting_for_credit;
+    }
     const bool restored = type == contract::RetentionClass::data ? _store.ensure_local(id, false) : _store.ensure_control_local(id);
+    trace(restored ? "restored" : "not-restored");
     if (!restored) return Outcome::not_restored;
     _credit = std::max(0.0, _credit - static_cast<double>(_extent));
     return Outcome::restored;
@@ -32,6 +42,7 @@ class Repair::Restorer final : public ledger::ClaimRestorer {
   DistributedStore& _store;
   double& _credit;
   const uint64_t _extent;
+  const RepairTrace& _trace;
 };
 
 // A throw from either stage must still close the turn, or the share counts it
@@ -141,7 +152,7 @@ Repair::Turn Repair::begin_turn(TimePoint now, uint8_t paced, PeerReading readin
 RepairWalks Repair::claim_walks(Turn&) {
   RepairWalks out;
   const auto extent = std::max<uint64_t>(1, _options.extent_size);
-  Restorer restorer(_store, _credit, extent);
+  Restorer restorer(_store, _credit, extent, _options.trace);
   for (auto* walk : {&_data_walk, &_control_walk}) {
     const auto step = walk->step(_ledger, restorer);
     out.examined += step.examined;

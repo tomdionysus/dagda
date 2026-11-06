@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <string_view>
 
 #include "dagda/contract/object_ledger.h"
 #include "dagda/ledger/claim_walk.h"
@@ -26,6 +27,11 @@
 #include "dannan/sched/duty_share.h"
 
 namespace dagda::store {
+
+// The decision trace: `kind` names what was decided and `detail` how,
+// deterministically. Macha's kinds and words ("claim-walk", "data <id>
+// restored").
+using RepairTrace = std::function<void(std::string_view kind, std::string_view detail)>;
 
 // Macha's maintenance figures that pace repair (config.hpp
 // MaintenanceConfig), with its defaults.
@@ -60,6 +66,8 @@ struct RepairOptions {
   // pass on its own clock gives it, as Macha's trace fixtures move its pass's
   // time while reachability stays on real time.
   const dannan::contract::TimeSource* time = nullptr;
+  // The claim walk's restorer reports each missing claim here.
+  RepairTrace trace;
 };
 
 // Why a pass's repair did or did not run: it ran; a higher class held it to
@@ -209,7 +217,8 @@ class Repair {
   [[nodiscard]] Turn begin_turn(dannan::contract::TimePoint now, uint8_t paced, PeerReading reading = PeerReading::each_time);
 
   // One bounded step of the DATA claim walk, then one of the CONTROL walk, a
-  // missing claim spending an extent of credit. Runs to its bound: nothing here looks at a stop.
+  // missing claim spending an extent of credit and traced through
+  // RepairOptions::trace. Runs to its bound: nothing here looks at a stop.
   static constexpr dannan::sched::Waits claim_walks_waits =
       dannan::sched::Waits::state_device | dannan::sched::Waits::data_device | dannan::sched::Waits::network | dannan::sched::Waits::locks;
   RepairWalks claim_walks(Turn& turn);
