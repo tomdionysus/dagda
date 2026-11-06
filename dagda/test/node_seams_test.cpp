@@ -17,8 +17,11 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
+#include <vector>
 
+#include "dagda/contract/stopping.h"
 #include "dagda/domain/wrap.h"
 #include "dagda/node.h"
 #include "dagda/store/messages.h"
@@ -166,6 +169,140 @@ TEST(NodeSeams, TheLocalStagesRunOnThePassesClocks) {
   EXPECT_FALSE(node.run_maintenance_once().local.scrub_ran);
   wall.advance(std::chrono::hours(2));
   EXPECT_TRUE(node.run_maintenance_once().local.scrub_ran);
+}
+
+// A packed node with dead bytes for the compaction to reclaim.
+class LocalStagesBed : public testing::Test {
+ protected:
+  void SetUp() override {
+    ClusterNodeOptions options;
+    options.packed = true;
+    options.pack_target_size = 256 * 1024;
+    options.repair.initial_bandwidth = 1ULL << 42;
+    options.maintenance.time = &time;
+    node = &cluster.add("node", options);
+    cluster.start_all();
+    std::vector<store::ObjectId> dead;
+    for (uint64_t n = 0; n < 128; ++n) {
+      const auto bytes = test::pattern(16 * 1024 + n, static_cast<uint8_t>(n));
+      const auto id = store::object_id(bytes);
+      ASSERT_TRUE(node->data().put(id, bytes));
+      if (n % 2 == 0) dead.push_back(id);
+    }
+    (void)node->data().reassert_durable(dead.back());
+    for (const auto& id : dead) ASSERT_TRUE(node->data().remove(id));
+    used = node->data().used();
+  }
+  Node& dagda() { return node->dagda_node(); }
+
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  ClusterNode* node = nullptr;
+  uint64_t used = 0;
+};
+
+// Macha's compact_packs(stop) through the composite: the stop comes out as
+// MaintenanceStopping, past the catch that logs a failed stage, and nothing was
+// compacted. Without a stop the composite behaves as it did.
+TEST_F(LocalStagesBed, TheCompositeTakesTheStopAndNothingSwallowsIt) {
+  std::stop_source stop;
+  stop.request_stop();
+  EXPECT_THROW((void)dagda().run_local_stages(stop.get_token()), contract::MaintenanceStopping);
+  EXPECT_EQ(node->data().used(), used);
+  const auto stages = dagda().run_local_stages();
+  EXPECT_TRUE(stages.packs_ran);
+  EXPECT_GT(stages.packs_compacted, 0u);
+  EXPECT_LT(node->data().used(), used);
+}
+
+// A stop after the turn began reaches the stage on its own, and each stage throws
+// it whichever it is.
+TEST_F(LocalStagesBed, EachStageThrowsTheStop) {
+  const std::vector<std::function<void(LocalTurn&)>> stages{
+      [&](LocalTurn& turn) { dagda().local_rebalance(turn); }, [&](LocalTurn& turn) { dagda().retention_compact(turn); },
+      [&](LocalTurn& turn) { dagda().compact_packs(turn); },   [&](LocalTurn& turn) { dagda().local_scrub(turn); },
+      [&](LocalTurn& turn) { dagda().ledger_verify(turn); },
+  };
+  for (size_t index = 0; index < stages.size(); ++index) {
+    SCOPED_TRACE(index);
+    std::stop_source stop;
+    LocalTurnOptions options;
+    options.stop = stop.get_token();
+    auto turn = dagda().begin_local_stages(options);
+    stop.request_stop();
+    EXPECT_THROW(stages[index](turn), contract::MaintenanceStopping);
+  }
+  EXPECT_EQ(node->data().used(), used);
+}
+
+// Macha's order is reachable: each stage does its own work and no other's, and
+// what falls between them can take the node's own locks, as head repair and history
+// truncation between the claims' compaction and the packs' may.
+TEST_F(LocalStagesBed, TheStagesRunOneByOneWithAnOwnersBetweenThem) {
+  dannan::identity::NodeId origin;
+  origin.bytes.fill(7);
+  for (uint64_t n = 0; n < 4100; ++n) node->claims().retain(contract::RetentionClass::data, store::object_id(test::numbered(n)), {origin, n + 1});
+  LocalTurnOptions options;
+  options.when_no_time_passed = std::chrono::seconds(1);
+  auto turn = dagda().begin_local_stages(options);
+  EXPECT_FALSE(turn.busy);
+
+  dagda().local_rebalance(turn);
+  EXPECT_TRUE(turn.stages.rebalance_ran);
+  EXPECT_FALSE(turn.stages.retention_ran);
+  dagda().retention_compact(turn);
+  EXPECT_TRUE(turn.stages.retention_compacted);
+  EXPECT_FALSE(turn.stages.packs_ran);
+  EXPECT_EQ(node->data().used(), used);
+
+  test::TestProvider owner;
+  dagda().register_reachability(domain::domain_v1, owner);
+  dagda().unregister_reachability(domain::domain_v1);
+
+  dagda().compact_packs(turn);
+  EXPECT_TRUE(turn.stages.packs_ran);
+  EXPECT_LT(node->data().used(), used);
+  EXPECT_FALSE(turn.stages.verify_ran);
+  dagda().local_scrub(turn);
+  EXPECT_FALSE(turn.stages.scrub_ran);
+  dagda().ledger_verify(turn);
+  EXPECT_TRUE(turn.stages.verify_ran);
+}
+
+// Each behind its gate: the node's activity holds them, and an owner's pass that
+// has decided for itself is taken at its word.
+TEST_F(LocalStagesBed, TheStagesKeepTheirGates) {
+  dagda().activity().note(dannan::sched::FrameType::foreground, 64 * 1024);
+  auto held = dagda().begin_local_stages();
+  EXPECT_TRUE(held.busy);
+  dagda().local_rebalance(held);
+  dagda().retention_compact(held);
+  dagda().compact_packs(held);
+  dagda().local_scrub(held);
+  EXPECT_FALSE(held.stages.rebalance_ran);
+  EXPECT_FALSE(held.stages.retention_ran);
+  EXPECT_FALSE(held.stages.packs_ran);
+  EXPECT_FALSE(held.stages.scrub_ran);
+  EXPECT_EQ(node->data().used(), used);
+
+  LocalTurnOptions idle;
+  idle.busy = false;
+  auto taken = dagda().begin_local_stages(idle);
+  EXPECT_FALSE(taken.busy);
+  dagda().compact_packs(taken);
+  EXPECT_TRUE(taken.stages.packs_ran);
+}
+
+// Macha earns a whole interval when no time has passed; the composite earns nothing.
+TEST_F(LocalStagesBed, CreditEarnsAnIntervalOnlyWhenAsked) {
+  auto first = dagda().begin_local_stages();
+  dagda().local_rebalance(first);
+  EXPECT_FALSE(first.stages.rebalance_ran);
+  LocalTurnOptions options;
+  options.when_no_time_passed = std::chrono::seconds(1);
+  auto second = dagda().begin_local_stages(options);
+  dagda().local_rebalance(second);
+  EXPECT_TRUE(second.stages.rebalance_ran);
 }
 
 }  // namespace

@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -131,6 +132,30 @@ struct LocalStages {
   store::StoragePool::MaintenanceResult scrub;
   bool verify_ran = false;
   store::LocalStore::VerifyResult verify;
+};
+
+// What begins a pass's local stages, for an owner running them one by one.
+struct LocalTurnOptions {
+  // Macha's stop: a stage it reaches throws contract::MaintenanceStopping.
+  std::stop_token stop;
+  // Whether a higher class is present, when the owner's pass has decided. None: the
+  // node's activity clocks say.
+  std::optional<bool> busy;
+  // What to earn for when no time has passed, as Macha's pass earns a whole
+  // interval (maintenance.cpp:388-390). None earns nothing.
+  std::optional<std::chrono::milliseconds> when_no_time_passed;
+};
+
+// One pass's local stages: what begin_local_stages() decided, and in `stages`
+// what the stages run on it did.
+struct LocalTurn {
+  bool forced = false;
+  bool busy = false;
+  bool scrub_due = false;
+  dannan::contract::TimePoint now{};
+  uint64_t wall_ms = 0;
+  std::stop_token stop;
+  LocalStages stages;
 };
 
 // The verify's credit in directories after `seconds` more (Macha's rate).
@@ -331,8 +356,30 @@ class Node {
   // its day's rest.
   MaintenanceReport run_maintenance_once();
   // One pass of the local stages as the thread runs them: credit earned since
-  // the last, and held by activity. Serialised with the thread's passes.
-  LocalStages run_local_stages();
+  // the last, and held by activity. Serialised with the thread's passes. A failed
+  // stage is logged and ends the pass's stages; `stop`, once requested, throws
+  // contract::MaintenanceStopping out of the stage it reaches, and nothing here
+  // catches that.
+  static constexpr dannan::sched::Waits local_stage_waits =
+      dannan::sched::Waits::state_device | dannan::sched::Waits::data_device | dannan::sched::Waits::locks;
+  LocalStages run_local_stages(std::stop_token stop = {});
+
+  // The same stages one at a time, so an owner's pass can put its own between them
+  // in its own order, as Macha's puts head repair and history truncation between
+  // the claims' compaction and pack compaction (maintenance.cpp:1098-1225):
+  // begin_local_stages() earns the credit, then local_rebalance(),
+  // retention_compact(), compact_packs(), local_scrub() and ledger_verify(), each
+  // behind its gate as run_local_stages() has it. Each serialises with the thread's
+  // passes for its own length only, so what falls between them may take the node's
+  // locks. Unlike run_local_stages(), each throws what its stage throws. A stage
+  // looks at the turn's stop as it starts and, where the work can be cut short by
+  // it, as it ends, and throws contract::MaintenanceStopping, having counted what it did.
+  LocalTurn begin_local_stages(const LocalTurnOptions& options = {});
+  void local_rebalance(LocalTurn& turn);
+  void retention_compact(LocalTurn& turn);
+  void compact_packs(LocalTurn& turn);
+  void local_scrub(LocalTurn& turn);
+  void ledger_verify(LocalTurn& turn);
 
   // Takes `reload` now: a new backend is locked and opened, a removed one goes
   // offline and its lock with it, a changed limit reopens one, and the cache
@@ -394,12 +441,21 @@ class Node {
   // with nothing deferred, or nothing to run.
   bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
   bool higher_class_active() const;
+  // What rebalance and the scrub yield to within their slice.
+  std::function<bool()> local_yield(const LocalTurn& turn) const;
   // The clocks a pass runs on (MaintenanceOptions::time and wall).
   const dannan::contract::TimeSource& pass_time() const;
   const dannan::contract::WallClock& pass_wall() const;
   // The local stages, in Macha's order. `forced` as run_maintenance_once says.
-  // Throws nothing: a failed stage is logged and the next pass tries again.
+  // Throws only the stop: a failed stage is logged and the next pass tries again.
   LocalStages local_stages_locked(bool forced, std::stop_token stop) DANNAN_REQUIRES(_maintenance_mutex);
+  LocalTurn begin_local_locked(bool forced, const LocalTurnOptions& options) DANNAN_REQUIRES(_maintenance_mutex);
+  void local_rebalance_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void retention_compact_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void compact_packs_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void local_scrub_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void ledger_verify_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
+  void note_local(const std::function<void(LocalFigures&)>& change);
   void persist_scrub_due() DANNAN_REQUIRES(_maintenance_mutex);
 
   dannan::Context& _context;
