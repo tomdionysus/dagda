@@ -3,6 +3,18 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: the node's seams for Macha's loop (`feature/node-seams`)
+
+`Node::run_local_stages(stop)` throws `MaintenanceStopping` past its catch; `begin_local_stages`, `local_rebalance`, `retention_compact`,
+`compact_packs`, `local_scrub`, `ledger_verify` are the same stages one by one, holding the node's lock each for its own length. `collector()`,
+`data_sightings()`, `control_sightings()` hand an owner's pass the node's own (automatic off). `MaintenanceOptions::time`, `wall` and `trace`
+put the pass, the survey (`AvailabilityOptions::time`), repair, the collector and the activity clocks on the owner's clocks and one hook.
+`maintenance_steps_test.cpp`'s bed moved onto all of it, its `availability.share = 0` gone; all seven fixtures unchanged. B6's observations and
+slow-stage lines are recorded in the steps, and about 35 figures added under `dagda.*`, `repair.last_credit_bytes` among them.
+`AdmissionOptions::device_pressure` is Macha's `dht.io_pressure_*`, zero turning the gate off. A node with custody and no certificate now opens
+and advertises no wrap key. Left: `cluster_stable` and `dagda.gc.*` under an owner's steps; custody is still required. Not run under GCC.
+Gate: `dagda_tests` 648 passing, 3 disabled, three whole runs on the Mac (627 at the start).
+
 ## 2026-11-06: the steps Macha's loop needs (`feature/maintenance-steps`)
 
 `Collector::pass` is `inventory_step`, `tombstone_step`, `release_step`, `control_step`, `data_step`; `Repair::pass` is
