@@ -1369,7 +1369,8 @@ TEST(StoreRepair, APromptCopyReadsWithoutCreditWhenTheNodeSaysSo) {
   ASSERT_TRUE(a.store().put_here(id, bytes));
   EXPECT_TRUE(wait_until([&] { return b.data().has(id); }));
   EXPECT_EQ(credit.stats().speculative_waits, 0u);
-  EXPECT_EQ(a.store().prompt_replication_stats().copies, 1u);
+  // Counted once the peer's answer is back, which is after the peer holds it.
+  EXPECT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().copies == 1; }));
 }
 
 // Dagda's default for a node that is not Macha's: the read is admitted as other
