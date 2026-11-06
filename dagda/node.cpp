@@ -56,6 +56,10 @@ const char* gate_name(store::RepairGate gate) noexcept {
 // add "metadata" at step 4).
 std::vector<std::string> readiness_planes() { return {plane_data, plane_control, plane_cache, plane_retention}; }
 
+void throw_if_stopped(const LocalTurn& turn) {
+  if (turn.stop.stop_requested()) throw contract::MaintenanceStopping{};
+}
+
 }  // namespace
 
 // The status timer's hold on the node, so a timer that fires as the node
@@ -405,6 +409,10 @@ const dannan::contract::TimeSource& Node::pass_time() const { return _options.ma
 
 const dannan::contract::WallClock& Node::pass_wall() const { return _options.maintenance.wall ? *_options.maintenance.wall : *_options.wall; }
 
+std::function<bool()> Node::local_yield(const LocalTurn& turn) const {
+  return [this, forced = turn.forced, stop = turn.stop] { return stop.stop_requested() || (!forced && higher_class_active()); };
+}
+
 bool Node::higher_class_active() const {
   auto& activity = *_activity;
   const auto quiet = _options.repair.foreground_quiet;
@@ -527,120 +535,188 @@ void Node::persist_scrub_due() {
   }
 }
 
-LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
-  LocalStages out;
-  const auto now = pass_time().now();
-  const double seconds = _local_at ? std::max(0.0, std::chrono::duration<double>(now - *_local_at).count()) : 0.0;
-  _local_at = now;
-  const bool busy = !forced && higher_class_active();
+void Node::note_local(const std::function<void(LocalFigures&)>& change) {
+  dannan::contract::Lock lock(_gc_figures_mutex);
+  change(_local_figures);
+}
+
+LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options) {
+  LocalTurn turn;
+  turn.forced = forced;
+  turn.stop = options.stop;
+  turn.now = pass_time().now();
+  double seconds = _local_at ? std::max(0.0, std::chrono::duration<double>(turn.now - *_local_at).count()) : 0.0;
+  _local_at = turn.now;
+  if (seconds <= 0.0 && options.when_no_time_passed) seconds = std::chrono::duration<double>(*options.when_no_time_passed).count();
+  turn.busy = !forced && options.busy.value_or(higher_class_active());
   const auto& policy = _options.maintenance;
 
   double bandwidth = _store->estimated_network_bps();
   if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.repair.initial_bandwidth);
   if (_options.repair.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.repair.max_bandwidth));
-  const double rate = bandwidth * (busy ? policy.busy_bandwidth_fraction : policy.idle_bandwidth_fraction) * _local_cpu->scale(seconds, policy.cpu_target);
+  const double rate = bandwidth * (turn.busy ? policy.busy_bandwidth_fraction : policy.idle_bandwidth_fraction) * _local_cpu->scale(seconds, policy.cpu_target);
   const double extent = static_cast<double>(_options.store.extent_size);
   const double burst = std::max(extent, bandwidth * 5.0);
   _local_credit = forced ? burst : std::min(burst, _local_credit + rate * seconds);
-  const auto wall_ms = pass_wall().unix_ms();
-  const bool scrub_due = policy.scrub_fraction > 0.0 && wall_ms >= _scrub_due_unix_ms;
+  turn.wall_ms = pass_wall().unix_ms();
+  turn.scrub_due = policy.scrub_fraction > 0.0 && turn.wall_ms >= _scrub_due_unix_ms;
   // Outside a campaign nothing is banked, so a due date is not a burst.
-  if (!scrub_due)
+  if (!turn.scrub_due)
     _scrub_credit = 0.0;
   else
     _scrub_credit = forced ? burst : std::min(burst, _scrub_credit + rate * policy.scrub_fraction * seconds);
+  return turn;
+}
 
-  const auto should_yield = [this, forced, stop] { return stop.stop_requested() || (!forced && higher_class_active()); };
-  LocalFigures added;
+void Node::local_rebalance_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  auto& out = turn.stages;
+  const auto events = _context.events().total();
+  if (_local_quiescent_events && *_local_quiescent_events != events) _local_quiescent_events.reset();
+  if (turn.busy || _local_quiescent_events || _local_credit < static_cast<double>(_options.store.extent_size)) return;
+  out.rebalance_ran = true;
+  out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, local_yield(turn));
+  if (out.rebalance.bytes) _local_credit = std::max(0.0, _local_credit - static_cast<double>(out.rebalance.bytes));
+  note_local([&](LocalFigures& figures) {
+    figures.rebalance_objects += out.rebalance.objects;
+    figures.rebalance_bytes += out.rebalance.bytes;
+  });
+  if (!out.rebalance.yielded && out.rebalance.complete && !out.rebalance.bytes) {
+    _local_credit = 0.0;
+    _local_quiescent_events = events;
+  }
+  throw_if_stopped(turn);
+}
+
+void Node::retention_compact_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  // Only here, so a foreground claim never pays for the rewrite.
+  if (turn.busy) return;
+  auto& out = turn.stages;
+  out.retention_ran = true;
+  out.retention_compacted = _claims->compact_if_needed(4096);
+  note_local([&](LocalFigures& figures) { figures.retention_compactions += out.retention_compacted ? 1 : 0; });
+}
+
+void Node::compact_packs_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  if (turn.busy) return;
+  auto& out = turn.stages;
+  out.packs_ran = true;
+  out.packs_compacted = _data->compact_packs(turn.stop);
+  note_local([&](LocalFigures& figures) { figures.packs_compacted += out.packs_compacted; });
+  throw_if_stopped(turn);
+}
+
+void Node::local_scrub_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  if (turn.busy || !turn.scrub_due || _scrub_credit < static_cast<double>(_options.store.extent_size)) return;
+  auto& out = turn.stages;
+  out.scrub_ran = true;
+  out.scrub = _data->scrub_step(static_cast<uint64_t>(_scrub_credit), 64, local_yield(turn));
+  if (out.scrub.bytes) _scrub_credit = std::max(0.0, _scrub_credit - static_cast<double>(out.scrub.bytes));
+  const bool finished = !out.scrub.yielded && out.scrub.complete;
+  if (finished) {
+    _scrub_credit = 0.0;
+    _scrub_due_unix_ms = turn.wall_ms + static_cast<uint64_t>(std::max<int64_t>(1, _options.maintenance.scrub_interval.count()));
+    persist_scrub_due();
+  }
+  note_local([&, due = _scrub_due_unix_ms](LocalFigures& figures) {
+    figures.scrub_objects += out.scrub.objects;
+    figures.scrub_bytes += out.scrub.bytes;
+    figures.scrub_campaigns += finished ? 1 : 0;
+    figures.scrub_due_unix_ms = due;
+  });
+  throw_if_stopped(turn);
+}
+
+void Node::ledger_verify_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  if (turn.now < _verify_due) return;
+  const double since = _verify_at ? std::max(0.0, std::chrono::duration<double>(turn.now - *_verify_at).count()) : 1.0;
+  _verify_at = turn.now;
+  _verify_credit = turn.forced ? 65536.0 : ledger_verify_credit(_verify_credit, since, turn.busy);
+  const auto directories = static_cast<size_t>(_verify_credit);
+  if (!directories) return;
+  _verify_credit -= static_cast<double>(directories);
+  auto& out = turn.stages;
+  out.verify_ran = true;
+  const auto data = _data->verify_step(directories);
+  const auto control = _control->verify_step(directories);
+  out.verify.directories = data.directories + control.directories;
+  out.verify.recorded = data.recorded + control.recorded;
+  out.verify.lost = data.lost + control.lost;
+  out.verify.complete = data.complete && control.complete;
+  auto& observations = _context.observations();
+  observations.add("ledger.verify.directories", directories);
+  observations.add("ledger.verify.recorded", out.verify.recorded);
+  observations.add("ledger.verify.lost", out.verify.lost);
+  if (out.verify.complete) {
+    _verify_due = turn.now + std::chrono::hours(24);
+    _verify_at.reset();
+    _logger.info("storage held ledgers verified against the disk");
+  }
+  note_local([&](LocalFigures& figures) {
+    figures.verify_directories += directories;
+    figures.verify_recorded += out.verify.recorded;
+    figures.verify_lost += out.verify.lost;
+    figures.verify_passes += out.verify.complete ? 1 : 0;
+  });
+}
+
+LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
+  LocalTurnOptions options;
+  options.stop = stop;
+  auto turn = begin_local_locked(forced, options);
   try {
-    const auto events = _context.events().total();
-    if (_local_quiescent_events && *_local_quiescent_events != events) _local_quiescent_events.reset();
-    if (!busy && !_local_quiescent_events && _local_credit >= extent) {
-      out.rebalance_ran = true;
-      out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, should_yield);
-      if (out.rebalance.bytes) _local_credit = std::max(0.0, _local_credit - static_cast<double>(out.rebalance.bytes));
-      added.rebalance_objects = out.rebalance.objects;
-      added.rebalance_bytes = out.rebalance.bytes;
-      if (!out.rebalance.yielded && out.rebalance.complete && !out.rebalance.bytes) {
-        _local_credit = 0.0;
-        _local_quiescent_events = events;
-      }
-    }
-    // Only here, so a foreground claim never pays for the rewrite.
-    if (!busy) {
-      out.retention_ran = true;
-      out.retention_compacted = _claims->compact_if_needed(4096);
-      added.retention_compactions = out.retention_compacted ? 1 : 0;
-      out.packs_ran = true;
-      out.packs_compacted = _data->compact_packs(stop);
-      added.packs_compacted = out.packs_compacted;
-    }
-    if (!busy && scrub_due && _scrub_credit >= extent) {
-      out.scrub_ran = true;
-      out.scrub = _data->scrub_step(static_cast<uint64_t>(_scrub_credit), 64, should_yield);
-      added.scrub_objects = out.scrub.objects;
-      added.scrub_bytes = out.scrub.bytes;
-      if (out.scrub.bytes) _scrub_credit = std::max(0.0, _scrub_credit - static_cast<double>(out.scrub.bytes));
-      if (!out.scrub.yielded && out.scrub.complete) {
-        _scrub_credit = 0.0;
-        _scrub_due_unix_ms = wall_ms + static_cast<uint64_t>(std::max<int64_t>(1, policy.scrub_interval.count()));
-        persist_scrub_due();
-        added.scrub_campaigns = 1;
-      }
-    }
-    if (now >= _verify_due) {
-      const double since = _verify_at ? std::max(0.0, std::chrono::duration<double>(now - *_verify_at).count()) : 1.0;
-      _verify_at = now;
-      _verify_credit = forced ? 65536.0 : ledger_verify_credit(_verify_credit, since, busy);
-      const auto directories = static_cast<size_t>(_verify_credit);
-      if (directories) {
-        _verify_credit -= static_cast<double>(directories);
-        out.verify_ran = true;
-        const auto data = _data->verify_step(directories);
-        const auto control = _control->verify_step(directories);
-        out.verify.directories = data.directories + control.directories;
-        out.verify.recorded = data.recorded + control.recorded;
-        out.verify.lost = data.lost + control.lost;
-        out.verify.complete = data.complete && control.complete;
-        added.verify_directories = directories;
-        added.verify_recorded = out.verify.recorded;
-        added.verify_lost = out.verify.lost;
-        auto& observations = _context.observations();
-        observations.add("ledger.verify.directories", directories);
-        observations.add("ledger.verify.recorded", out.verify.recorded);
-        observations.add("ledger.verify.lost", out.verify.lost);
-        if (out.verify.complete) {
-          _verify_due = now + std::chrono::hours(24);
-          _verify_at.reset();
-          added.verify_passes = 1;
-          _logger.info("storage held ledgers verified against the disk");
-        }
-      }
-    }
+    local_rebalance_locked(turn);
+    retention_compact_locked(turn);
+    compact_packs_locked(turn);
+    local_scrub_locked(turn);
+    ledger_verify_locked(turn);
+  } catch (const contract::MaintenanceStopping&) {
+    throw;
   } catch (const std::exception& error) {
     _logger.debug(std::string("local maintenance: ") + error.what());
   }
-  dannan::contract::Lock lock(_gc_figures_mutex);
-  auto& figures = _local_figures;
-  figures.rebalance_objects += added.rebalance_objects;
-  figures.rebalance_bytes += added.rebalance_bytes;
-  figures.retention_compactions += added.retention_compactions;
-  figures.packs_compacted += added.packs_compacted;
-  figures.scrub_objects += added.scrub_objects;
-  figures.scrub_bytes += added.scrub_bytes;
-  figures.scrub_campaigns += added.scrub_campaigns;
-  figures.scrub_due_unix_ms = _scrub_due_unix_ms;
-  figures.verify_directories += added.verify_directories;
-  figures.verify_recorded += added.verify_recorded;
-  figures.verify_lost += added.verify_lost;
-  figures.verify_passes += added.verify_passes;
-  return out;
+  return std::move(turn.stages);
 }
 
-LocalStages Node::run_local_stages() {
+LocalStages Node::run_local_stages(std::stop_token stop) {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (!_repair) return {};
-  return local_stages_locked(false, {});
+  return local_stages_locked(false, stop);
+}
+
+LocalTurn Node::begin_local_stages(const LocalTurnOptions& options) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_repair) return {};
+  return begin_local_locked(false, options);
+}
+
+void Node::local_rebalance(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) local_rebalance_locked(turn);
+}
+
+void Node::retention_compact(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) retention_compact_locked(turn);
+}
+
+void Node::compact_packs(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) compact_packs_locked(turn);
+}
+
+void Node::local_scrub(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) local_scrub_locked(turn);
+}
+
+void Node::ledger_verify(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) ledger_verify_locked(turn);
 }
 
 MaintenanceReport Node::run_maintenance_once() {
@@ -684,7 +760,11 @@ void Node::maintenance_loop(std::stop_token stop) {
         } catch (const std::exception& error) {
           _logger.debug(std::string("repair pass: ") + error.what());
         }
-        (void)local_stages_locked(false, stop);
+        try {
+          (void)local_stages_locked(false, stop);
+        } catch (const contract::MaintenanceStopping&) {
+          return;
+        }
         next_repair = now + interval;
       }
     }
