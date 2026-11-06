@@ -21,6 +21,7 @@ add_library(dagda SHARED
   heads/control_node_store.cpp
   heads/record.cpp
   heads/replica.cpp
+  heads/retirement.cpp
   heads/sealed_file.cpp
   heads/tree.cpp
   lease/fence.cpp

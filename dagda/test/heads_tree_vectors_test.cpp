@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "dagda/domain/storage_key.h"
+#include "dagda/heads/retirement.h"
 #include "dagda/heads/tree.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/store/local_format.h"
@@ -498,6 +499,28 @@ TEST(HeadsTreeState, EveryTreeNodeInTheSealedStoreIsMadeAgain) {
   EXPECT_EQ(leaves, 11u);
   EXPECT_EQ(branches, 8u);
   EXPECT_EQ(partial, 0u);
+}
+
+// H23 as bytes: the tombstone batch a real node wrote for a delete, in its sealed store,
+// opens under Macha's magic given as a parameter and is made again to its own id.
+TEST(HeadsTreeState, ARealRetirementBatchOpensAndIsMadeAgain) {
+  const auto root = macha_fixtures() / "state-scratch-0.93.4-delete/a/metadata-objects";
+  if (!std::filesystem::exists(root)) GTEST_SKIP() << "Macha's state-scratch-0.93.4-delete fixture is not here (DAGDA_MACHA_FIXTURES)";
+  constexpr Magic magic{'M', 'T', 'O', 'M', 'B', '0', '0', '1'};
+  size_t batches = 0;
+  for (const auto& [id, bytes] : open_sealed_store(root)) {
+    if (bytes.size() < magic.size() || !std::equal(magic.begin(), magic.end(), bytes.begin())) continue;
+    ++batches;
+    const auto content = decode_retirement_batch(magic, bytes);
+    EXPECT_GT(content.retired_at_ns, 0);
+    EXPECT_EQ(encode_retirement_batch(magic, content.retired_at_ns, content.ids), bytes);
+    MemoryTreeNodeStore written;
+    const auto batch = write_retirement_batch(written, magic, content.retired_at_ns, content.ids);
+    ASSERT_TRUE(batch);
+    EXPECT_EQ(hex(batch->id), hex(id));
+    EXPECT_EQ(batch->count, content.ids.size());
+  }
+  EXPECT_EQ(batches, 1u);
 }
 
 }  // namespace
