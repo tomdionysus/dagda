@@ -224,7 +224,8 @@ struct DistributedStoreOptions {
   size_t extent_size = 16 * 1024 * 1024;
   // A peer whose put has moved no byte for this long is spilled past.
   std::chrono::milliseconds write_stall{2500};
-  // A write's and a read's deadline when the caller names none.
+  // A write's and a read's deadline when the caller names none, from when the
+  // wait for this node's own credit is over.
   std::chrono::milliseconds write_deadline{60000};
   std::chrono::milliseconds read_deadline{60000};
   // How long a peer's put or fetch may run on past the write or read that

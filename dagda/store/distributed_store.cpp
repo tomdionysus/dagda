@@ -722,7 +722,11 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
 
 WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into) {
   _activity.note(options.frame, data.size());
-  const auto deadline = _time.now() + write_deadline_of(options);
+  // A deadline of the caller's runs from here. With none, no clock runs on the
+  // write while its local copy waits, as Macha's: that wait has the arbiter's
+  // window, and write_deadline starts when it is over.
+  const bool own_deadline = options.deadline.count() > 0;
+  auto deadline = _time.now() + write_deadline_of(options);
   // An ephemeral write runs in the background as the store's ordinary write.
   const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
   const bool deferred = options.deferred;
@@ -793,7 +797,6 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         // held across another node's answer.
         // A write with a deadline of its own keeps it; one with none waits as a
         // peer's server would, and fails in its words.
-        const bool own_deadline = options.deadline.count() > 0;
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - _time.now());
         const auto admitted =
             refusal ? std::nullopt
@@ -837,7 +840,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     run->calls[index].handle = std::move(handle);
   };
 
+  // This node, when it holds a copy, is first in order, and only its launch waits.
   for (size_t i = 0; i < initial; ++i) launch(order[i]);
+  if (!own_deadline) deadline = _time.now() + _options.write_deadline;
 
   size_t success = 0;
   {

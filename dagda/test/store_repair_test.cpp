@@ -1156,6 +1156,100 @@ TEST(StoreRepair, AStoreReadWithItsOwnDeadlineGivesUpAtIt) {
   EXPECT_EQ(credit.stats().no_progress_failures, 0u);
 }
 
+// src/cluster/distributed_store.cpp at Macha 9a08846, replicate (:305-312, :454-461):
+// no clock runs on a write while its local copy waits. A whole-window stall here
+// loses the local copy and the write is placed on a peer, however long that took.
+TEST(StoreRepair, AWriteAfterAWholeWindowStallHereLandsOnAPeer) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto stalls = waits_on_credit();
+  stalls.no_progress = 120s;
+  stalls.store.write_deadline = 60s;
+  stalls.time = &time;
+  auto& a = cluster.add("a", stalls);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 50);
+  const auto id = object_id(bytes);
+  auto& credit = *a.credit();
+  const auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  auto write = std::async(std::launch::async, [&] { return a.store().put(id, bytes); });
+  ASSERT_TRUE(wait_until([&] { return credit.stats().loader_waits + credit.stats().foreground_waits == 1; }));
+  time.advance(121s);
+  credit.time_advanced();
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  EXPECT_TRUE(write.get());
+  EXPECT_TRUE(b.data().has(id));
+  EXPECT_FALSE(a.data().has(id));
+  EXPECT_EQ(credit.stats().no_progress_failures, 1u);
+}
+
+// The same loop (:226-229, :346-351, :450-451): a write seeking two copies is not
+// out of time because its local admission was slow; the second copy still counts.
+TEST(StoreRepair, AWriteSeeksItsSecondCopyAfterASlowLocalAdmission) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto slow = options(2, 2, 8ULL * 1024 * 1024);
+  slow.device_reserve = false;
+  slow.no_progress = 120s;
+  slow.store.write_deadline = 60s;
+  slow.time = &time;
+  auto& a = cluster.add("a", slow);
+  auto peer = options(2, 2, 8ULL * 1024 * 1024);
+  peer.device_reserve = false;
+  auto& b = cluster.add("b", peer);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 51);
+  const auto id = object_id(bytes);
+  auto& credit = *a.credit();
+  auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  auto write = std::async(std::launch::async, [&] { return a.store().put(id, bytes); });
+  ASSERT_TRUE(wait_until([&] { return credit.stats().loader_waits + credit.stats().foreground_waits == 1; }));
+  // Past write_deadline, inside the window.
+  time.advance(61s);
+  credit.time_advanced();
+  EXPECT_EQ(write.wait_for(50ms), std::future_status::timeout);
+  full.reset();
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  EXPECT_TRUE(write.get());
+  EXPECT_TRUE(a.data().has(id));
+  EXPECT_TRUE(b.data().has(id));
+  EXPECT_EQ(credit.stats().no_progress_failures, 0u);
+}
+
+// A write with a deadline of its own keeps it across the local wait.
+TEST(StoreRepair, AWriteWithItsOwnDeadlineGivesUpAtIt) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto stalls = waits_on_credit();
+  stalls.no_progress = 120s;
+  stalls.time = &time;
+  auto& a = cluster.add("a", stalls);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 52);
+  const auto id = object_id(bytes);
+  auto& credit = *a.credit();
+  const auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  WriteOptions own;
+  own.deadline = 10s;
+  auto write = std::async(std::launch::async, [&] { return a.store().put(id, bytes, own); });
+  ASSERT_TRUE(wait_until([&] { return credit.stats().loader_waits + credit.stats().foreground_waits == 1; }));
+  time.advance(11s);
+  credit.time_advanced();
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  EXPECT_FALSE(write.get());
+  EXPECT_FALSE(b.data().has(id));
+  EXPECT_EQ(credit.stats().cancelled_waits, 1u);
+  EXPECT_EQ(credit.stats().no_progress_failures, 0u);
+}
+
 // test_min_write_floor_publishes_then_repair_converges_to_r2 (VALIDATION
 // "Placement and the write floor"): a write at a floor of one publishes on
 // the one node there is, and when a second owner joins, repair by diff
