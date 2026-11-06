@@ -42,7 +42,10 @@ add_library(dagda SHARED
   ledger/trie_diff.cpp
   ledger/trie_union.cpp
   ledger/unreferenced_since.cpp
+  migrate/compare.cpp
   migrate/legacy_v18.cpp
+  migrate/manifest.cpp
+  migrate/manifest_format.cpp
   migrate/migrate.cpp
   migrate/retag.cpp
   store/availability.cpp

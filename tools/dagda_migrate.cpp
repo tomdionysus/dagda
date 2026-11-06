@@ -26,6 +26,19 @@
 //
 // Exit 0 when the state is v19 (migrated now, or already); 1 when refused
 // or failed, the reason on stderr; 2 for a usage error.
+//
+// The proof that the data survived (dagda/migrate/manifest.h, docs/migration.md):
+//
+//   dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY [--backend DIR]...
+//                 [--control DIR] [--cache DIR] --write-manifest FILE [--resume]
+//   dagda-migrate --compare-before FILE --compare-after FILE [--expect-before 18] [--expect-after 19]
+//
+// --write-manifest reads the whole state and writes nothing under it, with the
+// node stopped: once before the migration and once after. Exit 0 when the
+// manifest is whole, which says nothing of what is in it. --compare-before reports
+// every difference by name. Exit 0 only when nothing differs and everything was
+// checked; 1 for any difference, anything NOT CHECKED, or a manifest that is not
+// whole.
 
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +47,7 @@
 #include <string>
 #include <vector>
 
+#include "dagda/migrate/manifest.h"
 #include "dagda/migrate/migrate.h"
 #include "dagda/version.h"
 #include "dannan/identity/cluster_key.h"
@@ -47,6 +61,7 @@ struct Arguments {
   std::vector<std::string> backends;
   bool dry_run = false;
   bool reverse = false;
+  bool resume = false;
   bool version = false;
 };
 
@@ -64,6 +79,10 @@ Arguments parse(int argc, char** argv) {
     }
     if (option == "--reverse") {
       out.reverse = true;
+      continue;
+    }
+    if (option == "--resume") {
+      out.resume = true;
       continue;
     }
     if (option.rfind("--", 0) != 0 || i + 1 >= argc) throw std::invalid_argument("expected --option value, at " + option);
@@ -101,7 +120,39 @@ dannan::identity::KeySource key_source(const Arguments& arguments) {
 constexpr const char* usage =
     "usage: dagda-migrate --state DIR --node-state DIR --cluster-key FILE (--passphrase-env VAR | --credential NAME [--credentials-dir DIR])\n"
     "                     [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run] [--reverse]\n"
+    "       dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY [--backend DIR]... [--control DIR] [--cache DIR]\n"
+    "                     --write-manifest FILE [--resume]\n"
+    "       dagda-migrate --compare-before FILE --compare-after FILE [--expect-before 18] [--expect-after 19]\n"
     "       dagda-migrate --version\n";
+
+void say_line(std::string_view line) { std::cout << line << (line.ends_with('\n') ? "" : "\n") << std::flush; }
+
+uint32_t layout_option(const Arguments& arguments, const std::string& name, uint32_t otherwise) {
+  const auto found = arguments.options.find(name);
+  if (found == arguments.options.end()) return otherwise;
+  if (found->second != "18" && found->second != "19") throw std::invalid_argument("--" + name + " is 18 or 19");
+  return found->second == "18" ? 18 : 19;
+}
+
+// Exit 0 only for a comparison that passed; the last line says which it was.
+int compare(const Arguments& arguments) {
+  dagda::migrate::ComparisonOptions options;
+  options.before_layout = layout_option(arguments, "expect-before", 18);
+  options.after_layout = layout_option(arguments, "expect-after", 19);
+  options.say = say_line;
+  try {
+    const auto report = dagda::migrate::compare_manifests(need(arguments, "compare-before"), need(arguments, "compare-after"), options);
+    if (report.passed()) {
+      std::cout << "RESULT: PASS\n";
+      return 0;
+    }
+    std::cout << "RESULT: FAIL: " << report.difference_count << " differences, " << report.not_checked_count << " not checked\n";
+    return 1;
+  } catch (const dagda::migrate::ManifestDamaged& error) {
+    std::cout << "RESULT: FAIL: " << error.what() << "\n";
+    return 1;
+  }
+}
 
 }  // namespace
 
@@ -119,6 +170,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   try {
+    if (arguments.options.contains("compare-before") || arguments.options.contains("compare-after")) return compare(arguments);
     const std::filesystem::path state = need(arguments, "state");
     const std::filesystem::path node_state = need(arguments, "node-state");
     const auto cluster = dannan::identity::load_cluster_key(need(arguments, "cluster-key"));
@@ -131,7 +183,21 @@ int main(int argc, char** argv) {
     if (!std::filesystem::exists(node_state / "node-id"))
       throw std::runtime_error("no node-id in " + node_state.string() + ": --node-state is the directory holding the id the node's disks carry");
     options.node = dannan::identity::load_or_create_node_id(node_state);
-    options.say = [](std::string_view line) { std::cout << line << (line.ends_with('\n') ? "" : "\n") << std::flush; };
+    if (arguments.options.contains("write-manifest")) {
+      dagda::migrate::ManifestOptions pass;
+      pass.backends.assign(arguments.backends.begin(), arguments.backends.end());
+      pass.control = options.control;
+      pass.cache = options.cache;
+      pass.node = options.node;
+      pass.node_state = node_state;
+      pass.resume = arguments.resume;
+      pass.metadata = dagda::migrate::metadata_manifest_reader();
+      pass.say = say_line;
+      const auto summary = dagda::migrate::write_manifest(arguments.options.at("write-manifest"), state, cluster, custody, pass);
+      std::cout << summary.summary();
+      return 0;
+    }
+    options.say = say_line;
     std::vector<std::filesystem::path> backends(arguments.backends.begin(), arguments.backends.end());
     const auto report = arguments.reverse ? dagda::migrate::migrate_state_back(state, backends, cluster, custody, options)
                                           : dagda::migrate::migrate_state(state, backends, cluster, custody, options);

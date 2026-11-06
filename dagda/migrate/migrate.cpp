@@ -252,40 +252,6 @@ void count(Ledger outcome, MigrationReport& report) {
   }
 }
 
-// The ledgers, by the names the store gives them, as Macha's does. Nothing
-// else under the state is read: metadata/ holds a journal.log and is not a
-// trie, and the rest of a Macha state is not the store's.
-struct KnownLedgers {
-  std::vector<std::filesystem::path> tries;
-  std::vector<std::filesystem::path> journals;
-  std::vector<std::filesystem::path> sightings;
-};
-
-KnownLedgers known_ledgers(const std::filesystem::path& state) {
-  KnownLedgers out;
-  std::error_code ec;
-  const auto keep = [&](std::vector<std::filesystem::path>& into, const std::filesystem::path& path) {
-    if (std::filesystem::exists(path, ec)) into.push_back(path);
-  };
-  const auto ledger = state / "ledger";
-  const auto retention = state / "retention";
-  keep(out.tries, ledger / "control");
-  if (std::filesystem::is_directory(ledger, ec)) {
-    for (const auto& entry : std::filesystem::directory_iterator(ledger, ec))
-      if (entry.is_directory() && entry.path().filename().string().starts_with("data-")) out.tries.push_back(entry.path());
-    if (ec) throw std::runtime_error("cannot list " + ledger.string() + ": " + ec.message());
-  }
-  keep(out.tries, ledger / "referenced" / "extents");
-  keep(out.tries, ledger / "referenced" / "nodes");
-  keep(out.tries, retention / "ledger-data");
-  keep(out.tries, retention / "ledger-control");
-  keep(out.journals, retention / "claims.log");
-  keep(out.sightings, retention / "unreferenced-data.bin");
-  keep(out.sightings, retention / "unreferenced-control.bin");
-  std::sort(out.tries.begin(), out.tries.end());
-  return out;
-}
-
 void migrate_ledgers(const std::filesystem::path& state, std::shared_ptr<const domain::StorageKey> from, std::shared_ptr<const domain::StorageKey> to,
                      MigrationReport& report, const MigrationOptions& options) {
   const auto ledgers = known_ledgers(state);
@@ -532,6 +498,34 @@ void remove_temporaries(const std::filesystem::path& state, const std::vector<st
 }
 
 }  // namespace
+
+// As Macha's does. Nothing else under the state is read: metadata/ holds a
+// journal.log and is not a trie, and the rest of a Macha state is not the
+// store's.
+KnownLedgers known_ledgers(const std::filesystem::path& state) {
+  KnownLedgers out;
+  std::error_code ec;
+  const auto keep = [&](std::vector<std::filesystem::path>& into, const std::filesystem::path& path) {
+    if (std::filesystem::exists(path, ec)) into.push_back(path);
+  };
+  const auto ledger = state / "ledger";
+  const auto retention = state / "retention";
+  keep(out.tries, ledger / "control");
+  if (std::filesystem::is_directory(ledger, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(ledger, ec))
+      if (entry.is_directory() && entry.path().filename().string().starts_with("data-")) out.tries.push_back(entry.path());
+    if (ec) throw std::runtime_error("cannot list " + ledger.string() + ": " + ec.message());
+  }
+  keep(out.tries, ledger / "referenced" / "extents");
+  keep(out.tries, ledger / "referenced" / "nodes");
+  keep(out.tries, retention / "ledger-data");
+  keep(out.tries, retention / "ledger-control");
+  keep(out.journals, retention / "claims.log");
+  keep(out.sightings, retention / "unreferenced-data.bin");
+  keep(out.sightings, retention / "unreferenced-control.bin");
+  std::sort(out.tries.begin(), out.tries.end());
+  return out;
+}
 
 bool migration_temporary(std::string_view file_name) {
   const auto at = file_name.rfind(".tmp.");
