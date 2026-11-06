@@ -22,9 +22,11 @@ needs them. Tell the Macha session when the answer is Yes.
 
 **The work, in this order. Each item is Dagda's to do.**
 
-1. Heads, now, not behind anything: re-read the heads plan at `9a08846`, write the cases for H20, H29 and H30, give every one
-   of the 95 gap-heads cases a session or a named retirement, then S2 to S7 (`2026-11-05-heads-plan.md`).
-2. The metadata and cache seed migration in `dagda-migrate`, with heads.
+1. Heads, now, not behind anything: S2 tree over keys, S3 replica on disk, S4 one node commits, S5 exchange, S6 reconciler, S7
+   conformance (`2026-11-05-heads-plan.md`, re-based on `9a08846`: H1 to H30 with gates, cases C2 to C46 Dagda must write, all
+   95 gap-heads cases assigned). L1 to L9 wait: Macha needs none, unless torrent gets its own space.
+2. The metadata and cache seed migration in `dagda-migrate`, in S7. It reports "nothing to do" under a v19 marker today, so
+   it needs a later pass.
 3. The steps Macha's loop needs: `Repair::pass` and `Collector::pass` split so Macha's pass can order and trace them, with
    `test_maintenance_trace`'s fixtures unchanged. Dagda's own loop to the same fixtures at 8c.
 4. Anything Dagda adds is inert on a Macha node: no behaviour Macha lacks. The device reserve off by the facade's option,
