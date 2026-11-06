@@ -276,6 +276,9 @@ class StoragePool final : public contract::ObjectStore {
   ClaimLocks& claim_locks() const noexcept { return _claim_locks; }
 
  private:
+  // A read that did not finish says nothing about the object: it stays, and is
+  // counted (storage.read_failures).
+  void note_read_failure(const ObjectId& id, const std::filesystem::path& path, const std::exception& error) const;
   struct CursorItem {
     std::shared_ptr<Backend> backend;
     std::shared_ptr<LocalStore> store;

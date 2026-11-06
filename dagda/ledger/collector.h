@@ -76,6 +76,8 @@ struct PassDue {
   // Asked between objects of the DATA sweep: foreground or loader work in
   // its quiet window.
   std::function<bool()> should_yield;
+  // Given to the owner's inventory walk: throws MaintenanceStopping to end it.
+  std::function<void()> pause;
 };
 
 struct PassReport {

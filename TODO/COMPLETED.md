@@ -3,6 +3,14 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: resumed, Macha 0.93.4's shapes (`9a08846`)
+
+`contract/stopping.h`; `ObjectCorrupt` thrown only for a record read in full that does not open, and `get` and
+`scrub_step` remove only on that, with any other failure counted in `storage.read_failures` and the object kept
+(a truncated pack record stays a counted failure and reports held, Macha's known gap); the owner's inventory walk
+takes the pause; a storage event when the online disk count rises. Dagda already had the rethrow, the multiset, the
+`not_held` pause, degraded, and the pull list's reset, which is the same shape as Macha's. Census and follow are heads.
+
 ## 2026-11-05: paused, and the mapping's test gaps merged
 
 18 of the mapping's 27 gaps closed (`dagda_tests` 448 passing, 3 disabled, three whole runs on the Mac; not yet on

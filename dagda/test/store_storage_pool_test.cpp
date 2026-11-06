@@ -846,8 +846,11 @@ TEST(StoreStoragePool, AReadErrorKeepsTheObject) {
   const auto aside = bed.dir.path() / "aside";
   std::filesystem::rename(file, aside);
   std::filesystem::create_directory(file);
+  const auto failures = [&] { return bed.observations.counter("storage.read_failures").load(); };
+  const auto before = failures();
   EXPECT_FALSE(pool->get(id).has_value());
   EXPECT_TRUE(pool->has(id));
+  EXPECT_EQ(failures(), before + 1);
   for (int slices = 0; slices < 8; ++slices)
     if (pool->scrub_step(0, 16).complete) break;
   EXPECT_TRUE(pool->has(id));

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include "dagda/contract/horizon.h"
@@ -35,7 +36,7 @@ class NodeHorizonBuilder {
   // At the provider's current generation. Throws what the provider throws:
   // an inventory that cannot be answered is not built.
   static constexpr dannan::sched::Waits inventory_waits = contract::ReachabilityProvider::answer_waits;
-  std::shared_ptr<const contract::InventoryHorizon> inventory();
+  std::shared_ptr<const contract::InventoryHorizon> inventory(const std::function<void()>& pause = {});
   // At `head`. A provider that cannot answer at all gives an empty,
   // incomplete build, which is never published.
   static constexpr dannan::sched::Waits release_waits = contract::ReachabilityProvider::answer_waits;

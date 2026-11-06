@@ -702,6 +702,11 @@ std::optional<dannan::identity::Hash256> StoragePool::held_digest(const ObjectId
   return blind_digest(sealed->nonce, sealed->tag, sealed->ciphertext);
 }
 
+void StoragePool::note_read_failure(const ObjectId& id, const std::filesystem::path& path, const std::exception& error) const {
+  _services.observations.add("storage.read_failures", 1);
+  _services.logger.warn("cannot read local object " + to_string(id) + " on " + path.string() + "; keeping it: " + error.what());
+}
+
 std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
   // A blind pool cannot open what it holds; a get is a programming error,
   // never a discarded object.
@@ -734,21 +739,20 @@ std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
                                " bytes=" + std::to_string(data ? data->size() : 0) + " ms=" + std::to_string(elapsed.count()));
       observe_get(data ? data->size() : 0, static_cast<uint64_t>(elapsed.count()));
       return data;
-    } catch (const ObjectReadError& error) {
-      // The device, not the object: it stays, and the next backend is asked.
-      _services.logger.warn("unreadable local object " + to_string(id) + " on " + path.string() + " kept (read failed): " + error.what());
-    } catch (const std::exception& error) {
+    } catch (const ObjectCorrupt& error) {
       // Corrupt content is an object failure, not a backend failure, once the
       // key is known to be the disk's; before that it may be the key.
       if (!key_checked(backend)) {
         _services.logger.warn("unreadable local object " + to_string(id) + " on " + path.string() + " kept (key unchecked): " + error.what());
         continue;
       }
-      _services.logger.warn("discarding unreadable local object " + to_string(id) + " on " + path.string() + ": " + error.what());
+      _services.logger.warn("discarding corrupt local object " + to_string(id) + " on " + path.string() + ": " + error.what());
       try {
         (void)store->remove(id);
       } catch (...) {
       }
+    } catch (const std::exception& error) {
+      note_read_failure(id, path, error);
     }
   }
   return std::nullopt;
@@ -1086,9 +1090,7 @@ StoragePool::MaintenanceResult StoragePool::scrub_step(uint64_t budget_bytes, si
         timer.note_bytes(data ? data->size() : 0);
       }
       if (data) result.bytes += data->size();
-    } catch (const ObjectReadError& error) {
-      _services.logger.warn("unreadable local object " + to_string(item->id) + " on " + item->path.string() + " kept (read failed): " + error.what());
-    } catch (const std::exception& error) {
+    } catch (const ObjectCorrupt& error) {
       if (!key_checked(item->backend)) {
         _services.logger.warn("unreadable local object " + to_string(item->id) + " on " + item->path.string() + " kept (key unchecked): " + error.what());
         continue;
@@ -1098,6 +1100,8 @@ StoragePool::MaintenanceResult StoragePool::scrub_step(uint64_t budget_bytes, si
         (void)item->store->remove(item->id);
       } catch (...) {
       }
+    } catch (const std::exception& error) {
+      note_read_failure(item->id, item->path, error);
     }
     if (budget_bytes && result.bytes >= budget_bytes) return result;
   }

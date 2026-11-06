@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "dagda/context.h"
+#include "dagda/contract/stopping.h"
 #include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/sealing.h"
@@ -398,7 +399,7 @@ bool Node::higher_class_active() const {
   return activity.recently_active(dannan::sched::WorkClass::foreground, quiet) || activity.recently_active(dannan::sched::WorkClass::loader, quiet);
 }
 
-bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
+bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop) {
   contract::ReachabilityProvider* provider = nullptr;
   {
     dannan::contract::Lock lock(_providers_mutex);
@@ -435,8 +436,13 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report) {
   due.gc_due = !busy;
   due.busy = busy;
   if (!forced) due.should_yield = [this] { return higher_class_active(); };
+  due.pause = [stop] {
+    if (stop.stop_requested()) throw contract::MaintenanceStopping{};
+  };
   try {
     report.gc = _collector->pass(due);
+  } catch (const contract::MaintenanceStopping&) {
+    throw;
   } catch (const std::exception& error) {
     report.gc_skipped = std::string("the reachability provider could not answer: ") + error.what();
     _logger.debug("garbage collection: " + report.gc_skipped);
@@ -651,7 +657,11 @@ void Node::maintenance_loop(std::stop_token stop) {
       dannan::contract::Lock lock(_maintenance_mutex);
       if (now >= next_gc) {
         MaintenanceReport report;
-        next_gc = now + (gc_pass_locked(false, report) ? gc_interval : interval);
+        try {
+          next_gc = now + (gc_pass_locked(false, report, stop) ? gc_interval : interval);
+        } catch (const contract::MaintenanceStopping&) {
+          return;
+        }
       }
       if (now >= next_repair) {
         try {

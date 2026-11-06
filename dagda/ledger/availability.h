@@ -13,11 +13,11 @@
 #include <map>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "dagda/contract/id_lookup.h"
+#include "dagda/contract/stopping.h"
 #include "dagda/ledger/trie_diff.h"
 #include "dagda/ledger/trie_union.h"
 #include "dannan/identity/node_id.h"
@@ -30,12 +30,7 @@
 // Primitives: no locks, no threads; I/O only through what they are given.
 namespace dagda::ledger {
 
-// Thrown out of a long walk by its `pause` when the node is asked to stop (Macha
-// 0.92.4): the pass catches it and the loop ends, so a stop never waits for a
-// million lookups. Never a peer's failure: survey_by_diff lets it through.
-struct MaintenanceStopping final : std::runtime_error {
-  MaintenanceStopping() : std::runtime_error("maintenance stopping") {}
-};
+using contract::MaintenanceStopping;
 
 // Whether this node holds a DATA object.
 using HeldFn = std::function<bool(const ObjectId&)>;
