@@ -26,6 +26,8 @@
 #include "dagda/domain/domain.h"
 #include "dagda/domain/storage_key.h"
 #include "dagda/domain/wrap.h"
+#include "dagda/heads/space.h"
+#include "dagda/heads/spaces.h"
 #include "dagda/lease/keeper.h"
 #include "dagda/lease/local_records.h"
 #include "dagda/lease/membership.h"
@@ -246,6 +248,15 @@ struct NodeOptions {
   // the node, for its stall gate over the construction (Macha's
   // service_startup_no_progress). Nothing: only the node sees them.
   dannan::supervise::StartupProgress* startup_progress = nullptr;
+  // Whether the node runs head spaces. Off, it declares no "metadata" plane and runs
+  // no head stage, so an owner whose own replica still runs (Macha through the first
+  // stage of the port) declares and marks that plane itself; a Heads noun refuses
+  // whatever it is asked, saying why. On is the library's default.
+  bool heads = true;
+  // The spaces whose replay readiness waits on: opened in the "open heads" stage, and
+  // the "metadata" plane marked after them, so at once with none. Context::Heads opens
+  // further spaces at any time, and those gate nothing.
+  std::vector<heads::SpaceSpec> spaces;
 };
 
 // What a node takes while running: Macha's live reload (LocalState::reconfigure),
@@ -274,8 +285,8 @@ class NodeRefused final : public std::runtime_error {
 // key and the wrap key (a node without custody is refused; one without a
 // certificate opens and advertises no wrap key), the DATA pool and
 // its admission, the control store, the cache, the claims and the reference
-// counts, the distributed store, availability, repair and the storage
-// server. Each readiness plane is reported ready as its part opens; a pool
+// counts, the distributed store, the head spaces, availability, repair and the
+// storage server. Each readiness plane is reported ready as its part opens; a pool
 // that holds nothing it should (every backend offline) is ready but degraded
 // (dagda.storage.degraded). The node then publishes its figures to Dannan's Status surface,
 // at once and every status_interval. stop() closes it in the reverse order,
@@ -298,7 +309,8 @@ class Node {
   // Throws NodeRefused, with a reason, for a Dannan contract of another
   // version, a Dannan node already started, a held lock, a refused layout, a
   // node without custody, or a part that cannot open. Declares its own
-  // readiness planes (data_storage, control_storage, cache, retention).
+  // readiness planes (data_storage, control_storage, cache, retention, and
+  // metadata unless NodeOptions::heads is off).
   Node(dannan::Context& context, NodeOptions options);
 
   // In two parts, for an owner whose node must answer peers and Status while the
@@ -348,6 +360,8 @@ class Node {
   const domain::WrapKey& wrap_key() const noexcept { return *_wrap; }
   lease::LeaseKeeper& lease_keeper() noexcept { return *_keeper; }
   lease::LeaseRecords& lease_records() noexcept { return _lease_records; }
+  // Null with NodeOptions::heads off. Valid while running().
+  heads::Spaces* spaces() noexcept { return _spaces.get(); }
 
   // The owner's reachability provider for a domain (requirement C3): what
   // its state refers to, from which the inventory is built. One per domain
@@ -526,6 +540,7 @@ class Node {
   std::unique_ptr<ledger::RetentionLedger> _ledger;
   std::unique_ptr<ledger::ReferenceCounts> _references;
   std::unique_ptr<store::DistributedStore> _store;
+  std::unique_ptr<heads::Spaces> _spaces;
   std::unique_ptr<store::AvailabilityService> _availability;
   std::unique_ptr<store::Repair> _repair;
   std::unique_ptr<store::StorageServer> _server;

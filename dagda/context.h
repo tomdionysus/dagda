@@ -19,6 +19,8 @@
 
 #include "dagda/contract/claim_store.h"
 #include "dagda/domain/domain.h"
+#include "dagda/heads/space.h"
+#include "dagda/heads/spaces.h"
 #include "dagda/lease/keeper.h"
 #include "dagda/lease/lease.h"
 #include "dagda/store/distributed_store.h"
@@ -36,7 +38,7 @@
 // one node is a bare boolean. Every noun is thread-safe.
 //
 // Version 1 as it stands carries Domains, Objects (with the instant delete,
-// step 7b), Claims, Leases and Tickets. Heads, Retained and node-local spaces are added at step 4, with
+// step 7b), Claims, Leases, Tickets and, on one node, Heads. Retained and node-local spaces are added at step 4, with
 // the domain catalogue, and version 1 is frozen only then: until it is, a
 // hosted system built against it is built against a contract still
 // growing.
@@ -84,6 +86,48 @@ struct ClaimEvidence {
   bool finished = false;
   std::vector<ObjectId> unheld;
   bool held_here = false;
+  std::string why;
+};
+
+// What opening a head space came to. `opened`: it replayed and stands at
+// `generation`. Otherwise `why` says what stopped it or that the deadline passed;
+// an open still running then may yet land, and opening again says so.
+struct SpaceOpened {
+  bool opened = false;
+  heads::SpaceId space{};
+  uint64_t generation = 0;
+  std::string why;
+};
+
+// How much a head read is asked to do: heads::Space's three.
+enum class HeadRead : uint8_t { current, local, converged };
+
+// What a head read came to. `finished`: it could happen, and `view` is what it found,
+// empty for finding nothing. Otherwise `why` says why it could not, or that the
+// deadline passed, and `stopped` that a long walk was told to stop.
+struct HeadReadEvidence {
+  bool finished = false;
+  bool stopped = false;
+  std::optional<heads::SpaceView> view;
+  std::string why;
+};
+
+// What a mutation came to. `finished`: it ran to its end before the deadline, and
+// `outcome` says what it did. Otherwise `why` says what refused it or that the deadline
+// passed, in which case it may yet land, and the caller's identity will tell;
+// `stopped` that a long walk was told to stop.
+struct MutationEvidence {
+  bool finished = false;
+  bool stopped = false;
+  std::optional<heads::CommitOutcome> outcome;
+  std::string why;
+};
+
+// The heads of a space as this node holds them. `known`: the space is open here, and
+// otherwise `why` says what stopped it.
+struct HeadsEvidence {
+  bool known = false;
+  heads::HeadsReport report;
   std::string why;
 };
 
@@ -214,6 +258,67 @@ class Context {
     Node& _node;
   };
 
+  // Head spaces (requirements H14, H20, H21): an owner's opaque state as a set of
+  // immutable commits, each named by its hash. open() names the owner's codec and
+  // merge and the policy; one every-node space is Macha's, and `replicas: N` is refused
+  // naming L2. A read is as Space's three say. mutate_delta() commits on this node
+  // alone with a change the caller declares and mutate() with what the codec's
+  // encode_delta makes of the two states; the peers are owed it.
+  class Heads {
+   public:
+    using Opened = std::function<void(SpaceOpened)>;
+    using Read = std::function<void(HeadReadEvidence)>;
+    using Committed = std::function<void(MutationEvidence)>;
+
+    static constexpr dannan::sched::Waits open_waits = heads::Spaces::open_waits;
+    static constexpr dannan::sched::Waits current_waits = heads::Space::current_waits;
+    static constexpr dannan::sched::Waits local_waits = heads::Space::local_waits;
+    static constexpr dannan::sched::Waits converged_waits = heads::Space::converged_waits;
+    static constexpr dannan::sched::Waits mutate_waits = heads::Space::mutate_waits;
+    static constexpr dannan::sched::Waits heads_waits = heads::Space::heads_waits;
+
+    // The id a name has in this node's domain. Waits on nothing.
+    heads::SpaceId id_of(std::string_view name) const;
+
+    // Throws std::invalid_argument for a deadline that is not positive.
+    void open(heads::SpaceSpec spec, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Opened done);
+    SpaceOpened open(heads::SpaceSpec spec, std::chrono::milliseconds deadline);
+
+    // current_waits: nothing is read, and an open space with no head decoded yet
+    // answers an empty view.
+    HeadReadEvidence current(const heads::SpaceId& space) const;
+    // Throws std::invalid_argument for a deadline that is not positive. The wait guard
+    // checks `work` against what `how` declares.
+    void read(const heads::SpaceId& space, HeadRead how, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Read done,
+              dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+    HeadReadEvidence read(const heads::SpaceId& space, HeadRead how, std::chrono::milliseconds deadline,
+                          dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+
+    // Throws std::invalid_argument for a deadline that is not positive.
+    void mutate(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                Committed done, std::optional<heads::ExternalIdentity> identity = {}, size_t retries = heads::Space::default_retries,
+                dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+    MutationEvidence mutate(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline,
+                            std::optional<heads::ExternalIdentity> identity = {}, size_t retries = heads::Space::default_retries,
+                            dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+    void mutate_delta(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                      Committed done, std::optional<heads::ExternalIdentity> identity = {}, size_t retries = heads::Space::default_retries,
+                      dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+    MutationEvidence mutate_delta(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline,
+                                  std::optional<heads::ExternalIdentity> identity = {}, size_t retries = heads::Space::default_retries,
+                                  dannan::sched::WorkContext work = dannan::sched::WorkContext{});
+
+    // heads_waits.
+    HeadsEvidence heads(const heads::SpaceId& space) const;
+
+   private:
+    friend class Context;
+    explicit Heads(Node& node) : _node(node) {}
+    void commit(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                Committed done, std::optional<heads::ExternalIdentity> identity, size_t retries, dannan::sched::WorkContext work, bool supplied);
+    Node& _node;
+  };
+
   // A write's ticket, after the write has returned: status() waits on
   // nothing (nothing for a ticket forgotten); wait() completes when it
   // settles, wait_complete() when no member is pending at all, each at the
@@ -255,6 +360,7 @@ class Context {
   Objects& objects() noexcept { return _objects; }
   Claims& claims() noexcept { return _claims; }
   Leases& leases() noexcept { return _leases; }
+  Heads& heads() noexcept { return _heads; }
   Tickets& tickets() noexcept { return _tickets; }
 
  private:
@@ -262,6 +368,7 @@ class Context {
   Objects _objects;
   Claims _claims;
   Leases _leases;
+  Heads _heads;
   Tickets _tickets;
 };
 

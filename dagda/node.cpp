@@ -35,6 +35,7 @@ constexpr const char* plane_data = "data_storage";
 constexpr const char* plane_control = "control_storage";
 constexpr const char* plane_cache = "cache";
 constexpr const char* plane_retention = "retention";
+constexpr const char* plane_metadata = "metadata";
 
 uint64_t u64(uint64_t value) { return value; }
 
@@ -53,9 +54,13 @@ const char* gate_name(store::RepairGate gate) noexcept {
 }
 
 // The readiness planes the node reports, Macha's names: the DATA pool, the
-// CONTROL store, the cache, and the claims with the reference counts (heads
-// add "metadata" at step 4).
-std::vector<std::string> readiness_planes() { return {plane_data, plane_control, plane_cache, plane_retention}; }
+// CONTROL store, the cache, the claims with the reference counts, and the heads
+// when the node runs them.
+std::vector<std::string> readiness_planes(bool heads) {
+  std::vector<std::string> planes{plane_data, plane_control, plane_cache, plane_retention};
+  if (heads) planes.emplace_back(plane_metadata);
+  return planes;
+}
 
 void throw_if_stopped(const LocalTurn& turn) {
   if (turn.stop.stop_requested()) throw contract::MaintenanceStopping{};
@@ -114,7 +119,7 @@ void Node::prepare() {
   // Every plane the node will report is known before the Dannan node starts,
   // so it never reports ready without them.
   try {
-    for (const auto& plane : readiness_planes()) _context.readiness().declare(plane);
+    for (const auto& plane : readiness_planes(_options.heads)) _context.readiness().declare(plane);
   } catch (const std::logic_error&) {
     throw NodeRefused("the Dannan node has started: a dagda::Node opens before the Dannan node starts");
   }
@@ -246,6 +251,24 @@ void Node::open() {
   _store = std::make_unique<store::DistributedStore>(
       _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get(), _activity.get()}, store_options);
 
+  if (_options.heads) {
+    // A space replays with the owner's codec, so its plane cannot be marked until it
+    // has: no peer is asked unless a node of the tree is missing here.
+    step("open heads");
+    _spaces = std::make_unique<heads::Spaces>(
+        heads::Spaces::Services{_context, *_control, *_store, *_cache, _options.key, _node_local, _options.domain.id, _options.state, _options.wall});
+    for (auto spec : _options.spaces) {
+      const auto name = spec.name;
+      try {
+        _spaces->open(std::move(spec));
+      } catch (const std::exception& error) {
+        throw NodeRefused("head space " + name + " cannot open: " + error.what());
+      }
+      (_options.startup_progress ? *_options.startup_progress : _progress).note();
+    }
+    ready(plane_metadata);
+  }
+
   step("open availability");
   auto availability = _options.availability;
   if (!availability.time) availability.time = _options.maintenance.time;
@@ -349,6 +372,8 @@ void Node::stop() {
   close("storage-server", _server);
   close("repair", _repair);
   close("availability", _availability);
+  if (_spaces) _spaces->stop();
+  close("heads", _spaces);
   close("distributed-store", _store);
   close("reference-counts", _references);
   _ledger.reset();

@@ -149,6 +149,9 @@ struct ClusterNodeOptions {
   // moves a durability window or an activity clock by hand).
   store::ControlStoreOptions control;
   const dannan::contract::TimeSource* time = nullptr;
+  // The head spaces: the node's off switch and the spaces its readiness waits on.
+  bool heads = true;
+  std::vector<heads::SpaceSpec> spaces;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -427,6 +430,8 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.control = _options.control;
   out.startup_progress = _options.startup_progress;
   out.control = _options.control;
+  out.heads = _options.heads;
+  out.spaces = _options.spaces;
   // In front of the server: count, then let the test answer instead.
   out.front = [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame,
                      const dannan::net::Message& request) -> std::optional<dannan::net::Handled> {
