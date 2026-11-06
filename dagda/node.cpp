@@ -132,6 +132,7 @@ void Node::prepare() {
   step("open message-types");
   try {
     store::message::register_types(_context.routes());
+    if (_options.heads) heads::message::register_types(_context.routes(), _options.exchange.numbers);
   } catch (const std::invalid_argument& error) {
     throw NodeRefused(std::string("Dagda's message types are registered already, so a store runs on this Dannan node: ") + error.what());
   } catch (const std::logic_error& error) {
@@ -255,8 +256,20 @@ void Node::open() {
     // A space replays with the owner's codec, so its plane cannot be marked until it
     // has: no peer is asked unless a node of the tree is missing here.
     step("open heads");
-    _spaces = std::make_unique<heads::Spaces>(
-        heads::Spaces::Services{_context, *_control, *_store, *_cache, _options.key, _node_local, _options.domain.id, _options.state, _options.wall});
+    auto exchange = _options.exchange;
+    // Both hear of a stage: the owner's pass and the exchange's own.
+    exchange.stage = [this, own = exchange.stage](std::string_view stage) {
+      if (own) own(stage);
+      enter_stage(stage);
+    };
+    decltype(heads::Spaces::Services::front) front;
+    if (_options.front)
+      front = [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request) {
+        return _options.front(peer, frame, request);
+      };
+    _spaces = std::make_unique<heads::Spaces>(heads::Spaces::Services{_context, *_control, *_store, *_cache, _options.key, _node_local, _options.domain.id,
+                                                                      _options.state, _options.wall, std::move(exchange), _options.garbage_grace, &pass_time(),
+                                                                      std::move(front), [this] { wake_maintenance(); }, _metadata_event, _claims_event});
     for (auto spec : _options.spaces) {
       const auto name = spec.name;
       try {
@@ -587,6 +600,19 @@ void Node::persist_scrub_due() {
   }
 }
 
+void Node::enter_stage(std::string_view stage) const {
+  if (_options.maintenance.stage) _options.maintenance.stage(stage);
+}
+
+void Node::wake_maintenance() {
+  _maintenance_kicked.store(true, std::memory_order_release);
+  // Taken so the thread between its check and its wait cannot miss this.
+  {
+    std::lock_guard lock(_maintenance_wait);
+  }
+  _maintenance_wake.notify_all();
+}
+
 void Node::note_local(const std::function<void(LocalFigures&)>& change) {
   dannan::contract::Lock lock(_gc_figures_mutex);
   change(_local_figures);
@@ -647,6 +673,7 @@ void Node::retention_compact_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
   // Only here, so a foreground claim never pays for the rewrite.
   if (turn.busy) return;
+  enter_stage("retention-compact");
   auto& out = turn.stages;
   out.retention_ran = true;
   out.retention_compacted = _claims->compact_if_needed(4096);
@@ -654,9 +681,76 @@ void Node::retention_compact_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
 }
 
+// An accepted head this replica cannot replay is excluded from reads and re-anchored here
+// from any peer that can materialise it. A no-op unless a head is flagged. Any activity.
+void Node::head_repair_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  if (!_spaces) return;
+  const auto pause = [&turn] { throw_if_stopped(turn); };
+  auto& out = turn.stages;
+  try {
+    enter_stage("head-repair");
+    out.heads_repair_ran = true;
+    const dannan::sched::WorkContext background(dannan::sched::FrameType::speculative, {}, nullptr, "maintenance::head-repair");
+    for (auto* exchange : _spaces->exchanges())
+      out.heads_repaired += exchange->repair_unreconstructable_heads(background, dannan::sched::FrameType::speculative, pause);
+  } catch (const contract::MaintenanceStopping&) {
+    throw;
+  } catch (const std::exception& error) {
+    _logger.debug(std::string("maintenance: metadata head repair failed: ") + error.what());
+  }
+  note_local([&](LocalFigures& figures) { figures.heads_repaired += out.heads_repaired; });
+  throw_if_stopped(turn);
+}
+
+void Node::history_truncate_locked(LocalTurn& turn) {
+  throw_if_stopped(turn);
+  if (!_spaces || turn.busy) return;
+  auto& out = turn.stages;
+  try {
+    enter_stage("history-truncate");
+    out.history_truncate_ran = true;
+    const dannan::sched::WorkContext background(dannan::sched::FrameType::speculative, {}, nullptr, "maintenance::history-truncate");
+    for (auto* exchange : _spaces->exchanges()) {
+      const auto before = exchange->space().replica().diagnostics().history_records;
+      exchange->truncate_history(background);
+      if (exchange->space().replica().diagnostics().history_records < before) ++out.history_truncated;
+    }
+  } catch (const contract::MaintenanceStopping&) {
+    throw;
+  } catch (const std::exception& error) {
+    _logger.debug(std::string("maintenance: history truncation failed: ") + error.what());
+  }
+  note_local([&](LocalFigures& figures) { figures.history_truncations += out.history_truncated; });
+  throw_if_stopped(turn);
+}
+
+std::vector<heads::RepairTurn> Node::metadata_repair_locked(std::stop_token stop, bool forced) {
+  std::vector<heads::RepairTurn> turns;
+  if (!_spaces) return turns;
+  for (auto* exchange : _spaces->exchanges()) turns.push_back(exchange->repair_turn(stop, forced));
+  return turns;
+}
+
+std::vector<heads::RepairTurn> Node::metadata_repair(std::stop_token stop) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  return metadata_repair_locked(stop, false);
+}
+
+void Node::head_repair(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) head_repair_locked(turn);
+}
+
+void Node::history_truncate(LocalTurn& turn) {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (_repair) history_truncate_locked(turn);
+}
+
 void Node::compact_packs_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
   if (turn.busy) return;
+  enter_stage("compact-packs");
   auto& out = turn.stages;
   out.packs_ran = true;
   out.packs_compacted = _data->compact_packs(turn.stop);
@@ -730,6 +824,8 @@ LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
   try {
     local_rebalance_locked(turn);
     retention_compact_locked(turn);
+    head_repair_locked(turn);
+    history_truncate_locked(turn);
     compact_packs_locked(turn);
     local_scrub_locked(turn);
     ledger_verify_locked(turn);
@@ -787,6 +883,12 @@ MaintenanceReport Node::run_maintenance_once() {
   MaintenanceReport report;
   dannan::contract::Lock lock(_maintenance_mutex);
   if (!_repair) return report;
+  report.metadata = metadata_repair_locked({}, true);
+  for (const auto& turn : report.metadata) {
+    if (!turn.hold_pass) continue;
+    report.gc_skipped = "metadata repair failed with no head to stand on: " + turn.why;
+    return report;
+  }
   (void)gc_pass_locked(true, report);
   try {
     report.repair = _repair->pass();
@@ -805,9 +907,22 @@ void Node::maintenance_loop(std::stop_token stop) {
   auto next_gc = next_repair;
   while (!stop.stop_requested()) {
     const auto now = time.now();
+    bool hold_pass = false;
+    std::optional<dannan::contract::TimePoint> metadata_due;
     {
       dannan::contract::Lock lock(_maintenance_mutex);
-      if (now >= next_gc) {
+      _maintenance_kicked.store(false, std::memory_order_release);
+      try {
+        for (const auto& turn : metadata_repair_locked(stop, false)) hold_pass = hold_pass || turn.hold_pass;
+      } catch (const contract::MaintenanceStopping&) {
+        return;
+      }
+      if (_spaces)
+        for (auto* exchange : _spaces->exchanges())
+          if (const auto due = exchange->turn_due()) metadata_due = metadata_due ? std::min(*metadata_due, *due) : *due;
+      if (hold_pass) {
+        // Recovery required, or no head yet: nothing that depends on the head proceeds.
+      } else if (now >= next_gc) {
         MaintenanceReport report;
         try {
           next_gc = now + (gc_pass_locked(false, report, stop) ? gc_interval : interval);
@@ -815,7 +930,7 @@ void Node::maintenance_loop(std::stop_token stop) {
           return;
         }
       }
-      if (now >= next_repair) {
+      if (!hold_pass && now >= next_repair) {
         try {
           (void)_repair->pass(stop);
         } catch (const store::MaintenanceStopping&) {
@@ -835,11 +950,12 @@ void Node::maintenance_loop(std::stop_token stop) {
     // Waits in real time for at most an interval, then reads the node's time
     // again: a stepped clock moved meanwhile is seen within an interval.
     const auto after = time.now();
-    const auto due = std::min(next_gc, next_repair);
+    auto due = hold_pass ? after + interval : std::min(next_gc, next_repair);
+    if (metadata_due) due = std::min(due, *metadata_due);
     if (due <= after) continue;
     const auto wait = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(due - after) + std::chrono::milliseconds(1), interval);
     std::unique_lock lock(_maintenance_wait);
-    _maintenance_wake.wait_for(lock, stop, wait, [] { return false; });
+    _maintenance_wake.wait_for(lock, stop, wait, [this] { return _maintenance_kicked.load(std::memory_order_acquire); });
   }
 }
 
@@ -875,7 +991,21 @@ void Node::stop_maintenance() {
 //   maintenance.scrub_bytes, maintenance.scrub_campaigns,
 //   maintenance.scrub_due_unix_ms, maintenance.verify_directories,
 //   maintenance.verify_recorded, maintenance.verify_lost,
-//   maintenance.verify_passes; gc.provider, gc.grace_ms, gc.passes, gc.skipped
+//   maintenance.verify_passes, maintenance.heads_repaired,
+//   maintenance.history_truncations;
+//   heads.spaces; and for each space under heads.<name>.: generation, history_records,
+//   history_file_bytes, history_resident_payload_bytes, historical_requests,
+//   historical_reconstructions, historical_deltas_applied,
+//   materialization_cache_hits, _misses, _evictions, _entries, _bytes, _limit_bytes,
+//   accepted_head_persistence_writes, _bytes, _failures; head_holders,
+//   head_holders_present, heads_set_aside; mutations, mutation_retention_ms_total, _max,
+//   mutation_publish_ms_total, _max; claims_owed_commits, claims_owed_bytes,
+//   claims_owed_dropped; availability, write_available, stable, replicas, replicas_online,
+//   write_replicas_required, observed_unix_ms; history_transfers,
+//   history_entries_submitted, history_peak_in_flight; announcements; convergence.events_received,
+//   .runs_scheduled, .runs_completed, .requested_epoch, .completed_epoch,
+//   .latest_generation, .scheduled;
+//   gc.provider, gc.grace_ms, gc.passes, gc.skipped
 //   (no provider), gc.failures (the provider could not answer),
 //   gc.inventories, gc.released_data, gc.released_control,
 //   gc.removed_control, gc.examined, gc.reclaimed_bytes, gc.pruned, gc.state
@@ -910,6 +1040,67 @@ void Node::publish_status() {
   put("storage.barriers", u64(_data->physical_barriers()));
   put("control.used", u64(_control->used()));
   put("control.limit", u64(_control->limit()));
+
+  if (_spaces) {
+    const auto exchanges = _spaces->exchanges();
+    put("heads.spaces", u64(exchanges.size()));
+    for (const auto* exchange_const : exchanges) {
+      auto* exchange = const_cast<heads::Exchange*>(exchange_const);
+      const auto head = [&](const std::string& name, dannan::status::Surface::Value value) { put("heads." + exchange->name() + "." + name, std::move(value)); };
+      auto& space = exchange->space();
+      const auto replica = space.replica().diagnostics();
+      head("generation", u64(space.current_generation()));
+      head("history_records", u64(replica.history_records));
+      head("history_file_bytes", u64(replica.history_file_bytes));
+      head("history_resident_payload_bytes", u64(replica.history_resident_payload_bytes));
+      head("historical_requests", u64(replica.historical_requests));
+      head("historical_reconstructions", u64(replica.historical_reconstructions));
+      head("historical_deltas_applied", u64(replica.historical_deltas_applied));
+      head("materialization_cache_hits", u64(replica.materialization_cache_hits));
+      head("materialization_cache_misses", u64(replica.materialization_cache_misses));
+      head("materialization_cache_evictions", u64(replica.materialization_cache_evictions));
+      head("materialization_cache_entries", u64(replica.materialization_cache_entries));
+      head("materialization_cache_bytes", u64(replica.materialization_cache_bytes));
+      head("materialization_cache_limit_bytes", u64(replica.materialization_cache_limit_bytes));
+      head("accepted_head_persistence_writes", u64(replica.accepted_head_persistence_writes));
+      head("accepted_head_persistence_bytes", u64(replica.accepted_head_persistence_bytes));
+      head("accepted_head_persistence_failures", u64(replica.accepted_head_persistence_failures));
+      const auto status = exchange->status();
+      head("head_holders", u64(status.head_holders));
+      head("head_holders_present", u64(status.head_present));
+      head("heads_set_aside", u64(space.set_aside_count()));
+      const auto timing = space.mutation_timing();
+      head("mutations", u64(timing.mutations));
+      head("mutation_retention_ms_total", u64(timing.retention_ms_total));
+      head("mutation_retention_ms_max", u64(timing.retention_ms_max));
+      head("mutation_publish_ms_total", u64(timing.publish_ms_total));
+      head("mutation_publish_ms_max", u64(timing.publish_ms_max));
+      const auto owed = space.owed_backlog();
+      head("claims_owed_commits", u64(owed.commits));
+      head("claims_owed_bytes", u64(owed.claim_bytes));
+      head("claims_owed_dropped", u64(owed.dropped));
+      head("availability", std::string(heads::availability_name(status.availability)));
+      head("write_available", status.write_available);
+      head("stable", status.stable);
+      head("replicas", u64(status.replicas));
+      head("replicas_online", u64(status.replicas_online));
+      head("write_replicas_required", u64(status.write_replicas_required));
+      head("observed_unix_ms", u64(status.observed_unix_ms));
+      const auto transfers = exchange->transfers();
+      head("history_transfers", u64(transfers.transfers));
+      head("history_entries_submitted", u64(transfers.entries_submitted));
+      head("history_peak_in_flight", u64(transfers.peak_in_flight));
+      head("announcements", u64(exchange->announcements()));
+      const auto demand = exchange->demand();
+      head("convergence.events_received", u64(demand.events_received));
+      head("convergence.runs_scheduled", u64(demand.runs_scheduled));
+      head("convergence.runs_completed", u64(demand.runs_completed));
+      head("convergence.requested_epoch", u64(demand.requested_epoch));
+      head("convergence.completed_epoch", u64(demand.completed_epoch));
+      head("convergence.latest_generation", u64(demand.latest_generation));
+      head("convergence.scheduled", demand.scheduled);
+    }
+  }
 
   const auto data_store = _data->diagnostics();
   put("data_store.loose_reaffirmation_fast_paths", u64(data_store.loose_reaffirmation_fast_paths));
@@ -984,6 +1175,8 @@ void Node::publish_status() {
   put("maintenance.verify_recorded", u64(local.verify_recorded));
   put("maintenance.verify_lost", u64(local.verify_lost));
   put("maintenance.verify_passes", u64(local.verify_passes));
+  put("maintenance.heads_repaired", u64(local.heads_repaired));
+  put("maintenance.history_truncations", u64(local.history_truncations));
   put("gc.provider", provider);
   put("gc.grace_ms", u64(static_cast<uint64_t>(_options.garbage_grace.count())));
   put("gc.passes", u64(gc.passes));

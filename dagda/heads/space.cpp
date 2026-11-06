@@ -32,6 +32,12 @@ uint64_t ms_since(std::chrono::steady_clock::time_point since) {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count());
 }
 
+void raise_to(std::atomic_uint64_t& slot, uint64_t value) {
+  auto seen = slot.load(std::memory_order_relaxed);
+  while (value > seen && !slot.compare_exchange_weak(seen, value, std::memory_order_relaxed)) {
+  }
+}
+
 }  // namespace
 
 std::optional<std::string> policy_refusal(const Policy& policy) {
@@ -173,15 +179,19 @@ Record Space::maybe_reconfigure(const Record& initial) {
   const auto reconfigured = _spec.reconfigure(state_of(initial));
   if (!reconfigured) return initial;
   const State& changed = *reconfigured;
-  // R2: no dot, so its clock equals its parent's. Session S5 sends it to the active
-  // set on the control frame; here it is this node's alone.
+  // R2: no dot, so its clock equals its parent's. It goes to the active set on the
+  // control frame.
   Record proposed;
   proposed.generation = initial.generation + 1;
   proposed.previous = initial.hash;
   proposed.payload = _spec.codec->encode_full(changed);
   proposed.hash = record_hash(proposed.generation, proposed.previous, proposed.payload);
-  HistoryEntry::Body body{};
-  accept_locally(proposed, {}, &body);
+  if (_services.publish_policy) {
+    _services.publish_policy(proposed);
+  } else {
+    HistoryEntry::Body body{};
+    accept_locally(proposed, {}, &body);
+  }
   _logger.info("metadata policy transition committed generation=" + std::to_string(proposed.generation));
   return cache_record(proposed, changed);
 }
@@ -189,8 +199,14 @@ Record Space::maybe_reconfigure(const Record& initial) {
 std::vector<Record> Space::usable_heads() const {
   if (_replica->set_aside_generation() && _services.membership_stamp && _set_aside_stamp.load(std::memory_order_acquire) != _services.membership_stamp())
     _replica->clear_set_aside();
-  if (!_replica->set_aside_generation()) return _replica->accepted_heads();
-  return _replica->usable_heads();
+  if (!_replica->set_aside_generation()) {
+    _set_aside_count.store(0, std::memory_order_relaxed);
+    return _replica->accepted_heads();
+  }
+  const auto all = _replica->accepted_heads().size();
+  auto usable = _replica->usable_heads();
+  _set_aside_count.store(all > usable.size() ? all - usable.size() : 0, std::memory_order_relaxed);
+  return usable;
 }
 
 Record Space::own_head(const std::vector<Record>& heads) const {
@@ -249,6 +265,7 @@ Record Space::cache_record(const Record& record, State state) {
   // Reads can complete out of order; never back to an older record.
   if (_view_record && newer_than(_view_record->generation, _view_record->hash, record)) return *_view_record;
   _view_record = record;
+  view_taken_locked();
   if (!_view_state || _view_generation != record.generation || _view_hash != record.hash) {
     const bool moved = !_view_state || [&]() DANNAN_REQUIRES(_view_mutex) {
       const auto before = _spec.codec->head_fields(_view_state).root;
@@ -265,17 +282,33 @@ Record Space::cache_record(const Record& record, State state) {
   return record;
 }
 
+void Space::view_taken_locked() {
+  if (_services.view_ttl) _view_until = (_services.view_time ? _services.view_time : _time)->now() + *_services.view_ttl;
+  if (_services.remote) _view_remote_epoch = _services.remote().epoch;
+}
+
+bool Space::view_current_locked(uint64_t generation) const {
+  if (_services.view_ttl && (_services.view_time ? _services.view_time : _time)->now() >= _view_until) return false;
+  if (_replica->committed_generation() > generation) return false;
+  if (_services.remote) {
+    const auto remote = _services.remote();
+    if (remote.epoch != _view_remote_epoch || remote.generation > generation) return false;
+  }
+  return true;
+}
+
 std::optional<Record> Space::cached_record() const {
   Lock lock(_view_mutex);
-  if (!_view_record || _replica->committed_generation() > _view_record->generation) return std::nullopt;
+  if (!_view_record || !view_current_locked(_view_record->generation)) return std::nullopt;
   return _view_record;
 }
 
-// H31's lifetime and the remote epoch join here with session S5's notices.
+// The decoded state is valid for its record but no proof the record is current: this
+// honours cached_record()'s lifetime, so a missed notice eventually forces a real read.
 std::optional<SpaceView> Space::cached_view() const {
   Lock lock(_view_mutex);
   if (!_view_record || !_view_state || _view_record->generation != _view_generation || _view_record->hash != _view_hash) return std::nullopt;
-  if (_replica->committed_generation() > _view_generation) return std::nullopt;
+  if (!view_current_locked(_view_generation)) return std::nullopt;
   return SpaceView{_view_generation, _view_revision, _view_hash, _view_state};
 }
 
@@ -341,6 +374,9 @@ CommitOutcome Space::commit_path(const MutationFactory& make, size_t retries, co
       const auto found = parent_fields.clock.find(identity->origin);
       if (found != parent_fields.clock.end() && found->second >= identity->sequence) return covered();
     }
+    if (_services.scope_refusal) {
+      if (const auto why = _services.scope_refusal()) throw std::runtime_error("this node's scope is refused: " + *why);
+    }
     if (!dot) dot = _replica->reserve_mutation_dot(_services.self, parent_fields.clock);
 
     if (_spec.tree && !parent_fields.root) throw std::logic_error("metadata head carries no namespace tree");
@@ -383,12 +419,21 @@ CommitOutcome Space::commit_path(const MutationFactory& make, size_t retries, co
 
     // This node's own claims, then the commit, both on this node alone. The caller is
     // answered from here; the peers' share is owed.
+    const auto retention_started = std::chrono::steady_clock::now();
     auto claims = claim(*dot, parent_fields, _spec.codec->head_fields(next), mutation->introduced(context), *reader, pause);
+    const auto retention_ms = ms_since(retention_started);
 
     try {
       CommitOutcome out;
+      const auto publish_started = std::chrono::steady_clock::now();
       accept_locally(proposed, delta_payload, &out.body);
       _replica->note_author_accepted(*dot);
+      const auto publish_ms = ms_since(publish_started);
+      _mutations.fetch_add(1, std::memory_order_relaxed);
+      _retention_ms_total.fetch_add(retention_ms, std::memory_order_relaxed);
+      _publish_ms_total.fetch_add(publish_ms, std::memory_order_relaxed);
+      raise_to(_retention_ms_max, retention_ms);
+      raise_to(_publish_ms_max, publish_ms);
       (void)cache_record(proposed, next);
       owe(proposed, OwedClaims{*dot, claims});
       out.record = std::move(proposed);
@@ -458,6 +503,7 @@ CommitClaims Space::claim(const Dot& dot, const HeadFields& before, const HeadFi
     report("control-claim-failed");
     throw std::runtime_error(std::string(control_unclaimed_refusal));
   }
+  _services.claims->claimed();
   report("ok");
   return claims;
 }
@@ -486,12 +532,17 @@ void Space::accept_locally(const Record& record, std::span<const uint8_t> delta,
   acceptance.hash = record.hash;
   acceptance.required = 1;
   acceptance.replicas = {_services.self};
+  if (!accept(acceptance)) throw std::runtime_error("local metadata acceptance persistence failed");
+}
+
+bool Space::accept(const Acceptance& acceptance) {
   const auto before = _replica->committed_identity();
   bool heads_changed = false;
-  if (!_replica->accept_commit(acceptance, &heads_changed)) throw std::runtime_error("local metadata acceptance persistence failed");
+  if (!_replica->accept_commit(acceptance, &heads_changed)) return false;
   const auto after = _replica->committed();
   if (heads_changed && after.hash != before.hash && _services.seed) _services.seed->remember(_services.space, after);
   if (_services.accepted) _services.accepted(acceptance, heads_changed, after);
+  return true;
 }
 
 void Space::owe(Record head, std::optional<OwedClaims> claims) {
@@ -524,6 +575,16 @@ OwedWork Space::take_owed() {
 size_t Space::owed_commits() const {
   Lock lock(_owed_mutex);
   return _owed_claims.size() + (_owed_head ? 1 : 0);
+}
+
+OwedBacklog Space::owed_backlog() const {
+  Lock lock(_owed_mutex);
+  return {_owed_claims.size(), _owed_claim_bytes, _owed_dropped.load(std::memory_order_relaxed)};
+}
+
+MutationTiming Space::mutation_timing() const noexcept {
+  return {_mutations.load(std::memory_order_relaxed), _retention_ms_total.load(std::memory_order_relaxed), _retention_ms_max.load(std::memory_order_relaxed),
+          _publish_ms_total.load(std::memory_order_relaxed), _publish_ms_max.load(std::memory_order_relaxed)};
 }
 
 }  // namespace dagda::heads

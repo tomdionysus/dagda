@@ -128,6 +128,10 @@ struct MutationEvidence {
 struct HeadsEvidence {
   bool known = false;
   heads::HeadsReport report;
+  // How it stands with the peers (dagda.heads.* carries the same).
+  heads::ExchangeStatus status;
+  heads::ConvergenceDemandDiagnostics convergence;
+  heads::OwedBacklog owed;
   std::string why;
 };
 

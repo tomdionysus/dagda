@@ -152,6 +152,8 @@ struct ClusterNodeOptions {
   // The head spaces: the node's off switch and the spaces its readiness waits on.
   bool heads = true;
   std::vector<heads::SpaceSpec> spaces;
+  // What they exchange under. The dead_after the cluster runs on goes in by itself.
+  heads::ExchangeOptions exchange;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -432,6 +434,8 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.control = _options.control;
   out.heads = _options.heads;
   out.spaces = _options.spaces;
+  out.exchange = _options.exchange;
+  out.exchange.dead_after = _cluster.dead_after();
   // In front of the server: count, then let the test answer instead.
   out.front = [this](const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame,
                      const dannan::net::Message& request) -> std::optional<dannan::net::Handled> {

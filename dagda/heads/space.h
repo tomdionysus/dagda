@@ -39,6 +39,8 @@ class HeadsNotReady final : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+class Exchange;
+
 // A key a caller owns, naming its mutation so that it can tell after a crash whether
 // it took effect: Macha's MetadataMutationIdentity. `sequence` increases across that
 // caller's mutations, and a head whose clock has reached it holds the mutation.
@@ -148,6 +150,14 @@ class ClaimBarrier {
   virtual std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const Dot& dot) = 0;
   // Claims here; false when the claim did not hold.
   virtual bool retain_control_here(const std::vector<ObjectId>& ids, const Dot& dot) = 0;
+  // A commit's claims on this node stand: what a claim's waiters wake on.
+  virtual void claimed() {}
+  // The peers' share of a commit already accepted here, from the replicator. An object no
+  // node present holds is repair's to find, not a reason to stop. May throw, leaving it owed.
+  virtual void retain_on_peers(const Dot& dot, const CommitClaims& claims) {
+    (void)dot;
+    (void)claims;
+  }
 };
 
 // One commit's claims, kept for the peers.
@@ -162,6 +172,31 @@ struct OwedClaims {
 struct OwedWork {
   std::deque<OwedClaims> claims;
   std::optional<Record> head;
+};
+
+// What the peers are owed, as Status shows it: commits whose claims are queued, those
+// claims' size, and claims dropped past the bound since start.
+struct OwedBacklog {
+  size_t commits = 0;
+  uint64_t claim_bytes = 0;
+  uint64_t dropped = 0;
+};
+
+// Mutation wall time split into the claims and the local commit; totals and maxima since
+// start. Measured for Status alone.
+struct MutationTiming {
+  uint64_t mutations = 0;
+  uint64_t retention_ms_total = 0;
+  uint64_t retention_ms_max = 0;
+  uint64_t publish_ms_total = 0;
+  uint64_t publish_ms_max = 0;
+};
+
+// What the exchange knows of the peers' heads beyond this node's own: an epoch that moves
+// with every notice, and the highest generation heard of that is news.
+struct RemoteKnown {
+  uint64_t epoch = 0;
+  uint64_t generation = 0;
 };
 
 // What a space's reads are at: a head, its state, and the witness that moves when the
@@ -215,6 +250,17 @@ struct SpaceSpec {
   std::function<std::optional<State>(const State&)> reconfigure;
   // Told of every head as it becomes the one reads are at.
   std::function<void(const State&)> on_head;
+  // Generation 2 from nothing, on the deterministic founder: the state the owner was
+  // configured with, its tree written through `nodes`. A function of that alone, so
+  // founders configured alike build one commit. None: this node forms no space.
+  std::function<State(TreeNodeStore& nodes)> founding;
+  // This space's messages carry no space id, and an unaddressed message is this space's:
+  // the one space an owner's peers already speak to. At most one on a node.
+  bool unaddressed = false;
+  // The adverts of the generation and the write copies, under names of the owner's. Empty:
+  // Dagda's own, named by the space's id.
+  std::string generation_advert;
+  std::string write_copies_advert;
 };
 
 // What a space runs on. The node fills this; a test may hold any part.
@@ -230,22 +276,35 @@ struct SpaceServices {
   SpaceId space{};
   // Moves when the membership does. A head set aside is retried when it has (R6, R8).
   std::function<uint64_t()> membership_stamp;
-  // Session S5's and S6's seam: what a read or a mutation with no usable head stands
-  // on, surveying peers, importing heads and folding them. None: this node's own head.
+  // What a read or a mutation with no usable head stands on: the exchange's survey, its
+  // import and its founding, and session S6's fold of what they find. None: this node's
+  // own head.
   std::function<Record()> converge;
-  // Session S5's seam: a commit was accepted here, and whether the head set and the
-  // committed record moved, for its adverts and notices. HeadsNotReady from here is
-  // an acceptance interrupted, which the mutation path retries with the same dot;
-  // nothing at Macha's 9a08846 raises one on this path (the plan's D13).
+  // A commit was accepted here, and whether the head set and the committed record moved,
+  // for the exchange's adverts and notices. HeadsNotReady from here is an acceptance
+  // interrupted, which the mutation path retries with the same dot; nothing at Macha's
+  // 9a08846 raises one on this path (the plan's D13).
   std::function<void(const Acceptance&, bool heads_changed, const Record& committed)> accepted;
-  // Session S5's seam: a commit is owed; the replicator wakes.
+  // A commit is owed; the replicator wakes.
   std::function<void()> owed_changed;
+  // A policy commit reaches the active set through this (R2). None: this node alone.
+  std::function<void(const Record&)> publish_policy;
+  // How long a decoded view is reused with nothing heard, on the replica's clock (H31),
+  // and what the peers are known to hold. None of either: only this node's commits make
+  // a view stale.
+  std::optional<std::chrono::milliseconds> view_ttl;
+  // What that is measured by; none: the replica's clock.
+  const dannan::contract::TimeSource* view_time = nullptr;
+  std::function<RemoteKnown()> remote;
+  // Why this node may not write the space now, as every replica that counts checks its
+  // writer before storing (H29). None: it may.
+  std::function<std::optional<std::string>()> scope_refusal;
 };
 
 // One head space on this node: Macha's MetadataManager at 9a08846 as far as one node
-// goes, over an owner's Codec, with no owner's type here. Everything to do with a
-// peer is a seam (SpaceServices) until session S5, and a fold of heads until S6. Macha
-// has one every-node space.
+// goes, over an owner's Codec, with no owner's type here. Everything to do with a peer is
+// the Exchange's, through SpaceServices, and a fold of heads session S6's. Macha has one
+// every-node space.
 //
 // Every operation is thread-safe. Lock order: _mutation_mutex, then the replica's,
 // then _view_mutex or _owed_mutex. A mutation holds _mutation_mutex across its local
@@ -290,6 +349,11 @@ class Space {
   const std::shared_ptr<const Codec>& codec() const noexcept { return _spec.codec; }
   // The node's replica of this space, for its exchange and for tests.
   Replica& replica() noexcept { return *_replica; }
+  const SpaceSpec& spec() const noexcept { return _spec; }
+  // Takes a certificate for a commit this node stores, moving the seed and telling the
+  // exchange what moved: what a peer's acceptance and this node's own go through. False
+  // when the replica would not hold it. Waits as Replica::accept_commit does.
+  bool accept(const Acceptance& acceptance);
 
   std::optional<SpaceView> current() const DANNAN_EXCLUDES(_view_mutex);
   std::optional<SpaceView> current(const dannan::sched::WorkContext& work) const DANNAN_EXCLUDES(_view_mutex);
@@ -330,10 +394,14 @@ class Space {
   // membership has moved is cleared here.
   std::vector<Record> usable_heads() const;
 
-  // Takes what is owed for the replicator (session S5) to deliver.
+  // Takes what is owed for the replicator to deliver.
   OwedWork take_owed() DANNAN_EXCLUDES(_owed_mutex);
   uint64_t owed_dropped() const noexcept { return _owed_dropped.load(std::memory_order_relaxed); }
   size_t owed_commits() const DANNAN_EXCLUDES(_owed_mutex);
+  OwedBacklog owed_backlog() const DANNAN_EXCLUDES(_owed_mutex);
+  MutationTiming mutation_timing() const noexcept;
+  // Heads set aside as this node last looked. Waits on nothing.
+  uint64_t set_aside_count() const noexcept { return _set_aside_count.load(std::memory_order_relaxed); }
 
   // Walks a view's tree a page at a time, Macha's entries(): a page of `view` after
   // `from`, in key order, one budget operation per entry. A view with no tree has
@@ -358,6 +426,7 @@ class Space {
   }
 
  private:
+  friend class Exchange;
   Record read_base();
   Record read_uncached();
   Record read_record();
@@ -375,6 +444,11 @@ class Space {
   Record cache_record(const Record& record, State state) DANNAN_EXCLUDES(_view_mutex);
   std::optional<Record> cached_record() const DANNAN_EXCLUDES(_view_mutex);
   std::optional<SpaceView> cached_view() const DANNAN_EXCLUDES(_view_mutex);
+  // A cached record at `generation` still stands: its lifetime, the peers' epoch, and
+  // nothing newer known here or there.
+  bool view_current_locked(uint64_t generation) const DANNAN_REQUIRES(_view_mutex);
+  void view_taken_locked() DANNAN_REQUIRES(_view_mutex);
+  std::unique_ptr<TreeNodeStore> commit_nodes() const { return _services.commit_nodes(); }
   void enter(const dannan::sched::WorkContext& work, dannan::sched::Waits declared, std::string_view operation) const;
 
   const SpaceSpec _spec;
@@ -388,6 +462,7 @@ class Space {
   dannan::contract::IoMutex _mutation_mutex;
   // The membership heads were set aside under.
   mutable std::atomic_uint64_t _set_aside_stamp{0};
+  mutable std::atomic_uint64_t _set_aside_count{0};
 
   // The newest view; nothing is read holding it.
   mutable dannan::contract::Mutex _view_mutex;
@@ -399,6 +474,8 @@ class Space {
   // local()'s answer, and the head-set revision it was taken at.
   std::optional<SpaceView> _local_view DANNAN_GUARDED_BY(_view_mutex);
   uint64_t _local_view_revision DANNAN_GUARDED_BY(_view_mutex) = 0;
+  dannan::contract::TimePoint _view_until DANNAN_GUARDED_BY(_view_mutex){};
+  uint64_t _view_remote_epoch DANNAN_GUARDED_BY(_view_mutex) = 0;
   std::atomic_uint64_t _available_generation{0};
   std::atomic_uint64_t _available_revision{0};
 
@@ -408,6 +485,12 @@ class Space {
   uint64_t _owed_claim_bytes DANNAN_GUARDED_BY(_owed_mutex) = 0;
   std::optional<Record> _owed_head DANNAN_GUARDED_BY(_owed_mutex);
   std::atomic_uint64_t _owed_dropped{0};
+
+  std::atomic_uint64_t _mutations{0};
+  std::atomic_uint64_t _retention_ms_total{0};
+  std::atomic_uint64_t _retention_ms_max{0};
+  std::atomic_uint64_t _publish_ms_total{0};
+  std::atomic_uint64_t _publish_ms_max{0};
 };
 
 }  // namespace dagda::heads
