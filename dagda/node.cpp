@@ -166,7 +166,9 @@ void Node::open() {
   }
   _wrap = domain::WrapKey::derive(_context.identity());
   if (!_wrap) throw NodeRefused("this node has no key custody, so no wrap key: a store needs custody");
-  domain::advertise_wrap_key(_context, *_wrap);
+  // The advert is signed by the certificate's key, so a node with none (Macha's,
+  // under its cluster key) publishes none. A peer reads that as "no wrap advert".
+  if (_context.identity().certificate()) domain::advertise_wrap_key(_context, *_wrap);
 
   const auto services = [&](std::string scope) {
     auto& progress = _options.startup_progress ? *_options.startup_progress : _progress;
