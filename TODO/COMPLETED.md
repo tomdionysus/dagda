@@ -22,13 +22,15 @@ absolute. `get_object`, `put_object` and `remove_objects` that give up answer 50
 The warning is Macha's line word for word. `AdmissionOptions::no_progress` defaults to 120 s. `admission_wait` now bounds control slots only, and
 nothing waits on it with the reserve off. Macha's 0 is 100 years from the facade (plan S.3): the one difference left in the window, unseen unless a
 config sets 0, and both live nodes set 120000. No existing test's assertion changed.
-Left, for the maintainer: the 60 s `write_deadline` runs during a local credit wait, so a whole-window stall fails the write where Macha spills to a peer; a
-read's own deadline restarts at each admission and at the remote fetch where Macha's is one absolute time; prompt replication and local `valid_on`
-take credit, where Macha's prompt read takes none and its store has no `valid_on`.
+Then the three differences that entry first left open. Write and read deadlines are on the node's clock (`look_at_the_clock`, 25 ms; `read_trace`).
+With no caller deadline, `write_deadline` starts when the local credit wait is over, so a whole-window stall lands on a peer and a slow admission still
+seeks its second copy. A read's own deadline is one time across its stages. `prompt_read_admission`, default on, is off in Macha's facade (S.3): the
+lease keeps a prompt read yielding to foreground and pressure, under the background ceiling and in a device slot, none of which Macha's has. `valid_on`
+keeps its credit: only tests call it. Left: past those points `write_deadline` and `read_deadline` are absolute limits Macha has not.
 `StoreRepair.RepairIsPacedNotStoppedWhileHigherClassesStayBusy` is on stepped time: a contended turn earns 19 times its real length as rest, so a turn of
 about 526 ms outran its 10 s wall-clock bound. Pacing as designed, not a defect; the failure itself was not reproduced under CPU load.
 Checked under GCC 15 by `-fsyntax-only` on the changed sources; not linked or run under GCC or on arm64.
-Gate: `dagda_tests` 806 passing, 4 disabled, three whole runs on the Mac (797 at the start).
+Gate: `dagda_tests` 814 passing, 4 disabled, three whole runs on the Mac (797 at the start).
 
 ## 2026-11-06: the node's seams for Macha's loop (`feature/node-seams`)
 

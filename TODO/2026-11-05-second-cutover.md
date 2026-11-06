@@ -285,8 +285,10 @@ Dagda options with no Macha key, which keep their defaults unless the maintainer
 `DistributedStoreOptions.write_deadline` and `.read_deadline` (60 s), `.call_horizon` (120 s),
 `.admission_wait` and `StorageServerOptions.admission_wait` (30 s). The last two bound
 control-slot waits only, and with the reserve off, as Macha's facade has it, nothing waits
-on them. Write and read deadlines are behaviour differences Macha's cases may catch; none
-is measured on a Pi.
+on them. `write_deadline` starts when the local credit wait is over, and `read_deadline`
+bounds a read's remote stage alone; past those points they are limits Macha has not, which
+its cases may catch; none is measured on a Pi. `DistributedStoreOptions.prompt_read_admission`
+(default on) the facade **must turn off**: Macha's prompt read takes no credit.
 
 ### S.4 The gate
 
