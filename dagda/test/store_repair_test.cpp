@@ -1091,12 +1091,10 @@ TEST(StoreRepair, AServedRequestAfterAStallAnswersStopping) {
 // The store's own paths with no caller deadline (src/cluster/distributed_store.cpp
 // at Macha 9a08846: launch :307, put_here :1020, get_shared :1741 with no deadline,
 // ensure_local :2270): each waits for credit under the
-// no-progress window, past write_deadline, read_deadline and admission_wait alike.
+// no-progress window, past admission_wait.
 TEST(StoreRepair, AStoreCallWithNoDeadlineWaitsForCreditPastAnyLimit) {
   Cluster cluster;
   auto limited = waits_on_credit();
-  limited.store.write_deadline = 1ms;
-  limited.store.read_deadline = 1ms;
   auto& node = cluster.add("node", limited);
   node.start();
   ASSERT_TRUE(cluster.converged());
@@ -1164,7 +1162,6 @@ TEST(StoreRepair, AWriteAfterAWholeWindowStallHereLandsOnAPeer) {
   Cluster cluster;
   auto stalls = waits_on_credit();
   stalls.no_progress = 120s;
-  stalls.store.write_deadline = 60s;
   stalls.time = &time;
   auto& a = cluster.add("a", stalls);
   auto& b = cluster.add("b", waits_on_credit());
@@ -1194,7 +1191,6 @@ TEST(StoreRepair, AWriteSeeksItsSecondCopyAfterASlowLocalAdmission) {
   auto slow = options(2, 2, 8ULL * 1024 * 1024);
   slow.device_reserve = false;
   slow.no_progress = 120s;
-  slow.store.write_deadline = 60s;
   slow.time = &time;
   auto& a = cluster.add("a", slow);
   auto peer = options(2, 2, 8ULL * 1024 * 1024);
@@ -1209,7 +1205,7 @@ TEST(StoreRepair, AWriteSeeksItsSecondCopyAfterASlowLocalAdmission) {
   ASSERT_TRUE(full.has_value());
   auto write = std::async(std::launch::async, [&] { return a.store().put(id, bytes); });
   ASSERT_TRUE(wait_until([&] { return credit.stats().loader_waits + credit.stats().foreground_waits == 1; }));
-  // Past write_deadline, inside the window.
+  // Past the 60 s a write had once, inside the window.
   time.advance(61s);
   credit.time_advanced();
   EXPECT_EQ(write.wait_for(50ms), std::future_status::timeout);
@@ -1317,8 +1313,8 @@ TEST(StoreRepair, AReadPastItsDeadlineGoesNoFurther) {
   }
 }
 
-// A read with no deadline names none for its admissions, and still has a bound on
-// its remote stage alone: read_deadline starts there, however long the local wait.
+// A read with no deadline names none for its admissions, and its remote stage asks a
+// peer afterwards, however long the local wait.
 TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
   dannan::test::SteppedTime time;
   // Stepping the reader's clock must not make its peer look dead.
@@ -1326,7 +1322,6 @@ TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
   auto reader = waits_on_credit();
   reader.time = &time;
   reader.no_progress = 120s;
-  reader.store.read_deadline = 60s;
   auto& a = cluster.add("a", reader);
   auto& b = cluster.add("b", waits_on_credit());
   cluster.start_all();
@@ -1346,6 +1341,202 @@ TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
   full.reset();
   ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
   EXPECT_EQ(result.get(), bytes);
+}
+
+// src/cluster/distributed_store.cpp at Macha 98b816d, replicate (:305-312, :346-351,
+// :454-461): a write has no absolute limit past its local wait. A peer that takes
+// longer than any figure Dagda had (write_deadline 60 s, call_horizon 120 s) inside
+// the no-progress window is waited for, and its copy counts.
+TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
+  dannan::test::SteppedTime time;
+  // Stepping the writer's clock must not make its peer look dead.
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 57);
+  const auto id = object_id(bytes);
+  WriteOptions durable;
+  durable.level = Durability::durable;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(200s);
+  // The watch looks at most every 250 ms: a second is several looks.
+  EXPECT_EQ(write.wait_for(1s), std::future_status::timeout);
+  gate.open();
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::acknowledged);
+  EXPECT_TRUE(b.data().has(id));
+}
+
+// The bound: a peer silent for the whole window fails, in Dannan's words, and the
+// write says what is owed.
+TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 58);
+  const auto id = object_id(bytes);
+  WriteOptions durable;
+  durable.level = Durability::durable;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(301s);
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::pending);
+  EXPECT_NE(evidence.on(b.id())->why.find("made no progress"), std::string::npos) << evidence.on(b.id())->why;
+  EXPECT_TRUE(a.data().has(id));
+}
+
+// A caller's own deadline stays: the write returns at it with the peer's copy
+// pending, the peer's answer reaches its ticket, and no window has passed.
+TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 59);
+  const auto id = object_id(bytes);
+  WriteOptions durable;
+  durable.level = Durability::durable;
+  durable.deadline = 10s;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(11s);
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::pending);
+  gate.open();
+  EXPECT_TRUE(wait_until([&] {
+    const auto now = a.store().status(evidence.ticket);
+    return now && now->on(b.id()) && now->on(b.id())->state == ReplicaState::acknowledged;
+  }));
+}
+
+// get_from and get_remote at Macha 98b816d (:1401-1417, :1554-1555): with no deadline a
+// read waits for its peer with no limit of its own.
+TEST(StoreRepair, AReadWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 60);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::get_object, gate));
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(200s);
+  EXPECT_EQ(result.wait_for(1s), std::future_status::timeout);
+  gate.open();
+  ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
+  EXPECT_EQ(result.get(), bytes);
+}
+
+// The bound on a read: the peer silent for the window is passed over, the next is
+// asked and has its own window, and the read lands however long that all took.
+TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  auto& c = cluster.add("c", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 61);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  ASSERT_TRUE(c.data().put(id, bytes));
+  // Whichever peer is asked first stays silent.
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  std::atomic_bool taken{false};
+  const test::Interpose first_is_silent = [&](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::get_object && !taken.exchange(true)) gate.enter_and_wait();
+    return std::nullopt;
+  };
+  b.interpose(first_is_silent);
+  c.interpose(first_is_silent);
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(301s);
+  ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
+  EXPECT_EQ(result.get(), bytes);
+}
+
+// The same with one peer: silent past the window, the read ends with nothing rather
+// than waiting on, and says to try later.
+TEST(StoreRepair, AReadWithNoDeadlineEndsWhenItsOnlyPeerIsSilentForTheWindow) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 62);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::get_object, gate));
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  auto result = std::async(std::launch::async, [&] { return a.store().read(id, read); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(301s);
+  ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
+  const auto answer = result.get();
+  EXPECT_FALSE(answer.object);
+  EXPECT_EQ(answer.answer, FetchAnswer::try_later);
 }
 
 // src/cluster/distributed_store.cpp at Macha 9a08846, prompt_replication_loop (:1306):

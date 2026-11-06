@@ -147,8 +147,9 @@ struct WriteOptions {
   Durability level = Durability::replicated;
   // Written now, made durable by a later wait() (Macha's put_deferred).
   bool deferred = false;
-  // The call returns by then, whatever is still pending. Zero: the store's
-  // write_deadline.
+  // The call returns by then, whatever is still pending. Zero: none of its own, as
+  // Macha's: each peer's put runs under call_no_progress, so it returns when what
+  // can land has landed.
   std::chrono::milliseconds deadline{0};
   dannan::sched::FrameType frame = dannan::sched::FrameType::loader;
   std::atomic_bool* cancelled = nullptr;
@@ -174,8 +175,9 @@ enum class ReadSource : uint8_t { none, local, cache, remote };
 
 struct ReadOptions {
   dannan::sched::FrameType frame = dannan::sched::FrameType::foreground;
-  // One time across the local, cache and remote stages. Zero: admission waits
-  // under the arbiter's window, and the remote stage has the store's read_deadline.
+  // One time across the local, cache and remote stages. Zero: none of its own, as
+  // Macha's: admission waits under the arbiter's window, and each peer's answer
+  // under call_no_progress.
   std::chrono::milliseconds deadline{0};
   // Rotates equal-scored replicas, so a file's stripes spread over them.
   size_t stripe = 0;
@@ -225,16 +227,16 @@ struct DistributedStoreOptions {
   size_t extent_size = 16 * 1024 * 1024;
   // A peer whose put has moved no byte for this long is spilled past.
   std::chrono::milliseconds write_stall{2500};
-  // A write's and a read's deadline when the caller names none, from when the
-  // wait for this node's own credit is over.
-  std::chrono::milliseconds write_deadline{60000};
-  std::chrono::milliseconds read_deadline{60000};
-  // How long a peer's put or fetch may run on past the write or read that
-  // started it, so a slow peer's acknowledgement still reaches the write's
-  // ticket. At the horizon Dannan cancels the call (the peer told, its reply
-  // slot freed, a late reply dropped) and the copy is owed to prompt
-  // replication.
-  std::chrono::milliseconds call_horizon{120000};
+  // The bound on a peer's put or fetch (Dannan's CallWatch): one that has received
+  // no byte of its answer for this long is cancelled (the peer told, its reply slot
+  // freed, a late reply dropped), and the copy is owed to prompt replication. One
+  // still moving goes on, however long, as Macha's does, past the write or read that
+  // started it if that had a deadline, so a slow peer's acknowledgement still reaches
+  // the write's ticket. Longer than the wait for credit a peer's server may make
+  // before it answers (Macha's 120 s window), so that answer comes first. Macha has
+  // no such bound on a data call (data_no_progress_deadline 0): a peer that keeps its
+  // session and never answers holds a call there for ever.
+  std::chrono::milliseconds call_no_progress{300000};
   // Each presence, claim and CONTROL call to one peer (Macha's
   // max(dead_after, connect_timeout)).
   std::chrono::milliseconds control_call{30000};
@@ -330,11 +332,12 @@ struct RepairDiagnostics {
 // local first, spill past a peer stalled beyond write_stall or one that
 // refuses, and return on what landed when nothing more can be had promptly;
 // the rest is owed to prompt replication (a second copy) and repair. Durable
-// writes to every live member of the set and waits for each to the deadline.
-// Every write returns evidence naming each node, and a ticket: calls still in
-// flight when the write returns run on to call_horizon and report into it,
-// and a durable write's ticket pushes the object to a member that was dead
-// once it is back.
+// writes to every live member of the set and waits for each. With a caller's
+// deadline a write returns by it; with none it has no clock of its own, and every
+// call it waits on is bounded by call_no_progress. Every write returns evidence
+// naming each node, and a ticket: calls still in flight when the write returns run
+// on and report into it, and a durable write's ticket pushes the object to a member
+// that was dead once it is back.
 //
 // Reads (S27): local, then the persistent cache, then remote owners and the
 // other ranked nodes in the replica selector's order; concurrent readers of
@@ -565,7 +568,6 @@ class DistributedStore final : public ControlObjectSource {
 
   WriteEvidence run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into = {});
   std::shared_ptr<TicketRecord> new_ticket(const ObjectId& id, Durability level, bool deferred);
-  std::chrono::milliseconds write_deadline_of(const WriteOptions& options) const;
   void check_write(const ObjectId& id, std::span<const uint8_t> data) const;
   std::vector<dannan::membership::NodeRecord> hosting(const std::vector<dannan::membership::NodeRecord>& nodes) const;
   // The principal and prefix as the replicas are told them: this node under
@@ -597,6 +599,8 @@ class DistributedStore final : public ControlObjectSource {
   std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
                                           std::atomic_bool* cancelled = nullptr) const;
   std::optional<IoReserve::Slot> admit_control() const;
+  // How a peer's put or fetch is watched: it has no other limit past a caller's own.
+  dannan::net::CallWatch peer_call_watch() const;
   void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);
   void trace_repair(const std::string& detail) const;
   void note_unsourceable(const ObjectId& id);
