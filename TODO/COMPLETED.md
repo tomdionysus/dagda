@@ -14,6 +14,22 @@ assertion but for flipping the body byte where Macha's writes 0x5a over it. No e
 For S7: a suffix that does not open under the reader's key and associated data is now one torn tail, so a half-migrated history must never reach this reader.
 Gate: `dagda_tests` 859 passing, 4 disabled, three whole runs on the Mac (797 at the start). `g++-15 -fsyntax-only` clean on the changed sources; not run under GCC.
 
+## 2026-11-06: DATA credit waits as Macha's (`feature/credit-wait`)
+
+`admit_data` takes `no_caller_deadline`: the credit wait runs under the arbiter's no-progress window, re-armed by any release, as Macha's at `9a08846`
+(`src/cluster/data_work.hpp`). Every store and server path whose Macha counterpart names no deadline uses it; a caller's own deadline stays
+absolute. `get_object`, `put_object` and `remove_objects` that give up answer 503 `stopping`; a probe that tries once answers 503 `storage_busy`.
+The warning is Macha's line word for word. `AdmissionOptions::no_progress` defaults to 120 s. `admission_wait` now bounds control slots only, and
+nothing waits on it with the reserve off. Macha's 0 is 100 years from the facade (plan S.3): the one difference left in the window, unseen unless a
+config sets 0, and both live nodes set 120000. No existing test's assertion changed.
+Left, for the maintainer: the 60 s `write_deadline` runs during a local credit wait, so a whole-window stall fails the write where Macha spills to a peer; a
+read's own deadline restarts at each admission and at the remote fetch where Macha's is one absolute time; prompt replication and local `valid_on`
+take credit, where Macha's prompt read takes none and its store has no `valid_on`.
+`StoreRepair.RepairIsPacedNotStoppedWhileHigherClassesStayBusy` is on stepped time: a contended turn earns 19 times its real length as rest, so a turn of
+about 526 ms outran its 10 s wall-clock bound. Pacing as designed, not a defect; the failure itself was not reproduced under CPU load.
+Checked under GCC 15 by `-fsyntax-only` on the changed sources; not linked or run under GCC or on arm64.
+Gate: `dagda_tests` 806 passing, 4 disabled, three whole runs on the Mac (797 at the start).
+
 ## 2026-11-06: the node's seams for Macha's loop (`feature/node-seams`)
 
 `Node::run_local_stages(stop)` throws `MaintenanceStopping` past its catch; `begin_local_stages`, `local_rebalance`, `retention_compact`,
