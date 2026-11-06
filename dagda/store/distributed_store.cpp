@@ -30,6 +30,10 @@ using Clock = std::chrono::steady_clock;
 // A write's or a read's deadline is on the node's clock, which nothing notifies
 // when it moves other than with the steady clock: a wait looks again this often.
 constexpr std::chrono::milliseconds look_at_the_clock{25};
+
+// Dannan's call takes a deadline. A peer's put or fetch is bounded by its no-progress
+// watch instead, as Macha's has no absolute limit: this is past any transfer.
+constexpr std::chrono::milliseconds no_absolute_limit = std::chrono::hours(24 * 365 * 10);
 using dannan::contract::Lock;
 using dannan::contract::ReadLock;
 using dannan::contract::WriteLock;
@@ -95,7 +99,7 @@ ObjectData buffer_of(Bytes bytes) {
 }
 
 // Calls `requests` concurrently, at most `window` at once, each within
-// `deadline`; the outcomes in order. Waits on the peers.
+// `deadline` and under `watch`; the outcomes in order. Waits on the peers.
 struct Request {
   NodeRecord peer;
   dannan::net::MessageType type{};
@@ -104,7 +108,7 @@ struct Request {
 };
 
 std::vector<CallOutcome> call_all(dannan::Routes& routes, const boost::asio::any_io_executor& executor, std::vector<Request> requests, size_t window,
-                                  std::chrono::milliseconds deadline) {
+                                  std::chrono::milliseconds deadline, dannan::net::CallWatch watch = {}) {
   std::vector<CallOutcome> out(requests.size());
   std::vector<std::future<CallOutcome>> in_flight;
   size_t first = 0;
@@ -122,8 +126,9 @@ std::vector<CallOutcome> call_all(dannan::Routes& routes, const boost::asio::any
     if (i >= first + std::max<size_t>(1, window)) drain(i + 1 - std::max<size_t>(1, window));
     auto promise = std::make_shared<std::promise<CallOutcome>>();
     in_flight.push_back(promise->get_future());
-    routes.call(requests[i].peer, requests[i].type, std::move(requests[i].payload), requests[i].frame, deadline, executor,
-                [promise](CallOutcome outcome) { promise->set_value(std::move(outcome)); });
+    routes.call(
+        requests[i].peer, requests[i].type, std::move(requests[i].payload), requests[i].frame, deadline, executor,
+        [promise](CallOutcome outcome) { promise->set_value(std::move(outcome)); }, watch);
   }
   drain(requests.size());
   return out;
@@ -686,10 +691,6 @@ std::optional<std::string> DistributedStore::scope_refusal(const message::WriteP
   return scope_refusal_text(decision);
 }
 
-std::chrono::milliseconds DistributedStore::write_deadline_of(const WriteOptions& options) const {
-  return options.deadline.count() > 0 ? options.deadline : _options.write_deadline;
-}
-
 std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(const ObjectId& id, Durability level, bool deferred) {
   std::vector<std::shared_ptr<Waiter>> forgotten;
   WriteEvidence forgotten_evidence;
@@ -723,10 +724,11 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
 WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into) {
   _activity.note(options.frame, data.size());
   // A deadline of the caller's runs from here. With none, no clock runs on the
-  // write while its local copy waits, as Macha's: that wait has the arbiter's
-  // window, and write_deadline starts when it is over.
+  // write at all, as Macha's (replicate): its local copy waits under the arbiter's
+  // window and each peer's put under call_no_progress, and it ends when each has
+  // answered or been spilled past.
   const bool own_deadline = options.deadline.count() > 0;
-  auto deadline = _time.now() + write_deadline_of(options);
+  const auto deadline = _time.now() + options.deadline;
   // An ephemeral write runs in the background as the store's ordinary write.
   const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
   const bool deferred = options.deferred;
@@ -832,17 +834,17 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       }
       return;
     }
-    // A call runs on past the write to call_horizon, so a slow peer's answer
-    // still reaches the ticket.
-    auto handle = _context.routes().call(node, type, payload, options.frame, _options.call_horizon, _executor,
-                                         [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); });
+    // A call runs on past the write while it moves, so a slow peer's answer still
+    // reaches the ticket.
+    auto handle = _context.routes().call(
+        node, type, payload, options.frame, no_absolute_limit, _executor, [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); },
+        peer_call_watch());
     Lock lock(run->mutex);
     run->calls[index].handle = std::move(handle);
   };
 
   // This node, when it holds a copy, is first in order, and only its launch waits.
   for (size_t i = 0; i < initial; ++i) launch(order[i]);
-  if (!own_deadline) deadline = _time.now() + _options.write_deadline;
 
   size_t success = 0;
   {
@@ -853,8 +855,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       size_t stalled = 0;
       size_t waited_unfinished = 0;
       size_t waited_ok = 0;
-      auto wake = deadline;
       const auto now = _time.now();
+      auto wake = own_deadline ? deadline : now + look_at_the_clock;
       for (auto& call : run->calls) {
         const bool member_waited = waited.contains(call.node.id);
         if (call.done) {
@@ -869,8 +871,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         }
         ++unfinished;
         if (member_waited) ++waited_unfinished;
-        // A durable write waits on a live member to its deadline; the
-        // others spill past a peer stalled beyond write_stall.
+        // A durable write waits on a live member; the others spill past a peer
+        // stalled beyond write_stall.
         if (level != Durability::durable && !call.spilled && call.handle) {
           // A call not placed yet has made no progress to judge.
           const auto idle = call.handle->idle_for();
@@ -894,7 +896,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
           if (!call.done && call.handle) call.handle->cancel();
         break;
       }
-      if (now >= deadline) break;
+      if (own_deadline && now >= deadline) break;
       if (replacement_needed && next_fallback < order.size()) {
         --replacement_needed;
         const auto node = order[next_fallback++];
@@ -1124,7 +1126,8 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
   // No lease here across the peer's admission: two nodes replicating to each
   // other would each wait on the other's slot.
   const auto started = Clock::now();
-  const auto outcome = _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, _options.call_horizon);
+  const auto outcome =
+      _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, no_absolute_limit, peer_call_watch());
   const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
   if (ok) note_network(data.size(), Clock::now() - started);
   return ok;
@@ -1658,7 +1661,9 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
 
 ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
                                         std::optional<dannan::contract::TimePoint> until) {
-  const auto deadline = until ? *until : _time.now() + (options.deadline.count() > 0 ? options.deadline : _options.read_deadline);
+  // None of the caller's: no clock of its own, as Macha's. The wait ends when the
+  // fetch does, and each peer's answer is under call_no_progress.
+  const auto deadline = until ? until : options.deadline.count() > 0 ? std::optional(_time.now() + options.deadline) : std::nullopt;
   const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;
@@ -1716,8 +1721,10 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
   std::shared_ptr<dannan::net::CallHandle> abandon;
   {
     Lock lock(fetch->mutex);
-    while (!fetch->done && _time.now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
-      fetch->changed.wait_for(lock.native(), std::min<std::chrono::nanoseconds>(deadline - _time.now(), look_at_the_clock));
+    while (!fetch->done && !_stopping.load() && (!deadline || _time.now() < *deadline) &&
+           !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
+      fetch->changed.wait_for(lock.native(), deadline ? std::min<std::chrono::nanoseconds>(*deadline - _time.now(), look_at_the_clock)
+                                                      : std::chrono::nanoseconds(look_at_the_clock));
     --fetch->waiters;
     if (!fetch->done) {
       // The transfer belongs to the object, not to any one reader: it is
@@ -1777,22 +1784,24 @@ void DistributedStore::fetch_next(const std::shared_ptr<SharedFetch>& fetch) {
     return;
   }
   const auto started = Clock::now();
-  auto handle = _context.routes().call(target, message::get_object, message::encode_id(fetch->id), frame, _options.call_horizon, _executor,
-                                       [weak = std::weak_ptr<Shared>(_shared), fetch, target, work, started](CallOutcome outcome) {
-                                         const auto shared = weak.lock();
-                                         if (shared) {
-                                           ReadLock alive(shared->alive);
-                                           if (shared->store) {
-                                             shared->store->fetched(fetch, target, work, started, std::move(outcome));
-                                             return;
-                                           }
-                                         }
-                                         {
-                                           Lock lock(fetch->mutex);
-                                           fetch->done = true;
-                                         }
-                                         fetch->changed.notify_all();
-                                       });
+  auto handle = _context.routes().call(
+      target, message::get_object, message::encode_id(fetch->id), frame, no_absolute_limit, _executor,
+      [weak = std::weak_ptr<Shared>(_shared), fetch, target, work, started](CallOutcome outcome) {
+        const auto shared = weak.lock();
+        if (shared) {
+          ReadLock alive(shared->alive);
+          if (shared->store) {
+            shared->store->fetched(fetch, target, work, started, std::move(outcome));
+            return;
+          }
+        }
+        {
+          Lock lock(fetch->mutex);
+          fetch->done = true;
+        }
+        fetch->changed.notify_all();
+      },
+      peer_call_watch());
   Lock lock(fetch->mutex);
   if (!fetch->done) fetch->handle = std::move(handle);
 }
@@ -2392,6 +2401,12 @@ std::optional<DataAdmission> DistributedStore::admit_data(FrameType frame, uint6
 
 std::optional<IoReserve::Slot> DistributedStore::admit_control() const { return store::admit_control(_io, _options.admission_wait); }
 
+dannan::net::CallWatch DistributedStore::peer_call_watch() const {
+  dannan::net::CallWatch watch;
+  watch.no_progress = _options.call_no_progress;
+  return watch;
+}
+
 void DistributedStore::note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed) {
   // Background credit is spent an extent at a time, so the estimate must
   // reflect an extent's cost: a transfer under half an extent is round trip
@@ -2785,7 +2800,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       std::vector<Request> requests;
       for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
       const auto dispatched = Clock::now();
-      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.call_horizon);
+      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), no_absolute_limit, peer_call_watch());
       std::set<ObjectId> failed;
       uint64_t delivered = 0;
       for (size_t i = 0; i < sends.size(); ++i) {
