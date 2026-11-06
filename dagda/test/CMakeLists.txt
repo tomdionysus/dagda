@@ -24,6 +24,7 @@ add_executable(dagda_tests
   domain_wrap_test.cpp
   heads_census_test.cpp
   heads_exchange_test.cpp
+  heads_messages_test.cpp
   heads_control_node_store_test.cpp
   heads_cost_test.cpp
   heads_record_test.cpp
