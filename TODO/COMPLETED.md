@@ -3,6 +3,13 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: Macha's store forms and live hosting (second-cutover B3, B10)
+
+`held_here`, `cache_local`, `hydration_available`, `hydrate`, `retain_data_here` and `reachability_epoch` on the
+store, with cases. `StorageServer::set_hosts_extents`, so `auto` can follow the dial-back while running. Left of B10 for
+the facade: `get_shared` is `read().object`, `DurabilityBatch` is the ticket wait, and the activity readings are
+Dannan's clocks (`take_*` semantics not checked).
+
 ## 2026-11-06: resumed, Macha 0.93.4's shapes (`9a08846`)
 
 `contract/stopping.h`; `ObjectCorrupt` thrown only for a record read in full that does not open, and `get` and
