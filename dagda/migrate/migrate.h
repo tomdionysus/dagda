@@ -52,8 +52,10 @@
 //   written into its next generation's file and its root published. Peak
 //   extra space is one ledger file.
 // - The backend markers, their mirrors under the state and the state
-//   layout marker are rewritten last, so a disk is v18 until everything on
-//   it is v19.
+//   layout marker are rewritten last. From the first write until then the
+//   state layout marker says the run is part way, which Macha and the store
+//   both refuse, so nothing opens a disk that is part one layout and part the
+//   other.
 //
 // The tag is derived, not sealed again (migrate/retag.h): a record is opened
 // once, under v18, which is what lists a damaged one, and the v19 tag follows
