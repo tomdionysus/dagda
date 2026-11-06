@@ -70,6 +70,10 @@ authenticates is the rest a torn tail. Dagda mirrors it when the commit lands, w
 and `test_a_torn_history_tail_is_still_cut`. The live nodes stay on 0.93.4 for the baselines. Until then Dagda's replica has the old
 shape. The other two read as unreachable and are reproduced: the cache's byte count at `reanchor_history`, and PREPARE then COMMIT with
 no certificate. `set-aside.meta` cannot be cut on Macha's bytes; the report names it as not shown there.
+No on-disk or wire form changes in 0.93.5, so the report names it: forms cut at `9a08846`, behaviour baseline the 0.93.5 commit once it lands,
+and the port branches from that commit. A `history.log` may now hold damaged bytes between good frames, which `dagda-migrate` and the
+comparison tool must read. New words for the journal mapping: Status reads 0.93.5, a torn tail's `reason=` reads "last frame failed
+AES-GCM authentication", and "record too large" is gone from this path.
 
 **Asked of the maintainer (2026-11-06), all answered above but R5, the baselines, which Macha runs now the TV import is cancelled.**
 
