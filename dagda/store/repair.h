@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -55,6 +56,10 @@ struct RepairOptions {
   // Calls one step may make.
   size_t operation_budget = 16;
   size_t extent_size = 16 * 1024 * 1024;
+  // The clock repair's credit and share run on. None: the node's. An owner's
+  // pass on its own clock gives it, as Macha's trace fixtures move its pass's
+  // time while reachability stays on real time.
+  const dannan::contract::TimeSource* time = nullptr;
 };
 
 // Why a pass's repair did or did not run: it ran; a higher class held it to
@@ -76,6 +81,38 @@ struct RepairPass {
   RepairResult step;
 };
 
+// What earn_credit() found: the credit now, in bytes, the rate it earns at and
+// the seconds it earned for.
+struct RepairCredit {
+  uint64_t credit = 0;
+  double rate = 0.0;
+  double seconds = 0.0;
+};
+
+// What claim_walks() did: the claims each class's walk examined, those not
+// held, those brought back. `waiting_for_credit`: a walk met a missing claim
+// it could not afford, and stays before it. `unfinished`: a walk reached its
+// bound with claims left.
+struct RepairWalks {
+  size_t examined = 0;
+  size_t missing = 0;
+  size_t restored = 0;
+  bool waiting_for_credit = false;
+  bool unfinished = false;
+};
+
+// What a turn leaves owing, in Macha's order of asking: the transfer ran out of
+// credit, and earning the next extent's is what to wait for; it yielded to a
+// higher class; there is work left, or work was done, so another turn is due
+// after one interval; only a claim walk still waits for credit; or nothing to
+// do, the credit is dropped and repair waits for an event.
+enum class RepairSettled : uint8_t { credit, yielded, more_work, waiting_for_credit, quiescent };
+
+// How a turn reads a peer's foreground traffic, whenever it asks whether a higher
+// class is present: from telemetry each time, or as the pass found it when it
+// began the turn, as Macha's does (maintenance.cpp:710-714).
+enum class PeerReading : uint8_t { each_time, as_begun };
+
 struct RepairGates {
   uint64_t ran = 0;
   uint64_t share = 0;
@@ -93,7 +130,18 @@ struct RepairGates {
 // node that is always busy still repairs). The rest of Macha's pass (its
 // metadata and catalogue stages, scrub, local rebalance) is not here.
 //
-// Single owner: one thread calls pass(). gates() is thread-safe.
+// pass() is these steps in Dagda's order, public so that an owner's pass can put
+// its own stages between them and decide for itself when repair is due, as
+// Macha's does: earn_credit() every pass, then paced_by(), may_start() and
+// note_gate() to decide, the collector's inventory step, survey(), and on a turn
+// begin_turn(), claim_walks(), lists(), transfer() and settle(). Whether repair
+// is quiet is the caller's: settle() says when it may be, and pass() alone keeps
+// its own state for that. No step looks at the owner's stop: only `pause`, inside
+// the survey's walks, may end one early with MaintenanceStopping, and no step
+// catches that or anything else, so what the rest of the pass does then is the
+// caller's.
+//
+// Single owner: one thread calls pass() and the steps. gates() is thread-safe.
 class Repair {
  public:
   // `activity`: the clocks the store notes object work on. None: the node's.
@@ -109,9 +157,80 @@ class Repair {
   RepairPass pass(std::stop_token stop = {});
   RepairGates gates() const;
 
+  // A turn of repair: begun against the duty share, and closed when this goes,
+  // whatever ended it, so a throw cannot leave the share counting it active.
+  class Turn {
+   public:
+    Turn(const Turn&) = delete;
+    Turn& operator=(const Turn&) = delete;
+    ~Turn();
+
+   private:
+    friend class Repair;
+    Turn(Repair& repair, std::optional<bool> peer) : _repair(repair), _peer(peer) {}
+    Repair& _repair;
+    // The peer reading the turn keeps; none: it reads telemetry each time.
+    const std::optional<bool> _peer;
+  };
+
+  static constexpr dannan::sched::ThreadSafety step_safety = dannan::sched::ThreadSafety::single_owner;
+
+  // Accrues credit for the time since the last call, at `now` on repair's
+  // clock. `when_no_time_passed`: what to earn for instead when none has, as
+  // Macha's pass earns a whole interval (maintenance.cpp:388-390); none earns
+  // nothing, as pass() does. Reads the process's CPU.
+  static constexpr dannan::sched::Waits earn_credit_waits = dannan::sched::Waits::none;
+  RepairCredit earn_credit(dannan::contract::TimePoint now, std::optional<std::chrono::milliseconds> when_no_time_passed = std::nullopt);
+  // The credit now, in bytes. Single owner.
+  uint64_t credit() const noexcept { return static_cast<uint64_t>(_credit); }
+
+  // Brings the availability survey up to date; whether peers were asked.
+  // `pause` is called between pages and rounds. A peer that cannot answer is the
+  // survey's own; anything else, and what `pause` throws, is thrown from here.
+  static constexpr dannan::sched::Waits survey_waits = AvailabilityService::refresh_waits;
+  bool survey(const std::function<void()>& pause = {});
+
+  // The higher classes present now, as RepairPacedBy bits.
+  static constexpr dannan::sched::Waits paced_by_waits = dannan::sched::Waits::none;
+  uint8_t paced_by() const;
+  // Whether the duty share lets a turn start, against `paced`. Macha's gate.repair
+  // "share".
+  static constexpr dannan::sched::Waits may_start_waits = dannan::sched::Waits::none;
+  bool may_start(dannan::contract::TimePoint now, uint8_t paced);
+  // How long until may_start() can say yes; zero now. What a pass parks for.
+  static constexpr dannan::sched::Waits turn_wait_waits = dannan::sched::Waits::none;
+  std::chrono::milliseconds turn_wait(dannan::contract::TimePoint now, uint8_t paced);
+  // Counts a pass's gate in gates(). A pass may note more than one, as Macha's
+  // notes `credit` after `ran`; pass() notes one.
+  static constexpr dannan::sched::Waits note_gate_waits = dannan::sched::Waits::none;
+  void note_gate(RepairGate gate, uint8_t paced);
+
+  static constexpr dannan::sched::Waits begin_turn_waits = dannan::sched::Waits::none;
+  [[nodiscard]] Turn begin_turn(dannan::contract::TimePoint now, uint8_t paced, PeerReading reading = PeerReading::each_time);
+
+  // One bounded step of the DATA claim walk, then one of the CONTROL walk, a
+  // missing claim spending an extent of credit. Runs to its bound: nothing here looks at a stop.
+  static constexpr dannan::sched::Waits claim_walks_waits =
+      dannan::sched::Waits::state_device | dannan::sched::Waits::data_device | dannan::sched::Waits::network | dannan::sched::Waits::locks;
+  RepairWalks claim_walks(Turn& turn);
+
+  // What a transfer works from, as the ledger and the survey stand now.
+  static constexpr dannan::sched::Waits lists_waits = dannan::sched::Waits::none;
+  RepairLists lists() const;
+
+  // One repair step from `lists` on the credit there is, which it spends. Yields
+  // at an operation boundary on the duty share, and otherwise runs to its budget:
+  // nothing here looks at a stop.
+  static constexpr dannan::sched::Waits transfer_waits = claim_walks_waits;
+  RepairResult transfer(Turn& turn, const RepairLists& lists);
+
+  // What the turn leaves owing; drops the credit when that is nothing.
+  static constexpr dannan::sched::Waits settle_waits = dannan::sched::Waits::none;
+  RepairSettled settle(const RepairWalks& walks, const RepairResult& step);
+
  private:
   class Restorer;
-  bool higher_class_active() const;
+  bool higher_class_active(const Turn& turn) const;
   // A peer's telemetry shows foreground traffic now.
   bool peer_foreground_active() const;
 
