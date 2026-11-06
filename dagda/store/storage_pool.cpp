@@ -150,7 +150,7 @@ StoragePool::StoragePool(std::filesystem::path state, NodeId node, NodeId epoch,
       _pack_threshold(options.pack_threshold),
       _pack_target_size(options.pack_target_size),
       _ledger_cache_bytes(options.ledger_cache_bytes),
-      _service_monitor(_services.logger.child("pressure")) {
+      _service_monitor(_services.logger.child("pressure"), options.service_thresholds) {
   if (_role == domain::Role::member && !_key) throw std::invalid_argument("storage pool needs a storage key");
   if (!_ledger_key)
     throw std::invalid_argument(
