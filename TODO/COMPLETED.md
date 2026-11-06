@@ -3,6 +3,18 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: the steps Macha's loop needs (`feature/maintenance-steps`)
+
+`Collector::pass` is `inventory_step`, `tombstone_step`, `release_step`, `control_step`, `data_step`; `Repair::pass` is
+`earn_credit`, `survey`, `paced_by`, `may_start`, `turn_wait`, `note_gate`, `begin_turn`, `claim_walks`, `lists`, `transfer`, `settle`:
+public, with waits declared, returning evidence, nothing catching a stop. `RepairOptions` gains `time` and `trace` (the `claim-walk`
+lines). The tombstones line is Macha's `erase=[...]`, and a stamp has its own line. `dagda/test/maintenance_steps_test.cpp` drives the
+steps in Macha's order in a neutral loop, on real clusters, to all seven of Macha's fixtures, unchanged, at `9a08846`
+(`dagda/test/data/maintenance-traces/`). What Macha's filesystem and catalogue answered is a scripted owner, so generation and live
+counts are its script's; a one-node fixture has a non-hosting peer beside it. Not run under GCC or on Linux. Dagda's own loop stays 8c:
+`Repair::pass` also wakes on a new survey list, which `claimed-objects-lost` forbids, and the survey has no injectable clock.
+Gate: `dagda_tests` 543 passing, 3 disabled, three whole runs on the Mac; the new cases 15 repeats before the last three cases, 5 after.
+
 ## 2026-11-06: heads S2, the tree over keys (`feature/heads-s2`)
 
 `dagda/heads/`: `tree.{h,cpp}` (build, update, apply, walk, lookup, scan, prefix, paged `entries`, diff, node diff, collect, stats,
