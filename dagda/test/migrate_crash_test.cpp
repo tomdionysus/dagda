@@ -14,13 +14,19 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <memory>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "dagda/migrate/manifest.h"
 #include "dagda/migrate/migrate.h"
 #include "dagda/migrate/retag.h"
 #include "dagda/test/fixtures/legacy_v18.h"
@@ -281,6 +287,325 @@ TEST(MigrateBack, AStateCrashedOnTheWayBackIsRefusedUntilItIsFinished) {
   EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
   EXPECT_EQ(v18.migrate().loose_migrated, 8u);
   expect_v19_opens(bed, v18);
+}
+
+// ---- Every step, a process that dies there ----------------------------------------
+
+// The steps migrate_state has, in its order, each one durable before the next:
+// 5 loose objects, 7 pack records of which 5 are puts (2 packs); 2 loose objects
+// of the control store; 1 of the cache; claims.log, the 2 sightings files and 6
+// tries; the backend's marker, its mirror, the state's marker. The count is pinned
+// below, so a step added to the migration fails here until it has its cases.
+constexpr size_t forward_steps = 5 + 5 + 2 + 1 + 1 + 2 + 6 + 3;
+
+struct CrashBed {
+  CrashBed() : v18(bed), manifests(bed.dir.path() / "manifests") {
+    std::filesystem::create_directories(manifests);
+    legacy::write_file(v18.state / "retention" / "unreferenced-data.bin", ledger::encode_unreferenced_since({{v18.loose[2].first, 1'000}}));
+    legacy::write_file(v18.state / "retention" / "unreferenced-control.bin", ledger::encode_unreferenced_since({{v18.control_objects[1].first, 2'000}}));
+    pass("before");
+  }
+
+  void pass(const std::string& name) const {
+    ManifestOptions options;
+    options.backends = {v18.backend};
+    options.cache = v18.cache;
+    options.node = v18.node;
+    options.metadata = std::make_shared<FilledMetadata>();
+    (void)write_manifest(manifests / name, v18.state, v18.cluster(), v18.custody(), options);
+  }
+
+  MigrationOptions run_options() const {
+    MigrationOptions options;
+    options.cache = v18.cache;
+    return options;
+  }
+  MigrationReport back() const { return migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), run_options()); }
+
+  // A child that runs `direction` and ends the process when `step` steps have
+  // been done, as a kill would, with no teardown. Secure memory is not inherited
+  // across a fork: the child derives its own keys from the files. True if it died
+  // there; false if the run ended first, having done everything.
+  bool die_after(size_t step, bool going_back) const {
+    const auto child = ::fork();
+    if (child < 0) {
+      ADD_FAILURE() << "cannot fork";
+      return false;
+    }
+    if (child == 0) {
+      try {
+        auto options = run_options();
+        size_t seen = 0;
+        options.after_step = [&seen, step](const MigrationReport&) {
+          if (++seen == step) ::_exit(0);
+        };
+        if (going_back)
+          (void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+        else
+          (void)migrate_state(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+        ::_exit(21);
+      } catch (...) {
+        ::_exit(22);
+      }
+    }
+    const auto code = test::exit_code(child);
+    EXPECT_TRUE(code == std::optional<int>(0) || code == std::optional<int>(21)) << "the child ended with " << code.value_or(-1);
+    return code == std::optional<int>(0);
+  }
+
+  // Compared with the manifest from before the first run: every object, ledger
+  // and marker by name, and nothing lost.
+  void expect_comparison_passes(uint32_t after_layout, const std::string& name) const {
+    pass(name);
+    ComparisonOptions options;
+    options.after_layout = after_layout;
+    const auto report = compare_manifests(manifests / "before", manifests / name, options);
+    EXPECT_TRUE(report.passed()) << report.summary();
+  }
+
+  StoreBed bed;
+  V18State v18;
+  const std::filesystem::path manifests;
+};
+
+// At every step, forward: the disk left is finished by a second run, the
+// comparison passes and the store reads every byte back.
+TEST(MigrateCrashPhases, AProcessThatDiesAfterAnyStepIsFinishedByASecondRun) {
+  size_t died = 0;
+  for (size_t step = 1;; ++step) {
+    SCOPED_TRACE("died after step " + std::to_string(step));
+    CrashBed crash;
+    if (!crash.die_after(step, false)) break;
+    ++died;
+    const auto report = crash.v18.migrate();
+    // Every record is accounted for, moved now or before.
+    EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+    if (!report.already_v19) {
+      EXPECT_EQ(report.loose_migrated + report.loose_already, 8u);
+      EXPECT_EQ(report.pack_records_migrated + report.pack_records_already, 5u);
+    }
+    crash.expect_comparison_passes(19, "after");
+    expect_v19_opens(crash.bed, crash.v18);
+  }
+  EXPECT_EQ(died, forward_steps);
+}
+
+// At every step, forward, and then taken back instead of finished: as Macha wrote
+// it, by the same comparison, tags included; and forward again from there.
+TEST(MigrateCrashPhases, AProcessThatDiesAfterAnyStepCanBeTakenBack) {
+  size_t died = 0;
+  for (size_t step = 1;; ++step) {
+    SCOPED_TRACE("died after step " + std::to_string(step));
+    CrashBed crash;
+    if (!crash.die_after(step, false)) break;
+    ++died;
+    (void)crash.back();
+    EXPECT_EQ(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    crash.expect_comparison_passes(18, "back");
+    (void)crash.v18.migrate();
+    crash.expect_comparison_passes(19, "forward");
+  }
+  EXPECT_EQ(died, forward_steps);
+}
+
+// At every step of going back: a second run going back finishes it.
+TEST(MigrateCrashPhases, AProcessThatDiesGoingBackAfterAnyStepIsFinishedByASecondRun) {
+  size_t died = 0;
+  for (size_t step = 1;; ++step) {
+    SCOPED_TRACE("died after step " + std::to_string(step));
+    CrashBed crash;
+    (void)crash.v18.migrate();
+    if (!crash.die_after(step, true)) break;
+    ++died;
+    (void)crash.back();
+    EXPECT_EQ(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    crash.expect_comparison_passes(18, "back");
+  }
+  EXPECT_EQ(died, forward_steps);
+}
+
+// The second run dies too, somewhere in each phase; a third finishes. Steps are
+// the second run's own count: it has fewer to do.
+TEST(MigrateCrashPhases, ACrashDuringTheSecondRunIsFinishedByAThird) {
+  size_t cases = 0;
+  for (const size_t first : std::vector<size_t>{1, 3, 5, 8, 10, 13, 14, 16, 19, 22, 23, 24}) {
+    for (const size_t second : std::vector<size_t>{1, 2, 5, 9}) {
+      SCOPED_TRACE("died after step " + std::to_string(first) + ", then after " + std::to_string(second));
+      CrashBed crash;
+      ASSERT_TRUE(crash.die_after(first, false));
+      if (!crash.die_after(second, false)) continue;
+      ++cases;
+      (void)crash.v18.migrate();
+      crash.expect_comparison_passes(19, "after");
+      expect_v19_opens(crash.bed, crash.v18);
+    }
+  }
+  EXPECT_GE(cases, 30u);
+}
+
+// Three in a row going back, from a crash going forward.
+TEST(MigrateCrashPhases, ACrashDuringASecondRunGoingBackIsFinishedByAThird) {
+  for (const size_t first : std::vector<size_t>{3, 14, 23}) {
+    SCOPED_TRACE(first);
+    CrashBed crash;
+    ASSERT_TRUE(crash.die_after(first, false));
+    (void)crash.die_after(2, true);
+    (void)crash.back();
+    crash.expect_comparison_passes(18, "back");
+  }
+}
+
+// Died before any write: after the refusals, as the first line goes out. Nothing
+// on the disk moved, no step was taken, and the second run does the lot.
+TEST(MigrateCrashPhases, ASecondRunWhoseFirstDiedBeforeAnyWriteDoesEverything) {
+  CrashBed crash;
+  const auto before = crash.v18.digest();
+  const auto child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    try {
+      auto options = crash.run_options();
+      options.say = [](std::string_view) { ::_exit(0); };
+      (void)migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
+      ::_exit(21);
+    } catch (...) {
+      ::_exit(22);
+    }
+  }
+  ASSERT_EQ(test::exit_code(child), std::optional<int>(0));
+  EXPECT_EQ(crash.v18.digest(), before);
+  const auto report = crash.v18.migrate();
+  EXPECT_EQ(report.loose_migrated, 8u);
+  EXPECT_EQ(report.loose_already, 0u);
+  EXPECT_EQ(report.pack_records_migrated, 5u);
+  EXPECT_EQ(report.ledgers_migrated, 9u);
+  EXPECT_EQ(report.markers_rewritten, 3u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// ---- Inside a ledger's move: what the steps above cannot stop between ---------------
+
+// A trie's journal folded into its nodes, under the old key, and no further: the
+// checkpoint that opens ObjectTrie::rekey.
+TEST(MigrateCrashPhases, ATrieStoppedAfterItsCheckpointIsFinished) {
+  CrashBed crash;
+  {
+    ledger::ObjectTrie trie(crash.v18.state / "retention" / "ledger-data", crash.bed.key, {}, test::quiet_logger());
+    trie.checkpoint();
+  }
+  (void)crash.v18.migrate();
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+std::vector<std::filesystem::path> node_files(const std::filesystem::path& dir) {
+  std::vector<std::filesystem::path> out;
+  for (const auto& entry : std::filesystem::directory_iterator(dir))
+    if (entry.path().filename().string().starts_with("nodes-")) out.push_back(entry.path());
+  return out;
+}
+
+// The next generation's node file part written under the new key, the root not
+// yet published: the trie is whole under the old key, and the part is removed.
+TEST(MigrateCrashPhases, ATrieStoppedPartWayThroughItsNextGenerationIsFinished) {
+  CrashBed crash;
+  const auto dir = crash.v18.state / "ledger" / ("data-" + dannan::identity::to_string(crash.v18.token));
+  const auto current = node_files(dir).at(0);
+  const auto name = current.filename().string();
+  const auto generation = std::stoull(name.substr(6, name.size() - 10));
+  legacy::write_file(dir / ("nodes-" + std::to_string(generation + 1) + ".bin"), Bytes(4000, 0x5e));
+  (void)crash.v18.migrate();
+  crash.expect_comparison_passes(19, "after");
+  EXPECT_EQ(node_files(dir).size(), 1u);
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// The root published under the new key, the old node file not yet removed. The
+// second run finds it done; the stale file is no ledger's and costs nothing the
+// next open does not take back.
+TEST(MigrateCrashPhases, ATrieStoppedBeforeRemovingItsOldNodesIsDone) {
+  CrashBed crash;
+  const auto dir = crash.v18.state / "ledger" / "control";
+  const auto old_file = node_files(dir).at(0);
+  const auto old_bytes = legacy::read_file(old_file);
+  {
+    ledger::ObjectTrie trie(dir, crash.bed.key, {}, test::quiet_logger());
+    trie.rekey(crash.v18.node_local());
+  }
+  legacy::write_file(old_file, old_bytes);
+  const auto report = crash.v18.migrate();
+  EXPECT_EQ(report.ledgers_already, 1u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+  EXPECT_FALSE(std::filesystem::exists(old_file));
+}
+
+// The bytes of a pack record cut short and a kill, together: the comparison holds
+// the second run to every record.
+TEST(MigrateCrashPhases, AWriteCutShortAmongRecordsAlreadyMovedIsFinished) {
+  CrashBed crash;
+  ASSERT_TRUE(crash.die_after(7, false));
+  // Five loose done and two of pack 1's and 2's puts: the next is pack 2's second.
+  const auto pack = legacy::pack_path(crash.v18.backend, 2);
+  const auto file = legacy::read_file(pack);
+  const auto first = decode_pack_header(std::span<const uint8_t>(file).first(pack_header_size)).value();
+  const uint64_t offset = pack_header_size + first.payload_size;
+  const auto header = decode_pack_header(std::span<const uint8_t>(file).subspan(offset, pack_header_size)).value();
+  TagDeriver deriver(*crash.bed.key);
+  auto moved = header;
+  moved.tag = deriver.derive(header.tag, associated_data_v18(header.id), v1.associated_data(header.id), header.payload_size);
+  const auto new_header = encode_pack_header(moved);
+  const auto new_bytes = std::span<const uint8_t>(new_header).subspan(pack_tag_offset);
+  write_at(pack, offset + pack_tag_offset, torn(std::span<const uint8_t>(file).subspan(offset + pack_tag_offset, 48), new_bytes, {20, true}));
+  const auto report = crash.v18.migrate();
+  EXPECT_EQ(report.pack_records_torn_finished, 1u);
+  EXPECT_EQ(report.pack_regions_skipped, 0u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// A journal's torn tail, a trie's and the claims', after the first pass: what
+// replay drops, the migration drops, and no record went with it.
+TEST(MigrateCrashPhases, TornJournalTailsAreDroppedAndNothingWithThem) {
+  CrashBed crash;
+  legacy::write_file(crash.v18.state / "retention" / "claims.log", Bytes(9, 0x33), true);
+  legacy::write_file(crash.v18.state / "retention" / "ledger-data" / "journal.log", Bytes(9, 0x44), true);
+  const auto report = crash.v18.migrate();
+  EXPECT_EQ(report.ledger_tail_bytes_dropped, 9u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// What a crash left beside a file being replaced: gone after the second run, and
+// never counted as a difference, whichever pass saw it.
+TEST(MigrateCrashPhases, TemporariesLeftByACrashAreNotADifference) {
+  CrashBed crash;
+  ASSERT_TRUE(crash.die_after(14, false));
+  legacy::write_file(crash.v18.state / "retention" / "claims.log.tmp.4242.0", bytes_of("half of a journal"));
+  legacy::write_file(crash.v18.state / "storage-layout.tmp.4242.1", bytes_of("half of a marker"));
+  (void)crash.v18.migrate();
+  EXPECT_FALSE(std::filesystem::exists(crash.v18.state / "retention" / "claims.log.tmp.4242.0"));
+  crash.expect_comparison_passes(19, "after");
+}
+
+// ---- What the comparison makes of a run that did not finish ---------------------------
+
+// A pass over a disk left half way, by a run nobody finished: the state's marker
+// still says v18, so a comparison against it can only fail, and it names what
+// moved.
+TEST(MigrateCrashPhases, AManifestOfAHalfMigratedStateFailsAndNamesItsRecords) {
+  CrashBed crash;
+  ASSERT_TRUE(crash.die_after(3, false));
+  crash.pass("half");
+  const auto report = compare_manifests(crash.manifests / "before", crash.manifests / "half");
+  EXPECT_FALSE(report.passed());
+  EXPECT_TRUE(report.names("the second manifest is of layout v18, not v19")) << report.summary();
+  ComparisonOptions same;
+  same.after_layout = 18;
+  const auto as_v18 = compare_manifests(crash.manifests / "before", crash.manifests / "half", same);
+  EXPECT_FALSE(as_v18.passed());
+  EXPECT_TRUE(as_v18.names("is v19 in a manifest of layout v18: not migrated")) << as_v18.summary();
 }
 
 }  // namespace
