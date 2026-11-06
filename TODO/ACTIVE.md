@@ -15,6 +15,15 @@ fixed constant record, new clusters only. Don't invest further in torrent parity
 "development will continue on them with macha code frozen until they can answer Yes unconditionally, the entire reason
 for their existence is this."
 
+What it means (the maintainer, relayed, in answer to "do ruled changes count"): "Dannan and Dagda are generalisations of macha's cluster
+and storage layer. The intent is to devlop them to the point where they are at least as capable as the macha code they are
+based on, then replace the macha code with them. MachaDFS and cluster become systems implemented with Dannan and Dagda as
+fundamental libraries. The fidelity point is that after that, Macha should work just as well as it ever did." So the test is
+what an operator, client or user of Macha would lose or find worse, and every piece of data surviving, not whether internals
+stay the same. v19 and ledgers under custody do not count in themselves. The device reserve, lease fence and claim parts are
+judged by the baselines; the options to turn them off stay, for if they are worse. (The last two sentences are the Macha
+session's reading, and mine.)
+
 The question: does Macha move onto Dagda with no change in data, functionality, reliability and performance? The only
 answer that counts is Yes, with nothing attached. A bounded claim, an exception list or a tolerance is a No. Macha stays
 frozen at `9a08846`. There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
@@ -29,8 +38,8 @@ needs them. Tell the Macha session when the answer is Yes.
    it needs a later pass.
 3. The steps Macha's loop needs: `Repair::pass` and `Collector::pass` split so Macha's pass can order and trace them, with
    `test_maintenance_trace`'s fixtures unchanged. Dagda's own loop to the same fixtures at 8c.
-4. Anything Dagda adds is inert on a Macha node: no behaviour Macha lacks. The device reserve off by the facade's option,
-   claim parts no finer than Macha's journal frames, no lease fence on Macha's paths. Check every difference in requirements
+4. Anything Dagda adds must leave Macha working as well. The device reserve can be off by option and is judged by the baselines;
+   claim parts are one journal frame; the lease fence is unused unless asked for. Check every difference in requirements
    section 7 the same way.
 5. The arbiter's foreground signal in Macha's meaning: Dannan's clocks count every inbound request, Macha's only object bytes.
 6. The before and after comparison tool: objects by id and plaintext hash across DATA, CONTROL and cache, removed objects staying
