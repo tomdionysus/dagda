@@ -162,7 +162,8 @@ Replica::Replica(ReplicaOptions options)
       _logger(logger_of(options.logger)),
       _pause(std::move(options.pause)),
       _costs(options.costs),
-      _replace_file(file_replacer(std::move(options.replace_file))) {
+      _replace_file(file_replacer(std::move(options.replace_file))),
+      _history_reader(std::move(options.history_reader)) {
   std::filesystem::create_directories(options.directory);
   open(std::move(options.recovery_seed));
   _opening = false;
@@ -678,20 +679,28 @@ void Replica::load_history() {
   if (!std::filesystem::exists(_history_path)) return;
 
   const uint64_t file_size = std::filesystem::file_size(_history_path);
-  std::ifstream stream(_history_path, std::ios::binary);
+  const auto open_history = [this]() -> std::unique_ptr<std::istream> {
+    if (_history_reader) return _history_reader(_history_path);
+    return std::make_unique<std::ifstream>(_history_path, std::ios::binary);
+  };
+  auto stream_owner = open_history();
+  auto& stream = *stream_owner;
   if (!stream) throw std::runtime_error("cannot open metadata history " + _history_path.string());
   uint64_t offset = 0;
   uint64_t valid = 0;
   std::string trailing_problem;
   size_t skipped = 0;
   std::string first_skipped;
+  const auto scan = open_history();
+  bool read_failed = false;
+  const auto open_this_frame = [this](std::span<const uint8_t> frame) { return open_frame(*_content_key, _history_aad, frame); };
 
   // Streaming: memory at open is bounded by one frame, not the file.
   while (offset + 4 <= file_size) {
     pause_walk();
     std::array<uint8_t, 4> header_bytes{};
     if (!stream.read(reinterpret_cast<char*>(header_bytes.data()), header_bytes.size())) {
-      trailing_problem = "incomplete trailing frame header";
+      read_failed = true;
       break;
     }
     Reader header(header_bytes);
@@ -702,7 +711,7 @@ void Replica::load_history() {
     if (in_file) {
       Bytes frame(static_cast<size_t>(length));
       if (length && !stream.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(length))) {
-        trailing_problem = "incomplete trailing frame";
+        read_failed = true;
         break;
       }
       opened = open_frame(*_content_key, _history_aad, frame);
@@ -712,7 +721,8 @@ void Replica::load_history() {
       // nothing about where the next one starts. A later frame that opens means this
       // is damage, left where it lies, and everything from there on is good; none
       // means a torn tail.
-      const auto next = next_frame_from(_history_path, file_size, offset + 1, *_content_key, _history_aad, [this] { pause_walk(); });
+      const auto next = next_frame_from(*scan, file_size, offset + 1, max_history_frame_bytes, open_this_frame, read_failed, [this] { pause_walk(); });
+      if (read_failed) break;
       if (!next) {
         trailing_problem = in_file ? "last frame failed AES-GCM authentication" : "incomplete trailing frame";
         break;
@@ -780,6 +790,16 @@ void Replica::load_history() {
     _logger.warn("metadata history skipped frames that could not be replayed path=" + _history_path.string() + " count=" + std::to_string(skipped) +
                  " first=" + first_skipped + "; dependent heads are repaired live from peers");
 
+  if (read_failed) {
+    // The disk did not answer, which says nothing about what is on it. Nothing is cut:
+    // what was not read is read at the next open, and heads needing it are repaired
+    // live from peers meanwhile.
+    _logger.warn("metadata history read failed path=" + _history_path.string() + " offset=" + std::to_string(offset) +
+                 " unread_bytes=" + std::to_string(file_size - offset) + "; nothing cut");
+    _history_bytes = file_size;
+    return;
+  }
+
   if (valid != file_size) {
     if (trailing_problem.empty()) trailing_problem = "trailing bytes after last complete frame";
     const uint64_t tail_size = file_size - valid;
@@ -792,7 +812,7 @@ void Replica::load_history() {
         throw std::runtime_error("cannot read corrupt metadata history tail");
       quarantine = quarantine_tail(_history_path, tail).string();
     }
-    stream.close();
+    stream_owner.reset();
     truncate_durable(_history_path, valid);
     _logger.warn("metadata history recovered path=" + _history_path.string() + " offset=" + std::to_string(valid) +
                  " discarded_bytes=" + std::to_string(tail_size) + " quarantine=" + quarantine + " reason=" + trailing_problem);

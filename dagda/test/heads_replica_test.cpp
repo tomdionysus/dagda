@@ -2151,7 +2151,7 @@ TEST(HeadsReplica, OpeningSkipsAFrameThatCannotReplayAndKeepsTheTail) {
   EXPECT_TRUE(any_file_starts_with(bed.path("other"), "history.log.corrupt."));
 }
 
-// test_a_damaged_history_frame_loses_only_that_frame (SM at Macha 9153011, 0.93.5). A
+// test_a_damaged_history_frame_loses_only_that_frame (SM at Macha 98b816d, 0.93.5). A
 // frame's length word is outside the AEAD, so damage to it looks like a torn tail.
 // Whatever it says, every intact frame after it stays, a node opens, and a commit made
 // afterwards survives the next open. Only bytes nothing can read are ever cut.
@@ -2173,7 +2173,6 @@ TEST(HeadsReplica, ADamagedHistoryFrameLosesOnlyThatFrame) {
       {"length short, inside the file", [&](auto& file, uint64_t offset, uint32_t length) { put_length(file, offset, length / 2); }},
       {"length long, inside the file", [&](auto& file, uint64_t offset, uint32_t length) { put_length(file, offset, length + 9); }},
       {"length zero", [&](auto& file, uint64_t offset, uint32_t) { put_length(file, offset, 0); }},
-      // Macha's writes 0x5a over the byte, which is no damage once in 256 seals. Flipped here.
       {"a body byte",
        [](auto& file, uint64_t offset, uint32_t length) {
          const auto at = static_cast<std::streamoff>(offset + 4 + length / 2);
@@ -2181,7 +2180,7 @@ TEST(HeadsReplica, ADamagedHistoryFrameLosesOnlyThatFrame) {
          file.seekg(at);
          file.get(byte);
          file.seekp(at);
-         file.put(static_cast<char>(byte ^ 0x5a));
+         file.put(static_cast<char>(byte ^ 0xFF));
        }},
   };
 
@@ -2275,6 +2274,172 @@ TEST(HeadsReplica, ATornHistoryTailIsStillCut) {
   for (const auto& item : std::filesystem::directory_iterator(bed.path()))
     kept_aside += item.path().filename().string().find("history.log") == 0 && item.path().filename() != "history.log";
   EXPECT_EQ(kept_aside, 1U);
+}
+
+namespace {
+
+// A disk that stops answering at a byte: what lies past it cannot be read.
+struct FailingBuffer final : std::streambuf {
+  Bytes bytes;
+  std::streamoff fails_from;
+  FailingBuffer(Bytes value, std::streamoff at) : bytes(std::move(value)), fails_from(at) { place(0); }
+  char* chars() { return reinterpret_cast<char*>(bytes.data()); }
+  void place(off_type off) {
+    setg(chars(), chars() + off, chars() + std::min<off_type>(std::max<off_type>(fails_from, off), static_cast<off_type>(bytes.size())));
+  }
+  pos_type seekoff(off_type off, std::ios_base::seekdir, std::ios_base::openmode) override {
+    place(off);
+    return off;
+  }
+  pos_type seekpos(pos_type at, std::ios_base::openmode mode) override { return seekoff(at, std::ios_base::beg, mode); }
+};
+
+struct FailingStream final : std::istream {
+  FailingBuffer buffer;
+  FailingStream(Bytes value, std::streamoff at) : std::istream(nullptr), buffer(std::move(value), at) { rdbuf(&buffer); }
+};
+
+Bytes read_all(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return Bytes(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+}  // namespace
+
+// test_a_failed_read_in_the_history_scan_is_not_nothing_later (SM at Macha 98b816d). A
+// disk that stops answering says nothing about what is on it, so the scan reports that
+// apart from finding nothing.
+TEST(HeadsReplica, AFailedReadInTheHistoryScanIsNotNothingLater) {
+  constexpr uint32_t inner = 64;
+  dannan::net::Writer writer;
+  writer.raw(Bytes(100, 0xEE));
+  writer.u32(inner + 32);
+  writer.raw(Bytes(28, 1));
+  writer.u32(inner);
+  writer.raw(Bytes(inner, 2));
+  const auto file = writer.take();
+  const auto open = [](std::span<const uint8_t>) -> std::optional<Bytes> { return Bytes{}; };
+  constexpr uint64_t max_frame = 1024 * 1024;
+
+  {
+    FailingStream stream(file, static_cast<std::streamoff>(file.size()));
+    bool read_failed = false;
+    const auto found = heads::next_frame_from(stream, file.size(), 1, max_frame, open, read_failed);
+    EXPECT_FALSE(read_failed);
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(*found, 100U);
+  }
+  {
+    // Nothing but bytes that are not a frame: nothing later, and no failure.
+    const Bytes noise(4096, 0xEE);
+    FailingStream stream(noise, static_cast<std::streamoff>(noise.size()));
+    bool read_failed = false;
+    EXPECT_FALSE(heads::next_frame_from(stream, noise.size(), 1, max_frame, open, read_failed).has_value());
+    EXPECT_FALSE(read_failed);
+  }
+  {
+    // The disk fails before the frame: a failure, not nothing.
+    FailingStream stream(file, 50);
+    bool read_failed = false;
+    EXPECT_FALSE(heads::next_frame_from(stream, file.size(), 1, max_frame, open, read_failed).has_value());
+    EXPECT_TRUE(read_failed);
+  }
+  {
+    // The disk fails inside the candidate frame.
+    FailingStream stream(file, 120);
+    bool read_failed = false;
+    EXPECT_FALSE(heads::next_frame_from(stream, 100 + 4 + inner + 32, 100, max_frame, open, read_failed).has_value());
+    EXPECT_TRUE(read_failed);
+  }
+}
+
+// Macha's case tests the scan alone, and its main loop only by reading: this is the whole
+// load, at each place a read can fail. Nothing is cut or kept aside, the frames read
+// stand, a later commit lands past every byte of the file, and the next open on a disk
+// that answers finds all of it.
+TEST(HeadsReplica, AFailedReadOfHistoryCutsNothing) {
+  struct Failure {
+    const char* name;
+    bool damage_fourth_length;       // Sends the load through the scan.
+    uint64_t main_fails_past_frame;  // The frame whose bytes the main stream stops at.
+    uint64_t into_frame;
+    bool scan_fails;
+  };
+  const std::vector<Failure> failures{
+      {"in a frame's length word", false, 3, 2, false},
+      {"in a frame's body", false, 3, 20, false},
+      {"in the scan past a damaged frame", true, 7, 0, true},
+  };
+  size_t index = 0;
+  for (const auto& failure : failures) {
+    SCOPED_TRACE(failure.name);
+    ReplicaBed bed;
+    const auto name = "failed-" + std::to_string(index++);
+    const auto history = bed.path(name) / "history.log";
+    auto state = head_with({});
+    std::vector<Record> chain;
+    std::vector<uint64_t> offsets;
+    Record head = bed.genesis();
+    {
+      auto writer = bed.open(name);
+      for (uint64_t generation = 2; generation <= 9; ++generation) {
+        offsets.push_back(std::filesystem::file_size(history));
+        state.clock[author(1)] = generation;
+        auto next = record_of(generation, head.hash, state);
+        ASSERT_TRUE(writer->store_commit(next));
+        ASSERT_TRUE(writer->accept_commit(accepted_by_two(next)));
+        chain.push_back(next);
+        head = next;
+      }
+    }
+    if (failure.damage_fourth_length) {
+      std::fstream file(history, std::ios::binary | std::ios::in | std::ios::out);
+      file.seekp(static_cast<std::streamoff>(offsets[3]));
+      const std::array<char, 4> zero{};
+      file.write(zero.data(), zero.size());
+    }
+    const auto before = read_all(history);
+    const auto fails_at = static_cast<std::streamoff>(offsets[failure.main_fails_past_frame] + failure.into_frame);
+
+    const auto sink = std::make_shared<test::RecordingSink>();
+    auto options = bed.options(name);
+    options.logger = test::logger_into(sink);
+    size_t opened = 0;
+    options.history_reader = [&](const std::filesystem::path& path) -> std::unique_ptr<std::istream> {
+      const bool is_scan = opened++ == 1;
+      const auto limit = is_scan && failure.scan_fails ? static_cast<std::streamoff>(offsets[3] + 8) : fails_at;
+      return std::make_unique<FailingStream>(read_all(path), limit);
+    };
+    const size_t read_before = failure.damage_fourth_length ? 3 : failure.main_fails_past_frame;
+    state.clock[author(1)] = 10;
+    const auto after = record_of(10, head.hash, state);
+    {
+      Replica replica(std::move(options));
+      // Every byte stays. The head, unread, is rooted again past them, as at any open.
+      const auto now = read_all(history);
+      ASSERT_GE(now.size(), before.size());
+      EXPECT_TRUE(std::equal(before.begin(), before.end(), now.begin()));
+      EXPECT_FALSE(any_file_starts_with(bed.path(name), "history.log.corrupt."));
+      EXPECT_TRUE(sink->saw("metadata history read failed"));
+      EXPECT_TRUE(sink->saw("nothing cut"));
+      EXPECT_FALSE(sink->saw("metadata history recovered"));
+      EXPECT_FALSE(replica.recovery_required());
+      for (size_t i = 0; i < read_before; ++i) EXPECT_TRUE(replica.history_entry(chain[i].hash).has_value()) << i;
+      for (size_t i = read_before; i < chain.size() - 1; ++i) EXPECT_FALSE(replica.history_entry(chain[i].hash).has_value()) << i;
+      ASSERT_TRUE(replica.store_commit(after));
+      // Appended past every byte, at the offset the index holds.
+      EXPECT_GT(std::filesystem::file_size(history), before.size());
+      const auto appended = replica.history_entry(after.hash);
+      ASSERT_TRUE(appended.has_value());
+      EXPECT_EQ(appended->payload, Bytes(after.payload.begin(), after.payload.end()));
+    }
+    auto again = bed.open(name);
+    for (size_t i = 0; i < chain.size(); ++i) {
+      if (failure.damage_fourth_length && i == 3) continue;
+      EXPECT_TRUE(again->history_entry(chain[i].hash).has_value()) << "lost frame " << i;
+    }
+    EXPECT_TRUE(again->history_entry(after.hash).has_value());
+  }
 }
 
 // Beyond Macha's two: what 9153011 says that they do not assert. The journal's words on

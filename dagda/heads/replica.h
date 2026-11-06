@@ -114,6 +114,9 @@ struct ReplicaOptions {
   // Replaces a whole file durably; dannan::identity::durable_replace_file unless a
   // test holds one. Called with no reader-visible lock held for a checkpoint.
   std::function<void(const std::filesystem::path&, std::string_view)> replace_file;
+  // Opens history.log to read at open, once per stream wanted; a plain file unless a
+  // test holds a disk that stops answering.
+  std::function<std::unique_ptr<std::istream>(const std::filesystem::path&)> history_reader;
 };
 
 class Replica {
@@ -337,6 +340,7 @@ class Replica {
   const TreePause _pause;
   CostCounters* const _costs;
   const std::function<void(const std::filesystem::path&, std::string_view)> _replace_file;
+  const std::function<std::unique_ptr<std::istream>(const std::filesystem::path&)> _history_reader;
 
   // Serialises durable mutations whose history append and fsync run without
   // _mutex; held across them.
