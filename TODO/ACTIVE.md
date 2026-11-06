@@ -63,6 +63,14 @@ needs them. Tell the Macha session when the answer is Yes.
 10. Dagda's own measurements on the Pis against Macha's baselines, when they exist. The TV import is cancelled by the maintainer, so Macha can run them now.
 11. The capabilities report.
 
+**Macha's freeze exception (the maintainer, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
+as 0.93.5, not yet committed: a frame that does not open no longer ends `load_history`'s scan, it looks forward byte by byte for the
+next frame that authenticates and leaves the damaged bytes in the file; a length over 2 GiB no longer throws; only when nothing later
+authenticates is the rest a torn tail. Dagda mirrors it when the commit lands, with `test_a_damaged_history_frame_loses_only_that_frame`
+and `test_a_torn_history_tail_is_still_cut`. The live nodes stay on 0.93.4 for the baselines. Until then Dagda's replica has the old
+shape. The other two read as unreachable and are reproduced: the cache's byte count at `reanchor_history`, and PREPARE then COMMIT with
+no certificate. `set-aside.meta` cannot be cut on Macha's bytes; the report names it as not shown there.
+
 **Asked of the maintainer (2026-11-06), all answered above but R5, the baselines, which Macha runs now the TV import is cancelled.**
 
 ## The earlier table, kept for its gates and details; the goal above decides the order
