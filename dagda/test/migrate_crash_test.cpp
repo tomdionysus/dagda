@@ -589,14 +589,44 @@ TEST(MigrateCrashPhases, TemporariesLeftByACrashAreNotADifference) {
   crash.expect_comparison_passes(19, "after");
 }
 
-// ---- What the comparison makes of a run that did not finish ---------------------------
-
-// A pass over a disk left half way, by a run nobody finished: the state's marker
-// still says v18, so a comparison against it can only fail, and it names what
-// moved.
-TEST(MigrateCrashPhases, AManifestOfAHalfMigratedStateFailsAndNamesItsRecords) {
+// A crash going forward, then the machine comes back and its service starts the
+// old binary. Under a v18 marker Macha opens the disk and reads every record
+// already moved as corrupt, and a store with no other copy loses it. From the first
+// write to the last the state says it is part way: Macha refuses any marker but its
+// own, the store refuses this one, and a run in either direction finishes it.
+TEST(MigrateCrashPhases, AStateCrashedGoingForwardIsOpenedByNobody) {
   CrashBed crash;
   ASSERT_TRUE(crash.die_after(3, false));
+  EXPECT_NE(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
+  try {
+    store::open_state_layout(crash.v18.state, v1);
+    ADD_FAILURE() << "the store opened it";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("dagda-migrate --state"), std::string::npos) << error.what();
+  }
+  (void)crash.v18.migrate();
+  crash.expect_comparison_passes(19, "after");
+}
+
+// A refusal leaves the marker as it found it: nothing has been written.
+TEST(MigrateCrashPhases, ARefusedRunLeavesTheMarkerAlone) {
+  CrashBed crash;
+  store::StorageLock held(crash.v18.backend);
+  EXPECT_THROW((void)crash.v18.migrate(), MigrationRefused);
+  EXPECT_EQ(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
+}
+
+// ---- What the comparison makes of a run that did not finish ---------------------------
+
+// A pass over a disk left part way, by a run nobody finished: refused, naming
+// what the state says. A record moved under a v18 marker can only be got at by a
+// marker made by hand, and then the comparison names it.
+TEST(MigrateCrashPhases, AManifestOfAHalfMigratedStateIsRefusedOrNamesItsRecords) {
+  CrashBed crash;
+  ASSERT_TRUE(crash.die_after(3, false));
+  EXPECT_THROW(crash.pass("half"), MigrationRefused);
+  EXPECT_FALSE(std::filesystem::exists(crash.manifests / "half"));
+  std::ofstream(crash.v18.state / "storage-layout", std::ios::trunc) << "macha-state-layout-v18\n";
   crash.pass("half");
   const auto report = compare_manifests(crash.manifests / "before", crash.manifests / "half");
   EXPECT_FALSE(report.passed());

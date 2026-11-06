@@ -776,7 +776,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   }
   if (layout == store::state_layout_going_back)
     throw MigrationRefused("state " + state.string() + " stopped on its way back to layout v18: finish that first, with --reverse");
-  if (layout != state_layout_v18) throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor this domain's v19");
+  if (layout != state_layout_v18 && layout != store::state_layout_going_forward)
+    throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor this domain's v19");
 
   struct BackendFound {
     std::filesystem::path path;
@@ -846,9 +847,13 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     migrate_ledgers(state, domain_key, node_local, scratch, quiet);
   }
 
+  say(options, "state " + state.string() + ": nothing refused");
   std::vector<std::filesystem::path> backend_paths;
   for (const auto& backend : found) backend_paths.push_back(backend.path);
   remove_temporaries(state, backend_paths, options);
+  // From the first write to the last the state is part v18 and part v19. Under
+  // v18's marker a Macha restarted on it would read the moved part as corrupt.
+  if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_forward) + "\n");
 
   // Objects first: a backend, the control store and the cache are each a
   // tree of loose files and packs.
@@ -914,7 +919,8 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   // already v19, and this finishes going back from it. Every record is looked
   // at, so a disk already all v18 is reported as such.
   const auto layout = read_text(layout_marker);
-  if (layout != store::state_layout_marker(v19) && layout != state_layout_v18 && layout != store::state_layout_going_back)
+  if (layout != store::state_layout_marker(v19) && layout != state_layout_v18 && layout != store::state_layout_going_back &&
+      layout != store::state_layout_going_forward)
     throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor domain v1's v19; only Macha's domain goes back");
 
   const auto v18_marker = [](const dannan::identity::NodeId& node, const dannan::identity::NodeId& token) {

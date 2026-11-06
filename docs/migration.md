@@ -102,8 +102,11 @@ published (one atomic replace). The extra space needed at any moment is one
 ledger file (for a trie, its live nodes once more).
 
 Last, the markers: each backend's `.macha.backend` and its mirror under
-`<state>/backend-identities/`, then `<state>/storage-layout`. A disk is v18
-until everything on it is v19.
+`<state>/backend-identities/`, then `<state>/storage-layout`. From the first write
+until that last one `<state>/storage-layout` says
+`dagda-state-layout-going-forward`, because a disk that is part v18 and part v19
+must open as neither: Macha refuses any marker but its own, and a service restarted
+by a power cut would otherwise read the moved records as corrupt.
 
 ## What a crash leaves, and how to resume
 
@@ -112,9 +115,8 @@ Run the tool again. What a crash left beside a file being replaced (a
 associated data authenticates it, so a second run skips the records already
 done and migrates the rest. Each ledger file is under the old key or the
 new, told by which key opens it, so it is likewise skipped or re-sealed.
-The markers are rewritten last, so until the run completes the store still
-refuses the disk and names the tool. A state whose layout marker is v19 is
-reported as nothing to do.
+Until the run completes Macha and the store both refuse the disk, and the store
+names the tool. A state whose layout marker is v19 is reported as nothing to do.
 
 A pack record's 48-byte rewrite is one write; if the power goes in the middle
 of it (it crosses a sector edge for about one record in 85), the header's

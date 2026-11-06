@@ -455,7 +455,7 @@ TEST(MigrateBack, ARunThatStoppedIsFinishedByASecondRun) {
     };
   };
   {
-    // Forward stopped among its records: the state marker is still v18.
+    // Forward stopped among its records: the state marker says so.
     StoreBed bed;
     V18State v18(bed);
     const auto backend_marker = read_text(v18.backend / ".macha.backend");
@@ -463,7 +463,7 @@ TEST(MigrateBack, ARunThatStoppedIsFinishedByASecondRun) {
     MigrationOptions options;
     options.after_step = stopping_after(3, seen);
     EXPECT_THROW((void)v18.migrate(options), Stop);
-    EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    EXPECT_EQ(read_text(v18.state / "storage-layout"), "dagda-state-layout-going-forward\n");
     MigrationOptions back;
     back.cache = v18.cache;
     const auto report = migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), back);
@@ -662,7 +662,7 @@ TEST(MigrateState, ALedgerUnderNeitherKeyIsRefusedAndTheStateStaysV18) {
 
 // A crash between records (a child that ends the process after three)
 // leaves every record v18 or v19, the ledgers under one key or the other,
-// and the markers v18, so the store still refuses the disk; a second run
+// and the markers not v19, so the store still refuses the disk; a second run
 // finishes, skipping what was done, and the store opens.
 TEST(MigrateState, ACrashMidWayLeavesADiskASecondRunFinishes) {
   StoreBed bed;
@@ -686,8 +686,9 @@ TEST(MigrateState, ACrashMidWayLeavesADiskASecondRunFinishes) {
   }
   ASSERT_EQ(test::exit_code(child), std::optional<int>(0));
 
-  // What it left: three records v19, the rest v18, the markers v18.
-  EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+  // What it left: three records v19, the rest v18, the backend's marker v18 and
+  // the state's saying it is part way.
+  EXPECT_EQ(read_text(v18.state / "storage-layout"), "dagda-state-layout-going-forward\n");
   EXPECT_EQ(read_text(v18.backend / ".macha.backend"), legacy::backend_marker_v18(v18.node, v18.token));
   size_t v19_records = 0;
   size_t v18_records = 0;
@@ -742,7 +743,7 @@ TEST(MigrateState, ACrashBetweenLedgersIsResumed) {
     }
   }
   ASSERT_EQ(test::exit_code(child), std::optional<int>(0));
-  EXPECT_EQ(read_text(v18.state / "storage-layout"), "macha-state-layout-v18\n");
+  EXPECT_EQ(read_text(v18.state / "storage-layout"), "dagda-state-layout-going-forward\n");
   const auto report = v18.migrate();
   EXPECT_EQ(report.loose_already, 8u);
   EXPECT_EQ(report.pack_records_already, 5u);

@@ -23,8 +23,10 @@ inline constexpr std::string_view state_layout_v19 = "dagda-state-layout-v19";
 
 // The marker's text for a domain, without its line end.
 std::string state_layout_marker(const SealingScheme& sealing);
-// What `--reverse` marks a state from its first write to its last: part of it is
-// v18 and part v19, and neither Macha nor the store may read it as either.
+// What a run marks a state from its first write to its last: part of it is v18
+// and part v19, and neither Macha nor the store may read it as either, since each
+// would take the other part for corrupt. Macha refuses any marker but its own.
+inline constexpr std::string_view state_layout_going_forward = "dagda-state-layout-going-forward";
 inline constexpr std::string_view state_layout_going_back = "dagda-state-layout-going-back";
 
 // The reason a v18 state or backend is refused: it names the command that
