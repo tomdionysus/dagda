@@ -1330,6 +1330,50 @@ TEST(StoreClaimLocks, AControlClaimInProgressHoldsTheSweepsCheckBack) {
   EXPECT_TRUE(b.claims().retained(contract::RetentionClass::control, id));
 }
 
+// The handler at Macha 98b816d (src/cluster/storage_server.cpp :343-385) takes no
+// admission, nor does the local claim (distributed_store.cpp :817). With the device
+// reserve off, as on a Macha node, Dagda's has none to refuse: no slot is asked for
+// (admit_control hands an empty one), and DATA credit plays no part, every byte of it
+// taken here. Macha never has a scope either: a claim with no principal is the
+// node's own, and is allowed for this node and for any node of the cluster.
+TEST(StoreDistributedStore, AClaimIsNeverRefusedWithTheDeviceReserveOff) {
+  auto reserve_off = options(2, 2);
+  reserve_off.device_reserve = false;
+  Cluster cluster;
+  auto& a = cluster.add("a", reserve_off);
+  auto& b = cluster.add("b", reserve_off);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_EQ(a.io(), nullptr);
+  ASSERT_EQ(b.io(), nullptr);
+  const auto full_a = a.credit()->try_acquire(DataWorkContext(FrameType::foreground, 0), a.credit()->stats().capacity_bytes);
+  const auto full_b = b.credit()->try_acquire(DataWorkContext(FrameType::foreground, 0), b.credit()->stats().capacity_bytes);
+  ASSERT_TRUE(full_a.has_value());
+  ASSERT_TRUE(full_b.has_value());
+
+  const auto data_bytes = pattern(4096, 55);
+  const auto control_bytes = pattern(4096, 56);
+  const auto data_id = object_id(data_bytes);
+  const auto control_id = object_id(control_bytes);
+  ASSERT_TRUE(b.data().put(data_id, data_bytes));
+  ASSERT_TRUE(b.control().put(control_id, control_bytes));
+  ASSERT_TRUE(a.control().put(control_id, control_bytes));
+
+  EXPECT_TRUE(claimed(ask_claim(a, b, contract::RetentionClass::data, data_id)));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, data_id));
+  EXPECT_TRUE(claimed(ask_claim(a, b, contract::RetentionClass::control, control_id)));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::control, control_id));
+
+  EXPECT_TRUE(a.store().retain_control({control_id}, contract::RetentionDot{a.id(), 9}, DistributedStore::ClaimScope::here));
+  EXPECT_TRUE(a.claims().retained(contract::RetentionClass::control, control_id));
+
+  ASSERT_TRUE(a.data().put(data_id, data_bytes));
+  EXPECT_TRUE(a.store().retain_data_here({data_id}, contract::RetentionDot{a.id(), 10}).empty());
+  EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, data_id));
+  EXPECT_EQ(a.credit()->stats().foreground_waits + a.credit()->stats().loader_waits + a.credit()->stats().speculative_waits, 0u);
+  EXPECT_EQ(b.credit()->stats().foreground_waits + b.credit()->stats().loader_waits + b.credit()->stats().speculative_waits, 0u);
+}
+
 // Macha's forms over the cache: a write through, hydrating from a peer, and neither
 // without a cache.
 TEST(StoreDistributedStore, CacheLocalAndHydrateFillTheCache) {
