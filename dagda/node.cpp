@@ -20,6 +20,7 @@
 #include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/sealing.h"
+#include "dagda/store/slow_stage.h"
 #include "dagda/store/state_layout.h"
 #include "dannan/identity/durable_file.h"
 
@@ -596,7 +597,10 @@ void Node::local_rebalance_locked(LocalTurn& turn) {
   if (_local_quiescent_events && *_local_quiescent_events != events) _local_quiescent_events.reset();
   if (turn.busy || _local_quiescent_events || _local_credit < static_cast<double>(_options.store.extent_size)) return;
   out.rebalance_ran = true;
+  const auto started = dannan::contract::Clock::now();
   out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, local_yield(turn));
+  store::log_slow_stage(_logger, "local-rebalance", started,
+                        "bytes=" + std::to_string(out.rebalance.bytes) + " objects=" + std::to_string(out.rebalance.objects));
   if (out.rebalance.bytes) _local_credit = std::max(0.0, _local_credit - static_cast<double>(out.rebalance.bytes));
   note_local([&](LocalFigures& figures) {
     figures.rebalance_objects += out.rebalance.objects;
@@ -634,7 +638,9 @@ void Node::local_scrub_locked(LocalTurn& turn) {
   if (turn.busy || !turn.scrub_due || _scrub_credit < static_cast<double>(_options.store.extent_size)) return;
   auto& out = turn.stages;
   out.scrub_ran = true;
+  const auto started = dannan::contract::Clock::now();
   out.scrub = _data->scrub_step(static_cast<uint64_t>(_scrub_credit), 64, local_yield(turn));
+  store::log_slow_stage(_logger, "scrub", started, "bytes=" + std::to_string(out.scrub.bytes) + " objects=" + std::to_string(out.scrub.objects));
   if (out.scrub.bytes) _scrub_credit = std::max(0.0, _scrub_credit - static_cast<double>(out.scrub.bytes));
   const bool finished = !out.scrub.yielded && out.scrub.complete;
   if (finished) {

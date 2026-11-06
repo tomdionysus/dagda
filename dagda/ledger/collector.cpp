@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "dagda/store/slow_stage.h"
+
 namespace dagda::ledger {
 namespace {
 
@@ -110,6 +112,7 @@ void Collector::trace_gate(std::string_view gate, const contract::GateVerdict& v
 
 InventoryStep Collector::inventory_step(const std::function<void()>& pause, bool may_rebuild) {
   InventoryStep out;
+  const auto started = dannan::contract::Clock::now();
   // The horizon this pass reads: the ledger's, as published.
   out.inventory = _ledger.inventory();
   const auto generation = _provider.generation();
@@ -123,6 +126,7 @@ InventoryStep Collector::inventory_step(const std::function<void()>& pause, bool
   _ledger.publish(_builder.inventory(pause));
   out.inventory = _ledger.inventory();
   out.rebuilt = true;
+  _services.observations.record("maintenance.inventory.build_us", store::stage_elapsed_us(started));
   trace("inventory",
         "generation=" + std::to_string(out.inventory->generation()) + " live=" + std::to_string(out.inventory->size(RetentionClass::data)) +
             " control_live=" + std::to_string(out.inventory->size(RetentionClass::control)) + " garbage=" + std::to_string(out.inventory->garbage().size()) +
@@ -147,6 +151,7 @@ ReleaseStep Collector::release_step() {
   // branches it has not seen are not dominated by that clock and survive.
   out.head = _provider.release_head();
   if (out.head && *out.head != (out.release ? out.release->head() : contract::Hash256{})) {
+    dannan::status::ObservedDuration horizon_build(_services.observations, "maintenance.release_horizon.build_us");
     auto built = _builder.release(*out.head);
     out.built = true;
     out.complete = built.complete;
@@ -229,6 +234,7 @@ DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory
   std::sort(protected_ids.begin(), protected_ids.end());
   protected_ids.erase(std::unique(protected_ids.begin(), protected_ids.end()), protected_ids.end());
 
+  const auto started = dannan::contract::Clock::now();
   out.swept = _data.gc_step(
       live.lookup(RetentionClass::data), protected_ids, out.orphan_grace, _options.data_budget, due.should_yield,
       [this](const ObjectId& id) { return _ledger.retained(RetentionClass::data, id); }, &_data_sightings, now_ms, _options.garbage_grace);
@@ -236,6 +242,12 @@ DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory
   if (out.swept.bytes) trace("gc", "reclaimed_bytes=" + std::to_string(out.swept.bytes));
   _services.observations.add("maintenance.gc.examined", out.swept.objects);
   _services.observations.add("maintenance.gc.reclaimed_bytes", out.swept.bytes);
+  const auto step_us = store::stage_elapsed_us(started);
+  _services.observations.record("maintenance.gc.step_us", step_us);
+  // Objects examined, reclaimed or not.
+  if (out.swept.objects) _services.observations.record("maintenance.gc.per_object_ns", step_us * 1000 / out.swept.objects);
+  store::log_slow_stage(_services.logger, "garbage-collect", started,
+                        "reclaimed_bytes=" + std::to_string(out.swept.bytes) + " objects=" + std::to_string(out.swept.objects));
   out.pruned = _ledger.prune_unclaimed(RetentionClass::data, _options.prune_budget);
   _services.observations.add("retention.pruned.data", out.pruned);
   if (out.pruned) trace("prune.data", std::to_string(out.pruned));

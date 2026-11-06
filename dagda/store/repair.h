@@ -249,6 +249,7 @@ class Repair {
   AvailabilityService& _availability;
   contract::ObjectLedger& _ledger;
   const RepairOptions _options;
+  const dannan::status::ScopedLogger _logger;
   const dannan::contract::TimeSource& _time;
   // Repair's duty share against the classes above it.
   dannan::sched::DutyShare _share;
@@ -256,6 +257,8 @@ class Repair {
   ledger::ClaimWalk _control_walk;
   CpuPacer _cpu;
   double _credit = 0.0;
+  // What this turn's claim walks restored, for the transfer's figures.
+  size_t _walks_restored = 0;
   std::optional<dannan::contract::TimePoint> _last;
   // Quiet after a pass with nothing to do, until an event or new lists.
   bool _quiescent = false;

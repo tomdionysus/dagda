@@ -30,6 +30,7 @@
 #include "dagda/domain/wrap.h"
 #include "dagda/node.h"
 #include "dagda/store/messages.h"
+#include "dagda/store/slow_stage.h"
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/reachability.h"
 #include "dagda/test/fixtures/store.h"
@@ -254,6 +255,19 @@ TEST(NodeSeams, TheCollectorIsNotHandedOutWhileTheNodesThreadRuns) {
   auto& node = cluster.add("node", options);
   cluster.start_all();
   EXPECT_THROW((void)node.dagda_node().collector(), std::logic_error);
+}
+
+// Macha's slow-stage line (maintenance.cpp log_slow_stage): 50 ms or more, at the
+// log's most verbose level.
+TEST(NodeSeams, ASlowStageIsLoggedInMachasWords) {
+  auto sink = std::make_shared<test::RecordingSink>();
+  const dannan::status::ScopedLogger logger(sink, "test");
+  const auto now = dannan::contract::Clock::now();
+  store::log_slow_stage(logger, "quick", now);
+  EXPECT_FALSE(sink->saw("quick"));
+  store::log_slow_stage(logger, "network-repair", now - std::chrono::milliseconds(60), "bytes=7");
+  EXPECT_TRUE(sink->saw("DIAG maintenance-stage stage=network-repair elapsed_ms="));
+  EXPECT_TRUE(sink->saw(" bytes=7"));
 }
 
 // A packed node with dead bytes for the compaction to reclaim.

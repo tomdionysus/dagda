@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <string>
 
+#include "dagda/store/slow_stage.h"
 #include "dannan/contract/thread_safety.h"
 
 namespace dagda::store {
@@ -57,6 +58,7 @@ Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilitySe
       _availability(availability),
       _ledger(ledger),
       _options(options),
+      _logger(context.logger("dagda.repair")),
       _time(options.time ? *options.time : context.time().source()),
       _share(options.foreground_weight, options.repair_weight, options.slice),
       _data_walk(contract::RetentionClass::data, &context.observations()),
@@ -161,6 +163,7 @@ RepairWalks Repair::claim_walks(Turn&) {
     out.waiting_for_credit = out.waiting_for_credit || step.waiting_for_credit;
     out.unfinished = out.unfinished || step.unfinished;
   }
+  _walks_restored = out.restored;
   return out;
 }
 
@@ -174,8 +177,24 @@ RepairLists Repair::lists() const {
 }
 
 RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
+  const auto started = dannan::contract::Clock::now();
   auto out = _store.repair_step(lists, static_cast<uint64_t>(_credit), _options.operation_budget,
                                 [&] { return _share.should_yield(_time.now(), higher_class_active(turn)); });
+  // Split by whether a higher class was present as the step ended: repair idle
+  // against repair on its share.
+  const std::string load = higher_class_active(turn) ? "loaded" : "idle";
+  auto& observations = _context.observations();
+  observations.record("maintenance.repair.step_us." + load, stage_elapsed_us(started));
+  observations.add("maintenance.repair.bytes." + load, out.bytes_transferred);
+  observations.add("maintenance.repair.push_examined." + load, out.push_examined);
+  observations.add("maintenance.repair.pull_examined." + load, out.pull_examined);
+  observations.add("maintenance.repair.retained_repairs", _walks_restored);
+  log_slow_stage(_logger, "network-repair", started,
+                 "bytes=" + std::to_string(out.bytes_transferred) + " retained_repairs=" + std::to_string(_walks_restored) +
+                     " push_examined=" + std::to_string(out.push_examined) + " pull_examined=" + std::to_string(out.pull_examined) +
+                     " remote_ops=" + std::to_string(out.remote_operations) + " complete=" + std::to_string(out.complete ? 1 : 0) +
+                     " yielded=" + std::to_string(out.yielded ? 1 : 0));
+  _walks_restored = 0;
   _credit = std::max(0.0, _credit - static_cast<double>(out.bytes_transferred));
   return out;
 }
