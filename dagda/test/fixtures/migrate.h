@@ -18,6 +18,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -31,6 +32,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/unreferenced_since.h"
 #include "dagda/migrate/legacy_v18.h"
+#include "dagda/migrate/manifest.h"
 #include "dagda/migrate/migrate.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/local_format.h"
@@ -327,5 +329,21 @@ inline void expect_v19_opens(StoreBed& bed, const V18State& v18) {
     EXPECT_EQ(hex(counts.views().nodes.get(v18.control_objects[1].first).value()), "0000000000000001");
   }
 }
+
+// What S7 brings, standing in: the metadata seam filled, so the comparison's other
+// categories can be shown to pass, and only with it there.
+class FilledMetadata final : public migrate::MetadataManifestReader {
+ public:
+  explicit FilledMetadata(std::string head = "same") : _head(std::move(head)) {}
+  void read(const migrate::MetadataManifestInput&, const std::function<void(const migrate::MetadataFact&)>& emit) override {
+    emit({"certificates", "certificate 1", bytes_of("certificate")});
+    emit({"heads", "head 1", bytes_of(_head)});
+    emit({"history", "frame 1", bytes_of("frame")});
+  }
+  bool covers(const std::filesystem::path&, const std::filesystem::path&) const override { return false; }
+
+ private:
+  std::string _head;
+};
 
 }  // namespace dagda::test::v18

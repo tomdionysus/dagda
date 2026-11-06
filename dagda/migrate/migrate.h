@@ -202,6 +202,16 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
 // removes these; they never hold anything a store reads. Waits on nothing.
 bool migration_temporary(std::string_view file_name);
 
+// The ledgers, by the names the store gives them: nothing else under a state
+// is read as one, and only those that exist are listed. Waits on the state
+// device.
+struct KnownLedgers {
+  std::vector<std::filesystem::path> tries;
+  std::vector<std::filesystem::path> journals;
+  std::vector<std::filesystem::path> sightings;
+};
+KnownLedgers known_ledgers(const std::filesystem::path& state);
+
 // One loose file: its tag rewritten if the record is v18, counted if v19 or
 // unreadable. One pack: each put record likewise, the pack's checksummed
 // headers recomputed. Both are what migrate_state runs over every file;

@@ -48,6 +48,7 @@ add_executable(dagda_tests
   ledger_trie_diff_test.cpp
   ledger_trie_union_test.cpp
   ledger_unreferenced_since_test.cpp
+  migrate_compare_test.cpp
   migrate_crash_test.cpp
   migrate_legacy_v18_test.cpp
   migrate_migrate_test.cpp
