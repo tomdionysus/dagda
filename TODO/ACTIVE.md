@@ -29,6 +29,13 @@ answer that counts is Yes, with nothing attached. A bounded claim, an exception 
 frozen at `9a08846`. There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
 needs them. Tell the Macha session when the answer is Yes.
 
+**How it ends (the maintainer, relayed, 2026-11-06):** the Macha session builds the port, "when the dannan and dagda agents have finished all
+tasks and reported their capabilities, and this agent is satisfied that macha can be ported with no loss of functionality onto
+their codebases, which will be frozen during the port." So `../macha` stays read only for Dagda, and this plan ends with a
+capabilities report to the Macha session, with the evidence for each, naming what the port needs from Dagda. Dagda is frozen
+during the port; how a defect found then is handled is being asked. What can only run over the port (retirements run, goldens
+through the facade, the real migration) is named in the report as the port's to run, with Dagda's part ready.
+
 **The work, in this order. Each item is Dagda's to do.**
 
 1. Heads, now, not behind anything: S2 tree over keys, S3 replica on disk, S4 one node commits, S5 exchange, S6 reconciler, S7
