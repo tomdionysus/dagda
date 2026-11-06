@@ -394,14 +394,7 @@ struct Traced {
 // loop, up to its wait.
 class MachaLoop {
  public:
-  MachaLoop(ClusterNode& node, Traced& traced, Owner& owner)
-      : _node(node),
-        _traced(traced),
-        _owner(owner),
-        _storage(node.context().events().kind("storage")),
-        _metadata(node.context().events().kind("metadata")),
-        _claims(node.context().events().kind("claims")),
-        _last_generation(owner.current()) {
+  MachaLoop(ClusterNode& node, Traced& traced, Owner& owner) : _node(node), _traced(traced), _owner(owner), _last_generation(owner.current()) {
     _observed_event = events();
     _node.dagda_node().register_reachability(domain::domain_v1, _owner);
   }
@@ -553,13 +546,8 @@ class MachaLoop {
   }
 
  private:
-  // Storage, metadata and claims, and the roster: Macha's four events. The roster
-  // here is membership: Dannan's topology also moves on every advert, so a peer's
-  // storage changing would wake repair.
-  uint64_t events() const {
-    const auto& counts = _node.context().events();
-    return counts.count(_storage) + counts.count(_metadata) + counts.count(_claims) + counts.count(dannan::status::NodeEvents::membership);
-  }
+  // Macha's four events.
+  uint64_t events() const { return _node.dagda_node().maintenance_events().total(); }
   void enter(const std::string& step) {
     if (before_step) before_step(step);
     sequence.push_back(step);
@@ -627,9 +615,6 @@ class MachaLoop {
   ClusterNode& _node;
   Traced& _traced;
   Owner& _owner;
-  const dannan::status::NodeEvents::Kind _storage;
-  const dannan::status::NodeEvents::Kind _metadata;
-  const dannan::status::NodeEvents::Kind _claims;
   uint64_t _observed_event = 0;
   uint64_t _last_generation = 0;
   TimePoint _network_quiet_until{};

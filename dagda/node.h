@@ -154,6 +154,18 @@ struct LocalTurnOptions {
   std::optional<std::chrono::milliseconds> when_no_time_passed;
 };
 
+// What has happened that a Macha pass wakes for, one monotonic count per kind:
+// Macha's four events. `topology` is Dannan's membership, the roster's changes less
+// its adverts, because Macha's own topology event never moved on a peer's storage
+// figures. Metadata and claims are the owner's to notify, under those names.
+struct MaintenanceEvents {
+  uint64_t storage = 0;
+  uint64_t metadata = 0;
+  uint64_t topology = 0;
+  uint64_t claims = 0;
+  uint64_t total() const noexcept { return storage + metadata + topology + claims; }
+};
+
 // One pass's local stages: what begin_local_stages() decided, and in `stages`
 // what the stages run on it did.
 struct LocalTurn {
@@ -162,6 +174,8 @@ struct LocalTurn {
   bool scrub_due = false;
   dannan::contract::TimePoint now{};
   uint64_t wall_ms = 0;
+  // The count of events rebalance's rest is measured against.
+  uint64_t events = 0;
   std::stop_token stop;
   LocalStages stages;
 };
@@ -392,10 +406,14 @@ class Node {
   // retention_compact(), compact_packs(), local_scrub() and ledger_verify(), each
   // behind its gate as run_local_stages() has it. Each serialises with the thread's
   // passes for its own length only, so what falls between them may take the node's
-  // locks. Unlike run_local_stages(), each throws what its stage throws. A stage
+  // locks. Unlike run_local_stages(), each throws what its stage throws. Rebalance's
+  // rest ends on Macha's four events (maintenance_events()); the composite's, on any
+  // event of the node's. A stage
   // looks at the turn's stop as it starts and, where the work can be cut short by
   // it, as it ends, and throws contract::MaintenanceStopping, having counted what it did.
   LocalTurn begin_local_stages(const LocalTurnOptions& options = {});
+  // Thread-safe; waits on nothing.
+  MaintenanceEvents maintenance_events() const noexcept;
   void local_rebalance(LocalTurn& turn);
   void retention_compact(LocalTurn& turn);
   void compact_packs(LocalTurn& turn);
@@ -473,7 +491,7 @@ class Node {
   // The local stages, in Macha's order. `forced` as run_maintenance_once says.
   // Throws only the stop: a failed stage is logged and the next pass tries again.
   LocalStages local_stages_locked(bool forced, std::stop_token stop) DANNAN_REQUIRES(_maintenance_mutex);
-  LocalTurn begin_local_locked(bool forced, const LocalTurnOptions& options) DANNAN_REQUIRES(_maintenance_mutex);
+  LocalTurn begin_local_locked(bool forced, const LocalTurnOptions& options, uint64_t events) DANNAN_REQUIRES(_maintenance_mutex);
   void local_rebalance_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
   void retention_compact_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
   void compact_packs_locked(LocalTurn& turn) DANNAN_REQUIRES(_maintenance_mutex);
@@ -521,6 +539,10 @@ class Node {
   // and the provider.
   mutable dannan::contract::Mutex _providers_mutex;
   std::map<domain::DomainId, contract::ReachabilityProvider*> _providers DANNAN_GUARDED_BY(_providers_mutex);
+
+  dannan::status::NodeEvents::Kind _storage_event = 0;
+  dannan::status::NodeEvents::Kind _metadata_event = 0;
+  dannan::status::NodeEvents::Kind _claims_event = 0;
 
   dannan::contract::IoMutex _maintenance_mutex;
   std::unique_ptr<ledger::UnreferencedSince> _data_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
