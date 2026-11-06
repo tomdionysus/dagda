@@ -88,8 +88,9 @@ void Collector::collect_tombstones(const contract::InventoryHorizon& inventory) 
   for (const auto& batch : inventory.batches())
     if (matured(batch.retired_at_ns, now_ns, grace)) collection.matured_batches.push_back(batch.id);
   _services.observations.add("maintenance.tombstones.collected", collected);
-  if (!collection.erase.empty() || !collection.stamp.empty())
-    trace("tombstones", "erase=[" + joined_ids(collection.erase) + "] stamp=[" + joined_ids(collection.stamp) + "]");
+  if (!collection.erase.empty()) trace("tombstones", "erase=[" + joined_ids(collection.erase) + "]");
+  // Macha's pass stamps nothing, so its trace has no word for this.
+  if (!collection.stamp.empty()) trace("tombstones", "stamp=[" + joined_ids(collection.stamp) + "]");
   _provider.collect_garbage(collection);
 }
 
