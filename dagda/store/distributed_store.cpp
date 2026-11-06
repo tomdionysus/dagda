@@ -572,7 +572,7 @@ bool DistributedStore::locally_available(const ObjectId& id) const { return _dat
 bool DistributedStore::cache_local(const ObjectId& id, std::span<const uint8_t> data) {
   if (!_cache.enabled()) return false;
   try {
-    const auto admitted = admit_data(FrameType::speculative, data.size(), _options.admission_wait);
+    const auto admitted = admit_data(FrameType::speculative, data.size(), no_caller_deadline);
     return admitted && _cache.put(id, data);
   } catch (const std::exception& error) {
     _logger.debug("cache write-through skipped object=" + to_string(id) + " error=" + error.what());
@@ -587,7 +587,7 @@ bool DistributedStore::hydrate(const ObjectId& id, ReadOptions options) {
   if (!_cache.enabled()) return false;
   const auto read = get_remote(id, options, false);
   if (!read.object) return false;
-  const auto admitted = admit_data(options.frame, read.object->bytes.size(), _options.admission_wait);
+  const auto admitted = admit_data(options.frame, read.object->bytes.size(), no_caller_deadline);
   return admitted && _cache.put(id, read.object->bytes);
 }
 
@@ -787,13 +787,19 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         const auto refusal = scope_refusal(writer);
         // This node's device admits the write as a peer's would: no lease is
         // held across another node's answer.
+        // A write with a deadline of its own keeps it; one with none waits as a
+        // peer's server would, and fails in its words.
+        const bool own_deadline = options.deadline.count() > 0;
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
-        const auto admitted = refusal ? std::nullopt : admit_data(options.frame, data.size(), std::max(left, std::chrono::milliseconds(1)), options.cancelled);
+        const auto admitted =
+            refusal ? std::nullopt
+                    : admit_data(options.frame, data.size(), own_deadline ? std::optional(std::max(left, std::chrono::milliseconds(1))) : no_caller_deadline,
+                                 options.cancelled);
         if (refusal) {
           why = *refusal;
         } else if (!admitted) {
           busy = true;
-          why = "503 storage_busy: DATA resource admission busy or stopping";
+          why = own_deadline ? "503 storage_busy: DATA resource admission busy or stopping" : "503 stopping: DATA resource admission stopping";
         } else {
           const bool held = _data.has(id);
           if (deferred) {
@@ -1082,7 +1088,7 @@ bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> dat
   }
   bool held = false;
   {
-    const auto admitted = admit_data(frame, data.size(), _options.write_deadline);
+    const auto admitted = admit_data(frame, data.size(), no_caller_deadline);
     if (!admitted) return put(id, data, options);
     held = _data.has(id);
     if (!_data.put(id, data)) return put(id, data, options);
@@ -1099,7 +1105,7 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
       _logger.debug("local copy refused id=" + to_string(id) + " " + *refusal);
       return false;
     }
-    const auto admitted = admit_data(frame, data.size(), _options.admission_wait);
+    const auto admitted = admit_data(frame, data.size(), no_caller_deadline);
     if (!admitted) return false;
     const bool held = _data.has(id);
     const bool ok = _data.put(id, data);
@@ -1555,7 +1561,7 @@ void DistributedStore::prompt_replication_loop(std::stop_token stop) {
       }
       std::optional<Bytes> data;
       {
-        const auto admitted = admit_data(FrameType::speculative, _options.extent_size, _options.admission_wait);
+        const auto admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
         if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
         data = _data.get(*id);
       }
@@ -1602,7 +1608,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   // Foreground demand is recorded before any storage access, so the first
   // read already holds back lower classes.
   if (foreground) _activity.note(options.frame, 0);
-  const auto wait = options.deadline.count() > 0 ? options.deadline : _options.read_deadline;
+  const auto wait = options.deadline.count() > 0 ? std::optional(options.deadline) : no_caller_deadline;
   std::optional<Bytes> local;
   {
     const auto admitted = admit_data(options.frame, _options.extent_size, wait, options.cancelled);
@@ -1864,7 +1870,7 @@ void DistributedStore::local_writer_loop(std::stop_token stop) {
       _local_copy_writing = true;
     }
     try {
-      const auto admitted = admit_data(FrameType::speculative, job.data.size(), _options.admission_wait);
+      const auto admitted = admit_data(FrameType::speculative, job.data.size(), no_caller_deadline);
       if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
       const bool cache = _cache.enabled();
       bool cached = false;
@@ -2265,7 +2271,9 @@ RemoveEvidence DistributedStore::remove(const std::vector<ObjectId>& input, cons
     local.why = decision.why;
     local.scope_generation = decision.generation;
     every(local, RemoveState::refused);
-  } else if (const auto admitted = admit_data(FrameType::loader, _options.extent_size, call_deadline); !admitted) {
+  } else if (const auto admitted =
+                 admit_data(FrameType::loader, _options.extent_size, deadline.count() > 0 ? std::optional(call_deadline) : no_caller_deadline);
+             !admitted) {
     local.why = "storage_busy: DATA admission busy or stopping";
     every(local, RemoveState::unreachable);
   } else {
@@ -2359,7 +2367,8 @@ void DistributedStore::remove(std::vector<ObjectId> ids, contract::RetentionCloc
 
 // ---- Admission -------------------------------------------------------------
 
-std::optional<DataAdmission> DistributedStore::admit_data(FrameType frame, uint64_t bytes, std::chrono::milliseconds wait, std::atomic_bool* cancelled) const {
+std::optional<DataAdmission> DistributedStore::admit_data(FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
+                                                          std::atomic_bool* cancelled) const {
   return store::admit_data(_credit, _io, frame, bytes, wait, cancelled);
 }
 
@@ -2382,7 +2391,7 @@ std::map<ObjectId, bool> DistributedStore::valid_on(const NodeRecord& target, co
   std::map<ObjectId, bool> out;
   if (target.id == _self) {
     for (const auto& id : ids) {
-      const auto admitted = admit_data(FrameType::speculative, _options.extent_size, _options.admission_wait);
+      const auto admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
       if (admitted) out[id] = _data.valid(id);
     }
     return out;
@@ -2426,7 +2435,7 @@ void DistributedStore::erase_all(const ObjectId& id) {
   for (const auto& target : _context.nodes().active()) {
     try {
       if (target.id == _self) {
-        const auto admitted = admit_data(FrameType::speculative, _options.extent_size, _options.admission_wait);
+        const auto admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
         if (admitted) {
           // The claim check marks the object for the delete.
           const auto deletion = _data.claim_locks().deletion(id, [&] { return _claims.retained(contract::RetentionClass::data, id); });
@@ -2445,12 +2454,12 @@ void DistributedStore::erase_all(const ObjectId& id) {
 bool DistributedStore::ensure_local(const ObjectId& id, bool foreground) {
   const auto frame = foreground ? FrameType::foreground : FrameType::speculative;
   {
-    const auto admitted = admit_data(frame, _options.extent_size, _options.admission_wait);
+    const auto admitted = admit_data(frame, _options.extent_size, no_caller_deadline);
     if (!admitted) return false;
     if (_data.valid(id)) return true;
   }
   const auto keep = [&](std::span<const uint8_t> bytes) {
-    const auto admitted = admit_data(frame, bytes.size(), _options.admission_wait);
+    const auto admitted = admit_data(frame, bytes.size(), no_caller_deadline);
     if (!admitted || !_data.put(id, bytes)) return false;
     _context.events().notify(_storage_event);
     note_acknowledged(id, _self);
@@ -2715,7 +2724,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           if (!source) {
             std::optional<Bytes> read;
             {
-              const auto admitted = admit_data(FrameType::speculative, extent, _options.admission_wait);
+              const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
               if (!admitted) {
                 stop = true;
                 break;
@@ -2799,7 +2808,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         // it: the copy stays until a host is known.
         if (!plan.unreadable && plan.target > 0 && plan.keepers.size() >= plan.target && !plan.keepers.contains(_self) &&
             !_claims.retained(contract::RetentionClass::data, plan.id)) {
-          const auto admitted = admit_data(FrameType::speculative, extent, _options.admission_wait);
+          const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
           if (admitted && _data.remove(plan.id)) {
             state.local_drops.fetch_add(1, std::memory_order_relaxed);
             trace_repair("drop-local " + to_string(plan.id));
@@ -2831,7 +2840,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       const auto read = get_remote(id, options, false);
       if (read.object) {
         {
-          const auto admitted = admit_data(FrameType::speculative, read.object->bytes.size(), _options.admission_wait);
+          const auto admitted = admit_data(FrameType::speculative, read.object->bytes.size(), no_caller_deadline);
           if (!admitted) return std::nullopt;
           if (_data.put(id, read.object->bytes)) {
             transferred += read.object->bytes.size();
@@ -2904,7 +2913,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         // work, so convergence never downloads twice.
         if (const auto cached = _cache.get(id)) {
           {
-            const auto admitted = admit_data(FrameType::speculative, cached->size(), _options.admission_wait);
+            const auto admitted = admit_data(FrameType::speculative, cached->size(), no_caller_deadline);
             if (!admitted) break;
             (void)_data.put(id, *cached);
           }

@@ -259,7 +259,7 @@ refuses replicas; `src/cluster/local_state.cpp:186-190`).
 | `dht.extent_size` | 16 MiB | `DistributedStoreOptions.extent_size` (the node copies it to the server and repair) | |
 | `dht.data_inflight_bytes` | 128 MiB | `AdmissionOptions.data_inflight_bytes` | |
 | `dht.data_viewer_reserve_bytes` | 32 MiB | `AdmissionOptions.foreground_reserve_bytes` | |
-| `dht.data_credit_no_progress_deadline_ms` | 120 s; 0 waits unbounded | `AdmissionOptions.no_progress` | **default 30 s**; the facade must set it. Zero's meaning not checked |
+| `dht.data_credit_no_progress_deadline_ms` | 120 s; 0 waits unbounded | `AdmissionOptions.no_progress` (`store::default_no_progress`, 120 s) | governs every wait whose caller named no deadline. The arbiter refuses 0: the facade passes 100 years (3153600000000 ms; `StoreDataWork.AHundredYearWindowDoesNotOverflow`). The one difference left in code: a wait with no release anywhere fails at 100 years, where Macha's goes on. To see it, a config must set 0 (both live nodes set 120000) and nothing in the arbiter must release for a century |
 | `dht.io_pressure_overhead_ms`, `dht.io_pressure_per_mib_ms`, `dht.io_pressure_slowdown_percent`, `dht.io_pressure_release_percent`, `dht.io_pressure_outlier_percent` | 25, 120, 300, 150, 1000 | no `NodeOptions` field; `node.data().configure_service_monitor(Thresholds)` after open (`dagda/store/storage_pool.h:179`). Slowdown 0 disables in Macha (`src/cluster/local_state.cpp:96`), so the facade keeps that test | MISSING as an option |
 | `dht.io_pressure_min_background` | 1 | `AdmissionOptions.min_background_under_pressure` | |
 | `dht.read_ahead` | 3 | none: `src/config.hpp:672`, the FS's | stays Macha's |
@@ -283,9 +283,10 @@ Dagda options with no Macha key, which keep their defaults unless Tom says other
 `StoragePoolOptions.durability_batch_window` (500 ms, Macha's constant at
 `src/service/main.cpp:53`), `IoReserveOptions.slots` and `.control_reserve` (8, 2; ruled),
 `DistributedStoreOptions.write_deadline` and `.read_deadline` (60 s), `.call_horizon` (120 s),
-`.admission_wait` and `StorageServerOptions.admission_wait` (30 s). The last two replace
-waits that in Macha last as long as the arbiter's no-progress window (120 s). Those are
-behaviour differences Macha's cases may catch; none is measured on a Pi.
+`.admission_wait` and `StorageServerOptions.admission_wait` (30 s). The last two bound
+control-slot waits only, and with the reserve off, as Macha's facade has it, nothing waits
+on them. Write and read deadlines are behaviour differences Macha's cases may catch; none
+is measured on a Pi.
 
 ### S.4 The gate
 
@@ -796,7 +797,6 @@ files moved earlier; those rest on Dagda's moved tests and known answers.
 
 Defaults that differ, each of which breaks Macha's behaviour if the facade forgets it:
 `dht.write_copies` (1, `src/config.hpp:647`; `dagda/store/distributed_store.h:221`, 2);
-`dht.data_credit_no_progress_deadline_ms` (120 s, `src/config.hpp:671`; `dagda/node.h:62`, 30 s);
 `maintenance.background_concurrency` (`dagda/node.h:61`, 4); `RepairOptions.peer_window`
 (`src/service/maintenance.cpp:432-433`, 30 s at the default interval; `dagda/store/repair.h:43`, 3 s).
 
