@@ -552,7 +552,7 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_the_metadata_view_pages_a_live_namespace` | NE:187 | Stays Macha's | Rewrites over the Heads noun; S4 supplies paging |
 | `test_a_node_that_is_not_a_tree_node_throws` | NE:225 | S2 | | `HeadsTree.ANodeThatIsNotATreeNodeThrows` |
 | `test_a_manager_without_a_store_pages_a_map_backed_view` | NE:242 | Stays Macha's | The map is Macha's working form, Dagda has none. Name is stale (F8) |
-| `test_tombstones_live_in_batches_in_a_tree_backed_head` | NS:336 | S4 | Keeps the FS-delete half |
+| `test_tombstones_live_in_batches_in_a_tree_backed_head` | NS:336 | S4 | `NodeHeads.RetirementsLiveInBatchesInATreeBackedHead`. Keeps the FS-delete half |
 | `test_reconciling_two_tree_backed_branches_keeps_the_namespace` | NS:565 | S6 | |
 | `test_a_merge_claims_what_it_introduces` | NS:852 | S6 | |
 | `test_the_tree_round_trips_every_namespace_it_is_given` | NT:78 | S2 | | `HeadsTree.TheTreeRoundTripsEveryKeySetItIsGiven` |
@@ -569,12 +569,12 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_an_update_reaches_the_root_a_full_build_reaches` | NT:1038 | S2 | | `HeadsTree.AnUpdateReachesTheRootAFullBuildReaches` |
 | `test_an_update_reads_the_path_it_changes_not_the_tree` | NT:1125 | S2 | | `HeadsTree.AnUpdateReadsThePathItChangesNotTheTree` |
 | `test_every_tree_node_is_reachable_for_the_collector` | NT:1170 | S2 | | `HeadsTree.EveryTreeNodeIsReachableForTheCollector` |
-| `test_a_commit_claims_the_nodes_it_introduced_and_prunes_the_rest` | NT:1191 | S4 | |
+| `test_a_commit_claims_the_nodes_it_introduced_and_prunes_the_rest` | NT:1191 | S4 | `HeadsCommit.ACommitClaimsTheNodesItIntroducedAndPrunesTheRest` |
 | `test_a_diff_is_the_paths_that_differ_and_reads_only_their_leaves` | NT:1436 | S2 | | `HeadsTree.ADiffIsTheKeysThatDifferAndReadsOnlyTheirLeaves` |
 | `test_distant_changes_read_no_leaf_between_them` | NT:1477 | S2 | | `HeadsTree.DistantChangesReadNoLeafBetweenThem` |
 | `test_a_tree_merge_is_the_merge_of_the_materialised_heads` | NT:1505 | S6 | Keeps the FS outcomes |
 | `test_baseline_reconcile_materialised_against_tree` | NT:1628 | S6 | Merge baseline |
-| `test_a_commit_is_published_only_once_its_objects_are_claimed` | `test_node_services.cpp:362` | S4 | Keeps "a hole is not an object" |
+| `test_a_commit_is_published_only_once_its_objects_are_claimed` | `test_node_services.cpp:362` | S4 | `NodeHeads.ACommitIsPublishedOnlyOnceItsObjectsAreClaimed`. Keeps "a hole is not an object" |
 | `test_rpc_metadata_mutations_use_bounded_isolated_executor` | RPC:2282 | Retired against Dannan | `Scheduler.AQueueOverItsByteBoundRefusesAndCounts`, `Scheduler.HeldWorkersOfOneClassNeverDelayAnother`; S5's C14. 38 assertions: compare them at S5 before the retirement is recorded |
 | `test_rpc_metadata_executor_orders_each_peer_and_parallelises_peers` | RPC:2428 | Retired against Dannan | `Scheduler.OrderedWorkKeepsEachPeersOrderAndRunsPeersSideBySide`; C14 |
 | `test_rpc_metadata_control_mutations_go_first` | RPC:2607 | Retired against Dannan | `Scheduler.ControlClassOrderedWorkGoesFirstAndKeepsAQuarterOfTheQueue`, `Scheduler.AControlMutationOvertakesItsOwnPeersBackgroundWork`; C14 |
@@ -635,7 +635,7 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_protocol20_state_rejects_legacy_authority_mutators` | gone | Retired by Macha | See 5.2 |
 | `test_storage_pool_and_persistent_cache` | SM:3616 | S3 | `HeadsSeed.TheSeedSurvivesReopenAndFollowsTheCache`. Seed lines `:3829-3844`. Rest retires against `StoreStoragePool.PoolsSpreadTraverseSweepAndRebalance`, `StorePersistentCache.TheCacheEvictsTheLeastRecentlyUsedAndReopens` |
 | `test_metadata_identity_rpc` | SM:4183 | S5 | |
-| `test_local_metadata_store_falls_back_from_invalid_delta` | SM:4340 | S4 | |
+| `test_local_metadata_store_falls_back_from_invalid_delta` | SM:4340 | S4 | `HeadsCommit.ADeltaThatOmitsAChangeFallsBackToTheWholeRecord` |
 
 ### 5.2 The three removed: a count that drops is a finding
 
@@ -660,7 +660,7 @@ Cases the mapping fates differently, that heads owes or that moved:
 | `test_a_new_namespace_is_a_tree_from_its_first_commit` | SM:2562 | New since `00861dd`. Neutral form S5; stays Macha's too |
 | `test_accepting_a_held_head_again_rebuilds_nothing` | SM:2492 | New. S3, `HeadsReplica.AcceptingAHeldHeadAgainRebuildsNothing` |
 | `test_a_namespace_tree_is_a_function_of_its_entries` | NS:609 | New. S2 |
-| `test_a_stale_tombstone_in_a_batch_is_erased_once` | NS:421 | New. S4 and S5, through the provider; the FS half stays Macha's |
+| `test_a_stale_tombstone_in_a_batch_is_erased_once` | NS:421 | New. S4, `NodeHeads.AStaleRetirementInABatchIsErasedOnce`, and S5, through the provider; the FS half stays Macha's |
 
 **Counts at `9a08846`.** The mapping's 786 at `00861dd` is now 792, by the script: 19 cases added, 13 gone. Gone: the 3 above; the 5 of `test_predicates.cpp` (Tom: retired; the mapping's GAP rows close); 5 of `test_namespace_migration.cpp`, `test_a_migrated_node_serves_and_writes_its_library`, `test_every_node_computes_the_same_record_from_the_same_head`, `test_a_migration_refuses_what_it_cannot_re_root_safely`, `test_the_pre_migration_state_is_kept_not_deleted`, `test_a_lagging_node_adopts_the_leaders_record_only_if_it_agrees`, which went with `macha-namespace-migrate` at `076115f` and need no Dagda case. Added and not heads', for the mapping's next pass: `test_a_delete_mark_lasts_until_the_last_delete_of_the_id_ends`, `test_a_delete_marks_its_object_and_holds_no_stripe` (already mapped), `test_a_failed_file_refuses_pause_and_resume_and_can_be_cancelled`, `test_a_failed_read_keeps_the_object_and_a_bad_record_is_removed`, `test_a_files_actions_work_on_a_failed_job`, `test_a_node_whose_only_disk_is_offline_starts_and_says_so`, `test_a_node_with_its_disk_online_is_not_degraded`, `test_a_pull_list_new_while_the_push_runs_is_not_passed_over`, `test_a_stop_during_the_diff_is_not_a_failed_peer`, `test_a_stop_ends_the_inventory_walk`, `test_a_store_tells_a_bad_record_from_a_failed_read`, `test_an_error_of_one_file_fails_that_file_and_the_job_carries_on`, `test_ingest_files_a_series_extras_under_the_series`, `test_the_repair_step_that_first_sees_a_new_pull_list_walks_it`, `test_what_is_not_held_pauses_over_the_ids_beside_the_view`.
 
@@ -788,6 +788,7 @@ Standing and not reopened: O(state) per delta, the policy disagreement loop, wir
 - **D3.** A corrupt `author.meta` throws out of `reserve_mutation_dot` (`md.cpp:2160-2162`) and every mutation with it, while every other sealed file there recovers or quarantines. R10.
 - **D4.** R1's unreachable branch and `resolve_conflict` on an unknown id.
 - **D5.** `load_history`'s and `load_journal`'s handling compares an exception's text (`md.cpp:2302`, `:2627`). Dagda decides by type.
+- **D13.** `mutate_delta`'s retry is unreachable (session S4, by reading): its `catch` takes `MetadataNotReady` (`mgr:1887`), and nothing in `accept_locally`, `publish_commit`, `store_commit_on`, `accept_commit_on`, `MetadataServer::accept_commit`, `note_author_accepted`, `cache_record` or `owe` throws one at `9a08846`, by script over those files. A failed store or acceptance on this node is `std::runtime_error`, which leaves the path at once with the dot unnoted. So "kept across retries" (`mgr:1640-1641`) and `retries` do nothing since a mutation publishes to self alone, and a mutation's only `MetadataNotReady` is the claims' refusal, outside the `try`. Dagda keeps the shape; C5 exercises it through the seam session S5 fills. For the Macha session.
 - **D6.** `MetadataManager::maybe_reconfigure` runs in `repair_once` under the mutation lock and publishes to all active with `FrameType::control` (`mgr:1333`, `:1986`), so a stalled peer can hold that lock through `commit_call`'s stall window. Read only; not traced whether `write_stall` bounds it in practice.
 
 **Macha's notes against its code.**

@@ -19,6 +19,31 @@ the claims' compaction run to their end, as Macha's do. Left: `cluster_stable` a
 and a zero is refused where Macha's waits for ever (for the facade and the capabilities report). Not run under GCC.
 Gate: `dagda_tests` 653 passing, 3 disabled, three whole runs on the Mac (627 at the start).
 
+## 2026-11-06: heads S4, one node commits (`feature/heads-s4`)
+
+`dagda/heads/`: `space.{h,cpp}` (Macha's `MetadataManager` at `9a08846` as far as one node goes: `mutate_delta`, `mutate`, own head, the
+policy commit's local half, the claims barrier, `current`, `local`, `converged`, paging, what is owed the peers), `spaces.{h,cpp}` (a node's
+spaces at `<state>/heads/<space id hex>/`, the store's claims, one thread for the Context's forms, the wait guard), `retirement.{h,cpp}`
+(tombstone batches, the magic a parameter). `Context::Heads` (`open`, `current`, `read`, `mutate`, `mutate_delta`, `heads`), evidence all the
+way, the executor rule and deadlines. `NodeOptions::heads` and `spaces`, the `metadata` plane from real replay, stage `open heads`. `HeadFields`
+gains `root` and `policy`. Owner's steps are `Mutation`, Dagda's the order (mgr:1636-1903). `Policy::replicas_of(N)` is refused naming L2.
+
+Seams left. S5: `SpaceServices::converge` (survey, import, forming: a node with no head and no exchange is `HeadsNotReady`), `accepted` (adverts
+and notices), `owed_changed` and `take_owed` (the replicator; a claims queue bounded at 32 MiB is here, nobody drains it), `maybe_reconfigure`
+commits on this node alone (the policy commit's active set, C11, C17, C37), `cached_view` has no TTL or remote epoch (H31), no message types, no
+`dagda.heads.*`, the barrier does not notify `NodeEvent::claims`. S6: `SpaceSpec::merge` is held and uncalled; `Space::set_aside` and the stamp
+are there for it. Founding is S5's: tests found a head by hand. The Space's own forms take no deadline, as Macha's do not; `Context::Heads` is what
+carries one, and a mutation it gave up on may yet land.
+
+Macha's 4 S4 cases are named in the plan's 5.1; S4's half of NS:421 in 5.3. `test_every_write_records_where_it_came_from`, NS:497 and SM:4524, which
+H14 and H23 cite, stay Macha's by the mapping (REWRITE, REWRITE, KEEP): each is FileSystem or the owner's codec. NE:187 stays Macha's and paging
+is `HeadsSpace.AViewPagesItsTreeLikeTheWalk`. C2's commit half, C5, C6, C9, C13, C21 to C24, C36; the commit baseline, 100 k keys 24 nodes read and
+12 written, equal record bytes. Fixtures: a space commits on `state-scratch-0.93.4` (checked in) with a clock-only mutation, its bytes opaque, and
+the batch in `-delete`'s sealed store opens and is made again to its id. Finding D13 in the plan: `mutate_delta`'s retry is unreachable at `9a08846`.
+Checked under GCC 15 by `-fsyntax-only` on the new sources; not linked or run under GCC or on arm64.
+Gate: `dagda_tests` 685 passing, 3 disabled, three whole runs on the Mac. One earlier whole run under another session's load lost
+`StoreRepair.RepairIsPacedNotStoppedWhileHigherClassesStayBusy`, a wall-clock bound in a case S4 does not touch; alone it passed five of five.
+
 ## 2026-11-06: the steps Macha's loop needs (`feature/maintenance-steps`)
 
 `Collector::pass` is `inventory_step`, `tombstone_step`, `release_step`, `control_step`, `data_step`; `Repair::pass` is
