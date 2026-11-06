@@ -108,6 +108,9 @@ void Node::prepare() {
     throw NodeRefused("the Dannan node serves dannan::Context version " + std::to_string(_context.version()) + " and Dagda was built against version " +
                       std::to_string(dannan::context_version));
   if (_options.state.empty()) throw NodeRefused("no state path: the node's state is a directory of its own");
+  _storage_event = _context.events().kind("storage");
+  _metadata_event = _context.events().kind("metadata");
+  _claims_event = _context.events().kind("claims");
   // Every plane the node will report is known before the Dannan node starts,
   // so it never reports ready without them.
   try {
@@ -564,9 +567,10 @@ void Node::note_local(const std::function<void(LocalFigures&)>& change) {
   change(_local_figures);
 }
 
-LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options) {
+LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options, uint64_t events) {
   LocalTurn turn;
   turn.forced = forced;
+  turn.events = events;
   turn.stop = options.stop;
   turn.now = pass_time().now();
   double seconds = _local_at ? std::max(0.0, std::chrono::duration<double>(turn.now - *_local_at).count()) : 0.0;
@@ -595,8 +599,7 @@ LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options)
 void Node::local_rebalance_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
   auto& out = turn.stages;
-  const auto events = _context.events().total();
-  if (_local_quiescent_events && *_local_quiescent_events != events) _local_quiescent_events.reset();
+  if (_local_quiescent_events && *_local_quiescent_events != turn.events) _local_quiescent_events.reset();
   if (turn.busy || _local_quiescent_events || _local_credit < static_cast<double>(_options.store.extent_size)) return;
   out.rebalance_ran = true;
   const auto started = dannan::contract::Clock::now();
@@ -610,7 +613,7 @@ void Node::local_rebalance_locked(LocalTurn& turn) {
   });
   if (!out.rebalance.yielded && out.rebalance.complete && !out.rebalance.bytes) {
     _local_credit = 0.0;
-    _local_quiescent_events = events;
+    _local_quiescent_events = turn.events;
   }
   throw_if_stopped(turn);
 }
@@ -696,7 +699,7 @@ void Node::ledger_verify_locked(LocalTurn& turn) {
 LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
   LocalTurnOptions options;
   options.stop = stop;
-  auto turn = begin_local_locked(forced, options);
+  auto turn = begin_local_locked(forced, options, _context.events().total());
   try {
     local_rebalance_locked(turn);
     retention_compact_locked(turn);
@@ -717,10 +720,15 @@ LocalStages Node::run_local_stages(std::stop_token stop) {
   return local_stages_locked(false, stop);
 }
 
+MaintenanceEvents Node::maintenance_events() const noexcept {
+  const auto& events = _context.events();
+  return {events.count(_storage_event), events.count(_metadata_event), events.count(dannan::status::NodeEvents::membership), events.count(_claims_event)};
+}
+
 LocalTurn Node::begin_local_stages(const LocalTurnOptions& options) {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (!_repair) return {};
-  return begin_local_locked(false, options);
+  return begin_local_locked(false, options, maintenance_events().total());
 }
 
 void Node::local_rebalance(LocalTurn& turn) {

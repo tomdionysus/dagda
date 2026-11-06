@@ -465,6 +465,18 @@ class LocalStagesBed : public testing::Test {
     used = node->data().used();
   }
   Node& dagda() { return node->dagda_node(); }
+  // A turn of the steps, earning enough credit, and whether rebalance ran.
+  bool rebalance_runs() {
+    LocalTurnOptions options;
+    options.when_no_time_passed = std::chrono::seconds(1);
+    auto turn = dagda().begin_local_stages(options);
+    dagda().local_rebalance(turn);
+    return turn.stages.rebalance_ran;
+  }
+  // With credit to spare, a turn that does not run is one that rests.
+  bool rebalance_rests() {
+    return test::wait_until([&] { return !rebalance_runs(); });
+  }
 
   dannan::test::SteppedTime time;
   Cluster cluster;
@@ -562,6 +574,49 @@ TEST_F(LocalStagesBed, TheStagesKeepTheirGates) {
   EXPECT_FALSE(taken.busy);
   dagda().compact_packs(taken);
   EXPECT_TRUE(taken.stages.packs_ran);
+}
+
+// Macha's rest ends on its four events and no others, so a busy cluster's adverts
+// cost a Macha node no rebalance steps: a peer's storage figures, or a kind of event
+// of some other hosted system's, leave it resting.
+TEST_F(LocalStagesBed, OnlyMachasFourEventsEndRebalancesRest) {
+  auto& events = node->context().events();
+  ASSERT_TRUE(rebalance_rests());
+  const auto before = dagda().maintenance_events();
+
+  events.notify(dannan::status::NodeEvents::topology);
+  EXPECT_FALSE(rebalance_runs());
+  node->context().nodes().advertise("seams/advert", store::Bytes{1, 2, 3});
+  EXPECT_FALSE(rebalance_runs());
+  events.notify(events.kind("another-system"));
+  EXPECT_FALSE(rebalance_runs());
+  EXPECT_EQ(dagda().maintenance_events().total(), before.total());
+
+  for (const auto kind : {events.kind("storage"), events.kind("metadata"), events.kind("claims"), dannan::status::NodeEvents::membership}) {
+    SCOPED_TRACE(kind);
+    events.notify(kind);
+    EXPECT_TRUE(rebalance_runs());
+    ASSERT_TRUE(rebalance_rests());
+  }
+  const auto after = dagda().maintenance_events();
+  EXPECT_EQ(after.storage, before.storage + 1);
+  EXPECT_EQ(after.metadata, before.metadata + 1);
+  EXPECT_EQ(after.claims, before.claims + 1);
+  EXPECT_EQ(after.topology, before.topology + 1);
+}
+
+// Dagda's own composite still ends its rest on any event, until its loop is 8c's.
+TEST_F(LocalStagesBed, TheCompositesRestStillEndsOnAnyEvent) {
+  const auto run = [&] {
+    time.advance(std::chrono::seconds(1));
+    return dagda().run_local_stages();
+  };
+  ASSERT_TRUE(test::wait_until([&] {
+    const auto stages = run();
+    return stages.rebalance_ran && stages.rebalance.complete && !stages.rebalance.bytes && !stages.rebalance.yielded && !run().rebalance_ran;
+  }));
+  node->context().events().notify(dannan::status::NodeEvents::topology);
+  EXPECT_TRUE(run().rebalance_ran);
 }
 
 // Macha earns a whole interval when no time has passed; the composite earns nothing.
