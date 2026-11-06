@@ -24,6 +24,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "dagda/contract/stopping.h"
@@ -268,6 +269,110 @@ TEST(NodeSeams, ASlowStageIsLoggedInMachasWords) {
   store::log_slow_stage(logger, "network-repair", now - std::chrono::milliseconds(60), "bytes=7");
   EXPECT_TRUE(sink->saw("DIAG maintenance-stage stage=network-repair elapsed_ms="));
   EXPECT_TRUE(sink->saw(" bytes=7"));
+}
+
+std::optional<dannan::status::Surface::Value> published(ClusterNode& node, const std::string& name) {
+  node.dagda_node().publish_status();
+  const auto snapshot = node.context().status().snapshot();
+  const auto found = snapshot.values.find("dagda." + name);
+  if (found == snapshot.values.end()) return std::nullopt;
+  return found->second;
+}
+
+// Macha's diagnostics.repair.last_credit_bytes: the credit when the pass noted its
+// gate, which is what the pass reported, and the classes that paced it.
+TEST(NodeSeams, TheLastCreditAndWhatPacedRepairArePublished) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.time = &time;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  (void)node.repair().pass();
+  time.advance(std::chrono::seconds(1));
+  const auto pass = node.repair().pass();
+  ASSERT_GT(pass.credit, 0u);
+  EXPECT_EQ(node.repair().gates().last_credit_bytes, pass.credit);
+  ASSERT_TRUE(published(node, "repair.last_credit_bytes").has_value());
+  EXPECT_EQ(std::get<uint64_t>(*published(node, "repair.last_credit_bytes")), pass.credit);
+
+  node.dagda_node().activity().note(dannan::sched::FrameType::foreground, 64 * 1024);
+  (void)node.repair().pass();
+  ASSERT_TRUE(published(node, "repair.paced_by").has_value());
+  EXPECT_EQ(std::get<uint64_t>(*published(node, "repair.paced_by")) & store::paced_by_foreground, uint64_t{store::paced_by_foreground});
+}
+
+// Every figure of Macha's diagnostics the store holds and did not publish
+// (status_api.cpp:1009-1038, :1082-1105, :1317-1368; its gauges,
+// node_services.cpp), under Dagda's words for its classes.
+TEST(NodeSeams, MachasOtherMaintenanceFiguresArePublished) {
+  Cluster cluster;
+  auto& node = cluster.add("node");
+  cluster.start_all();
+  for (const auto* name : {"repair.push_examined",
+                           "repair.pull_examined",
+                           "repair.push_phase_complete",
+                           "repair.unsourceable_sample",
+                           "repair.estimated_network_bps",
+                           "activity.foreground_idle_ms",
+                           "activity.loader_idle_ms",
+                           "cache.capacity_bytes",
+                           "cache.used_bytes",
+                           "admission.capacity_bytes",
+                           "admission.foreground_reserve_bytes",
+                           "admission.peak_used_bytes",
+                           "admission.foreground_admissions",
+                           "admission.loader_admissions",
+                           "admission.speculative_admissions",
+                           "admission.foreground_waits",
+                           "admission.loader_waits",
+                           "admission.speculative_waits",
+                           "admission.cancelled_waits",
+                           "admission.background_limit",
+                           "admission.background_active",
+                           "admission.peak_background_active",
+                           "admission.device_service_us",
+                           "admission.device_worst_us",
+                           "admission.device_slowdown_percent",
+                           "admission.device_pressure_onsets",
+                           "admission.no_progress_failures",
+                           "data_store.loose_reaffirmation_fast_paths",
+                           "data_store.loose_reaffirmation_full_validations",
+                           "data_store.presence_index_entries",
+                           "data_store.pack_recovery_truncated_tails",
+                           "data_store.pack_recovery_skipped_regions",
+                           "data_store.pack_recovery_skipped_bytes"}) {
+    EXPECT_TRUE(published(node, name).has_value()) << name;
+  }
+  if (::testing::Test::HasFailure()) return;
+  const auto stats = node.credit()->stats();
+  EXPECT_EQ(std::get<uint64_t>(*published(node, "admission.capacity_bytes")), stats.capacity_bytes);
+  EXPECT_EQ(std::get<uint64_t>(*published(node, "admission.background_limit")), stats.background_limit);
+  EXPECT_EQ(std::get<uint64_t>(*published(node, "cache.capacity_bytes")), node.options().cache.max_blocks * node.options().store.extent_size);
+}
+
+// An object no peer would supply is in the sample, as Macha's list has it.
+TEST(NodeSeams, TheUnsourceableSampleNamesItsObjects) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  auto& node = cluster.add("node", options);
+  (void)cluster.add("peer", options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto lost = store::object_id(test::numbered(1));
+  const std::vector<store::ObjectId> live{lost};
+  store::RepairLists lists;
+  lists.inventory =
+      std::make_shared<const contract::InventoryHorizon>(uint64_t{1}, true, live, std::vector<store::ObjectId>{}, std::vector<contract::Garbage>{});
+  lists.pull = std::make_shared<const std::vector<store::ObjectId>>(live);
+  ASSERT_TRUE(test::wait_until([&] {
+    (void)node.store().repair_step(lists, 1ULL << 30, 16, [] { return false; });
+    return !node.store().repair_diagnostics().unsourceable_sample.empty();
+  }));
+  const auto text = published(node, "repair.unsourceable_sample");
+  ASSERT_TRUE(text.has_value());
+  EXPECT_NE(std::get<std::string>(*text).find(store::to_string(lost)), std::string::npos);
 }
 
 // A packed node with dead bytes for the compaction to reclaim.

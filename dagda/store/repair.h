@@ -128,6 +128,8 @@ struct RepairGates {
   uint64_t credit = 0;
   std::optional<RepairGate> last;
   uint8_t paced_by = 0;
+  // The credit when a gate was last noted, in bytes (Macha's last_credit_bytes).
+  uint64_t last_credit_bytes = 0;
 };
 
 // The repair stage of a node's maintenance pass (Macha's
@@ -208,8 +210,8 @@ class Repair {
   // How long until may_start() can say yes; zero now. What a pass parks for.
   static constexpr dannan::sched::Waits turn_wait_waits = dannan::sched::Waits::none;
   std::chrono::milliseconds turn_wait(dannan::contract::TimePoint now, uint8_t paced);
-  // Counts a pass's gate in gates(). A pass may note more than one, as Macha's
-  // notes `credit` after `ran`; pass() notes one.
+  // Counts a pass's gate in gates(), with the credit there is now. A pass may note
+  // more than one, as Macha's notes `credit` after `ran`; pass() notes one.
   static constexpr dannan::sched::Waits note_gate_waits = dannan::sched::Waits::none;
   void note_gate(RepairGate gate, uint8_t paced);
 
@@ -273,6 +275,7 @@ class Repair {
   // 0x100 | gate << 4 | paced_by, so a reader never pairs a gate with
   // another pass's classes.
   std::atomic<uint16_t> _last_gate{0};
+  std::atomic<uint64_t> _last_credit{0};
 };
 
 }  // namespace dagda::store

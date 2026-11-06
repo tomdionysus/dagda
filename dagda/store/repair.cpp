@@ -91,6 +91,7 @@ RepairGates Repair::gates() const {
   out.share = _gated_share.load(std::memory_order_relaxed);
   out.quiescent = _gated_quiescent.load(std::memory_order_relaxed);
   out.credit = _gated_credit.load(std::memory_order_relaxed);
+  out.last_credit_bytes = _last_credit.load(std::memory_order_relaxed);
   if (const auto last = _last_gate.load(std::memory_order_relaxed); last & 0x100U) {
     out.last = static_cast<RepairGate>((last >> 4) & 0xFU);
     out.paced_by = static_cast<uint8_t>(last & 0xFU);
@@ -129,6 +130,7 @@ bool Repair::may_start(TimePoint now, uint8_t paced) { return _share.may_start(n
 std::chrono::milliseconds Repair::turn_wait(TimePoint now, uint8_t paced) { return _share.wait(now, paced != 0); }
 
 void Repair::note_gate(RepairGate gate, uint8_t paced) {
+  _last_credit.store(credit(), std::memory_order_relaxed);
   _last_gate.store(static_cast<uint16_t>(0x100U | (static_cast<unsigned>(gate) << 4) | (paced & 0xFU)), std::memory_order_relaxed);
   switch (gate) {
     case RepairGate::ran:
