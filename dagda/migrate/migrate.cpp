@@ -358,6 +358,53 @@ RecordLayout classify(const domain::StorageKey& key, const store::SealingScheme&
   return RecordLayout::neither;
 }
 
+// A tag the power cut off in the middle of its rewrite. The tag on the disk is
+// the old tag's bytes on one side of the cut and the new tag's on the other, and
+// old and new differ by a value that depends only on the associated data and the
+// length (migrate/retag.h). So the tags it can have been are few: the cut at each
+// byte, front first or back first, with the bytes on one side moved back. Each
+// is tried under both layouts, which for a record that is simply damaged costs
+// these opens and finds nothing, since no tag opens a changed ciphertext. Nothing
+// is believed but a tag that authenticates.
+struct TornTag {
+  RecordLayout layout = RecordLayout::neither;
+  std::array<uint8_t, 16> tag{};
+};
+
+std::optional<TornTag> find_torn_tag(const domain::StorageKey& key, const TagDeriver& deriver, const store::SealingScheme& v19, const ObjectId& id,
+                                     std::span<const uint8_t, 12> nonce, std::span<const uint8_t, 16> found, std::span<const uint8_t> ciphertext,
+                                     uint64_t plain_size) {
+  const std::array<uint8_t, 16> zero{};
+  const auto difference = deriver.derive(zero, associated_data_v18(id), v19.associated_data(id), ciphertext.size());
+  std::array<uint8_t, 16> candidate{};
+  const auto opens = [&](RecordLayout& layout) {
+    try {
+      (void)open_object_v18(key, id, nonce, candidate, ciphertext, plain_size);
+      layout = RecordLayout::v18;
+      return true;
+    } catch (const std::exception&) {
+    }
+    try {
+      (void)store::open_object(key, v19, id, nonce, candidate, ciphertext, plain_size);
+      layout = RecordLayout::v19;
+      return true;
+    } catch (const std::exception&) {
+    }
+    return false;
+  };
+  for (size_t cut = 0; cut <= 16; ++cut) {
+    // Bytes before the cut moved back or forward; the rest as they are. A cut
+    // of none is the tag as found: whole, with only the checksum after it torn.
+    for (int front = 1; front >= 0; --front) {
+      if (cut == 0 && !front) continue;
+      for (size_t i = 0; i < 16; ++i) candidate[i] = static_cast<uint8_t>(found[i] ^ (((i < cut) == (front == 1)) ? difference[i] : 0));
+      RecordLayout layout = RecordLayout::neither;
+      if (opens(layout)) return TornTag{layout, candidate};
+    }
+  }
+  return std::nullopt;
+}
+
 // A line every so many records: on a 4 TB disk the operator sees it moving.
 // The clock is only ever printed.
 void progress(MigrationReport& report, const MigrationOptions& options) {
@@ -452,18 +499,31 @@ void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, c
     unreadable(report, proved, report.loose_unreadable, file.string() + ": " + error.what());
     return;
   }
-  const auto layout = classify(key, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size, options.reverse);
+  std::optional<TagDeriver> own;
+  if (!deriver) deriver = &own.emplace(key);
+  auto layout = classify(key, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size, options.reverse);
+  std::array<uint8_t, 16> found = loose.tag;
+  bool torn = false;
+  if (layout == RecordLayout::neither) {
+    if (const auto tear = find_torn_tag(key, *deriver, to, id, loose.nonce, loose.tag, loose.ciphertext, loose.plain_size)) {
+      layout = tear->layout;
+      found = tear->tag;
+      torn = true;
+    }
+  }
   if (layout == RecordLayout::neither) {
     unreadable(report, proved, report.loose_unreadable, file.string() + ": opens under neither layout");
     return;
   }
   proved = true;
-  if (layout == (options.reverse ? RecordLayout::v18 : RecordLayout::v19)) {
+  const auto target = options.reverse ? RecordLayout::v18 : RecordLayout::v19;
+  if (layout == target && !torn) {
     ++report.loose_already;
     return;
   }
+  if (torn) ++report.loose_torn_finished;
   if (!options.dry_run) {
-    const auto tag = moved_tag(deriver ? *deriver : TagDeriver(key), to, id, loose.tag, loose.ciphertext.size(), options.reverse);
+    const auto tag = layout == target ? found : moved_tag(*deriver, to, id, found, loose.ciphertext.size(), options.reverse);
     Fd fd(file, O_RDWR);
     struct stat before{};
     if (::fstat(fd.get(), &before) != 0) throw std::runtime_error("cannot stat " + file.string() + ": " + std::strerror(errno));
@@ -485,7 +545,7 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
   if (::fstat(fd.get(), &st) != 0 || st.st_size < 0) throw std::runtime_error("cannot stat " + pack.string() + ": " + std::strerror(errno));
   const auto file_size = static_cast<uint64_t>(st.st_size);
   std::optional<TagDeriver> own;
-  if (!deriver && !options.dry_run) deriver = &own.emplace(key);
+  if (!deriver) deriver = &own.emplace(key);
   uint64_t offset = 0;
   // Written and not yet on the device. A record is whole v18 or whole v19
   // either way, so a crash costs only the re-doing; the last sync is before
@@ -501,6 +561,34 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
     if (!bytes) throw std::runtime_error("cannot read " + pack.string());
     const auto header = decode_pack_header(*bytes);
     if (!header) {
+      // A rewrite of this record's tag and checksum cut short? Its first 77
+      // bytes are as Macha wrote them, so it still says what it is.
+      if (const auto torn = decode_pack_header_unchecked(*bytes);
+          torn && torn->type == pack_put && pack_header_size + torn->payload_size <= file_size - offset) {
+        const auto payload = read_at(fd.get(), static_cast<size_t>(torn->payload_size), offset + pack_header_size);
+        if (!payload) throw std::runtime_error("cannot read " + pack.string());
+        if (const auto tear = find_torn_tag(key, *deriver, to, torn->id, torn->nonce, torn->tag, *payload, torn->plain_size)) {
+          proved = true;
+          ++report.pack_records_torn_finished;
+          ++report.pack_records_migrated;
+          const auto target = options.reverse ? RecordLayout::v18 : RecordLayout::v19;
+          if (!options.dry_run) {
+            auto rewritten = *torn;
+            rewritten.tag = tear->layout == target ? tear->tag : moved_tag(*deriver, to, torn->id, tear->tag, payload->size(), options.reverse);
+            const auto encoded = encode_pack_header(rewritten);
+            write_at(fd.get(), std::span<const uint8_t>(encoded).subspan(pack_tag_offset), offset + pack_tag_offset, pack);
+            report.bytes_written += encoded.size() - pack_tag_offset;
+            sync_fd(fd.get(), pack);
+          }
+          step(options, report);
+          if (options.probe_only) return;
+          const uint64_t total = pack_header_size + torn->payload_size;
+          offset += total;
+          report.bytes_read += total;
+          progress(report, options);
+          continue;
+        }
+      }
       // As the store's recovery: a torn tail is left for it to truncate, a
       // damaged span inside the pack is skipped.
       const auto next = find_next_pack_header(fd.get(), offset + 1, file_size);
@@ -570,6 +658,8 @@ std::string MigrationReport::summary() const {
   if (reverse) out << "back to layout v18\n";
   const char* done = reverse ? " v18 already, " : " v19 already, ";
   out << "loose objects: " << loose_migrated << " migrated, " << loose_already << done << loose_unreadable << " unreadable\n";
+  if (loose_torn_finished + pack_records_torn_finished)
+    out << "cut short by a crash and finished: " << loose_torn_finished << " loose objects, " << pack_records_torn_finished << " pack records\n";
   out << "pack records: " << pack_records_migrated << " migrated, " << pack_records_already << done << pack_records_unreadable << " unreadable, "
       << pack_records_unsealed << " unsealed (touches and tombstones), in " << packs << " packs; " << pack_regions_skipped << " damaged spans skipped, "
       << pack_tail_bytes << " torn tail bytes left\n";

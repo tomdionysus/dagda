@@ -83,6 +83,9 @@ Bytes encode_pack_header(const PackHeader& header);
 // Nothing unless the bytes are a whole header, its checksum holds, its type
 // is known and its sizes fit its type.
 std::optional<PackHeader> decode_pack_header(std::span<const uint8_t> bytes);
+// The same with its checksum not looked at: what the migration reads of a record
+// whose rewrite of the tag and checksum was cut short.
+std::optional<PackHeader> decode_pack_header_unchecked(std::span<const uint8_t> bytes);
 
 // First offset at or after `from` in the open pack `fd` (of `file_size`
 // bytes) holding a decodable header, or nothing. Tells a torn append

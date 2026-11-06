@@ -94,9 +94,14 @@ Bytes encode_pack_header(const PackHeader& header) {
 
 std::optional<PackHeader> decode_pack_header(std::span<const uint8_t> bytes) {
   if (bytes.size() != pack_header_size) return std::nullopt;
-  const auto prefix = bytes.first(pack_header_prefix_size);
-  const auto checksum = dannan::identity::sha256(prefix);
+  const auto checksum = dannan::identity::sha256(bytes.first(pack_header_prefix_size));
   if (!std::equal(checksum.bytes.begin(), checksum.bytes.end(), bytes.begin() + pack_header_prefix_size)) return std::nullopt;
+  return decode_pack_header_unchecked(bytes);
+}
+
+std::optional<PackHeader> decode_pack_header_unchecked(std::span<const uint8_t> bytes) {
+  if (bytes.size() != pack_header_size) return std::nullopt;
+  const auto prefix = bytes.first(pack_header_prefix_size);
   try {
     Reader reader(prefix);
     const auto magic = reader.view(pack_magic.size());
