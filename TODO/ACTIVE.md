@@ -7,8 +7,7 @@ the record.
 
 **Resumed 2026-11-06.** Macha's old-code removal landed: 0.93.4 live on both nodes, tag on merge `9a08846`. That is the
 baseline. Forms remaining: SM14, 16, 17, 19, DLT5 to DLT11, envelope, hash and tree forms, the legacy clock. Genesis is a
-fixed constant record, new clusters only. Don't invest further in torrent parity: torrent is leaving Macha (its plan:
-`../macha/TODO/2026-11-06-ingest-plugins-torrent-removal-plan.md`). Goldens are to be re-cut on 0.93.4.
+fixed constant record, new clusters only. Torrent stays in Macha through the port (the maintainer): it moves after all of the port work, shelved until he asks. The 23 requests, the SM19 torrent section and DLT9 stay live, "`macha-metadata-dump` identical" holds as first written, and Macha has one space. Dagda still holds no torrent code: Macha's bytes are opaque vectors at S7. Goldens are to be re-cut on 0.93.4.
 
 ## The goal (the maintainer, 2026-11-06, relayed by the Macha session)
 
@@ -43,7 +42,7 @@ needs them. Tell the Macha session when the answer is Yes.
 
 **The work, in this order. Each item is Dagda's to do.**
 
-1. Heads, now, not behind anything: S2 tree over keys, S3 replica on disk, S4 one node commits, S5 exchange, S6 reconciler, S7
+1. Heads, now, not behind anything: S2 tree over keys (done), S3 replica on disk, S4 one node commits, S5 exchange, S6 reconciler, S7
    conformance (`2026-11-05-heads-plan.md`, re-based on `9a08846`: H1 to H30 with gates, cases C2 to C46 Dagda must write, all
    95 gap-heads cases assigned). L1 to L9 wait: Macha needs none, unless torrent gets its own space.
 2. The metadata and cache seed migration in `dagda-migrate`, in S7. It reports "nothing to do" under a v19 marker today, so
