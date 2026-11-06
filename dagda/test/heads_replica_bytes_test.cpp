@@ -37,6 +37,7 @@
 
 #include "dagda/domain/storage_key.h"
 #include "dagda/heads/replica.h"
+#include "dagda/heads/space.h"
 #include "dagda/test/fixtures/heads.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
@@ -563,6 +564,116 @@ TEST(HeadsReplicaBytes, ACommitExtendsMachasStateAndItAllReopens) {
   ASSERT_EQ(frames.size(), 14U);
   EXPECT_EQ(frames.front().entry.generation, 1U);
   EXPECT_EQ(frames.back().entry.hash, next.hash);
+}
+
+// The clock section's place in a whole record, as opaque_fields reads it.
+size_t clock_offset(std::span<const uint8_t> payload) {
+  Reader in(payload);
+  (void)in.view(8);
+  const auto voters = in.u32();
+  return 8 + 4 + size_t{voters} * 16 + 4 + 8;
+}
+
+// A mutation that says nothing but its clock, as Macha's mutate_delta would on a commit
+// that changes nothing (R1): the rest of the record is carried as bytes, torrent
+// sections and all, and Dagda parses none of it. It has no delta, so its frame is whole.
+class ClockOnly final : public Mutation {
+ public:
+  explicit ClockOnly(const State& parent) : _payload(static_cast<const OpaqueState*>(parent.get())->payload) {}
+  void edit(const MutationContext&) override {}
+  void stamp(const MutationContext&) override {}
+  void advance_clock(const MutationContext& context) override {
+    const auto at = clock_offset(_payload);
+    Reader in(std::span<const uint8_t>(_payload).subspan(at));
+    auto clock = decode_clock(in);
+    const auto old_bytes = _payload.size() - at - in.remaining();
+    clock[context.dot.author] = context.dot.sequence;
+    Writer out;
+    encode_clock(out, clock);
+    const auto bytes = out.take();
+    Bytes next(_payload.begin(), _payload.begin() + static_cast<std::ptrdiff_t>(at));
+    next.insert(next.end(), bytes.begin(), bytes.end());
+    next.insert(next.end(), _payload.begin() + static_cast<std::ptrdiff_t>(at + old_bytes), _payload.end());
+    _payload = std::move(next);
+  }
+  void apply(const MutationContext&) override {}
+  State state() const override { return std::make_shared<const OpaqueState>(OpaqueState{_payload}); }
+  Bytes delta() const override { return {}; }
+  Introduced introduced(const MutationContext&) const override { return {}; }
+
+ private:
+  Bytes _payload;
+};
+
+// S4 on Macha's own state: a space's commit extends the head two real nodes left, with
+// the next dot of the author in author.meta. The frame seals as Macha's, the whole chain
+// still reads frame by frame, and it all reopens. Macha's own codec is what a real commit
+// runs at the port; this holds only what is Dagda's.
+TEST(HeadsReplicaBytes, ASpaceCommitExtendsMachasStateWithTheNextDot) {
+  dannan::test::TempDir dir;
+  for (const auto& [name, bytes] : read_checked_in("state-scratch")) write_file(dir.path() / name, bytes);
+  const auto key = fixture_key();
+  const auto open = [&] {
+    ReplicaOptions replica;
+    replica.directory = dir.path();
+    replica.content_key = key;
+    replica.local_key = key;
+    replica.magics = machas_magics();
+    replica.aad = machas_aad();
+    replica.codec = std::make_shared<OpaqueCodec>();
+    replica.logger = test::quiet_logger();
+    SpaceSpec spec;
+    spec.name = "macha/namespace";
+    spec.codec = replica.codec;
+    SpaceServices services;
+    services.self = test::author(1);
+    services.commit_nodes = [] { return std::make_unique<MemoryTreeNodeStore>(); };
+    services.read_nodes = [] { return std::make_unique<MemoryTreeNodeStore>(); };
+    return std::make_unique<Space>(std::move(spec), std::move(replica), std::move(services));
+  };
+  const MutationFactory mutation = [](const State& parent) { return std::make_unique<ClockOnly>(parent); };
+
+  Record first;
+  Dot dot;
+  {
+    auto space = open();
+    const auto head = space->replica().committed();
+    ASSERT_EQ(head.generation, 13U);
+    const auto parent_clock = opaque_fields(head.payload).clock;
+    const auto outcome = space->mutate_delta(mutation);
+    ASSERT_EQ(outcome.kind, CommitOutcome::Kind::committed);
+    first = outcome.record;
+    dot = *outcome.dot;
+    EXPECT_EQ(first.generation, 14U);
+    EXPECT_EQ(first.previous, head.hash);
+    EXPECT_EQ(outcome.body, HistoryEntry::Body::full);
+    EXPECT_EQ(space->replica().committed().hash, first.hash);
+
+    // The clock moved by that one entry, and the author continues what author.meta held.
+    auto expected = parent_clock;
+    expected[dot.author] = dot.sequence;
+    EXPECT_EQ(opaque_fields(first.payload).clock, expected);
+    const auto at = parent_clock.find(dot.author);
+    ASSERT_NE(at, parent_clock.end()) << "the fixture's own author";
+    EXPECT_GT(dot.sequence, at->second);
+    // Everything past the clock is the parent's, byte for byte.
+    const auto tail = head.payload.size() - clock_offset(head.payload) - (4 + parent_clock.size() * 24);
+    EXPECT_TRUE(
+        std::equal(head.payload.end() - static_cast<std::ptrdiff_t>(tail), head.payload.end(), first.payload.end() - static_cast<std::ptrdiff_t>(tail)));
+  }
+
+  const auto frames = walk_frames(*key, read_file(dir.path() / "history.log"));
+  ASSERT_EQ(frames.size(), 14U);
+  EXPECT_EQ(frames.back().entry.hash, first.hash);
+  EXPECT_EQ(frames.back().entry.body, HistoryEntry::Body::full);
+
+  auto reopened = open();
+  EXPECT_EQ(reopened->replica().committed().hash, first.hash);
+  EXPECT_FALSE(reopened->replica().recovery_required());
+  const auto next = reopened->mutate_delta(mutation);
+  EXPECT_EQ(next.dot->author, dot.author);
+  EXPECT_EQ(next.dot->sequence, dot.sequence + 1);
+  EXPECT_EQ(next.record.previous, first.hash);
 }
 
 }  // namespace

@@ -5,9 +5,9 @@
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
 //
 
-// The cost baselines S3 closes (the plan's section 2.6): verify, replay and accept.
-// They assert counts, never time: nothing here grows with the keys of the tree. A
-// million-key run stays with the scale pass; commit is S4's and merge S6's.
+// The cost baselines S3 and S4 close (the plan's section 2.6): verify, replay, accept
+// and commit. They assert counts, never time: nothing here grows with the keys of the
+// tree. A million-key run stays with the scale pass; merge is S6's.
 
 #include <gtest/gtest.h>
 
@@ -17,6 +17,7 @@
 
 #include "dagda/heads/replica.h"
 #include "dagda/test/fixtures/heads.h"
+#include "dagda/test/fixtures/heads_space.h"
 
 namespace dagda::heads {
 namespace {
@@ -223,6 +224,52 @@ TEST(HeadsCost, AcceptingAHeldHeadAgainCostsNothing) {
   EXPECT_EQ(cost.syncs, 0U);
   EXPECT_EQ(after.historical_requests, before.historical_requests);
   EXPECT_EQ(after.accepted_head_persistence_writes, before.accepted_head_persistence_writes);
+}
+
+// Commit keys: a one-leaf change, one author, through the whole mutation path. Nodes
+// written and read at most follow depth, record bytes equal at both sizes, no full decode
+// for parents and no parent copied.
+Spent commit_at(size_t keys) {
+  test::SpaceBed bed;
+  test::NeutralEntries entries;
+  for (size_t i = 0; i < keys; ++i) entries["key/" + std::to_string(i * 7919 % keys) + "/" + std::to_string(i)] = test::make_item(i, 1);
+  auto space = bed.open();
+  bed.found(*space, entries);
+  const auto key = entries.begin()->first;
+  auto item = entries.begin()->second;
+  item.stamp = 12345;
+  // One commit, so the next is at the steady state, its parent materialised.
+  (void)space->mutate_delta(test::neutral_mutation([&](test::NeutralEditing& editing) { editing.delta.upsert_keys[key] = item; }));
+  for (auto* counter : {&bed.costs.tree_nodes_read, &bed.costs.tree_nodes_written, &bed.costs.record_bytes_encoded, &bed.costs.record_bytes_hashed,
+                        &bed.costs.full_decodes, &bed.costs.parent_states_copied, &bed.costs.history_frames_written, &bed.costs.syncs})
+    *counter = 0;
+  item.stamp = 12346;
+  const auto outcome = space->mutate_delta(test::neutral_mutation([&](test::NeutralEditing& editing) { editing.delta.upsert_keys[key] = item; }));
+  EXPECT_EQ(outcome.body, HistoryEntry::Body::delta);
+  return spent(bed.costs);
+}
+
+TEST(HeadsCost, CommitDoesNotGrowWithKeys) {
+  const auto small = commit_at(1000);
+  const auto large = commit_at(100000);
+  // Record bytes equal at both sizes: the record names a root and no entries.
+  EXPECT_EQ(small.encoded, large.encoded);
+  EXPECT_EQ(small.hashed, large.hashed);
+  // The replica's own decode of the proposal for its parents, as Macha's store_commit
+  // makes, and its one on acceptance; none for the parent, which is materialised.
+  EXPECT_EQ(small.decodes, large.decodes);
+  EXPECT_LE(large.decodes, 2U);
+  EXPECT_EQ(large.copies, 0U);
+  EXPECT_EQ(large.frames, 1U);
+  // Nodes: a path, proportional to depth. 100 times the keys adds at most a level or
+  // two, against the 100-fold a walk would show.
+  EXPECT_GT(small.nodes_written, 0U);
+  EXPECT_LE(large.nodes_read, small.nodes_read * 4);
+  EXPECT_LE(large.nodes_written, small.nodes_written * 4);
+  EXPECT_LT(large.nodes_read, 128U);
+  EXPECT_LT(large.nodes_written, 64U);
+  std::cout << "BENCH name=heads.commit.keys keys=100000 nodes_read=" << large.nodes_read << " nodes_written=" << large.nodes_written
+            << " record_bytes_encoded=" << large.encoded << " record_bytes_hashed=" << large.hashed << " decodes=" << large.decodes << '\n';
 }
 
 // The record's axis reports only (section 2.6): what grows the record is its clock.

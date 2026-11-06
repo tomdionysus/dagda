@@ -32,6 +32,11 @@ struct HeadFields {
   std::vector<Hash256> merge_parents;
   // Zero only on genesis: its certificate names nobody.
   uint32_t floor = 0;
+  // The tree this head names; none on a head with no tree.
+  std::optional<ObjectId> root;
+  // Whatever of the state only a policy commit may change, in any form that compares:
+  // a mutation that moves it is refused (mgr:1713-1718).
+  Bytes policy;
 };
 
 // The bytes of a head space are the owner's (the plan's section 2.0): Dagda holds
@@ -52,7 +57,7 @@ class Codec {
   virtual State decode_full(std::span<const uint8_t> payload) const = 0;
   virtual Bytes encode_full(const State& state) const = 0;
   // The delta from `before` to `after`; nothing when one cannot express it. For
-  // the commit path (session S4); replay never calls it.
+  // Space::mutate; replay never calls it.
   virtual std::optional<Bytes> encode_delta(const State& before, const State& after) const = 0;
   // Throws unless `delta` decodes. Called on a frame's body at open, so a delta
   // that can never apply is skipped there as Macha's load_history skips it. Reads

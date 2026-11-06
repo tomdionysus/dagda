@@ -29,6 +29,7 @@ add_executable(dagda_tests
   heads_replica_bytes_test.cpp
   heads_replica_test.cpp
   heads_retirement_test.cpp
+  heads_space_test.cpp
   heads_seed_test.cpp
   heads_tree_test.cpp
   heads_tree_vectors_test.cpp
