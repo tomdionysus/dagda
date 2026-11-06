@@ -201,6 +201,22 @@ class ObjectTrie {
   // journal and truncates it at the first frame that will not open. Waits
   // on the state device.
   static std::optional<bool> probe(const std::filesystem::path& dir, const domain::StorageKey& key);
+  struct ReadOnlyWalk {
+    uint64_t records = 0;
+    uint64_t journal_frames = 0;
+    uint64_t journal_tail_bytes = 0;
+    // A whole journal frame would not open or decode: damage, or another key.
+    bool journal_damaged = false;
+  };
+  // Every record the trie in `dir` would hold once opened under `key`, in id
+  // order, with its journal applied, read from files that are left exactly as
+  // they are: an open removes stale node files, truncates a torn journal and may
+  // checkpoint, and this does none of that and creates nothing. For a pass that
+  // must write nothing (migrate/manifest.h). Each node is checked against its
+  // parent. Throws std::runtime_error or DecodeError if a published node cannot
+  // be read under `key`. Waits on the state device.
+  static ReadOnlyWalk read_only(const std::filesystem::path& dir, const domain::StorageKey& key,
+                                const std::function<void(const ObjectId&, std::span<const uint8_t>)>& visit);
   // Records after `after` (from the first when none), in id order, at most
   // `limit` of them.
   std::vector<Record> next(const std::optional<ObjectId>& after, size_t limit) const;
@@ -243,6 +259,7 @@ class ObjectTrie {
   Child mutate(const Child&, uint8_t depth, std::span<const Change>);
   Child save(const Child&, SealedJournal& into);
   void apply_unjournaled(std::span<const Change>);
+  static std::vector<Change> decode_journal_frame(std::span<const uint8_t> plain);
   static std::optional<Bytes> find(const Child& root, const ObjectId&, const std::function<NodePtr(const Child&)>& load);
   static void collect(const Child&, const std::optional<ObjectId>& after, bool bounded, size_t limit, std::vector<Record>& out,
                       const std::function<NodePtr(const Child&)>& load);
