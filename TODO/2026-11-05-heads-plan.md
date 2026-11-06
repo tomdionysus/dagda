@@ -211,8 +211,10 @@ default limits are Macha's: 1 worker, 64 jobs, 256 MiB (`cluster/net.hpp:239-241
 `ACancelledQueuedRequestNeverRuns`, `StoppingFinishesRunningWorkAndDropsTheQueue`,
 `AControlMutationOvertakesItsOwnPeersBackgroundWork`, `HeldOrderedWorkDelaysNoOtherClass`. So no request to Dannan.
 
-**Plan, session S5.** `dagda/heads/messages.{h,cpp}` with its own `register_types(routes)`, called by `Node::open`
-beside the store's (`node.cpp:110`) under the same catch, unless `NodeOptions::heads` is off. Numbers are 512 plus
+**Plan, session S5.** `dagda/heads/messages.{h,cpp}` with its own `register_types(routes, numbers)`, called by
+`Node::prepare` beside the store's under the same catch, unless `NodeOptions::heads` is off. As built, the library holds
+no number of Macha's: `NodeOptions::exchange.numbers` names them, Dagda's own from 784 by default, and Macha's facade
+passes the table below, which only tests hold here (the maintainer's rule, session S5; `test::owner_numbers()`). Numbers are 512 plus
 Macha's (`cluster/net.hpp:34-123`, all re-read). Everything is on the CONTROL lane, as `lane_for` puts it
 (`cluster/net.cpp:2027-2037`). `Frames::any`, because Macha calls these at control, read-ahead and speculative.
 
@@ -541,9 +543,9 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 
 | Case | At `9a08846` | Fate | Note |
 |---|---|---|---|
-| `test_metadata_decoded_cache_ttl_recovers_missed_notice` | `test_hydration_catalogue.cpp:4177` | S5 | H31 |
+| `test_metadata_decoded_cache_ttl_recovers_missed_notice` | `test_hydration_catalogue.cpp:4177` | S5 | H31. `HeadsExchange.ADecodedViewsLifetimeRecoversAMissedNotice` |
 | `test_metadata_availability_logs_only_transitions` | `test_invariants.cpp:1874` | Stays Macha's | The Macha session's answer: log text. Dagda's evidence half is C38 |
-| `test_claims_owed_to_slow_peers_stay_within_their_bound` | `test_invariants.cpp:3030` | S5 | H15, 32 MiB |
+| `test_claims_owed_to_slow_peers_stay_within_their_bound` | `test_invariants.cpp:3030` | S5 | H15, 32 MiB. `HeadsExchange.ClaimsOwedToSlowPeersStayWithinTheirBound` |
 | `test_pages_visit_what_the_callback_walk_visits_on_every_shape` | NE:88 | S2 | | `HeadsTree.PagesVisitWhatTheCallbackWalkVisitsOnEveryShape` |
 | `test_a_resumed_page_reads_only_its_own_path` | NE:108 | S2 | | `HeadsTree.AResumedPageReadsOnlyItsOwnPath` |
 | `test_a_cursor_between_paths_resumes_after_it` | NE:129 | S2 | `HeadsTree.ACursorBetweenKeysResumesAfterIt`. Tree form; map form stays with Macha's working form |
@@ -575,31 +577,31 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_a_tree_merge_is_the_merge_of_the_materialised_heads` | NT:1505 | S6 | Keeps the FS outcomes |
 | `test_baseline_reconcile_materialised_against_tree` | NT:1628 | S6 | Merge baseline |
 | `test_a_commit_is_published_only_once_its_objects_are_claimed` | `test_node_services.cpp:362` | S4 | `NodeHeads.ACommitIsPublishedOnlyOnceItsObjectsAreClaimed`. Keeps "a hole is not an object" |
-| `test_rpc_metadata_mutations_use_bounded_isolated_executor` | RPC:2282 | Retired against Dannan | `Scheduler.AQueueOverItsByteBoundRefusesAndCounts`, `Scheduler.HeldWorkersOfOneClassNeverDelayAnother`; S5's C14. 38 assertions: compare them at S5 before the retirement is recorded |
+| `test_rpc_metadata_mutations_use_bounded_isolated_executor` | RPC:2282 | Retired against Dannan | Compared at S5, all 38 by name and the queue case's body: `Scheduler.AQueueOverItsByteBoundRefusesAndCounts` (per class, no handler run, counted), `.HeldWorkersOfOneClassNeverDelayAnother`, `.HeldOrderedWorkDelaysNoOtherClass`, `.RecordsTimingsPerTypeAndPerFrameClass`, `.ATimingRecordsItsWaitAndHandlerTime`, `.ControlClassOrderedWorkGoesFirstAndKeepsAQuarterOfTheQueue` (jobs), `.ARequestIsChargedUntilItsHandlerReturns`; C14 for Dagda's types. "The session stays open after a refusal" has no assertion of its own in those: it rests on Dannan's refusal being a reply |
 | `test_rpc_metadata_executor_orders_each_peer_and_parallelises_peers` | RPC:2428 | Retired against Dannan | `Scheduler.OrderedWorkKeepsEachPeersOrderAndRunsPeersSideBySide`; C14 |
-| `test_rpc_metadata_control_mutations_go_first` | RPC:2607 | Retired against Dannan | `Scheduler.ControlClassOrderedWorkGoesFirstAndKeepsAQuarterOfTheQueue`, `Scheduler.AControlMutationOvertakesItsOwnPeersBackgroundWork`; C14 |
-| `test_rpc_metadata_executor_cancellation_disconnect_and_shutdown` | RPC:2681 | Retired against Dannan | `Scheduler.ACancelledQueuedRequestNeverRuns`, `Scheduler.StoppingFinishesRunningWorkAndDropsTheQueue`. Its disconnect half: compare at S5 |
-| `test_joiner_cannot_form_genesis` | RPC:2978 | S5 | |
-| `test_bootstrap_joiner_requires_complete_checkpoint_survey` | RPC:2999 | S5 | |
-| `test_nodes_seeking_different_copy_counts_share_one_namespace` | RPC:3060 | S5 | |
+| `test_rpc_metadata_control_mutations_go_first` | RPC:2607 | Retired against Dannan | `Scheduler.ControlClassOrderedWorkGoesFirstAndKeepsAQuarterOfTheQueue`, `Scheduler.AControlMutationOvertakesItsOwnPeersBackgroundWork`; C14, `HeadsExchange.ACommitOvertakesImportsAndOnePeersOrderHolds` |
+| `test_rpc_metadata_executor_cancellation_disconnect_and_shutdown` | RPC:2681 | Retired against Dannan | Compared at S5. Cancel: `Scheduler.ACancelledQueuedRequestNeverRuns`. Disconnect, `abort()`: `Client.ACallHandleCancelsPromotesAndAborts`, `Server.AClosedSessionsQueuedWorkIsNotStartedAndItsRunningWorkFinishes`. Shutdown: `Scheduler.StoppingFinishesRunningWorkAndDropsTheQueue` |
+| `test_joiner_cannot_form_genesis` | RPC:2978 | S5 | `HeadsFounding.AJoinerCannotFormGenesis` |
+| `test_bootstrap_joiner_requires_complete_checkpoint_survey` | RPC:2999 | S5 | `HeadsFounding.AJoinerRequiresACompleteCheckpointSurvey`. A real peer stopped within its dead_after, not a phantom: placement is no longer on that path |
+| `test_nodes_seeking_different_copy_counts_share_one_namespace` | RPC:3060 | S5 | `HeadsExchange.NodesSeekingDifferentCopyCountsShareOneSpace`. Writes in turn; a fork is S6's |
 | `test_two_node_mutual_bootstrap_metadata_write_floor` | RPC:3114 | S6 | Needs merge. Carried as a known failure in Macha's `TODO/ACTIVE.md:146` |
-| `test_service_metadata_repair_coalesces_real_generation_burst` | RPC:3212 | S5 | |
-| `test_failed_convergence_retries_once_per_burst_of_events` | RPC:3328 | S5 | |
+| `test_service_metadata_repair_coalesces_real_generation_burst` | RPC:3212 | S5 | `HeadsExchange.RepairCoalescesARealGenerationBurst` |
+| `test_failed_convergence_retries_once_per_burst_of_events` | RPC:3328 | S5 | `HeadsExchange.FailedConvergenceRetriesOncePerBurstOfEvents`. The pass's clock stepped, not five real seconds |
 | `test_service_same_generation_sibling_notice_triggers_reconciliation` | RPC:3556 | S6 | |
 | `test_a_head_from_an_unknown_history_is_merged` | RPC:3737 | S6 | |
 | `test_a_head_that_cannot_be_merged_is_set_aside` | RPC:3806 | S6 | |
 | `test_concurrent_reads_during_divergence_produce_one_reconciliation` | RPC:3859 | S6 | |
-| `test_lagging_third_replica_catches_up_linear_burst_in_bounded_runs` | RPC:4037 | S5 | |
-| `test_a_file_touch_commits_while_a_holder_is_away` | RPC:4214 | S5 | |
-| `test_commit_replicas_ordered_local_then_nearest` | RPC:4317 | S5 | |
+| `test_lagging_third_replica_catches_up_linear_burst_in_bounded_runs` | RPC:4037 | S5 | `HeadsExchange.ALaggingThirdReplicaCatchesUpALinearBurstInBoundedRuns`, and `.AHistoryPushFillsItsWindowOfEightAndNoMore` |
+| `test_a_file_touch_commits_while_a_holder_is_away` | RPC:4214 | S5 | `HeadsExchange.ATouchCommitsWhileAHolderIsAway` |
+| `test_commit_replicas_ordered_local_then_nearest` | RPC:4317 | S5 | `HeadsExchange.CommitReplicasAreOrderedLocalThenNearest` |
 | `test_disjoint_metadata_pairs_branch_and_reconcile` | RPC:4590 | S6 | |
-| `test_metadata_commits_with_whichever_nodes_remain` | RPC:5148 | S5 | |
-| `test_metadata_repair_stalled_on_a_silent_peer_does_not_block_local_writes` | RPC:5588 | S5 | |
-| `test_a_commit_is_claimed_here_when_the_peer_never_answers_the_claim` | RPC:5660 | S5 | |
-| `test_a_peer_that_stalls_on_a_commit_is_not_waited_for_again` | RPC:5758 | S5 | |
-| `test_a_node_truncates_its_history_with_its_peer_away_and_the_peer_converges` | RPC:6293 | S5 | |
+| `test_metadata_commits_with_whichever_nodes_remain` | RPC:5148 | S5 | `HeadsExchange.CommitsWithWhicheverNodesRemain` |
+| `test_metadata_repair_stalled_on_a_silent_peer_does_not_block_local_writes` | RPC:5588 | S5 | `HeadsExchange.RepairStalledOnASilentPeerDoesNotBlockLocalWrites` |
+| `test_a_commit_is_claimed_here_when_the_peer_never_answers_the_claim` | RPC:5660 | S5 | `HeadsExchange.ACommitIsClaimedHereWhenThePeerNeverAnswersTheClaim`. The head's tree in place of Macha's catalogue root |
+| `test_a_peer_that_stalls_on_a_commit_is_not_waited_for_again` | RPC:5758 | S5 | `HeadsExchange.APeerThatStallsOnACommitIsNotWaitedForAgain` |
+| `test_a_node_truncates_its_history_with_its_peer_away_and_the_peer_converges` | RPC:6293 | S5 | `HeadsExchange.ANodeTruncatesItsHistoryWithItsPeerAwayAndThePeerConverges` |
 | `test_history_is_not_truncated_while_two_heads_are_held` | RPC:6378 | S6 | A read merges the two |
-| `test_unreconstructable_accepted_head_is_repaired_live_from_a_peer` | RPC:6448 | S5 | |
+| `test_unreconstructable_accepted_head_is_repaired_live_from_a_peer` | RPC:6448 | S5 | `HeadsExchange.AnUnreconstructableHeadIsRepairedLiveFromAPeer` |
 | `test_metadata_record_payload_copy_is_shared` | SM:541 | S3 | `HeadsRecord.APayloadCopyIsShared` |
 | `test_metadata_seed_sibling_replays_after_restart` | gone | Retired by Macha | See 5.2 |
 | `test_metadata_hash_streaming_matches_canonical_encoding` | SM:571 | S3 | `HeadsRecord.TheHashStreamsTheCanonicalEncoding` |
@@ -634,7 +636,7 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_metadata_materialization_cache_never_validates_corrupt_delta` | SM:2699 | S3 | `HeadsReplica.TheCacheNeverValidatesACorruptDelta` |
 | `test_protocol20_state_rejects_legacy_authority_mutators` | gone | Retired by Macha | See 5.2 |
 | `test_storage_pool_and_persistent_cache` | SM:3616 | S3 | `HeadsSeed.TheSeedSurvivesReopenAndFollowsTheCache`. Seed lines `:3829-3844`. Rest retires against `StoreStoragePool.PoolsSpreadTraverseSweepAndRebalance`, `StorePersistentCache.TheCacheEvictsTheLeastRecentlyUsedAndReopens` |
-| `test_metadata_identity_rpc` | SM:4183 | S5 | |
+| `test_metadata_identity_rpc` | SM:4183 | S5 | `HeadsExchange.APeerIsAskedItsIdentity`. R11 asserted both ways |
 | `test_local_metadata_store_falls_back_from_invalid_delta` | SM:4340 | S4 | `HeadsCommit.ADeltaThatOmitsAChangeFallsBackToTheWholeRecord` |
 
 ### 5.2 The three removed: a count that drops is a finding
@@ -655,12 +657,12 @@ Cases the mapping fates differently, that heads owes or that moved:
 |---|---|---|
 | `test_metadata_codec_and_replica` | SM:3848 | Split, the Macha session's answer: replica half (quarantine, seed, compaction) S3, `HeadsReplica.AStoredCommitIsNotAHeadUntilAcceptedAndHistoryGrowsByTheDelta`, `.AnUncommittedProposalSurvivesAndATornJournalTailIsPreserved`, `.CompactionBoundsTheJournal`, `HeadsSeed.ADamagedCheckpointRecoversFromTheSeedAndIsPreserved`, `.WithoutASeedAPrimaryFailureNamesTheFile`; codec half stays Macha's |
 | `test_metadata_delta_state_model` | `test_models.cpp:43` | S3, `HeadsReplica.TheDeltaStateModel` on the neutral owner; Macha's stays |
-| `test_replication_policy_change_on_restart` | RPC:4756 | Policy half is C11 |
-| `test_convergence_demand_coalesces_burst_and_keeps_same_generation_event` | `test_invariants.cpp:113` | KEEP in the mapping; the loop ruling moves the primitive to S5, and the case with it |
-| `test_a_new_namespace_is_a_tree_from_its_first_commit` | SM:2562 | New since `00861dd`. Neutral form S5; stays Macha's too |
+| `test_replication_policy_change_on_restart` | RPC:4756 | Policy half is C11, `HeadsPolicy.AChangedPolicyOnRestartIsCommittedAndWritesFollowIt`; repair's half stays Macha's |
+| `test_convergence_demand_coalesces_burst_and_keeps_same_generation_event` | `test_invariants.cpp:113` | KEEP in the mapping; the loop ruling moves the primitive to S5, and the case with it: `HeadsDemand.CoalescesABurstAndKeepsASameGenerationEvent` |
+| `test_a_new_namespace_is_a_tree_from_its_first_commit` | SM:2562 | New since `00861dd`. Neutral form S5, `HeadsFounding.ASpaceIsATreeFromItsFirstCommit`; stays Macha's too |
 | `test_accepting_a_held_head_again_rebuilds_nothing` | SM:2492 | New. S3, `HeadsReplica.AcceptingAHeldHeadAgainRebuildsNothing` |
 | `test_a_namespace_tree_is_a_function_of_its_entries` | NS:609 | New. S2 |
-| `test_a_stale_tombstone_in_a_batch_is_erased_once` | NS:421 | New. S4, `NodeHeads.AStaleRetirementInABatchIsErasedOnce`, and S5, through the provider; the FS half stays Macha's |
+| `test_a_stale_tombstone_in_a_batch_is_erased_once` | NS:421 | New. S4, `NodeHeads.AStaleRetirementInABatchIsErasedOnce`, and S5, through the provider on the node's thread, `NodeHeads.AStaleRetirementIsErasedOnceByTheLoopAndThePeerFollows`; the FS half stays Macha's |
 
 **Counts at `9a08846`.** The mapping's 786 at `00861dd` is now 792, by the script: 19 cases added, 13 gone. Gone: the 3 above; the 5 of `test_predicates.cpp` (the maintainer: retired; the mapping's GAP rows close); 5 of `test_namespace_migration.cpp`, `test_a_migrated_node_serves_and_writes_its_library`, `test_every_node_computes_the_same_record_from_the_same_head`, `test_a_migration_refuses_what_it_cannot_re_root_safely`, `test_the_pre_migration_state_is_kept_not_deleted`, `test_a_lagging_node_adopts_the_leaders_record_only_if_it_agrees`, which went with `macha-namespace-migrate` at `076115f` and need no Dagda case. Added and not heads', for the mapping's next pass: `test_a_delete_mark_lasts_until_the_last_delete_of_the_id_ends`, `test_a_delete_marks_its_object_and_holds_no_stripe` (already mapped), `test_a_failed_file_refuses_pause_and_resume_and_can_be_cancelled`, `test_a_failed_read_keeps_the_object_and_a_bad_record_is_removed`, `test_a_files_actions_work_on_a_failed_job`, `test_a_node_whose_only_disk_is_offline_starts_and_says_so`, `test_a_node_with_its_disk_online_is_not_degraded`, `test_a_pull_list_new_while_the_push_runs_is_not_passed_over`, `test_a_stop_during_the_diff_is_not_a_failed_peer`, `test_a_stop_ends_the_inventory_walk`, `test_a_store_tells_a_bad_record_from_a_failed_read`, `test_an_error_of_one_file_fails_that_file_and_the_job_carries_on`, `test_ingest_files_a_series_extras_under_the_series`, `test_the_repair_step_that_first_sees_a_new_pull_list_walks_it`, `test_what_is_not_held_pauses_over_the_ids_beside_the_view`.
 
