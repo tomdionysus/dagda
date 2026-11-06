@@ -495,6 +495,23 @@ TEST(MigrateBack, ARunThatStoppedIsFinishedByASecondRun) {
   }
 }
 
+// A loose object's modification time is when it was last touched: the store
+// ages it by that (older_than, remove_if_older_than), so a migration that left
+// every file newly written would restart every deletion wait on the disk.
+TEST(MigrateState, ALooseObjectKeepsItsTouchedTime) {
+  StoreBed bed;
+  V18State v18(bed);
+  const auto file = loose_path(v18.backend / "objects", v18.loose[1].first);
+  const auto long_ago = std::filesystem::last_write_time(file) - std::chrono::hours(24 * 30);
+  std::filesystem::last_write_time(file, long_ago);
+  (void)v18.migrate();
+  EXPECT_EQ(std::filesystem::last_write_time(file), long_ago);
+  MigrationOptions options;
+  options.cache = v18.cache;
+  (void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
+  EXPECT_EQ(std::filesystem::last_write_time(file), long_ago);
+}
+
 // The wrong key, a dry run, another node's id and a running node change nothing.
 TEST(MigrateBack, RefusalsAndADryRunWriteNothing) {
   StoreBed bed;

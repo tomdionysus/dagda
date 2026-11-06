@@ -112,6 +112,19 @@ void sync_fd(int fd, const std::filesystem::path& path) {
   if (rc != 0) throw std::runtime_error("cannot sync " + path.string() + ": " + std::strerror(errno));
 }
 
+// The store ages a loose object by its modification time (older_than,
+// remove_if_older_than), so a move that only rewrites a tag leaves it as it was.
+void keep_modified_time(int fd, const struct stat& before, const std::filesystem::path& path) {
+  struct timespec times[2]{};
+  times[0].tv_nsec = UTIME_OMIT;
+#if defined(__APPLE__)
+  times[1] = before.st_mtimespec;
+#else
+  times[1] = before.st_mtim;
+#endif
+  if (::futimens(fd, times) != 0) throw std::runtime_error("cannot keep the time of " + path.string() + ": " + std::strerror(errno));
+}
+
 class Fd {
  public:
   Fd(const std::filesystem::path& path, int flags) : _fd(::open(path.c_str(), flags | O_CLOEXEC)) {
@@ -452,7 +465,10 @@ void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, c
   if (!options.dry_run) {
     const auto tag = moved_tag(deriver ? *deriver : TagDeriver(key), to, id, loose.tag, loose.ciphertext.size(), options.reverse);
     Fd fd(file, O_RDWR);
+    struct stat before{};
+    if (::fstat(fd.get(), &before) != 0) throw std::runtime_error("cannot stat " + file.string() + ": " + std::strerror(errno));
     write_at(fd.get(), tag, loose_tag_offset, file);
+    keep_modified_time(fd.get(), before, file);
     sync_fd(fd.get(), file);
     report.bytes_written += tag.size();
   }
