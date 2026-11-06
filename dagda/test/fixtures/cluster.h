@@ -130,6 +130,9 @@ struct ClusterNodeOptions {
     out.cpu = {};
     return out;
   }();
+  // The node's one ledger cache, when a case wants it other than the node's
+  // default: a small one makes every lookup read its nodes from the device.
+  std::optional<uint64_t> ledger_cache_bytes;
   // The node's domain's wait, and the clock the node dates its files and
   // sightings by (a stepped one, for a case that waits out a grace).
   std::chrono::milliseconds garbage_grace{std::chrono::hours(24 * 30)};
@@ -404,6 +407,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     out.pool.pack_target_size = _options.pack_target_size;
   }
   out.cache = _options.cache;
+  if (_options.ledger_cache_bytes) out.ledger_cache_bytes = *_options.ledger_cache_bytes;
   if (_options.admission) {
     dagda::AdmissionOptions admission;
     admission.data_inflight_bytes = _options.data_inflight_bytes;

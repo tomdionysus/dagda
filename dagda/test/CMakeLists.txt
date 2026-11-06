@@ -18,6 +18,7 @@ add_executable(dagda_tests
   context_test.cpp
   contract_gates_test.cpp
   contract_include_direction_test.cpp
+  delete_stress_test.cpp
   domain_cluster_keys_test.cpp
   domain_domain_id_test.cpp
   domain_storage_key_test.cpp
