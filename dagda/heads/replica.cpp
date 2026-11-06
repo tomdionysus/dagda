@@ -668,7 +668,6 @@ void Replica::write_history_frame(std::span<const uint8_t> bytes) const {
 }
 
 void Replica::load_history() {
-  constexpr uint64_t max_record = 2ULL * 1024ULL * 1024ULL * 1024ULL;
   constexpr uint64_t max_quarantine_tail = 16ULL * 1024ULL * 1024ULL;
   _history.clear();
   _materialized.clear();
@@ -697,77 +696,80 @@ void Replica::load_history() {
     }
     Reader header(header_bytes);
     const auto length = static_cast<uint64_t>(header.u32());
-    if (length > max_record)
-      throw std::runtime_error("metadata history " + _history_path.string() + " offset=" + std::to_string(offset) + ": record too large");
-    if (offset + 4 + length > file_size) {
-      trailing_problem = "incomplete trailing frame";
-      break;
-    }
 
-    Bytes frame(static_cast<size_t>(length));
-    if (length && !stream.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(length))) {
-      trailing_problem = "incomplete trailing frame";
-      break;
-    }
-    const bool final_frame = offset + 4 + length == file_size;
-    bool torn = false;
-    try {
-      const auto envelope = parse_frame_envelope(frame);
-      Bytes plaintext;
-      try {
-        plaintext = open_frame_envelope(*_content_key, _history_aad, envelope);
-      } catch (const std::exception&) {
-        if (!final_frame) throw;
-        torn = true;
+    std::optional<Bytes> opened;
+    const bool in_file = length <= max_history_frame_bytes && offset + 4 + length <= file_size;
+    if (in_file) {
+      Bytes frame(static_cast<size_t>(length));
+      if (length && !stream.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(length))) {
+        trailing_problem = "incomplete trailing frame";
+        break;
       }
-      if (!torn) {
-        auto entry = decode_history_entry(plaintext);
+      opened = open_frame(*_content_key, _history_aad, frame);
+    }
+    if (!opened) {
+      // The length word is outside the AEAD, so a frame that does not open says
+      // nothing about where the next one starts. A later frame that opens means this
+      // is damage, left where it lies, and everything from there on is good; none
+      // means a torn tail.
+      const auto next = next_frame_from(_history_path, file_size, offset + 1, *_content_key, _history_aad, [this] { pause_walk(); });
+      if (!next) {
+        trailing_problem = in_file ? "last frame failed AES-GCM authentication" : "incomplete trailing frame";
+        break;
+      }
+      ++skipped;
+      if (skipped == 1) first_skipped = "offset=" + std::to_string(offset) + ": frame does not authenticate";
+      offset = *next;
+      valid = offset;
+      stream.clear();
+      stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+      continue;
+    }
 
-        // Linear in history bytes: each frame is validated alone; reconstruction
-        // is left to the heads that can become authority.
-        if (entry.body == HistoryEntry::Body::full) {
-          Record record;
-          record.generation = entry.generation;
-          record.previous = entry.previous;
-          record.hash = entry.hash;
-          record.payload = entry.payload;
-          if (!valid_record_counted(record)) throw DecodeError("invalid full metadata history record");
-          // Not decoded: the frame and the hash bind the identity, and a head is
-          // decoded and cross-checked when materialised.
-        } else {
-          if (!entry.previous_known || entry.generation <= 1) throw DecodeError("metadata delta history has no predecessor");
-          const auto parent = _history.find(entry.previous);
-          if (parent == _history.end() || !delta_succession_valid(parent->second.generation, entry.generation))
-            throw DecodeError("metadata delta history predecessor missing or invalid");
-          _codec->check_delta(entry.payload);
-        }
+    try {
+      auto entry = decode_history_entry(*opened);
 
-        auto index = index_history_entry(entry, offset, 4 + length);
-        if (const auto existing = _history.find(entry.hash); existing != _history.end()) {
-          // reanchor_history appends a whole body for an indexed hash; the hash
-          // binds the identity, so the whole body is preferred. A conflicting
-          // identity is corruption.
-          if (existing->second.generation != entry.generation || existing->second.previous != entry.previous)
-            throw DecodeError("duplicate metadata history record with conflicting identity");
-          if (entry.body == HistoryEntry::Body::full) existing->second = std::move(index);
-        } else {
-          _history.emplace(entry.hash, std::move(index));
-        }
+      // Linear in history bytes: each frame is validated alone; reconstruction
+      // is left to the heads that can become authority.
+      if (entry.body == HistoryEntry::Body::full) {
+        Record record;
+        record.generation = entry.generation;
+        record.previous = entry.previous;
+        record.hash = entry.hash;
+        record.payload = entry.payload;
+        if (!valid_record_counted(record)) throw DecodeError("invalid full metadata history record");
+        // Not decoded: the frame and the hash bind the identity, and a head is
+        // decoded and cross-checked when materialised.
+      } else {
+        if (!entry.previous_known || entry.generation <= 1) throw DecodeError("metadata delta history has no predecessor");
+        const auto parent = _history.find(entry.previous);
+        if (parent == _history.end() || !delta_succession_valid(parent->second.generation, entry.generation))
+          throw DecodeError("metadata delta history predecessor missing or invalid");
+        _codec->check_delta(entry.payload);
+      }
+
+      auto index = index_history_entry(entry, offset, 4 + length);
+      if (const auto existing = _history.find(entry.hash); existing != _history.end()) {
+        // reanchor_history appends a whole body for an indexed hash; the hash
+        // binds the identity, so the whole body is preferred. A conflicting
+        // identity is corruption.
+        if (existing->second.generation != entry.generation || existing->second.previous != entry.previous)
+          throw DecodeError("duplicate metadata history record with conflicting identity");
+        if (entry.body == HistoryEntry::Body::full) existing->second = std::move(index);
+      } else {
+        _history.emplace(entry.hash, std::move(index));
       }
     } catch (const MaintenanceStopping&) {
       throw;
     } catch (const std::exception& error) {
-      // Entries are independent and hash-indexed: skip a bad one (its dependants
-      // fail their predecessor check too); heads needing it are repaired from peers.
+      // Authenticated, so its length is good. Entries are independent and
+      // hash-indexed: skip a bad one (its dependants fail their predecessor check
+      // too); heads needing it are repaired from peers.
       ++skipped;
       if (skipped == 1) first_skipped = "offset=" + std::to_string(offset) + ": " + error.what();
       offset += 4 + length;
       valid = offset;
       continue;
-    }
-    if (torn) {
-      trailing_problem = "final frame failed AES-GCM authentication";
-      break;
     }
 
     offset += 4 + length;

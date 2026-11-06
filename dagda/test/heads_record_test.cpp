@@ -176,7 +176,7 @@ TEST(HeadsRecord, SixtyFourMergeParentsPassAndSixtyFiveAreRefusedEverywhere) {
     std::ofstream out(history, std::ios::binary | std::ios::app);
     out.write(reinterpret_cast<const char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
   }
-  // A good frame after it, so the bad one is not a final frame.
+  // A good frame after it. Authenticated, the bad one is skipped wherever it lies.
   {
     const auto aad = replica_aad(test::neutral_domain(), test::neutral_space())(test::neutral_magics().history);
     const auto after = make_record(52, Hash256{{7}}, neutral_payload(with_over));
