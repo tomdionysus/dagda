@@ -256,6 +256,8 @@ struct DistributedStoreOptions {
   // Repair's decision trace (each copy pushed, pull and local drop, in
   // decision order), for tests: kind "repair" and the decision.
   std::function<void(std::string_view kind, std::string_view detail)> repair_trace;
+  // Told as a read's local and cache stages end, for tests.
+  std::function<void(std::string_view stage)> read_trace;
 };
 
 // What one repair step works from: the availability survey's lists, never a
