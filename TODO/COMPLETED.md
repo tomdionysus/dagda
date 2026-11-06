@@ -12,8 +12,12 @@ put the pass, the survey (`AvailabilityOptions::time`), repair, the collector an
 `maintenance_steps_test.cpp`'s bed moved onto all of it, its `availability.share = 0` gone; all seven fixtures unchanged. B6's observations and
 slow-stage lines are recorded in the steps, and about 35 figures added under `dagda.*`, `repair.last_credit_bytes` among them.
 `AdmissionOptions::device_pressure` is Macha's `dht.io_pressure_*`, zero turning the gate off. A node with custody and no certificate now opens
-and advertises no wrap key. Left: `cluster_stable` and `dagda.gc.*` under an owner's steps; custody is still required. Not run under GCC.
-Gate: `dagda_tests` 648 passing, 3 disabled, three whole runs on the Mac (627 at the start).
+and advertises no wrap key. The steps' rebalance rest ends on Macha's four events only (`maintenance_events()`; the composite keeps any event). A
+stop inside a stage comes through it: in pack compaction's wait for the walk and between backends, as Macha's can fall; a pack being rewritten and
+the claims' compaction run to their end, as Macha's do. Left: `cluster_stable` and `dagda.gc.*` under an owner's steps; custody is still required;
+`no_progress` governs no store or server wait, because `admit_data` gives each an absolute `admission_wait`, where Macha's re-arms on any release,
+and a zero is refused where Macha's waits for ever (for the facade and the capabilities report). Not run under GCC.
+Gate: `dagda_tests` 653 passing, 3 disabled, three whole runs on the Mac (627 at the start).
 
 ## 2026-11-06: the steps Macha's loop needs (`feature/maintenance-steps`)
 
