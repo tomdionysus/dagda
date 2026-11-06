@@ -52,6 +52,8 @@ class RosterNodes final : public dannan::Nodes {
     absent.erase(id);
   }
 
+  void refresh_public_connectivity(bool, bool, boost::asio::any_io_executor,
+                                   std::function<void(std::optional<dannan::reach::PublicConnectivityStatus>)>) override {}
   uint64_t watch(boost::asio::any_io_executor, std::function<void(dannan::RosterChange)>) override { return 0; }
   void unwatch(uint64_t) override {}
   NodeRecord self() const override { return _self; }

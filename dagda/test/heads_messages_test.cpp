@@ -86,22 +86,23 @@ struct Recorder final : dannan::Routes {
   explicit Recorder(RouteTable& t) : table(t) {}
   RouteTable& table;
   void add(dannan::net::MessageType type, dannan::net::Registration registration, dannan::net::RequestHandler) override { table.add(type, registration); }
+  void retire(dannan::net::MessageType) override {}
   void bind(dannan::net::MessageType, dannan::net::RequestHandler) override {}
   void unbind(dannan::net::MessageType) override {}
   std::shared_ptr<dannan::net::CallHandle> call(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, FrameType,
-                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done) override {
+                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
     return {};
   }
   std::shared_ptr<dannan::net::CallHandle> call(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, FrameType,
-                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done) override {
+                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
     return {};
   }
   dannan::net::CallOutcome call_and_wait(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, FrameType,
-                                         std::chrono::milliseconds) override {
+                                         std::chrono::milliseconds, dannan::net::CallWatch) override {
     return {};
   }
   dannan::net::CallOutcome call_and_wait(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, FrameType,
-                                         std::chrono::milliseconds) override {
+                                         std::chrono::milliseconds, dannan::net::CallWatch) override {
     return {};
   }
 };
