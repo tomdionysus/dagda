@@ -302,7 +302,13 @@ class NeutralCodec final : public Codec {
   }
   HeadFields head_fields(const State& state) const override {
     const auto& head = *as_head(state);
-    return {head.clock, head.merge_parents, head.floor};
+    HeadFields fields{head.clock, head.merge_parents, head.floor, head.root, {}};
+    // What only a policy commit may move: the notes under "policy/".
+    for (auto at = head.notes.get().lower_bound("policy/"); at != head.notes.get().end() && at->first.starts_with("policy/"); ++at) {
+      fields.policy.insert(fields.policy.end(), at->first.begin(), at->first.end());
+      fields.policy.insert(fields.policy.end(), at->second.begin(), at->second.end());
+    }
+    return fields;
   }
   uint64_t resident_bytes(const State& state) const override {
     const auto& head = *as_head(state);

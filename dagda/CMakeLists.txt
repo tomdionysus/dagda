@@ -23,6 +23,7 @@ add_library(dagda SHARED
   heads/replica.cpp
   heads/retirement.cpp
   heads/sealed_file.cpp
+  heads/space.cpp
   heads/tree.cpp
   lease/fence.cpp
   lease/keeper.cpp
