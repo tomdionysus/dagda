@@ -56,6 +56,7 @@ add_executable(dagda_tests
   node_local_maintenance_test.cpp
   maintenance_steps_test.cpp
   node_maintenance_test.cpp
+  node_seams_test.cpp
   node_test.cpp
   store_control_fetch_test.cpp
   store_control_store_test.cpp

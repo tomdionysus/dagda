@@ -215,7 +215,8 @@ class NodeRefused final : public std::runtime_error {
 // starts), takes the storage lock on the state path and every store root, and
 // then opens, in order: the state layout (a v18 state or backend is refused
 // with a reason naming dagda-migrate, and nothing is changed), the node-local
-// key and the wrap key (a node without custody is refused), the DATA pool and
+// key and the wrap key (a node without custody is refused; one without a
+// certificate opens and advertises no wrap key), the DATA pool and
 // its admission, the control store, the cache, the claims and the reference
 // counts, the distributed store, availability, repair and the storage
 // server. Each readiness plane is reported ready as its part opens; a pool
