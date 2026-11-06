@@ -3,6 +3,17 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: a damaged history frame loses only that frame (`feature/history-damage`)
+
+Macha 0.93.5's `load_history` mirrored from its `9153011` (behaviour baseline; forms stay cut at `9a08846`). A frame that does not open looks forward for the
+next that authenticates (`next_frame_from` in `sealed_file.h`, reachable for S7's migration and the comparison tool); the damaged bytes stay; nothing later is
+a torn tail, cut and quarantined up to 16 MiB. A length over 2 GiB no longer reaches a seed. Dagda's one addition: the scan pauses per window, so a stop passes
+through it (Macha's load has no stop). `HeadsReplica.ADamagedHistoryFrameLosesOnlyThatFrame` and `ATornHistoryTailIsStillCut` are Macha's, assertion for
+assertion but for flipping the body byte where Macha's writes 0x5a over it. No existing case's assertion differed. `dagda/test/data/replica-0.93.4/` gains
+`recovery` and `twoheads`; the byte proof damages copies of real history, six kinds against every frame of eight states. Plan: R12 resolved, D5's history half gone.
+For S7: a suffix that does not open under the reader's key and associated data is now one torn tail, so a half-migrated history must never reach this reader.
+Gate: `dagda_tests` 859 passing, 4 disabled, three whole runs on the Mac (797 at the start). `g++-15 -fsyntax-only` clean on the changed sources; not run under GCC.
+
 ## 2026-11-06: the node's seams for Macha's loop (`feature/node-seams`)
 
 `Node::run_local_stages(stop)` throws `MaintenanceStopping` past its catch; `begin_local_stages`, `local_rebalance`, `retention_compact`,
