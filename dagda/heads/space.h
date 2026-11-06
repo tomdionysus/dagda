@@ -63,17 +63,72 @@ struct Policy {
 // Nothing, or why a space may not open under `policy`.
 std::optional<std::string> policy_refusal(const Policy& policy);
 
-// The owner's merge of two heads, for the reconciler (session S6, which calls it).
-// Held from open(); nothing calls it yet. Macha ignores `base`. Thread-safe.
+// The claims a commit named: what the peers' share is, not a second derivation.
+struct CommitClaims {
+  std::vector<ObjectId> data;
+  std::vector<ObjectId> control;
+  uint64_t bytes() const noexcept { return (data.size() + control.size()) * sizeof(ObjectId); }
+};
+
+// Two heads the reconciler is folding, in the one order every reconciler takes them:
+// `primary` has the lower hash, and is the commit's previous; `secondary` is its one merge
+// parent. Valid for the call.
+struct MergeHeads {
+  const Record& primary;
+  const Record& secondary;
+  const State& primary_state;
+  const State& secondary_state;
+  // The node store as it stands, and the one that writes the merged tree, on this node alone.
+  const TreeNodeStore& reader;
+  TreeNodeStore& nodes;
+  const TreePause& pause;
+};
+
+// The owner's merge of two heads: an owner's type lives behind this, and Dagda knows only
+// what it says of the result. Thread-safe.
+//
+// Every reconciler of a pair must mint one commit (H8), so the state is a function of the
+// two heads alone: their clocks joined and nothing of this node's in them (R3), their tree
+// merged by what differs, and merge parents of exactly the secondary's hash.
+//
+// `base` is the two heads' common ancestor as this node holds it, and is outside that
+// promise. History truncates per node (H16), so one reconciler may hold the ancestor and
+// another not; a merge that lets `base` change its result makes sibling commits, which are
+// two heads like any others and are folded in their turn. Such a merge must settle when it
+// folds its own siblings, or the nodes never reach one head (the plan's Q5, C40). The walk
+// is only made for a merge that says it reads `base`; Macha's does not.
 class Merge {
  public:
   struct Result {
-    // Empty with `why`: the merge cannot be made with what this node can reach now.
+    // Empty, with `why`: the merge cannot be made with what this node can reach now, and
+    // the head that is not this node's own is set aside (H10).
     State state;
     std::string why;
+    // The change against the primary, when the owner can say it. The frame is this if it is
+    // strictly smaller than the record, else the record (H9).
+    Bytes delta;
+    // What the commit brings in beside its tree's nodes, which Dagda collects itself: objects
+    // the change names, conflict alternatives among them. All claimed here under the merge's
+    // dot (H22). None is looked for elsewhere: a merge refuses nothing for an object this node
+    // does not hold, as its parents' holders may be away.
+    CommitClaims claims;
+    // For the reconciliation's line and figures. The conflicts are the owner's blob (H11).
+    uint64_t conflicts_created = 0;
+    uint64_t conflicts_superseded = 0;
+    uint64_t conflicts_standing = 0;
   };
   virtual ~Merge() = default;
-  virtual Result merge(const std::optional<State>& base, const State& a, const State& b) const = 0;
+  // Throwing DecodeError is as `why`: a node one branch needs that no node present can supply.
+  // Anything else ends the read or the repair run that asked, and what a pause throws goes
+  // through.
+  virtual Result merge(const std::optional<State>& base, const MergeHeads& heads) const = 0;
+  virtual bool reads_base() const { return false; }
+  // Told once the merge is published here, holding the reconciliation's lock: what the owner
+  // says of it, such as its conflicts, in its own words.
+  virtual void published(const Result& result, const Record& commit) const {
+    (void)result;
+    (void)commit;
+  }
 };
 
 // What an owner gives a mutation attempt. Valid for that attempt.
@@ -132,13 +187,6 @@ class Mutation {
 };
 
 using MutationFactory = std::function<std::unique_ptr<Mutation>(const State& parent)>;
-
-// The claims a commit named: what the peers' share is, not a second derivation.
-struct CommitClaims {
-  std::vector<ObjectId> data;
-  std::vector<ObjectId> control;
-  uint64_t bytes() const noexcept { return (data.size() + control.size()) * sizeof(ObjectId); }
-};
 
 // A commit's claims on this node, on the store (H22). Thread-safe.
 class ClaimBarrier {
@@ -277,8 +325,7 @@ struct SpaceServices {
   // Moves when the membership does. A head set aside is retried when it has (R6, R8).
   std::function<uint64_t()> membership_stamp;
   // What a read or a mutation with no usable head stands on: the exchange's survey, its
-  // import and its founding, and session S6's fold of what they find. None: this node's
-  // own head.
+  // import, its founding and its fold of what they find. None: this node's own head.
   std::function<Record()> converge;
   // A commit was accepted here, and whether the head set and the committed record moved,
   // for the exchange's adverts and notices. HeadsNotReady from here is an acceptance
@@ -303,7 +350,7 @@ struct SpaceServices {
 
 // One head space on this node: Macha's MetadataManager at 9a08846 as far as one node
 // goes, over an owner's Codec, with no owner's type here. Everything to do with a peer is
-// the Exchange's, through SpaceServices, and a fold of heads session S6's. Macha has one
+// the Exchange's, through SpaceServices, the fold of several heads among it. Macha has one
 // every-node space.
 //
 // Every operation is thread-safe. Lock order: _mutation_mutex, then the replica's,
@@ -322,8 +369,8 @@ class Space {
   // Reads the state device once after the head set moves.
   static constexpr dannan::sched::Waits local_waits = dannan::sched::local_waits;
   // The state at the newest generation known: the cache when current, else as
-  // `converge` says.
-  static constexpr dannan::sched::Waits converged_waits = dannan::sched::local_waits | dannan::sched::Waits::network;
+  // `converge` says. That can be a merge, and a merge's claims check DATA presence.
+  static constexpr dannan::sched::Waits converged_waits = dannan::sched::local_waits | dannan::sched::Waits::data_device | dannan::sched::Waits::network;
   // A commit on this node. Claims check DATA presence and may ask a peer.
   static constexpr dannan::sched::Waits mutate_waits = dannan::sched::local_waits | dannan::sched::Waits::data_device | dannan::sched::Waits::network;
   // A page of a view's tree. Nodes this node lacks are fetched from peers.
@@ -344,7 +391,8 @@ class Space {
 
   const std::string& name() const noexcept { return _spec.name; }
   const Policy& policy() const noexcept { return _spec.policy; }
-  // Session S6's, held since open().
+  // What the exchange folds several heads with. None: they stand until a commit's clock
+  // covers them, and a read falls back to this node's own.
   const std::shared_ptr<const Merge>& merge() const noexcept { return _spec.merge; }
   const std::shared_ptr<const Codec>& codec() const noexcept { return _spec.codec; }
   // The node's replica of this space, for its exchange and for tests.
@@ -387,7 +435,7 @@ class Space {
   // Of several heads, the one carrying the most of what this node authored: by its
   // current author id first, then each earlier one, and the lower hash on a tie (R4).
   Record own_head(const std::vector<Record>& heads) const;
-  // Sets `head` aside until the membership changes, for the reconciler (session S6).
+  // Sets `head` aside until the membership changes, for the reconciler.
   // False when it is the only head not set aside, as a node always keeps one.
   bool set_aside(const Record& head, std::string_view reason);
   // Accepted heads, without those set aside. Reads can write (R6): a set-aside whose

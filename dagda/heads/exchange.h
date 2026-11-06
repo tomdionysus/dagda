@@ -113,6 +113,13 @@ struct TransferDiagnostics {
   uint64_t peak_in_flight = 0;
 };
 
+struct ReconcileDiagnostics {
+  uint64_t merges = 0;
+  uint64_t conflicts_created = 0;
+  uint64_t conflicts_superseded = 0;
+  uint64_t set_aside = 0;
+};
+
 // One peer's refusal, as it said it: the scope check's words and generation.
 struct PeerRefusal {
   NodeId peer{};
@@ -146,22 +153,23 @@ struct RepairTurn {
 };
 
 // One space's exchange with its peers: Macha's MetadataManager at 9a08846 from here out
-// (import, push, publish, survey, founding, repair, the replicator) and MetadataServer
-// (what a peer's request does, the adverts and notices), and the metadata half of its
-// maintenance loop. Over an owner's Codec and with no owner's type. A fold of several
-// heads is session S6's: `read_group` says so where Macha's would fold (see its comment).
+// (import, push, publish, survey, founding, the fold of several heads, repair, the
+// replicator) and MetadataServer (what a peer's request does, the adverts and notices), and
+// the metadata half of its maintenance loop. Over an owner's Codec and Merge and with no
+// owner's type.
 //
 // Thread-safe, except that repair_turn() has one owner, the node's maintenance thread.
-// Lock order: Space's _mutation_mutex, then a replica's, then _owed_mutex, _stalled_mutex
-// or _unacceptable_mutex, each a leaf. No lock here is held across a call to a peer but
-// the mutation mutex, which a mutation's reconfigure holds across a publish, as Macha's
-// does (the plan's D6).
+// Lock order: Space's _mutation_mutex, then _reconciliation_mutex, then a replica's, then
+// _owed_mutex, _stalled_mutex or _unacceptable_mutex, each a leaf. No lock here is held
+// across a call to a peer but the mutation mutex, which a mutation's reconfigure holds across
+// a publish, as Macha's does (the plan's D6), and the reconciliation's, across a merge's.
 class Exchange {
  public:
   static constexpr dannan::sched::ThreadSafety safety = dannan::sched::ThreadSafety::thread_safe;
   // The survey, the import, the publish and the repair all wait on each peer in turn,
   // each call within its deadline.
-  static constexpr dannan::sched::Waits repair_waits = dannan::sched::local_waits | dannan::sched::Waits::network;
+  // A merge among it: its claims check DATA presence, and it waits for another reconciler.
+  static constexpr dannan::sched::Waits repair_waits = dannan::sched::local_waits | dannan::sched::Waits::data_device | dannan::sched::Waits::network;
   static constexpr dannan::sched::Waits head_repair_waits = dannan::sched::local_waits | dannan::sched::Waits::network;
   static constexpr dannan::sched::Waits truncate_waits = dannan::sched::local_waits;
   // A wait of the caller's own, on the replicator.
@@ -277,6 +285,11 @@ class Exchange {
     return {_history_transfers.load(std::memory_order_relaxed), _history_entries_submitted.load(std::memory_order_relaxed),
             _history_peak_in_flight.load(std::memory_order_relaxed)};
   }
+  // What the fold has done since start.
+  ReconcileDiagnostics reconciliations() const noexcept {
+    return {_reconciliations.load(std::memory_order_relaxed), _conflicts_created.load(std::memory_order_relaxed),
+            _conflicts_superseded.load(std::memory_order_relaxed), _heads_set_aside.load(std::memory_order_relaxed)};
+  }
   // The refusals peers gave this node last, one per peer.
   std::vector<PeerRefusal> refusals() const DANNAN_EXCLUDES(_refusals_mutex);
   // Whether `peer` is in its time out from commit calls.
@@ -317,9 +330,13 @@ class Exchange {
   bool accept_commit_on(const Peer& owner, const Acceptance& acceptance, FrameType frame);
   std::vector<std::pair<Peer, Acceptance>> discover_accepted_heads(const std::vector<Peer>& nodes, FrameType frame);
   bool replicate_accepted_head(const Peer& owner, const Record& record, const Acceptance& acceptance, FrameType frame, const TreePause& pause);
-  // The survey, the import, and then the one head that stands. Throws HeadsNotReady at
-  // the point Macha's folds several (mgr:1157): session S6's to replace.
+  // The survey, the import, the fold of what stands (mgr:1127-1315), and the one head left.
+  // A head no merge can be made with is set aside, so this never waits for one. Throws
+  // HeadsNotReady when no head stands, or several and this space's owner gave no merge.
   Record read_group(const std::vector<Peer>& nodes, FrameType frame, const TreePause& pause = {}) DANNAN_EXCLUDES(_unacceptable_mutex);
+  // One merge and its publish: `left` is the lower hash. Throws what sets a head aside, a
+  // MergeUnavailable or a DecodeError, and anything else for what ends the read.
+  void reconcile(const std::vector<Peer>& nodes, const Record& left, const Record& right, FrameType frame, const TreePause& pause, size_t remaining);
   struct RecoverySurvey {
     bool complete = false;
     bool durable_history = false;
@@ -373,6 +390,16 @@ class Exchange {
     Exchange* exchange DANNAN_GUARDED_BY(mutex) = nullptr;
   };
   std::shared_ptr<RosterHold> _roster_hold;
+
+  // Guards no state: serialises merge and publish, so readers who all see one divergence do
+  // not each mint a commit. Held across the merge's tree reads, claims and publish, and taken
+  // only on seeing several heads. After Space's _mutation_mutex, which a repair run holds
+  // here and a read does not.
+  dannan::contract::IoMutex _reconciliation_mutex;
+  std::atomic_uint64_t _reconciliations{0};
+  std::atomic_uint64_t _conflicts_created{0};
+  std::atomic_uint64_t _conflicts_superseded{0};
+  std::atomic_uint64_t _heads_set_aside{0};
 
   // What the replicator is doing, beside the space's own queue.
   mutable dannan::contract::Mutex _owed_mutex;

@@ -998,7 +998,8 @@ void Node::stop_maintenance() {
 //   historical_reconstructions, historical_deltas_applied,
 //   materialization_cache_hits, _misses, _evictions, _entries, _bytes, _limit_bytes,
 //   accepted_head_persistence_writes, _bytes, _failures; head_holders,
-//   head_holders_present, heads_set_aside; mutations, mutation_retention_ms_total, _max,
+//   head_holders_present, heads_set_aside; reconciliations, conflicts_created,
+//   conflicts_superseded; mutations, mutation_retention_ms_total, _max,
 //   mutation_publish_ms_total, _max; claims_owed_commits, claims_owed_bytes,
 //   claims_owed_dropped; availability, write_available, stable, replicas, replicas_online,
 //   write_replicas_required, observed_unix_ms; history_transfers,
@@ -1069,6 +1070,10 @@ void Node::publish_status() {
       head("head_holders", u64(status.head_holders));
       head("head_holders_present", u64(status.head_present));
       head("heads_set_aside", u64(space.set_aside_count()));
+      const auto reconciled = exchange->reconciliations();
+      head("reconciliations", u64(reconciled.merges));
+      head("conflicts_created", u64(reconciled.conflicts_created));
+      head("conflicts_superseded", u64(reconciled.conflicts_superseded));
       const auto timing = space.mutation_timing();
       head("mutations", u64(timing.mutations));
       head("mutation_retention_ms_total", u64(timing.retention_ms_total));
