@@ -105,7 +105,8 @@ until everything on it is v19.
 
 ## What a crash leaves, and how to resume
 
-Run the tool again. Each record is either v18 or v19, told by which
+Run the tool again. What a crash left beside a file being replaced (a
+`<name>.tmp.<pid>.<n>`, as large as a ledger) is removed first. Each record is either v18 or v19, told by which
 associated data authenticates it, so a second run skips the records already
 done and migrates the rest. Each ledger file is under the old key or the
 new, told by which key opens it, so it is likewise skipped or re-sealed.

@@ -194,6 +194,11 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
                                    const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody,
                                    const MigrationOptions& options = {});
 
+// Whether a file name is what a crash leaves of a replacement the migration
+// makes (`<name>.tmp.<pid>.<n>` of a marker or a ledger's file). A second run
+// removes these; they never hold anything a store reads. Waits on nothing.
+bool migration_temporary(std::string_view file_name);
+
 // One loose file: its tag rewritten if the record is v18, counted if v19 or
 // unreadable. One pack: each put record likewise, the pack's checksummed
 // headers recomputed. Both are what migrate_state runs over every file;

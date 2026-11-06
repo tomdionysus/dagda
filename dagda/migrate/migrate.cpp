@@ -311,6 +311,27 @@ void migrate_ledgers(const std::filesystem::path& state, std::shared_ptr<const d
 // nothing has been written. An unmarked trie with records is its "hold claims
 // but no ledger marker"; a probe cannot tell an empty trie, so an unmarked
 // one that has been written to refuses too and the operator decides.
+// Where the migration makes replacements under the state.
+std::vector<std::filesystem::path> known_ledgers_dirs(const std::filesystem::path& state) {
+  std::vector<std::filesystem::path> dirs{state, state / "backend-identities", state / "retention"};
+  std::error_code ec;
+  const auto holding = [&](const std::filesystem::path& dir) {
+    if (std::filesystem::is_directory(dir, ec)) dirs.push_back(dir);
+  };
+  const auto ledger = state / "ledger";
+  holding(ledger / "control");
+  holding(ledger / "referenced" / "extents");
+  holding(ledger / "referenced" / "nodes");
+  holding(state / "retention" / "ledger-data");
+  holding(state / "retention" / "ledger-control");
+  if (std::filesystem::is_directory(ledger, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(ledger, ec))
+      if (entry.is_directory() && entry.path().filename().string().starts_with("data-")) dirs.push_back(entry.path());
+    if (ec) throw std::runtime_error("cannot list " + ledger.string() + ": " + ec.message());
+  }
+  return dirs;
+}
+
 void check_retention(const std::filesystem::path& state, const domain::StorageKey& from, const domain::StorageKey& to) {
   const auto root = state / "retention";
   std::error_code ec;
@@ -459,7 +480,39 @@ std::string v19_marker_for(const BackendMarkerV18& old, const domain::StorageKey
   return store::backend_marker_text(to, old.node, old.token, store::backend_key_check(key, to.domain, old.token)) + "\n";
 }
 
+// What a crash left beside what a replacement was replacing: as large as it, and
+// nothing else ever removes it.
+void remove_temporaries(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends, const MigrationOptions& options) {
+  if (options.dry_run) return;
+  auto dirs = known_ledgers_dirs(state);
+  dirs.insert(dirs.end(), backends.begin(), backends.end());
+  std::error_code ec;
+  for (const auto& dir : dirs) {
+    if (!std::filesystem::is_directory(dir, ec)) continue;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+      if (!migration_temporary(entry.path().filename().string())) continue;
+      std::filesystem::remove(entry.path(), ec);
+      if (ec) throw std::runtime_error("cannot remove " + entry.path().string() + ": " + ec.message());
+      say(options, "removed what a crash left: " + entry.path().string());
+    }
+    if (ec) throw std::runtime_error("cannot list " + dir.string() + ": " + ec.message());
+  }
+}
+
 }  // namespace
+
+bool migration_temporary(std::string_view file_name) {
+  const auto at = file_name.rfind(".tmp.");
+  if (at == std::string_view::npos) return false;
+  const auto suffix = file_name.substr(at + 5);
+  const auto dot = suffix.find('.');
+  if (dot == std::string_view::npos || dot == 0 || dot + 1 == suffix.size()) return false;
+  const auto digits = [](std::string_view text) { return std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }); };
+  if (!digits(suffix.substr(0, dot)) || !digits(suffix.substr(dot + 1))) return false;
+  const auto base = file_name.substr(0, at);
+  return base == "storage-layout" || base == store::backend_marker_name || base == "claims.log" || base == "unreferenced-data.bin" ||
+         base == "unreferenced-control.bin" || base == "root" || base == "journal.log" || base.ends_with(".id");
+}
 
 RecordLayout record_layout(const domain::StorageKey& key, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                            std::span<const uint8_t, 16> tag, std::span<const uint8_t> ciphertext, uint64_t plain_size) {
@@ -757,6 +810,10 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     migrate_ledgers(state, domain_key, node_local, scratch, quiet);
   }
 
+  std::vector<std::filesystem::path> backend_paths;
+  for (const auto& backend : found) backend_paths.push_back(backend.path);
+  remove_temporaries(state, backend_paths, options);
+
   // Objects first: a backend, the control store and the cache are each a
   // tree of loose files and packs.
   for (const auto& backend : found) {
@@ -901,6 +958,9 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
     if (have_cache) migrate_objects(options.cache, *domain_key, deriver, v19, scratch, proved, probe);
     migrate_ledgers(state, node_local, domain_key, scratch, quiet);
   }
+  std::vector<std::filesystem::path> backend_paths;
+  for (const auto& backend : found) backend_paths.push_back(backend.path);
+  remove_temporaries(state, backend_paths, options);
   for (const auto& backend : found) {
     say(options, "backend " + backend.path.string());
     migrate_objects(backend.path, *domain_key, deriver, v19, report, proved, options);

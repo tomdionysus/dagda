@@ -146,5 +146,38 @@ TEST(MigrateCrash, ARecordThatIsDamagedIsNotTakenForATear) {
   EXPECT_EQ(report.loose_torn_finished, 0u);
 }
 
+// ---- What a crash leaves beside the files --------------------------------------
+
+// durable_replace_file writes `<path>.tmp.<pid>.<n>` and renames it. A crash
+// between the two leaves the temporary, as large as the ledger it was replacing,
+// and nothing else ever removes it: a second run does.
+TEST(MigrateCrash, TheTemporariesACrashLeavesAreRemovedByTheSecondRun) {
+  StoreBed bed;
+  V18State v18(bed);
+  const std::vector<std::filesystem::path> temporaries{
+      v18.state / "storage-layout.tmp.4242.0",
+      v18.backend / ".macha.backend.tmp.4242.1",
+      store::backend_identity_path(v18.state, v18.backend).string() + ".tmp.4242.2",
+      v18.state / "retention" / "claims.log.tmp.4242.3",
+      v18.state / "retention" / "unreferenced-data.bin.tmp.4242.4",
+      v18.state / "ledger" / "control" / "root.tmp.4242.5",
+      v18.state / "retention" / "ledger-data" / "journal.log.tmp.4242.6",
+  };
+  for (const auto& path : temporaries) legacy::write_file(path, bytes_of("half of something"));
+  // Not the migration's: what it did not make it leaves.
+  const auto not_ours = v18.state / "retention" / "somebody-elses.tmp.4242.7";
+  legacy::write_file(not_ours, bytes_of("kept"));
+
+  MigrationOptions dry;
+  dry.dry_run = true;
+  (void)v18.migrate(dry);
+  for (const auto& path : temporaries) EXPECT_TRUE(std::filesystem::exists(path)) << path;
+
+  (void)v18.migrate();
+  for (const auto& path : temporaries) EXPECT_FALSE(std::filesystem::exists(path)) << path;
+  EXPECT_TRUE(std::filesystem::exists(not_ours));
+  expect_v19_opens(bed, v18);
+}
+
 }  // namespace
 }  // namespace dagda::migrate
