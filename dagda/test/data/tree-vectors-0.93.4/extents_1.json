@@ -1,0 +1,6 @@
+{"name":"extents_1","purpose":"One file of 1 extents: inline to 8, external from 9.","limits":{"entry_target_fanout":32,"entry_max_fanout":128,"branch_target_fanout":32,"branch_max_fanout":128,"extent_inline_max":8,"extent_target_fanout":256,"extent_max_fanout":1024},"root":"29319ea17d87a52d3d43bb53c3b146dbd7435ec0a8d69286fe17dd3beccf3bce","stats":{"entries":1,"extents":1,"leaves":1,"branches":0,"extent_nodes":0,"bytes":113,"largest_node_bytes":113,"depth":1},"nodes_written":1,"nodes_reachable":1,
+"entries":[
+{"key_hex":"2f66","key":"/f","entry":{"type":2,"mode":420,"uid":1000,"gid":1000,"size":4194304,"ctime_ns":11000,"mtime_ns":22000,"version":5,"extents":[{"offset":0,"length":4194304,"hole":false,"id":"c234778d99c6af6951ec017bdc2a2b4d3cc746ec8e45d412f1f6ab11c6f55b89"}]}}],
+"nodes":[
+{"id":"29319ea17d87a52d3d43bb53c3b146dbd7435ec0a8d69286fe17dd3beccf3bce","kind":"MNL1","reachable":true,"count":1,"keys_hex":["2f66"],"direct_children":[{"extent":true,"id":"c234778d99c6af6951ec017bdc2a2b4d3cc746ec8e45d412f1f6ab11c6f55b89"}],"bytes_hex":"4d4e4c3100000001000000022f6602000001a4000003e8000003e800000000004000000000000000002af800000000000055f0000000000000000501000000010000000000000000000000000040000000c234778d99c6af6951ec017bdc2a2b4d3cc746ec8e45d412f1f6ab11c6f55b89"}],
+"updates":[]}

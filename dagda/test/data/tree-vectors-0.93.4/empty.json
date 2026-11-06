@@ -1,0 +1,5 @@
+{"name":"empty","purpose":"An empty namespace is one empty leaf.","limits":{"entry_target_fanout":32,"entry_max_fanout":128,"branch_target_fanout":32,"branch_max_fanout":128,"extent_inline_max":8,"extent_target_fanout":256,"extent_max_fanout":1024},"root":"d738fb11119c7e0211008bf1efcd77fc44a89257c128b10d8f723dfa5b986086","stats":{"entries":0,"extents":0,"leaves":1,"branches":0,"extent_nodes":0,"bytes":8,"largest_node_bytes":8,"depth":1},"nodes_written":1,"nodes_reachable":1,
+"entries":[],
+"nodes":[
+{"id":"d738fb11119c7e0211008bf1efcd77fc44a89257c128b10d8f723dfa5b986086","kind":"MNL1","reachable":true,"count":0,"direct_children":[],"bytes_hex":"4d4e4c3100000000"}],
+"updates":[]}

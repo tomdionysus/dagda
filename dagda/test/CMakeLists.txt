@@ -22,6 +22,10 @@ add_executable(dagda_tests
   domain_domain_id_test.cpp
   domain_storage_key_test.cpp
   domain_wrap_test.cpp
+  heads_census_test.cpp
+  heads_control_node_store_test.cpp
+  heads_tree_test.cpp
+  heads_tree_vectors_test.cpp
   lease_claimed_collection_test.cpp
   lease_fence_test.cpp
   lease_keeper_test.cpp

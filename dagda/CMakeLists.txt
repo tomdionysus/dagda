@@ -17,6 +17,8 @@ add_library(dagda SHARED
   domain/domain_id.cpp
   domain/storage_key.cpp
   domain/wrap.cpp
+  heads/control_node_store.cpp
+  heads/tree.cpp
   lease/fence.cpp
   lease/keeper.cpp
   lease/lease.cpp

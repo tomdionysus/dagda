@@ -1,0 +1,6 @@
+{"name":"extents_0","purpose":"One file of 0 extents: inline to 8, external from 9.","limits":{"entry_target_fanout":32,"entry_max_fanout":128,"branch_target_fanout":32,"branch_max_fanout":128,"extent_inline_max":8,"extent_target_fanout":256,"extent_max_fanout":1024},"root":"4a47eba2fe7feb6cabe3f42d59092f9b74d2b3e8aa8104c624548e50c9a925b1","stats":{"entries":1,"extents":0,"leaves":1,"branches":0,"extent_nodes":0,"bytes":60,"largest_node_bytes":60,"depth":1},"nodes_written":1,"nodes_reachable":1,
+"entries":[
+{"key_hex":"2f66","key":"/f","entry":{"type":2,"mode":420,"uid":1000,"gid":1000,"size":0,"ctime_ns":11000,"mtime_ns":22000,"version":5,"extents":[]}}],
+"nodes":[
+{"id":"4a47eba2fe7feb6cabe3f42d59092f9b74d2b3e8aa8104c624548e50c9a925b1","kind":"MNL1","reachable":true,"count":1,"keys_hex":["2f66"],"direct_children":[],"bytes_hex":"4d4e4c3100000001000000022f6602000001a4000003e8000003e800000000000000000000000000002af800000000000055f0000000000000000500"}],
+"updates":[]}

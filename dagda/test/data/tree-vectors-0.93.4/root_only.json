@@ -1,0 +1,6 @@
+{"name":"root_only","purpose":"One directory.","limits":{"entry_target_fanout":32,"entry_max_fanout":128,"branch_target_fanout":32,"branch_max_fanout":128,"extent_inline_max":8,"extent_target_fanout":256,"extent_max_fanout":1024},"root":"4a36f0049b0d5149eb22f42c8a2d516948956af58c16bab3f831aff4527218f2","stats":{"entries":1,"extents":0,"leaves":1,"branches":0,"extent_nodes":0,"bytes":59,"largest_node_bytes":59,"depth":1},"nodes_written":1,"nodes_reachable":1,
+"entries":[
+{"key_hex":"2f","key":"/","entry":{"type":1,"mode":493,"uid":0,"gid":0,"size":0,"ctime_ns":0,"mtime_ns":0,"version":1,"extents":[]}}],
+"nodes":[
+{"id":"4a36f0049b0d5149eb22f42c8a2d516948956af58c16bab3f831aff4527218f2","kind":"MNL1","reachable":true,"count":1,"keys_hex":["2f"],"direct_children":[],"bytes_hex":"4d4e4c3100000001000000012f01000001ed0000000000000000000000000000000000000000000000000000000000000000000000000000000100"}],
+"updates":[]}

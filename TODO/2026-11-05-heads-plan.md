@@ -544,34 +544,34 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_metadata_decoded_cache_ttl_recovers_missed_notice` | `test_hydration_catalogue.cpp:4177` | S5 | H31 |
 | `test_metadata_availability_logs_only_transitions` | `test_invariants.cpp:1874` | Stays Macha's | The Macha session's answer: log text. Dagda's evidence half is C38 |
 | `test_claims_owed_to_slow_peers_stay_within_their_bound` | `test_invariants.cpp:3030` | S5 | H15, 32 MiB |
-| `test_pages_visit_what_the_callback_walk_visits_on_every_shape` | NE:88 | S2 | |
-| `test_a_resumed_page_reads_only_its_own_path` | NE:108 | S2 | |
-| `test_a_cursor_between_paths_resumes_after_it` | NE:129 | S2 | Tree form; map form stays with Macha's working form |
-| `test_cancellation_stops_before_an_entry` | NE:148 | S2 | |
-| `test_a_missing_node_or_store_throws` | NE:159 | S2 | |
+| `test_pages_visit_what_the_callback_walk_visits_on_every_shape` | NE:88 | S2 | | `HeadsTree.PagesVisitWhatTheCallbackWalkVisitsOnEveryShape` |
+| `test_a_resumed_page_reads_only_its_own_path` | NE:108 | S2 | | `HeadsTree.AResumedPageReadsOnlyItsOwnPath` |
+| `test_a_cursor_between_paths_resumes_after_it` | NE:129 | S2 | `HeadsTree.ACursorBetweenKeysResumesAfterIt`. Tree form; map form stays with Macha's working form |
+| `test_cancellation_stops_before_an_entry` | NE:148 | S2 | | `HeadsTree.CancellationStopsBeforeAnEntry` |
+| `test_a_missing_node_or_store_throws` | NE:159 | S2 | | `HeadsTree.AMissingNodeOrStoreThrows` |
 | `test_the_metadata_view_pages_a_live_namespace` | NE:187 | Stays Macha's | Rewrites over the Heads noun; S4 supplies paging |
-| `test_a_node_that_is_not_a_tree_node_throws` | NE:225 | S2 | |
+| `test_a_node_that_is_not_a_tree_node_throws` | NE:225 | S2 | | `HeadsTree.ANodeThatIsNotATreeNodeThrows` |
 | `test_a_manager_without_a_store_pages_a_map_backed_view` | NE:242 | Stays Macha's | The map is Macha's working form, Dagda has none. Name is stale (F8) |
 | `test_tombstones_live_in_batches_in_a_tree_backed_head` | NS:336 | S4 | Keeps the FS-delete half |
 | `test_reconciling_two_tree_backed_branches_keeps_the_namespace` | NS:565 | S6 | |
 | `test_a_merge_claims_what_it_introduces` | NS:852 | S6 | |
-| `test_the_tree_round_trips_every_namespace_it_is_given` | NT:78 | S2 | |
-| `test_the_root_is_a_function_of_the_entry_set_and_nothing_else` | NT:136 | S2 | |
-| `test_changing_one_file_rewrites_a_path_to_the_root_and_not_the_library` | NT:159 | S2 | |
-| `test_a_lookup_reads_a_path_to_the_root_rather_than_the_namespace` | NT:218 | S2 | |
-| `test_a_corrupt_node_is_refused_rather_than_trusted` | NT:261 | S2 | Dagda asserts the refusal, C7 |
-| `test_an_incremental_update_produces_the_tree_a_rebuild_would` | NT:629 | S2 | |
-| `test_a_write_rewrites_a_path_rather_than_the_library` | NT:692 | S2 | |
-| `test_a_delta_applied_to_the_tree_lands_where_the_map_lands` | NT:721 | S2 | Keeps the spine-append half |
+| `test_the_tree_round_trips_every_namespace_it_is_given` | NT:78 | S2 | | `HeadsTree.TheTreeRoundTripsEveryKeySetItIsGiven` |
+| `test_the_root_is_a_function_of_the_entry_set_and_nothing_else` | NT:136 | S2 | | `HeadsTree.TheRootIsAFunctionOfTheEntrySetAndNothingElse` |
+| `test_changing_one_file_rewrites_a_path_to_the_root_and_not_the_library` | NT:159 | S2 | | `HeadsTree.ChangingOneValueRewritesAPathToTheRootAndNotTheTree` |
+| `test_a_lookup_reads_a_path_to_the_root_rather_than_the_namespace` | NT:218 | S2 | | `HeadsTree.ALookupReadsAPathToTheRootRatherThanTheTree` |
+| `test_a_corrupt_node_is_refused_rather_than_trusted` | NT:261 | S2 | `HeadsTree.ACorruptNodeIsRefused`. Dagda asserts the refusal, C7 |
+| `test_an_incremental_update_produces_the_tree_a_rebuild_would` | NT:629 | S2 | | `HeadsTree.AnIncrementalUpdateProducesTheTreeARebuildWould` |
+| `test_a_write_rewrites_a_path_rather_than_the_library` | NT:692 | S2 | | `HeadsTree.AWriteRewritesAPathRatherThanTheTree` |
+| `test_a_delta_applied_to_the_tree_lands_where_the_map_lands` | NT:721 | S2 | `HeadsTree.ADeltaAppliedToTheTreeLandsWhereAMapLands`. Keeps the spine-append half |
 | `test_history_replay_applies_a_delta_to_the_tree_not_the_map` | NT:780 | S3 | Needs replay's applier |
-| `test_a_prefix_scan_descends_rather_than_walking_the_library` | NT:862 | S2 | |
-| `test_a_scan_seeks_and_stops_where_it_is_told` | NT:991 | S2 | |
-| `test_an_update_reaches_the_root_a_full_build_reaches` | NT:1038 | S2 | |
-| `test_an_update_reads_the_path_it_changes_not_the_tree` | NT:1125 | S2 | |
-| `test_every_tree_node_is_reachable_for_the_collector` | NT:1170 | S2 | |
+| `test_a_prefix_scan_descends_rather_than_walking_the_library` | NT:862 | S2 | | `HeadsTree.APrefixScanDescendsRatherThanWalkingTheTree` |
+| `test_a_scan_seeks_and_stops_where_it_is_told` | NT:991 | S2 | | `HeadsTree.AScanSeeksAndStopsWhereItIsTold` |
+| `test_an_update_reaches_the_root_a_full_build_reaches` | NT:1038 | S2 | | `HeadsTree.AnUpdateReachesTheRootAFullBuildReaches` |
+| `test_an_update_reads_the_path_it_changes_not_the_tree` | NT:1125 | S2 | | `HeadsTree.AnUpdateReadsThePathItChangesNotTheTree` |
+| `test_every_tree_node_is_reachable_for_the_collector` | NT:1170 | S2 | | `HeadsTree.EveryTreeNodeIsReachableForTheCollector` |
 | `test_a_commit_claims_the_nodes_it_introduced_and_prunes_the_rest` | NT:1191 | S4 | |
-| `test_a_diff_is_the_paths_that_differ_and_reads_only_their_leaves` | NT:1436 | S2 | |
-| `test_distant_changes_read_no_leaf_between_them` | NT:1477 | S2 | |
+| `test_a_diff_is_the_paths_that_differ_and_reads_only_their_leaves` | NT:1436 | S2 | | `HeadsTree.ADiffIsTheKeysThatDifferAndReadsOnlyTheirLeaves` |
+| `test_distant_changes_read_no_leaf_between_them` | NT:1477 | S2 | | `HeadsTree.DistantChangesReadNoLeafBetweenThem` |
 | `test_a_tree_merge_is_the_merge_of_the_materialised_heads` | NT:1505 | S6 | Keeps the FS outcomes |
 | `test_baseline_reconcile_materialised_against_tree` | NT:1628 | S6 | Merge baseline |
 | `test_a_commit_is_published_only_once_its_objects_are_claimed` | `test_node_services.cpp:362` | S4 | Keeps "a hole is not an object" |
@@ -757,7 +757,7 @@ Others of the same kind, found reading, with the same standing: reproduce, do no
 
 **From `state-scratch-0.93.4/`:** `metadata-objects/` under domain v1's sealing; `macha-metadata-dump-*.txt` says 3 nodes, 2 leaves, 1 branch, depth 2, 7 entries, 1 extent, root `ade47a9a0e53...`. Gives one real `MNB1` to re-encode and one real root to reach only by an owner's codec. Its `MNL1` leaves cannot be parsed without that codec.
 
-**More to cut, `tree-vectors-0.93.4/`, by name:** boundary known answers for each of the four domain strings, at several levels; the empty leaf's id; an `MNB1` at depth 3; a file past 8 extents so `MNX1` and `MNY1` exist, which the fixture lacks; a boundary-run case hitting the packed fallback (`tree.cpp:118-124`); before and after roots of one update, with node ids; a README naming the commit.
+**Cut 2026-11-06, 25 cases, and S2 passes them all; 20 of the cases are checked in at `dagda/test/data/tree-vectors-0.93.4/`:** `HeadsTreeVectors.*`. What it was cut to, **`tree-vectors-0.93.4/`, by name:** boundary known answers for each of the four domain strings, at several levels; the empty leaf's id; an `MNB1` at depth 3; a file past 8 extents so `MNX1` and `MNY1` exist, which the fixture lacks; a boundary-run case hitting the packed fallback (`tree.cpp:118-124`); before and after roots of one update, with node ids; a README naming the commit.
 
 ### What S3 needs
 
