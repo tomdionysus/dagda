@@ -12,14 +12,22 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <vector>
 
 #include "dagda/ledger/object_trie.h"
+#include "dagda/ledger/retention.h"
+#include "dagda/migrate/manifest.h"
+#include "dagda/migrate/migrate.h"
 #include "dagda/store/local_store.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dagda/test/fixtures/legacy_v18.h"
+#include "dagda/test/fixtures/migrate.h"
 #include "dagda/test/fixtures/store.h"
 #include "dannan/test/fixtures/temp_dir.h"
 
@@ -149,6 +157,134 @@ TEST(Scale, DISABLED_AHundredThousandObjectsAcrossPacks) {
   bench("store.compact_one", ms_since(started), 1);
   EXPECT_LT(store->used(), before);
   for (uint64_t n = 1; n < objects; n += 997) EXPECT_TRUE(store->has(ids[n]) == (n % 5 != 0)) << n;
+}
+
+// The manifest at macnessa's counts (the evaluation's 1,031,852 loose objects, 42
+// packs of CONTROL holding 314,390 puts and 1,883,019 touches and tombstones, as the
+// dry run counted them, and 17 of DATA, whose 340,000 records are a guess, since no
+// count of them has been taken), with small objects, since a manifest's size follows
+// the records and not their bytes. Passes before and after a real migration of all
+// of it, one object lost among them and named, and how large and how slow each is.
+// DAGDA_SCALE_DIVIDE thins it for a machine that cannot hold a million files.
+TEST(Scale, DISABLED_ManifestsOfMachasCounts) {
+  const auto divide = std::getenv("DAGDA_SCALE_DIVIDE") ? std::strtoull(std::getenv("DAGDA_SCALE_DIVIDE"), nullptr, 10) : 1;
+  const uint64_t loose = 1031852 / divide;
+  const uint64_t control_puts = 314390 / divide;
+  const uint64_t control_others = 1883019 / divide;
+  const uint64_t data_packed = 340000 / divide;
+  test::StoreBed bed;
+  test::v18::V18State v18(bed);
+  std::mt19937_64 random(7);
+  std::vector<ObjectId> held;
+  held.reserve(loose + data_packed);
+  const auto root = bed.dir.path() / "scale";
+  auto started = Clock::now();
+  const auto object = [&] {
+    Bytes data(64);
+    for (auto& byte : data) byte = static_cast<uint8_t>(random());
+    return data;
+  };
+  for (uint64_t n = 0; n < loose; ++n) {
+    const auto data = object();
+    const auto id = store::object_id(data);
+    test::legacy::write_loose_v18(v18.backend, *bed.key, id, data);
+    held.push_back(id);
+  }
+  bench("manifest.build_loose", ms_since(started), loose);
+  // Whole records appended in one write a pack: 17 of DATA, 42 of CONTROL.
+  const auto write_packs = [&](const std::filesystem::path& store_root, uint64_t packs, uint64_t puts, uint64_t others) {
+    std::filesystem::create_directories(store_root / "packs");
+    std::vector<ObjectId> recent;
+    for (uint64_t pack = 1; pack <= packs; ++pack) {
+      Bytes bytes;
+      for (uint64_t n = 0; n < puts / packs; ++n) {
+        const auto data = object();
+        const auto id = store::object_id(data);
+        const auto sealed = test::legacy::seal_v18(*bed.key, id, data);
+        store::local_format::PackHeader header;
+        header.type = store::local_format::pack_put;
+        header.touched_ms = 1793700000000ULL + n;
+        header.id = id;
+        header.plain_size = data.size();
+        header.payload_size = sealed.ciphertext.size();
+        header.nonce = sealed.nonce;
+        header.tag = sealed.tag;
+        const auto encoded = store::local_format::encode_pack_header(header);
+        bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+        bytes.insert(bytes.end(), sealed.ciphertext.begin(), sealed.ciphertext.end());
+        recent.push_back(id);
+      }
+      for (uint64_t n = 0; n < others / packs; ++n) {
+        store::local_format::PackHeader header;
+        header.type = n % 8 ? store::local_format::pack_touch : store::local_format::pack_remove;
+        header.touched_ms = 1793800000000ULL + n;
+        header.id = recent[n % recent.size()];
+        const auto encoded = store::local_format::encode_pack_header(header);
+        bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+      }
+      test::legacy::write_file(store_root / "packs" / store::local_format::pack_name(pack), bytes);
+    }
+  };
+  write_packs(v18.backend, 17, data_packed, 0);
+  write_packs(v18.control, 42, control_puts, control_others);
+  bench("manifest.build_packs", ms_since(started), control_puts + control_others + data_packed);
+  // A held ledger and the claims and counts of that size.
+  std::sort(held.begin(), held.end());
+  {
+    ledger::ObjectTrie trie(v18.state / "ledger" / ("data-" + dannan::identity::to_string(v18.token)), bed.key, {}, test::quiet_logger());
+    std::vector<ledger::ObjectTrie::Record> records;
+    records.reserve(held.size());
+    for (const auto& id : held) records.emplace_back(id, Bytes(8, 1));
+    trie.replace_all(std::move(records));
+  }
+  {
+    ledger::retention_format::ObjectState state;
+    state.adds[v18.origin] = 1;
+    const auto value = ledger::retention_format::encode_state(state);
+    ledger::ObjectTrie trie(v18.state / "retention" / "ledger-data", bed.key, {}, test::quiet_logger());
+    std::vector<ledger::ObjectTrie::Record> records;
+    records.reserve(held.size());
+    for (const auto& id : held) records.emplace_back(id, value);
+    trie.replace_all(std::move(records));
+  }
+  bench("manifest.build_ledgers", ms_since(started), held.size());
+
+  const auto manifests = root;
+  std::filesystem::create_directories(manifests);
+  migrate::ManifestOptions options;
+  options.backends = {v18.backend};
+  options.cache = v18.cache;
+  options.node = v18.node;
+  options.metadata = std::make_shared<test::v18::FilledMetadata>();
+  started = Clock::now();
+  const auto before = migrate::write_manifest(manifests / "before", v18.state, v18.cluster(), v18.custody(), options);
+  bench("manifest.before", ms_since(started), before.items);
+  std::cout << "BENCH name=manifest.size bytes=" << before.manifest_bytes << " items=" << before.items
+            << " bytes_per_item=" << before.manifest_bytes / before.items << std::endl;
+
+  started = Clock::now();
+  const auto report = v18.migrate();
+  bench("manifest.migrate", ms_since(started), report.loose_migrated + report.pack_records_migrated);
+  EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+
+  started = Clock::now();
+  const auto after = migrate::write_manifest(manifests / "after", v18.state, v18.cluster(), v18.custody(), options);
+  bench("manifest.after", ms_since(started), after.items);
+  EXPECT_EQ(after.items, before.items);
+
+  started = Clock::now();
+  const auto compared = migrate::compare_manifests(manifests / "before", manifests / "after");
+  bench("manifest.compare", ms_since(started), compared.categories.size());
+  EXPECT_TRUE(compared.passed()) << compared.summary();
+  std::cout << compared.summary() << std::endl;
+
+  // One object out of a million, and it is named.
+  std::filesystem::remove(store::local_format::loose_path(v18.backend / "objects", held[held.size() / 2]));
+  (void)migrate::write_manifest(manifests / "damaged", v18.state, v18.cluster(), v18.custody(), options);
+  const auto named = migrate::compare_manifests(manifests / "before", manifests / "damaged");
+  EXPECT_FALSE(named.passed());
+  EXPECT_EQ(named.difference_count, 1u) << named.summary();
+  EXPECT_TRUE(named.names(store::to_string(held[held.size() / 2])));
 }
 
 }  // namespace
