@@ -34,6 +34,10 @@ class Repair::Restorer final : public ledger::ClaimRestorer {
   const uint64_t _extent;
 };
 
+// A throw from either stage must still close the turn, or the share counts it
+// active for ever and never computes another rest.
+Repair::Turn::~Turn() { _repair._share.finished(_repair._time.now(), _repair.higher_class_active(*this)); }
+
 Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilityService& availability, contract::ObjectLedger& ledger, RepairOptions options,
                dannan::status::ActivityClocks* activity)
     : _context(context),
@@ -42,7 +46,7 @@ Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilitySe
       _availability(availability),
       _ledger(ledger),
       _options(options),
-      _time(context.time().source()),
+      _time(options.time ? *options.time : context.time().source()),
       _share(options.foreground_weight, options.repair_weight, options.slice),
       _data_walk(contract::RetentionClass::data, &context.observations()),
       _control_walk(contract::RetentionClass::control, &context.observations()),
@@ -62,10 +66,10 @@ bool Repair::peer_foreground_active() const {
   return false;
 }
 
-bool Repair::higher_class_active() const {
+bool Repair::higher_class_active(const Turn& turn) const {
   auto& activity = _activity;
   return activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet) ||
-         activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet) || peer_foreground_active();
+         activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet) || (turn._peer ? *turn._peer : peer_foreground_active());
 }
 
 RepairGates Repair::gates() const {
@@ -81,53 +85,115 @@ RepairGates Repair::gates() const {
   return out;
 }
 
-RepairPass Repair::pass(std::stop_token stop) {
-  RepairPass out;
-  const auto now = _time.now();
+RepairCredit Repair::earn_credit(TimePoint now, std::optional<std::chrono::milliseconds> when_no_time_passed) {
   // Credit: the link's rate, a fraction of it, banked to a burst.
   double bandwidth = _store.estimated_network_bps();
   if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.initial_bandwidth);
   if (_options.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.max_bandwidth));
-  const double seconds = _last ? std::chrono::duration<double>(now - *_last).count() : 0.0;
+  double seconds = _last ? std::chrono::duration<double>(now - *_last).count() : 0.0;
   _last = now;
+  if (seconds <= 0.0 && when_no_time_passed) seconds = std::chrono::duration<double>(*when_no_time_passed).count();
   const double burst = std::max(static_cast<double>(_options.extent_size), bandwidth * 5.0);
   const double cpu_scale = _cpu.scale(seconds, _options.cpu_target);
-  _credit = std::min(burst, _credit + bandwidth * _options.idle_bandwidth_fraction * cpu_scale * std::max(0.0, seconds));
+  const double rate = bandwidth * _options.idle_bandwidth_fraction * cpu_scale;
+  _credit = std::min(burst, _credit + rate * std::max(0.0, seconds));
+  return {credit(), rate, seconds};
+}
 
-  out.surveyed = _availability.refresh([&stop] {
+bool Repair::survey(const std::function<void()>& pause) { return _availability.refresh(pause); }
+
+uint8_t Repair::paced_by() const {
+  uint8_t out = 0;
+  auto& activity = _activity;
+  if (activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet)) out |= paced_by_foreground;
+  if (activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet)) out |= paced_by_loader;
+  if (peer_foreground_active()) out |= paced_by_peer_foreground;
+  return out;
+}
+
+bool Repair::may_start(TimePoint now, uint8_t paced) { return _share.may_start(now, paced != 0); }
+
+std::chrono::milliseconds Repair::turn_wait(TimePoint now, uint8_t paced) { return _share.wait(now, paced != 0); }
+
+void Repair::note_gate(RepairGate gate, uint8_t paced) {
+  _last_gate.store(static_cast<uint16_t>(0x100U | (static_cast<unsigned>(gate) << 4) | (paced & 0xFU)), std::memory_order_relaxed);
+  switch (gate) {
+    case RepairGate::ran:
+      _ran.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case RepairGate::share:
+      _gated_share.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case RepairGate::quiescent:
+      _gated_quiescent.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case RepairGate::credit:
+      _gated_credit.fetch_add(1, std::memory_order_relaxed);
+      break;
+  }
+}
+
+Repair::Turn Repair::begin_turn(TimePoint now, uint8_t paced, PeerReading reading) {
+  _share.started(now, paced != 0);
+  return Turn(*this, reading == PeerReading::as_begun ? std::optional<bool>((paced & paced_by_peer_foreground) != 0) : std::nullopt);
+}
+
+RepairWalks Repair::claim_walks(Turn&) {
+  RepairWalks out;
+  const auto extent = std::max<uint64_t>(1, _options.extent_size);
+  Restorer restorer(_store, _credit, extent);
+  for (auto* walk : {&_data_walk, &_control_walk}) {
+    const auto step = walk->step(_ledger, restorer);
+    out.examined += step.examined;
+    out.missing += step.missing;
+    out.restored += step.restored;
+    out.waiting_for_credit = out.waiting_for_credit || step.waiting_for_credit;
+    out.unfinished = out.unfinished || step.unfinished;
+  }
+  return out;
+}
+
+RepairLists Repair::lists() const {
+  RepairLists out;
+  out.inventory = _ledger.inventory();
+  out.pull = _availability.missing_here();
+  out.lacks = _availability.peer_lacks();
+  out.unavailable = [this](const ObjectId& id) { return _availability.unavailable(id); };
+  return out;
+}
+
+RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
+  auto out = _store.repair_step(lists, static_cast<uint64_t>(_credit), _options.operation_budget,
+                                [&] { return _share.should_yield(_time.now(), higher_class_active(turn)); });
+  _credit = std::max(0.0, _credit - static_cast<double>(out.bytes_transferred));
+  return out;
+}
+
+RepairSettled Repair::settle(const RepairWalks& walks, const RepairResult& step) {
+  if (step.credit_limited) return RepairSettled::credit;
+  if (step.yielded) return RepairSettled::yielded;
+  if (!step.complete || walks.restored || step.bytes_transferred || walks.unfinished) return RepairSettled::more_work;
+  if (walks.waiting_for_credit) return RepairSettled::waiting_for_credit;
+  _credit = 0.0;
+  return RepairSettled::quiescent;
+}
+
+RepairPass Repair::pass(std::stop_token stop) {
+  RepairPass out;
+  const auto now = _time.now();
+  (void)earn_credit(now);
+  out.surveyed = survey([&stop] {
     if (stop.stop_requested()) throw MaintenanceStopping{};
   });
-  auto& activity = _activity;
-  if (activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet)) out.paced_by |= paced_by_foreground;
-  if (activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet)) out.paced_by |= paced_by_loader;
-  if (peer_foreground_active()) out.paced_by |= paced_by_peer_foreground;
-  const bool busy = out.paced_by != 0;
+  out.paced_by = paced_by();
   const auto note = [&](RepairGate gate) {
     out.gate = gate;
-    out.credit = static_cast<uint64_t>(_credit);
-    _last_gate.store(static_cast<uint16_t>(0x100U | (static_cast<unsigned>(gate) << 4) | (out.paced_by & 0xFU)), std::memory_order_relaxed);
-    switch (gate) {
-      case RepairGate::ran:
-        _ran.fetch_add(1, std::memory_order_relaxed);
-        break;
-      case RepairGate::share:
-        _gated_share.fetch_add(1, std::memory_order_relaxed);
-        break;
-      case RepairGate::quiescent:
-        _gated_quiescent.fetch_add(1, std::memory_order_relaxed);
-        break;
-      case RepairGate::credit:
-        _gated_credit.fetch_add(1, std::memory_order_relaxed);
-        break;
-    }
+    out.credit = credit();
+    note_gate(gate, out.paced_by);
   };
 
-  RepairLists lists;
-  lists.inventory = _ledger.inventory();
-  lists.pull = _availability.missing_here();
-  lists.lacks = _availability.peer_lacks();
-  lists.unavailable = [this](const ObjectId& id) { return _availability.unavailable(id); };
-  const std::shared_ptr<const void> identity[3] = {lists.inventory, lists.pull, lists.lacks};
+  const auto current = lists();
+  const std::shared_ptr<const void> identity[3] = {current.inventory, current.pull, current.lacks};
   const auto events = _context.events().total();
   if (_quiescent) {
     if (events == _quiescent_events && std::equal(std::begin(identity), std::end(identity), std::begin(_quiescent_lists))) {
@@ -136,44 +202,25 @@ RepairPass Repair::pass(std::stop_token stop) {
     }
     _quiescent = false;
   }
-  if (!_share.may_start(now, busy)) {
+  if (!may_start(now, out.paced_by)) {
     note(RepairGate::share);
     return out;
   }
-  _share.started(now, busy);
-  // A throw from either stage must still close the turn, or the share counts
-  // it active for ever and never computes another rest.
-  struct Turn {
-    Repair& repair;
-    ~Turn() { repair._share.finished(repair._time.now(), repair.higher_class_active()); }
-  } turn{*this};
-
-  const auto extent = std::max<uint64_t>(1, _options.extent_size);
-  Restorer restorer(_store, _credit, extent);
-  bool waiting_for_credit = false;
-  bool walk_unfinished = false;
-  for (auto* walk : {&_data_walk, &_control_walk}) {
-    const auto step = walk->step(_ledger, restorer);
-    out.restored += step.restored;
-    waiting_for_credit = waiting_for_credit || step.waiting_for_credit;
-    walk_unfinished = walk_unfinished || step.unfinished;
-  }
-
-  out.step = _store.repair_step(lists, static_cast<uint64_t>(_credit), _options.operation_budget,
-                                [this] { return _share.should_yield(_time.now(), higher_class_active()); });
-  _credit = std::max(0.0, _credit - static_cast<double>(out.step.bytes_transferred));
+  auto turn = begin_turn(now, out.paced_by);
+  const auto walks = claim_walks(turn);
+  out.restored = walks.restored;
+  out.step = transfer(turn, current);
   if (out.step.credit_limited) {
     // The credit accrued by the next pass covers the next extent.
     note(RepairGate::credit);
-  } else {
-    note(RepairGate::ran);
-    if (out.step.complete && !out.step.yielded && !out.restored && !out.step.bytes_transferred && !walk_unfinished && !waiting_for_credit) {
-      // Nothing to do: quiet until an event or the survey's lists change.
-      _credit = 0.0;
-      _quiescent = true;
-      _quiescent_events = events;
-      std::copy(std::begin(identity), std::end(identity), std::begin(_quiescent_lists));
-    }
+    return out;
+  }
+  note(RepairGate::ran);
+  if (settle(walks, out.step) == RepairSettled::quiescent) {
+    // Nothing to do: quiet until an event or the survey's lists change.
+    _quiescent = true;
+    _quiescent_events = events;
+    std::copy(std::begin(identity), std::end(identity), std::begin(_quiescent_lists));
   }
   return out;
 }
