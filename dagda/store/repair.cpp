@@ -34,8 +34,10 @@ class Repair::Restorer final : public ledger::ClaimRestorer {
   const uint64_t _extent;
 };
 
-Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilityService& availability, contract::ObjectLedger& ledger, RepairOptions options)
+Repair::Repair(dannan::Context& context, DistributedStore& store, AvailabilityService& availability, contract::ObjectLedger& ledger, RepairOptions options,
+               dannan::status::ActivityClocks* activity)
     : _context(context),
+      _activity(activity ? *activity : context.activity()),
       _store(store),
       _availability(availability),
       _ledger(ledger),
@@ -61,7 +63,7 @@ bool Repair::peer_foreground_active() const {
 }
 
 bool Repair::higher_class_active() const {
-  auto& activity = _context.activity();
+  auto& activity = _activity;
   return activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet) ||
          activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet) || peer_foreground_active();
 }
@@ -95,7 +97,7 @@ RepairPass Repair::pass(std::stop_token stop) {
   out.surveyed = _availability.refresh([&stop] {
     if (stop.stop_requested()) throw MaintenanceStopping{};
   });
-  auto& activity = _context.activity();
+  auto& activity = _activity;
   if (activity.recently_active(dannan::sched::WorkClass::foreground, _options.foreground_quiet)) out.paced_by |= paced_by_foreground;
   if (activity.recently_active(dannan::sched::WorkClass::loader, _options.foreground_quiet)) out.paced_by |= paced_by_loader;
   if (peer_foreground_active()) out.paced_by |= paced_by_peer_foreground;

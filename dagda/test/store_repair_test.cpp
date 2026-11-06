@@ -677,7 +677,7 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
     std::atomic<bool> working{true};
     std::thread worker([&] {
       while (working.load()) {
-        s2.context().activity().note(frame, 64 * 1024);
+        s2.dagda_node().activity().note(frame, 64 * 1024);
         std::this_thread::sleep_for(5ms);
       }
     });

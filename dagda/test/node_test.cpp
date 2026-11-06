@@ -431,7 +431,7 @@ TEST(Node, TheLoaderYieldsToARecentForegroundUserUnderPressure) {
   EXPECT_EQ(credit->stats().pressure_refusals, 0u);
 
   // A foreground read within the window: the loader is refused.
-  a.context().activity().note(FrameType::foreground, 1);
+  a.dagda_node().activity().note(FrameType::foreground, 1);
   time.advance(1999ms);
   EXPECT_FALSE(credit->try_acquire(loader, 4096).has_value());
   EXPECT_EQ(credit->stats().pressure_refusals, 1u);
@@ -499,6 +499,21 @@ TEST(Node, AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery) {
   a.open();
   EXPECT_TRUE(test::wait_until([&] { return progress.value() > before; }));
   a.stop();
+}
+
+// Macha has no device reserve; its facade turns Dagda's off, and DATA work then goes
+// uncapped by it.
+TEST(Node, TheDeviceReserveCanBeOff) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.device_reserve = false;
+  auto& a = cluster.add("a", options);
+  cluster.start_all();
+  EXPECT_EQ(a.dagda_node().io(), nullptr);
+  const auto bytes = test::pattern(4096, 91);
+  EXPECT_TRUE(a.store().put(store::object_id(bytes), bytes));
+  EXPECT_TRUE(a.store().get(store::object_id(bytes)).has_value());
+  a.dagda_node().publish_status();
 }
 
 }  // namespace

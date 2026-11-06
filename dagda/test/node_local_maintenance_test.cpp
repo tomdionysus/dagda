@@ -240,7 +240,7 @@ TEST(NodeLocalMaintenance, BusyHoldsTheGatedStages) {
   wall.advance(std::chrono::hours(24 * 31));
   (void)node.dagda_node().run_local_stages();
   for (const auto frame : {dannan::sched::FrameType::loader, dannan::sched::FrameType::foreground}) {
-    node.context().activity().note(frame, 64 * 1024);
+    node.dagda_node().activity().note(frame, 64 * 1024);
     const auto held = node.dagda_node().run_local_stages();
     EXPECT_FALSE(held.rebalance_ran);
     EXPECT_FALSE(held.retention_ran);

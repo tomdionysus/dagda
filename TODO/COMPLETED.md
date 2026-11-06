@@ -3,6 +3,14 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: additions inert on a Macha node, and activity in Macha's meaning
+
+For the maintainer's unconditional Yes. `AdmissionOptions::device_reserve` off leaves DATA uncapped, which Macha's facade sets. Claim parts
+are one journal frame (65,536 ids, `retain_ids_per_frame`), so they cost no extra sync over Macha. The node keeps its own
+`ActivityClocks`: Macha's clocks count object bytes, Dannan's every inbound request, and the arbiter, repair and the local
+stages read these (`StoreDistributedStore.ActivityIsObjectWorkInMachasMeaning`). The store has Macha's `foreground_activity`,
+`take_*_bytes` and `idle_for`. Gate: `dagda_tests` 455 passing, 3 disabled.
+
 ## 2026-11-06: Macha's store forms and live hosting (second-cutover B3, B10)
 
 `held_here`, `cache_local`, `hydration_available`, `hydrate`, `retain_data_here` and `reachability_epoch` on the

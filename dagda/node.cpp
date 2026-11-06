@@ -176,6 +176,8 @@ void Node::open() {
   const auto cache_bytes = _options.ledger_cache_bytes;
   const auto& self = _context.identity();
 
+  _activity = std::make_unique<dannan::status::ActivityClocks>(&_context.time().source());
+
   step("open storage-pool");
   auto pool = _options.pool;
   pool.sealing = scheme;
@@ -193,13 +195,13 @@ void Node::open() {
     step("open admission");
     const auto& admission = *_options.admission;
     const auto quiet = _options.repair.foreground_quiet;
-    auto& activity = _context.activity();
+    auto& activity = *_activity;
     _credit = std::make_unique<store::DataResourceArbiter>(
         admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
         [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
         _context.time().source());
     _credit->observe_device(&_data->service_monitor(), admission.min_background_under_pressure);
-    _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
+    if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
   }
 
   step("open control-store");
@@ -229,7 +231,7 @@ void Node::open() {
   auto store_options = _options.store;
   store_options.domain = _options.domain;
   _store = std::make_unique<store::DistributedStore>(
-      _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get()}, store_options);
+      _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get(), _activity.get()}, store_options);
 
   step("open availability");
   _availability = std::make_unique<store::AvailabilityService>(_context, *_ledger, _options.availability);
@@ -237,14 +239,15 @@ void Node::open() {
   step("open repair");
   auto repair = _options.repair;
   repair.extent_size = store_options.extent_size;
-  _repair = std::make_unique<store::Repair>(_context, *_store, *_availability, *_ledger, repair);
+  _repair = std::make_unique<store::Repair>(_context, *_store, *_availability, *_ledger, repair, _activity.get());
 
   step("open storage-server");
   auto server = _options.server;
   server.extent_size = store_options.extent_size;
   server.domain = _options.domain;
-  _server = std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get()}, server,
-                                                   store::StorageServerAdmission{_credit.get(), _io.get()});
+  _server =
+      std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get(), _activity.get()},
+                                             server, store::StorageServerAdmission{_credit.get(), _io.get()});
   if (_options.front) {
     // The server outlives its routes: its destructor unbinds them, waiting
     // for the calls in flight, before it goes.
@@ -394,7 +397,7 @@ bool Node::publish_inventory() {
 // ---- Maintenance ------------------------------------------------------------
 
 bool Node::higher_class_active() const {
-  auto& activity = _context.activity();
+  auto& activity = *_activity;
   const auto quiet = _options.repair.foreground_quiet;
   return activity.recently_active(dannan::sched::WorkClass::foreground, quiet) || activity.recently_active(dannan::sched::WorkClass::loader, quiet);
 }

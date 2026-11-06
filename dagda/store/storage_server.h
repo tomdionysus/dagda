@@ -108,6 +108,8 @@ class StorageServer {
     // The ledger whose published inventory an instant delete checks: an
     // object it refers to is kept. None: no inventory.
     const contract::ObjectLedger* ledger = nullptr;
+    // As DistributedStore::Stores: object bytes this node served. None: the node's.
+    dannan::status::ActivityClocks* activity = nullptr;
   };
 
   StorageServer(dannan::Context& context, Stores stores, StorageServerOptions options = {}, StorageServerAdmission admission = {});
@@ -150,6 +152,7 @@ class StorageServer {
   const StorageServerAdmission _admission;
   const dannan::status::ScopedLogger _logger;
   const dannan::status::NodeEvents::Kind _storage_event;
+  dannan::status::ActivityClocks& _activity;
   std::atomic<size_t> _online_backends{0};
   std::atomic_bool _hosts_extents;
 
