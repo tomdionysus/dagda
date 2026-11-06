@@ -3,6 +3,19 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-06: heads S6, the reconciler (`feature/heads-s6`)
+
+`Exchange::read_group` folds several heads (`mgr:1127-1315` at `98b816d`): two at a time in hash order, under a reconciliation lock taken lazily (`IoMutex`, after the space's mutation mutex), generation max plus one, previous the lower hash, one merge parent, the higher. `MergeUnavailable` and `DecodeError` set aside the head that is not this node's own; a stop goes through everything. A merge's claims are as Macha's: a dot its clock does not carry (R3), here only, nothing refused for an object not held, the peers' share deferred on failure. `heads::Merge` is now `merge(base?, MergeHeads)`, its result carrying the delta (kept only when strictly smaller), the objects to claim and conflict counts, and it holds Q5's contract; `base` is computed only for a merge whose `reads_base()` says so. A space with no merge keeps two heads and says so. `dagda.heads.<space>.reconciliations`, `conflicts_created`, `conflicts_superseded`; observations `heads.reconcile_us`, `heads.reconcile_wait_us`, which Macha's facade maps from `metadata.reconcile_*`. `converged_waits` and `repair_waits` gained the data device: a merge's claims check presence. The neutral owner's merge is `test/fixtures/heads_merge.h`, Macha's two merge functions with the filesystem out.
+
+Macha's 11 S6 cases named in the plan's 5.1. Owner's and said so in each case: the rename and returning directory outcomes of NT:1505 and NT:1628, `metadata_voters` and `data_replication` of RPC:3114, `legacy_clock` of RPC:3737 and RPC:6378; RPC:3556's two 100 ms sleeps became assertions at the sender. C2's merge half, C8, C16's second half, C39, C40, merge baseline. Beside them: H11's seam (`AConflictsValuesAreClaimedAndRootedWhileItStands`), a stop through the merge, peers' claims deferred, a head with no tree, what a policy commit left, RPC:3060's fork.
+
+Macha's bytes: `HeadsWireFixture.TheFoldMintsMachasOwnMergeFromItsTwoHeads`. Given the two heads and the merge's payload, the reconciler mints Macha's commit, hash for hash, on `-markers` node a (generation 14, stored whole). Only there: `-branch`'s merge and the other nodes have a delta among the parents, which needs Macha's codec, so on those only the shape is asserted (one merge parent, previous the lower hash, generation, delta smaller). `-twoheads` holds no merge; its survey stays S5's case. Macha's real merge over these is the port branch's.
+
+Found, for the Macha session (none fixed): R13, a fold step over two heads neither of which holds this node's latest mutation rotates its author, by reading and pinned here on Dagda's replica, not run on Macha; the swap at `mgr:1213-1215` cannot fire, as `heads` is already sorted by hash. Macha's reconciler has no stop in it; Dagda's takes the pause it was told to.
+
+Checked under GCC 15 by `-fsyntax-only` on the changed sources; not linked or run under GCC or on arm64. No mutation testing, by the maintainer's rule. Only the last code commit (`4c0161d`) was run; the commits before it were not each built.
+Gate: `dagda_tests` 952 passing, 4 disabled, one whole run on the Mac (928 at the start).
+
 ## 2026-11-06: a failed read of history cuts nothing (Macha `98b816d`)
 
 Mirrors `load_history` and `next_history_frame` from Macha `98b816d`. A read failing in the main loop or the forward scan stops the load: nothing is
