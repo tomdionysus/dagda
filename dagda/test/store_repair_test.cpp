@@ -609,12 +609,23 @@ TEST(StoreRepair, AStepIsBoundedAndYields) {
 // node's own foreground work, then its loader never going quiet, each
 // missing claimed copy still comes back, and the share is seen turning
 // passes away between repair's turns.
+//
+// The repairing node's pass, credit, share and activity clocks are stepped, so
+// a turn that runs long on a loaded machine earns no longer a rest and the
+// bound is on repair's own time. A peer's telemetry is Dannan's, on real time:
+// it is waited for, and that wait's bound only guards against a hang.
 TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
+  constexpr auto step = 100ms;
+  // Ten seconds of repair's time.
+  constexpr int bound = 100;
+  dannan::test::SteppedTime time;
   Cluster cluster;
   auto busy = options(1);
   busy.repair.foreground_quiet = 500ms;
   auto& s1 = cluster.add("s1", busy);
-  auto& s2 = cluster.add("s2", busy);
+  auto stepped = busy;
+  stepped.maintenance.time = &time;
+  auto& s2 = cluster.add("s2", stepped);
   auto watching = busy;
   watching.hosts_extents = false;
   auto& viewer = cluster.add("viewer", watching);
@@ -634,17 +645,21 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
     s2.context().events().notify(storage);
     return std::pair{id, bytes};
   };
-  const auto run_until = [&](const ObjectId& id) {
-    return wait_until(
-        [&] {
-          (void)s2.run_maintenance_once();
-          // A second repair pass straight after: a whole node pass now runs
-          // the local stages too, which can outlast a rest, and the share is
-          // seen refusing only a pass made within one.
-          (void)s2.repair().pass();
-          return s2.data().valid(id);
-        },
-        10s);
+  // One step of repair's time, a whole node pass, then a repair pass at the same
+  // instant: if the first took a turn, the share refuses the second, whatever
+  // the turn took on the real clock.
+  const auto pass = [&](std::chrono::milliseconds by, const std::function<void()>& busy_now) {
+    time.advance(by);
+    if (busy_now) busy_now();
+    (void)s2.run_maintenance_once();
+    (void)s2.repair().pass();
+  };
+  const auto within_bound = [&](const std::function<void()>& busy_now, const std::function<bool()>& done) {
+    for (int i = 0; i < bound; ++i) {
+      pass(step, busy_now);
+      if (done()) return true;
+    }
+    return false;
   };
 
   // Another node playing from s1 throughout: s1's foreground traffic, in
@@ -662,9 +677,14 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
       read.frame = FrameType::foreground;
       while (watching_on.load()) (void)viewer.store().get(playing_id, read);
     });
-    const bool seen = wait_until([&] { return s2.run_maintenance_once().repair.paced_by & paced_by_peer_foreground; }, 10s);
+    const bool seen = wait_until(
+        [&] {
+          time.advance(step);
+          return s2.run_maintenance_once().repair.paced_by & paced_by_peer_foreground;
+        },
+        60s);
     const auto [id, bytes] = lose_a_copy(1);
-    const bool restored = run_until(id);
+    const bool restored = within_bound({}, [&] { return s2.data().valid(id); });
     const auto gates = s2.repair().gates();
     watching_on = false;
     player.join();
@@ -676,24 +696,17 @@ TEST(StoreRepair, RepairIsPacedNotStoppedWhileHigherClassesStayBusy) {
   }
 
   for (const auto frame : {FrameType::foreground, FrameType::loader}) {
-    std::atomic<bool> working{true};
-    std::thread worker([&] {
-      while (working.load()) {
-        s2.dagda_node().activity().note(frame, 64 * 1024);
-        std::this_thread::sleep_for(5ms);
-      }
-    });
-    // The busy class seen holding repair to its share, then a copy lost.
+    // Never quiet: noted at every step, and a step is well inside foreground_quiet.
+    const auto working = [&] { s2.dagda_node().activity().note(frame, 64 * 1024); };
+    // The busy class seen holding repair to its share, then a copy lost. On a
+    // stepped clock a turn earns the least rest, 19 ms: a millisecond after the
+    // turn that restored the last copy, the share refuses the pass.
     const auto share_before = s2.repair().gates().share;
-    ASSERT_TRUE(wait_until([&] {
-      (void)s2.run_maintenance_once();
-      return s2.repair().gates().share > share_before;
-    }));
+    pass(1ms, working);
+    ASSERT_GT(s2.repair().gates().share, share_before);
     const auto [id, bytes] = lose_a_copy(frame == FrameType::foreground ? 2 : 3);
-    const bool restored = run_until(id);
+    const bool restored = within_bound(working, [&] { return s2.data().valid(id); });
     const auto gates = s2.repair().gates();
-    working = false;
-    worker.join();
     ASSERT_TRUE(restored);
     EXPECT_EQ(s2.data().get(id), bytes);
     EXPECT_GT(gates.share, share_before);
