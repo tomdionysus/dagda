@@ -72,6 +72,9 @@ StorageServer::~StorageServer() {
 void StorageServer::refresh() {
   _data.refresh();
   advertise();
+  // A disk come back changes what this node holds, with nothing written.
+  const auto online = _data.online_backends();
+  if (online > _online_backends.exchange(online, std::memory_order_relaxed)) _context.events().notify(_storage_event);
 }
 
 void StorageServer::advertise() {

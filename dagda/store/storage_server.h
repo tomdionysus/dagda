@@ -146,6 +146,7 @@ class StorageServer {
   const StorageServerAdmission _admission;
   const dannan::status::ScopedLogger _logger;
   const dannan::status::NodeEvents::Kind _storage_event;
+  std::atomic<size_t> _online_backends{0};
 
   // The held unions pinned for peers' diffs, newest last.
   struct Pinned {

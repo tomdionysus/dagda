@@ -66,12 +66,12 @@ void PosixLocalStoreFiles::install(const std::filesystem::path& path, std::span<
 
 Bytes PosixLocalStoreFiles::read(const std::filesystem::path& path) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) throw ObjectReadError("cannot open object: " + std::string(std::strerror(errno)));
+  if (fd < 0) throw std::runtime_error("cannot open object: " + std::string(std::strerror(errno)));
   struct stat st{};
   if (::fstat(fd, &st) != 0 || st.st_size < 0) {
     const auto error = std::string(std::strerror(errno));
     ::close(fd);
-    throw ObjectReadError("cannot stat object: " + error);
+    throw std::runtime_error("cannot stat object: " + error);
   }
   Bytes out(static_cast<size_t>(st.st_size));
   size_t done = 0;
@@ -81,11 +81,11 @@ Bytes PosixLocalStoreFiles::read(const std::filesystem::path& path) {
       if (errno == EINTR) continue;
       const auto error = std::string(std::strerror(errno));
       ::close(fd);
-      throw ObjectReadError("cannot read object: " + error);
+      throw std::runtime_error("cannot read object: " + error);
     }
     if (n == 0) {
       ::close(fd);
-      throw ObjectReadError("short object read");
+      throw std::runtime_error("short object read");
     }
     done += static_cast<size_t>(n);
   }
@@ -95,7 +95,7 @@ Bytes PosixLocalStoreFiles::read(const std::filesystem::path& path) {
 
 std::optional<Bytes> PosixLocalStoreFiles::read_at(const std::filesystem::path& path, uint64_t offset, size_t size) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) throw ObjectReadError("cannot open pack: " + std::string(std::strerror(errno)));
+  if (fd < 0) throw std::runtime_error("cannot open pack: " + std::string(std::strerror(errno)));
   std::optional<Bytes> out(std::in_place, size);
   size_t done = 0;
   while (done < size) {
@@ -104,7 +104,7 @@ std::optional<Bytes> PosixLocalStoreFiles::read_at(const std::filesystem::path& 
       if (errno == EINTR) continue;
       const auto error = std::string(std::strerror(errno));
       ::close(fd);
-      throw ObjectReadError("cannot read pack: " + error);
+      throw std::runtime_error("cannot read pack: " + error);
     }
     if (n == 0) {
       out.reset();

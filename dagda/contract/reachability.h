@@ -83,9 +83,11 @@ class ReachabilityProvider {
 
   // What the state at generation() refers to, its retirements and their
   // batches. Throws when it cannot answer at all. May read the owner's
-  // CONTROL objects and fetch what it lacks.
+  // CONTROL objects and fetch what it lacks. `pause`, when given, runs between the
+  // entries a build walks and may throw MaintenanceStopping to end it; the
+  // provider lets that through.
   static constexpr dannan::sched::Waits answer_waits = dannan::sched::Waits::state_device | dannan::sched::Waits::network | dannan::sched::Waits::locks;
-  virtual Reachability inventory() = 0;
+  virtual Reachability inventory(const std::function<void()>& pause) = 0;
 
   // The head claims are released against: the owner's sole accepted head,
   // none while it has several or none.

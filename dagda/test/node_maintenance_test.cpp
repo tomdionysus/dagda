@@ -15,8 +15,10 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <variant>
 
 #include "dagda/node.h"
@@ -194,6 +196,36 @@ TEST(NodeMaintenance, TheNodesThreadRunsThePassesOnItsOwn) {
   EXPECT_TRUE(test::wait_until([&] { return figure(a, "dagda.gc.skipped") >= 2; }));
   EXPECT_EQ(owner.inventories + owner.releases, asked);
   a.stop();
+}
+
+// A stop during the owner's inventory walk ends it, rather than waiting for the walk
+// (Macha 0.93.4). The walk here never finishes on its own, within the bound.
+TEST(NodeMaintenance, AStopEndsTheOwnersInventoryWalk) {
+  test::TestProvider owner;
+  refer_to_nothing(owner);
+  std::atomic<bool> walking{false};
+  std::atomic<bool> ran_out{false};
+  owner.walk = [&](const std::function<void()>& pause) {
+    const auto until = std::chrono::steady_clock::now() + 30s;
+    while (std::chrono::steady_clock::now() < until) {
+      walking = true;
+      if (pause) pause();
+      std::this_thread::sleep_for(1ms);
+    }
+    ran_out = true;
+  };
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  options.maintenance.interval = 5ms;
+  options.maintenance.gc_interval = 5ms;
+  options.repair.foreground_quiet = 1ms;
+  Cluster cluster;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  node.dagda_node().register_reachability(domain::domain_v1, owner);
+  ASSERT_TRUE(test::wait_until([&] { return walking.load(); }));
+  node.stop();
+  EXPECT_FALSE(ran_out.load());
 }
 
 }  // namespace

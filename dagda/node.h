@@ -375,7 +375,7 @@ class Node {
   // One GC pass on the provider registered now. `forced`: due whatever the
   // node's activity. Whether the collector is settled: its sweep complete
   // with nothing deferred, or nothing to run.
-  bool gc_pass_locked(bool forced, MaintenanceReport& report) DANNAN_REQUIRES(_maintenance_mutex);
+  bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
   bool higher_class_active() const;
   // The local stages, in Macha's order. `forced` as run_maintenance_once says.
   // Throws nothing: a failed stage is logged and the next pass tries again.

@@ -5,8 +5,10 @@ and not the `5a06d3c` baseline (Tom, 2026-11-05). Where the design and Macha's c
 differ, Macha's behaviour is the plan and Dagda is reshaped to it. `COMPLETED.md` is
 the record.
 
-**PAUSED (Tom, relayed by the Macha session, 2026-11-05: "Pause until it lands"):** no port work until Macha's old-code
-removal lands. See `COMPLETED.md` for where it stopped and what to do on resuming.
+**Resumed 2026-11-06.** Macha's old-code removal landed: 0.93.4 live on both nodes, tag on merge `9a08846`. That is the
+baseline. Forms remaining: SM14, 16, 17, 19, DLT5 to DLT11, envelope, hash and tree forms, the legacy clock. Genesis is a
+fixed constant record, new clusters only. Don't invest further in torrent parity: torrent is leaving Macha (its plan:
+`../macha/TODO/2026-11-06-ingest-plugins-torrent-removal-plan.md`). Goldens are to be re-cut on 0.93.4.
 
 ## The plan, re-based on Macha `00861dd` and `cac5998` (Tom, 2026-11-05)
 

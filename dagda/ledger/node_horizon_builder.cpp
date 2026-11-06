@@ -31,7 +31,9 @@ contract::ReleaseBuild build_release(contract::Reachability answer) {
 NodeHorizonBuilder::NodeHorizonBuilder(contract::ReachabilityProvider& provider, dannan::status::ScopedLogger logger) noexcept
     : _provider(provider), _logger(std::move(logger)) {}
 
-std::shared_ptr<const contract::InventoryHorizon> NodeHorizonBuilder::inventory() { return build_inventory(_provider.inventory()); }
+std::shared_ptr<const contract::InventoryHorizon> NodeHorizonBuilder::inventory(const std::function<void()>& pause) {
+  return build_inventory(_provider.inventory(pause));
+}
 
 contract::ReleaseBuild NodeHorizonBuilder::release(const contract::Hash256& head) {
   try {

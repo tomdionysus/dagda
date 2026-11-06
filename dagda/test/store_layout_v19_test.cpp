@@ -390,7 +390,7 @@ TEST(StoreLayoutV19, ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked) {
   ASSERT_TRUE(checked->put(id, data));
   test::corrupt_object(checked_disk, id);
   EXPECT_FALSE(checked->get(id).has_value());
-  EXPECT_TRUE(bed.sink->saw("discarding unreadable local object " + to_string(id)));
+  EXPECT_TRUE(bed.sink->saw("discarding corrupt local object " + to_string(id)));
   EXPECT_FALSE(checked->has(id));
 }
 

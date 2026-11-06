@@ -44,6 +44,14 @@
 
 namespace dagda::store {
 
+// A record that was read in full and does not open (Macha 0.93.4): the bytes on
+// the disk are not this object. Any other exception from a read says the read did
+// not finish, and nothing about the object.
+class ObjectCorrupt final : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+
 // An exclusive lock on a store's root (`.macha.lock`): Dannan's state lock
 // under the store's name, so two processes, or two nodes in one, never open
 // one store. Throws std::runtime_error if it is held.

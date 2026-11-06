@@ -513,8 +513,12 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
   try {
     Unlocked unlocked(lock, _mutex);
     const auto payload = _files.read_at(entry.file, entry.payload_offset, static_cast<size_t>(entry.payload_size));
-    if (!payload) throw ObjectReadError("short packed object read");
-    plain = open_object(*_key, _sealing, id, entry.nonce, entry.tag, *payload, entry.plain_size);
+    if (!payload) throw std::runtime_error("short packed object read");
+    try {
+      plain = open_object(*_key, _sealing, id, entry.nonce, entry.tag, *payload, entry.plain_size);
+    } catch (const std::runtime_error& error) {
+      throw ObjectCorrupt(error.what());
+    }
   } catch (...) {
     release_reader();
     throw;
@@ -988,7 +992,12 @@ std::optional<Bytes> LocalStore::get(const ObjectId& id) const {
   if (!std::filesystem::exists(file)) return std::nullopt;
   const auto encoded = _files.read(file);
   if (encoded.empty() && prune_empty_loose(id, file)) return std::nullopt;
-  auto plain = open_loose(id, encoded);
+  Bytes plain;
+  try {
+    plain = open_loose(id, encoded);
+  } catch (const std::runtime_error& error) {
+    throw ObjectCorrupt(error.what());
+  }
   if (const auto stamp = loose_stamp(file)) {
     lock.lock();
     remember_verified_loose_locked(id, *stamp);

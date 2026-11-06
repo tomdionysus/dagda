@@ -103,7 +103,7 @@ PassReport Collector::pass(const PassDue& due) {
   const auto generation = _provider.generation();
   if (!inventory || !inventory->complete() || inventory->generation() != generation) {
     // The pass reads what the ledger holds, never its own copy.
-    _ledger.publish(_builder.inventory());
+    _ledger.publish(_builder.inventory(due.pause));
     inventory = _ledger.inventory();
     report.rebuilt_inventory = true;
     trace("inventory", "generation=" + std::to_string(inventory->generation()) + " live=" + std::to_string(inventory->size(RetentionClass::data)) +

@@ -37,14 +37,17 @@ class TestProvider final : public contract::ReachabilityProvider {
   // may begin.
   std::function<void()> before_hold;
   std::vector<contract::GarbageCollection> collected;
+  // The owner's walk: a case makes it long, and it asks `pause` as a real one does.
+  std::function<void(const std::function<void()>&)> walk;
   int inventories = 0;
   int releases = 0;
 
   uint64_t generation() override { return current_generation; }
   uint64_t known_generation() override { return known; }
-  contract::Reachability inventory() override {
+  contract::Reachability inventory(const std::function<void()>& pause) override {
     ++inventories;
     if (inventory_throws) throw std::runtime_error("a node of the state is unreadable");
+    if (walk) walk(pause);
     auto out = answer;
     out.generation = current_generation;
     return out;
