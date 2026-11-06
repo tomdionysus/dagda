@@ -19,21 +19,10 @@ using dannan::contract::TimePoint;
 using dannan::sched::FrameType;
 using dannan::sched::WorkClass;
 
-// How long one wait sleeps before it looks again at what nothing notifies:
-// a caller's cancellation flag.
+// How often a wait looks at what nothing notifies: a caller's cancellation flag.
 constexpr std::chrono::milliseconds cancellation_poll{25};
 
-// However far off a deadline is, one sleep is no longer than this: a very long
-// window never reaches the platform's wait.
-constexpr std::chrono::hours longest_sleep{1};
-
-// The wait from `now` to `until`, at least a millisecond, at most longest_sleep,
-// and no longer than the cancellation poll when the work can be cancelled.
-std::chrono::nanoseconds slice(TimePoint now, TimePoint until, bool cancellable) {
-  auto left = std::clamp<std::chrono::nanoseconds>(until - now, std::chrono::milliseconds(1), longest_sleep);
-  if (cancellable) left = std::min<std::chrono::nanoseconds>(left, cancellation_poll);
-  return left;
-}
+constexpr auto nothing_to_ask = [](auto&) { return false; };
 
 }  // namespace
 
@@ -76,7 +65,8 @@ DataResourceArbiter::DataResourceArbiter(uint64_t capacity_bytes, uint64_t foreg
       _no_progress_deadline(no_progress_deadline),
       _foreground_recently_active(std::move(foreground_recently_active)),
       _logger(std::move(logger)),
-      _time(time) {
+      _time(time),
+      _waits(&time) {
   if (!_capacity_bytes || !_foreground_reserve_bytes || _foreground_reserve_bytes >= _capacity_bytes)
     throw std::invalid_argument("DATA resource capacity must exceed the foreground reserve");
   if (_no_progress_deadline <= std::chrono::milliseconds::zero()) throw std::invalid_argument("a DATA credit wait needs a no-progress deadline");
@@ -94,13 +84,14 @@ bool DataResourceArbiter::available_locked(FrameType frame, uint64_t bytes, bool
   if (refused_for_pressure) *refused_for_pressure = false;
   if (_used_bytes > _capacity_bytes - bytes) return false;
   if (foreground(frame)) return true;
-  if (_waiting_foreground) return false;
+  if (_waits.waiting(WorkClass::foreground)) return false;
   // Law 3: the loader yields to pressure only when a foreground user is
   // present; a slow device nobody is reading from must not hold a bulk
   // write back. Speculative work yields to pressure alone. Presence is asked only
   // under pressure, keeping the uncontended path cheap.
   if (_monitor && _monitor->pressured() && _lower_active >= _min_background_under_pressure) {
-    const bool present = _waiting_foreground > 0 || _used_bytes > _lower_used_bytes || (_foreground_recently_active && _foreground_recently_active());
+    const bool present =
+        _waits.waiting(WorkClass::foreground) > 0 || _used_bytes > _lower_used_bytes || (_foreground_recently_active && _foreground_recently_active());
     if (dannan::sched::work_class(frame) == WorkClass::speculative || present) {
       if (refused_for_pressure) *refused_for_pressure = true;
       return false;
@@ -110,7 +101,7 @@ bool DataResourceArbiter::available_locked(FrameType frame, uint64_t bytes, bool
   const auto lower_capacity = _capacity_bytes - _foreground_reserve_bytes;
   if (bytes > lower_capacity) return false;
   if (_lower_used_bytes > lower_capacity - bytes) return false;
-  if (dannan::sched::work_class(frame) == WorkClass::speculative && _waiting_loaders) return false;
+  if (dannan::sched::work_class(frame) == WorkClass::speculative && _waits.waiting(WorkClass::loader)) return false;
   return true;
 }
 
@@ -143,64 +134,32 @@ std::optional<DataResourceArbiter::Lease> DataResourceArbiter::acquire(const Dat
   const auto class_capacity = foreground(frame) ? _capacity_bytes : _capacity_bytes - _foreground_reserve_bytes;
   // Larger than the whole class budget: never admissible, so not waited for.
   if (bytes > class_capacity) return std::nullopt;
+  const auto work_class = dannan::sched::work_class(frame);
   std::string abandoned;
   {
     Lock lock(_mutex);
-    const auto work_class = dannan::sched::work_class(frame);
-    auto& waiters = work_class == WorkClass::foreground ? _waiting_foreground : work_class == WorkClass::loader ? _waiting_loaders : _waiting_speculative;
-    bool counted = false;
     bool refused_for_pressure = false;
-    auto window_start = _time.now();
-    auto seen = _releases;
-    const auto settled = [&]() DANNAN_REQUIRES(_mutex) {
-      return _stopping || work.cancelled() || work.expired(_time.now()) || available_locked(frame, bytes, &refused_for_pressure);
-    };
-    while (!settled()) {
-      if (!counted) {
-        counted = true;
+    dannan::sched::ClassWaits::Bounds bounds;
+    bounds.deadline = work.deadline();
+    bounds.cancelled = work.cancellation();
+    bounds.no_progress = _no_progress_deadline;
+    if (work.cancellation()) bounds.cancellation_poll = cancellation_poll;
+    const auto outcome = _waits.wait(
+        lock, _changed, work_class, bounds, [&]() DANNAN_REQUIRES(_mutex) { return _stopping; },
+        [&]() DANNAN_REQUIRES(_mutex) { return available_locked(frame, bytes, &refused_for_pressure); },
         // Once per waiter, not per wakeup: it counts work turned away.
-        if (refused_for_pressure) ++_pressure_refusals;
-        ++waiters;
-        if (work_class == WorkClass::foreground)
-          ++_foreground_waits;
-        else if (work_class == WorkClass::loader)
-          ++_loader_waits;
-        else
-          ++_speculative_waits;
-      }
-      const auto now = _time.now();
-      if (work.deadline() == TimePoint{}) {
-        // No-progress windows: any release anywhere re-arms the window, so
-        // only a wholly stalled arbiter gives up.
-        if (_releases != seen) {
-          seen = _releases;
-          window_start = now;
-        } else if (now - window_start >= _no_progress_deadline) {
-          ++_no_progress_failures;
-          --waiters;
-          _changed.notify_all();
-          // Macha's line word for word, its field names too: what an operator's search finds.
-          abandoned = "DATA credit wait abandoned after " + std::to_string(_no_progress_deadline.count()) +
-                      " ms with no release anywhere: class=" + dannan::sched::frame_type_name(frame) + " bytes=" + std::to_string(bytes) +
-                      " used=" + std::to_string(_used_bytes) + "/" + std::to_string(_capacity_bytes) + " lower_active=" + std::to_string(_lower_active) + "/" +
-                      std::to_string(_background_concurrency) + " waiting_viewers=" + std::to_string(_waiting_foreground) +
-                      " waiting_loaders=" + std::to_string(_waiting_loaders);
-          break;
-        }
-        _changed.wait_for(lock.native(), slice(now, window_start + _no_progress_deadline, work.cancellation() != nullptr));
-      } else {
-        _changed.wait_for(lock.native(), slice(now, work.deadline(), work.cancellation() != nullptr));
-      }
-    }
-    if (abandoned.empty()) {
-      if (counted) --waiters;
-      if (_stopping || work.cancelled() || work.expired(_time.now())) {
-        ++_cancelled_waits;
-        _changed.notify_all();
-        return std::nullopt;
-      }
-      return admit_locked(frame, bytes);
-    }
+        [&]() DANNAN_REQUIRES(_mutex) {
+          if (refused_for_pressure) ++_pressure_refusals;
+        },
+        nothing_to_ask);
+    if (outcome == dannan::sched::ClassWaits::Outcome::admitted) return admit_locked(frame, bytes);
+    if (outcome == dannan::sched::ClassWaits::Outcome::gave_up) return std::nullopt;
+    // Macha's line word for word, its field names too: what an operator's search finds.
+    abandoned = "DATA credit wait abandoned after " + std::to_string(_no_progress_deadline.count()) +
+                " ms with no release anywhere: class=" + dannan::sched::frame_type_name(frame) + " bytes=" + std::to_string(bytes) +
+                " used=" + std::to_string(_used_bytes) + "/" + std::to_string(_capacity_bytes) + " lower_active=" + std::to_string(_lower_active) + "/" +
+                std::to_string(_background_concurrency) + " waiting_viewers=" + std::to_string(_waits.waiting(WorkClass::foreground)) +
+                " waiting_loaders=" + std::to_string(_waits.waiting(WorkClass::loader));
   }
   if (_logger) _logger->warn(abandoned);
   return std::nullopt;
@@ -224,7 +183,7 @@ std::optional<DataResourceArbiter::Lease> DataResourceArbiter::try_acquire(const
 void DataResourceArbiter::release(FrameType frame, uint64_t bytes) {
   {
     Lock lock(_mutex);
-    ++_releases;
+    _waits.released();
     _used_bytes -= std::min(_used_bytes, bytes);
     if (!foreground(frame)) {
       _lower_used_bytes -= std::min(_lower_used_bytes, bytes);
@@ -262,10 +221,10 @@ DataResourceStats DataResourceArbiter::stats() const {
   out.foreground_admissions = _foreground_admissions;
   out.loader_admissions = _loader_admissions;
   out.speculative_admissions = _speculative_admissions;
-  out.foreground_waits = _foreground_waits;
-  out.loader_waits = _loader_waits;
-  out.speculative_waits = _speculative_waits;
-  out.cancelled_waits = _cancelled_waits;
+  out.foreground_waits = _waits.waits(WorkClass::foreground);
+  out.loader_waits = _waits.waits(WorkClass::loader);
+  out.speculative_waits = _waits.waits(WorkClass::speculative);
+  out.cancelled_waits = _waits.gave_up();
   out.background_limit = _background_concurrency;
   out.background_active = _lower_active;
   out.peak_background_active = _peak_lower_active;
@@ -275,7 +234,7 @@ DataResourceStats DataResourceArbiter::stats() const {
   out.device_slowdown_percent = device.slowdown_percent;
   out.device_pressure_onsets = _monitor ? _monitor->pressure_onsets() : 0;
   out.pressure_refusals = _pressure_refusals;
-  out.no_progress_failures = _no_progress_failures;
+  out.no_progress_failures = _waits.no_progress();
   return out;
 }
 
@@ -295,7 +254,7 @@ void IoReserve::Slot::reset() {
   std::exchange(_owner, nullptr)->release(_control);
 }
 
-IoReserve::IoReserve(IoReserveOptions options, const dannan::contract::TimeSource& time) : _options(options), _time(time) {
+IoReserve::IoReserve(IoReserveOptions options, const dannan::contract::TimeSource& time) : _options(options), _time(time), _waits(&time) {
   if (!_options.slots) throw std::invalid_argument("a device admits at least one operation");
   if (_options.control_reserve >= _options.slots) throw std::invalid_argument("the control reserve must leave DATA work a slot");
   Lock lock(_mutex);
@@ -305,24 +264,25 @@ IoReserve::IoReserve(IoReserveOptions options, const dannan::contract::TimeSourc
 
 std::optional<IoReserve::Slot> IoReserve::data(const DataWorkContext& work, std::chrono::milliseconds wait) {
   Lock lock(_mutex);
-  auto until = _time.now() + wait;
-  if (work.deadline() != TimePoint{}) until = std::min(until, work.deadline());
-  const auto free = [&]() DANNAN_REQUIRES(_mutex) {
-    return _stopping || work.cancelled() || (!_control_waiting && _data < data_share() && _data + _control < _options.slots);
-  };
-  bool counted = false;
-  while (!free()) {
-    const auto now = _time.now();
-    if (now >= until) break;
-    if (!counted) {
-      counted = true;
-      ++_stats.data_waits;
+  const auto free = [&]() DANNAN_REQUIRES(_mutex) { return !_waits.waiting(WorkClass::control) && _data < data_share() && _data + _control < _options.slots; };
+  const auto refused = _stopping || work.cancelled();
+  // A free slot is taken whatever the time: only one to wait for has a deadline.
+  if (refused || !free()) {
+    bool admitted = false;
+    if (!refused) {
+      dannan::sched::ClassWaits::Bounds bounds;
+      bounds.deadline = _time.now() + wait;
+      if (work.deadline() != TimePoint{}) bounds.deadline = std::min(bounds.deadline, work.deadline());
+      bounds.cancelled = work.cancellation();
+      if (work.cancellation()) bounds.cancellation_poll = cancellation_poll;
+      admitted = _waits.wait(
+                     lock, _changed, work.work(), bounds, [&]() DANNAN_REQUIRES(_mutex) { return _stopping; }, free,
+                     [&]() DANNAN_REQUIRES(_mutex) { ++_stats.data_waits; }, nothing_to_ask) == dannan::sched::ClassWaits::Outcome::admitted;
     }
-    _changed.wait_for(lock.native(), slice(now, until, work.cancellation() != nullptr));
-  }
-  if (_stopping || work.cancelled() || !free()) {
-    ++_stats.data_refusals;
-    return std::nullopt;
+    if (!admitted) {
+      ++_stats.data_refusals;
+      return std::nullopt;
+    }
   }
   ++_data;
   ++_stats.data_admissions;
@@ -334,27 +294,29 @@ std::optional<IoReserve::Slot> IoReserve::try_data(const DataWorkContext& work) 
 
 std::optional<IoReserve::Slot> IoReserve::control(std::chrono::milliseconds wait) {
   Lock lock(_mutex);
-  const auto until = _time.now() + wait;
-  const auto free = [&]() DANNAN_REQUIRES(_mutex) { return _stopping || _data + _control < _options.slots; };
-  bool counted = false;
-  while (!free()) {
-    const auto now = _time.now();
-    if (now >= until) break;
-    if (!counted) {
-      counted = true;
-      ++_stats.control_waits;
-      // While control work waits, DATA admission is closed (law 1).
-      ++_control_waiting;
-    }
-    _changed.wait_for(lock.native(), slice(now, until, false));
-  }
-  if (counted) {
-    --_control_waiting;
-    _changed.notify_all();
-  }
+  const auto free = [&]() DANNAN_REQUIRES(_mutex) { return _data + _control < _options.slots; };
+  // A free slot is taken whatever the time: only one to wait for has a deadline.
   if (_stopping || !free()) {
-    ++_stats.control_refusals;
-    return std::nullopt;
+    bool admitted = false;
+    if (!_stopping) {
+      dannan::sched::ClassWaits::Bounds bounds;
+      bounds.deadline = _time.now() + wait;
+      bool waited = false;
+      // While control work waits, DATA admission is closed (law 1): its count is
+      // what DATA reads, so DATA looks again when it ends.
+      admitted = _waits.wait(
+                     lock, _changed, WorkClass::control, bounds, [&]() DANNAN_REQUIRES(_mutex) { return _stopping; }, free,
+                     [&]() DANNAN_REQUIRES(_mutex) {
+                       waited = true;
+                       ++_stats.control_waits;
+                     },
+                     nothing_to_ask) == dannan::sched::ClassWaits::Outcome::admitted;
+      if (waited) _changed.notify_all();
+    }
+    if (!admitted) {
+      ++_stats.control_refusals;
+      return std::nullopt;
+    }
   }
   ++_control;
   ++_stats.control_admissions;
