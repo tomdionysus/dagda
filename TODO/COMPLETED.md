@@ -35,6 +35,21 @@ Macha's 32 S3 cases are named in the plan's 5.1; the replica half of SM:3848, `t
 C20, C25, C26; verify, replay and accept baselines. Not run under GCC or on arm64. Gate: `dagda_tests` 604 passing, 3 disabled,
 three whole runs on the Mac.
 
+## 2026-11-06: the before and after comparison, and crash cases per phase (`feature/migrate-compare`)
+
+Items 6 and 7. `dagda-migrate --write-manifest` is a read-only pass and `--compare-before/--compare-after` reports every
+difference by name (`dagda/migrate/manifest.{h,cpp}`, `manifest_format.{h,cpp}`, `compare.cpp`; `docs/migration.md`, "Proving nothing
+was lost"): objects per store, removed, accounting, markers, retention marker, held, claims and dots, reference counts, sightings, every
+other file by SHA-256. Metadata heads, certificates and history are NOT CHECKED, failing, until S7 fills `metadata_manifest_reader`.
+At macnessa's counts a manifest is 504 MB, 89 bytes an item, and a pass resumes. Every step of the migration has its case, 25 in
+each direction, and a second and third run; the comparison passes after each. Over a copy of Macha 0.93.4's scratch state `a`: everything
+SAME, metadata NOT CHECKED, so it fails, as it must.
+Found and fixed, each with a case: a loose object's touched time reset; a torn tag rewrite lost as a damaged span; a crash's
+temporaries never removed; a backend left off the command line stranded v18 under a v19 state; a journal of a torn frame refused for good; a
+state crashed in either direction opened by Macha or the store. Left: S7's reader, the live runs. Not run under GCC, on arm64 or on a
+real disk at 4 TB. A kill between a tag's write and restoring its time leaves one touched time moved, which the comparison names.
+Gate: `dagda_tests` 606 passing, 4 disabled, three whole runs on the Mac.
+
 ## 2026-11-06: heads S2, the tree over keys (`feature/heads-s2`)
 
 `dagda/heads/`: `tree.{h,cpp}` (build, update, apply, walk, lookup, scan, prefix, paged `entries`, diff, node diff, collect, stats,
