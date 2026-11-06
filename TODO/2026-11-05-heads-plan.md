@@ -741,6 +741,8 @@ Others of the same kind, found reading, with the same standing: reproduce, do no
 
 SM16, 17, 19 and DLT9, 10, 11 pass through the owner's codec as Macha writes them. Dagda sees payload bytes and a hash. C46 treats those sections as bytes and parses none. `test_torrent_requests_ride_the_snapshot_and_its_deltas` (SM:4624), `test_a_delta_refuses_a_torrent_request_with_no_id` (SM:4732) and the coordinator's cases stay Macha's. Several gate cases mention torrent only to set `config.torrent.enabled = false`; Dagda's versions have no such line.
 
+The `-torrent` fixture is owed by the Macha session at S7: it cuts it on a node when told S7 has started, as the laptop has no torrent plugin. `journal-frames-0.93.4` will not exist: 0.93.4 only writes `journal.log` empty (`metadata.cpp:4039`, `:4070`), so the journal reader (Q3) has no fixture from live code.
+
 ## 9. Fixtures
 
 **What was checked.** A script opened the scratch fixture under its own test key and recomputed tags and hashes. All 13 frames on each node, `heads.meta`, `checkpoint.meta` and `author.meta` authenticate under the magic as AAD; all 12 full frames re-hash. **Forms present:** generation 1 `DHTMGEN1`, generation 2 SM14 (122 bytes), 10 frames of SM17 (178 bytes), generation 8 DLT5 (78 bytes). That is the README's gap filled: it does not state forms. Nodes `a` and `b` hold the same history; `b` has no `author.meta`. `storage-layout` is `macha-state-layout-v18`.
