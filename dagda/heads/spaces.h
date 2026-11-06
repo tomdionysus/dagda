@@ -1,0 +1,115 @@
+//
+// Dagda - The Store
+//
+// Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+// Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+//
+
+#pragma once
+
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <filesystem>
+#include <functional>
+#include <map>
+#include <memory>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+#include "dagda/domain/domain_id.h"
+#include "dagda/domain/storage_key.h"
+#include "dagda/heads/cache_seed.h"
+#include "dagda/heads/space.h"
+#include "dagda/store/distributed_store.h"
+#include "dagda/store/local_store.h"
+#include "dagda/store/persistent_cache.h"
+#include "dannan/context.h"
+#include "dannan/contract/thread_safety.h"
+#include "dannan/sched/work.h"
+
+namespace dagda::heads {
+
+// A commit's claims on the node's store, as Macha's retain_metadata_publication makes
+// them.
+class StoreClaimBarrier final : public ClaimBarrier {
+ public:
+  explicit StoreClaimBarrier(store::DistributedStore& store) : _store(store) {}
+  std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const Dot& dot) override;
+  std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const Dot& dot) override;
+  bool retain_control_here(const std::vector<ObjectId>& ids, const Dot& dot) override;
+
+ private:
+  store::DistributedStore& _store;
+};
+
+// The node's head spaces, at <state>/heads/<space id hex>/, and the one thread the
+// Context's asynchronous forms run on: commits wait on devices and locks, which the io
+// context's threads must not. Replay's node store writes every node it is given and
+// fetches what it reads through the store's ensure_control_local.
+//
+// Thread-safe. Lock order: _mutex, then a space's; the queue's lock nests in nothing.
+class Spaces {
+ public:
+  static constexpr dannan::sched::ThreadSafety safety = dannan::sched::ThreadSafety::thread_safe;
+  static constexpr dannan::sched::Waits open_waits = Space::open_waits;
+  static constexpr dannan::sched::Waits find_waits = dannan::sched::Waits::none;
+
+  struct Services {
+    dannan::Context& context;
+    store::LocalStore& control;
+    store::DistributedStore& store;
+    const store::PersistentBlockCache& cache;
+    std::shared_ptr<const domain::StorageKey> content_key;
+    std::shared_ptr<const domain::StorageKey> local_key;
+    domain::DomainId domain{};
+    std::filesystem::path state;
+    const dannan::contract::WallClock* wall = nullptr;
+  };
+
+  explicit Spaces(Services services);
+  ~Spaces();
+  Spaces(const Spaces&) = delete;
+  Spaces& operator=(const Spaces&) = delete;
+
+  // Opens a space and replays it. Throws std::invalid_argument for a policy that
+  // waits on another session or a name already open, and what Replica throws,
+  // naming the file, for primary state that fails with no valid seed.
+  Space& open(SpaceSpec spec) DANNAN_EXCLUDES(_mutex);
+  // The open space; null for one not open.
+  Space* find(const SpaceId& space) const DANNAN_EXCLUDES(_mutex);
+  SpaceId id_of(std::string_view name) const { return space_id(_services.domain, name); }
+
+  // Runs `job` on the spaces' thread, unless stopping: false then, and it never runs.
+  bool submit(std::function<void()> job) DANNAN_EXCLUDES(_queue_mutex);
+  // Ends the thread; what is queued runs, told by `stopping()`. Waits on what is
+  // running. Idempotent.
+  void stop() DANNAN_EXCLUDES(_queue_mutex);
+  bool stopping() const noexcept { return _stopping.load(std::memory_order_acquire); }
+
+  dannan::sched::WaitGuard& guard() noexcept { return _guard; }
+
+ private:
+  void worker(std::stop_token stop) DANNAN_EXCLUDES(_queue_mutex);
+
+  const Services _services;
+  StoreClaimBarrier _barrier;
+  dannan::sched::WaitGuard _guard;
+  const dannan::status::ScopedLogger _logger;
+
+  // Held across a replay: spaces open one at a time.
+  mutable dannan::contract::IoMutex _mutex;
+  std::map<SpaceId, std::unique_ptr<Space>> _spaces DANNAN_GUARDED_BY(_mutex);
+  std::map<SpaceId, std::unique_ptr<CacheSeed>> _seeds DANNAN_GUARDED_BY(_mutex);
+
+  dannan::contract::Mutex _queue_mutex;
+  std::condition_variable_any _queue_changed;
+  std::deque<std::function<void()>> _queue DANNAN_GUARDED_BY(_queue_mutex);
+  std::atomic_bool _stopping{false};
+  std::jthread _thread;
+};
+
+}  // namespace dagda::heads

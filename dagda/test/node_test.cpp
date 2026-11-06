@@ -59,11 +59,11 @@ struct Stages {
 
 const std::vector<std::string> opens{"open message-types", "open state-layout", "open node-local-key", "open storage-pool",     "open admission",
                                      "open control-store", "open cache",        "open claims",         "open reference-counts", "open distributed-store",
-                                     "open availability",  "open repair",       "open storage-server", "open maintenance"};
+                                     "open heads",         "open availability", "open repair",         "open storage-server",   "open maintenance"};
 // Step 7b: the maintenance thread stops first.
-const std::vector<std::string> stops{"stop maintenance",      "stop storage-server", "stop repair",      "stop availability",  "stop distributed-store",
-                                     "stop reference-counts", "stop claims",         "stop cache",       "stop control-store", "stop admission",
-                                     "stop storage-pool",     "stop node-local-key", "stop state-layout"};
+const std::vector<std::string> stops{"stop maintenance",       "stop storage-server",   "stop repair",         "stop availability", "stop heads",
+                                     "stop distributed-store", "stop reference-counts", "stop claims",         "stop cache",        "stop control-store",
+                                     "stop admission",         "stop storage-pool",     "stop node-local-key", "stop state-layout"};
 
 std::string refusal_of(ClusterNode& node) {
   try {
@@ -243,7 +243,7 @@ TEST(Node, PublishesTheStoresFiguresAndGoesReady) {
   auto& a = cluster.add("a");
   a.start();
   auto& readiness = a.context().readiness();
-  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention"}) EXPECT_TRUE(readiness.has(plane)) << plane;
+  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention", "metadata"}) EXPECT_TRUE(readiness.has(plane)) << plane;
   EXPECT_TRUE(readiness.complete());
   EXPECT_FALSE(readiness.failed());
 
@@ -277,7 +277,7 @@ TEST(Node, DeclaresItsOwnReadinessPlanes) {
   auto& a = cluster.add("a");
   a.start();
   auto& readiness = a.context().readiness();
-  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention"}) EXPECT_TRUE(readiness.has(plane)) << plane;
+  for (const auto* plane : {"data_storage", "control_storage", "cache", "retention", "metadata"}) EXPECT_TRUE(readiness.has(plane)) << plane;
   EXPECT_TRUE(readiness.complete());
   EXPECT_FALSE(readiness.failed());
   a.stop();
