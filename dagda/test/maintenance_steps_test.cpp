@@ -47,7 +47,6 @@
 
 #include "dagda/contract/stopping.h"
 #include "dagda/ledger/collector.h"
-#include "dagda/ledger/unreferenced_since.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/repair.h"
 #include "dagda/test/fixtures/cluster.h"
@@ -362,8 +361,8 @@ const std::vector<std::string> macha_order{"credit", "gate.repair", order_invent
 
 std::string flag(std::string_view name, bool value) { return std::string(name) + (value ? "=1" : "=0"); }
 
-// The traced node's bed: stepped time for its repair and its collector, as
-// Macha's pass runs on its manual clock while reachability is on real time.
+// The traced node's bed: the node's own collector, repair and survey on stepped
+// time, as Macha's pass runs on its manual clock while reachability is on real time.
 struct Traced {
   dannan::test::SteppedTime time;
   dannan::test::SteppedWall wall{dannan::contract::system_wall_clock().unix_ms()};
@@ -382,12 +381,11 @@ struct Traced {
     // Macha's test nodes' extent (tests/test_support.hpp).
     out.store.extent_size = 1024 * 1024;
     out.repair.extent_size = out.store.extent_size;
-    out.store.repair_trace = [this](std::string_view kind, std::string_view detail) { trace(kind, detail); };
-    out.repair.time = &time;
-    out.repair.trace = [this](std::string_view kind, std::string_view detail) { trace(kind, detail); };
-    // Macha's surveys are paced on its manual clock, which a fixture moves past
-    // any survey's cost; here they stay on the node's, so nothing paces them.
-    out.availability.share = 0;
+    out.garbage_grace = garbage_grace;
+    out.maintenance.collector.retry_window = no_progress_backoff;
+    out.maintenance.time = &time;
+    out.maintenance.wall = &wall;
+    out.maintenance.trace = [this](std::string_view kind, std::string_view detail) { trace(kind, detail); };
     return out;
   }
 };
@@ -400,19 +398,17 @@ class MachaLoop {
       : _node(node),
         _traced(traced),
         _owner(owner),
-        _data_seen(node.state() / "test-unreferenced-data.bin", test::key_of(0x4e), test::quiet_logger()),
-        _control_seen(node.state() / "test-unreferenced-control.bin", test::key_of(0x4e), test::quiet_logger()),
-        _collector(node.ledger(), owner, node.data(), node.control(), _data_seen, _control_seen, collector_options(),
-                   ledger::CollectorServices{node.context().logger("gc"), node.context().observations(), traced.time, traced.wall}, &node.cache(),
-                   [&traced](std::string_view kind, std::string_view detail) { traced.trace(kind, detail); }),
         _storage(node.context().events().kind("storage")),
         _metadata(node.context().events().kind("metadata")),
         _claims(node.context().events().kind("claims")),
         _last_generation(owner.current()) {
     _observed_event = events();
+    _node.dagda_node().register_reachability(domain::domain_v1, _owner);
   }
+  ~MachaLoop() { _node.dagda_node().unregister_reachability(domain::domain_v1); }
 
-  ledger::Collector& collector() { return _collector; }
+  // The node's own.
+  ledger::Collector& collector() { return *_node.dagda_node().collector(); }
   std::stop_source stop;
   // In place of the stop's pause for the survey, for a failure.
   std::function<void()> survey_pause;
@@ -441,8 +437,7 @@ class MachaLoop {
   }
 
   // A pass whenever Macha's would wake: an event, or a deadline this clock has
-  // reached. Its availability deadline is not one here: the survey is on the node's
-  // real time, and every pass asks it.
+  // reached.
   void settle() {
     for (int i = 0; i < 256; ++i) {
       if (events() == _observed_event && _traced.time.now() < _deadline) return;
@@ -510,7 +505,7 @@ class MachaLoop {
       if (network_due || garbage_due || gc_due) {
         enter(order_inventory);
         const bool repair_only = network_due && !garbage_due && !gc_due;
-        const auto inventory = _collector.inventory_step(pause(), !repair_only || metadata_ready);
+        const auto inventory = collector().inventory_step(pause(), !repair_only || metadata_ready);
         last_inventory = inventory;
         if (inventory.rebuilt) _gc_quiet_until = _traced.time.now() + foreground_quiet;
         survey();
@@ -533,13 +528,13 @@ class MachaLoop {
         due.busy = busy;
         due.gc_waiting_for_event = _gc_quiet_until == TimePoint::max();
         enter("tombstones");
-        last_tombstones = _collector.tombstone_step(due, inventory);
+        last_tombstones = collector().tombstone_step(due, inventory);
         enter("release");
-        const auto release = _collector.release_step();
+        const auto release = collector().release_step();
         enter("control");
-        last_control = _collector.control_step(due, inventory, release);
+        last_control = collector().control_step(due, inventory, release);
         enter("data");
-        last_data = _collector.data_step(due, inventory, release);
+        last_data = collector().data_step(due, inventory, release);
         if (last_data->gate.permitted && !last_data->swept.yielded && last_data->swept.complete)
           _gc_quiet_until = last_data->swept.deferred ? _traced.time.now() + last_data->orphan_grace : TimePoint::max();
       } else {
@@ -558,12 +553,6 @@ class MachaLoop {
   }
 
  private:
-  static ledger::CollectorOptions collector_options() {
-    ledger::CollectorOptions out;
-    out.garbage_grace = garbage_grace;
-    out.retry_window = no_progress_backoff;
-    return out;
-  }
   // Storage, metadata and claims, and the roster: Macha's four events. The roster
   // here is membership: Dannan's topology also moves on every advert, so a peer's
   // storage changing would wake repair.
@@ -630,15 +619,14 @@ class MachaLoop {
       }
       if (repair_continue) deadline = std::min(deadline, now + interval);
     }
+    // A deferred survey, or a peer to ask again.
+    if (const auto due = _node.availability().due()) deadline = std::min(deadline, std::max(*due, now));
     _deadline = deadline;
   }
 
   ClusterNode& _node;
   Traced& _traced;
   Owner& _owner;
-  ledger::UnreferencedSince _data_seen;
-  ledger::UnreferencedSince _control_seen;
-  ledger::Collector _collector;
   const dannan::status::NodeEvents::Kind _storage;
   const dannan::status::NodeEvents::Kind _metadata;
   const dannan::status::NodeEvents::Kind _claims;
@@ -657,9 +645,9 @@ class TracedNode {
   explicit TracedNode(bool hosts_beside = false, size_t replication = 1, size_t write_copies = 1) {
     _node = &_cluster.add("traced", _traced.options(replication, write_copies));
     auto peer = _traced.options(replication, write_copies);
-    peer.store.repair_trace = {};
-    peer.repair.trace = {};
-    peer.repair.time = nullptr;
+    peer.maintenance.trace = {};
+    peer.maintenance.time = nullptr;
+    peer.maintenance.wall = nullptr;
     peer.hosts_extents = hosts_beside;
     _peer = &_cluster.add("peer", peer);
     _traced.log.ignore("release.control");
@@ -891,7 +879,9 @@ class StepsBed : public testing::Test {
   // After this a pass finds every step due.
   void make_due() {
     (void)next_write();
-    loop().move(foreground_quiet * 2);
+    // Past the quiet window, and past any survey's cost at its share, as a fixture's
+    // advance moves past it.
+    loop().move(1min);
     loop().stop = std::stop_source{};
     loop().before_step = {};
     loop().survey_pause = {};
@@ -1043,6 +1033,22 @@ TEST_F(StepsBed, AStopInsideABoundedStepWaitsForItsBound) {
   EXPECT_TRUE(swept.gate.permitted);
   EXPECT_GT(asked, 1u);
   EXPECT_TRUE(swept.swept.complete);
+}
+
+// The loop's sweep works from the node's own sightings, in the node's own files.
+TEST_F(StepsBed, TheSweepUsesTheNodesOwnSightings) {
+  auto& dagda = node.node().dagda_node();
+  const auto bytes = pattern(64 * 1024, 0xee);
+  ASSERT_TRUE(node.node().data().put(store::object_id(bytes), bytes));
+  ASSERT_EQ(dagda.data_sightings().size(), 0u);
+  make_due();
+  loop().pass();
+  loop().move(foreground_quiet * 2);
+  loop().pass();
+  ASSERT_TRUE(loop().last_data);
+  ASSERT_TRUE(loop().last_data->gate.permitted) << loop().last_data->gate.reason;
+  EXPECT_GT(dagda.data_sightings().size(), 0u);
+  EXPECT_TRUE(std::filesystem::exists(node.node().state() / "retention" / "unreferenced-data.bin"));
 }
 
 // A failure in the inventory: Macha's outer catch logs it and the rest of the pass

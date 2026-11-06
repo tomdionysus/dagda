@@ -117,6 +117,11 @@ struct MaintenanceOptions {
   // files keep real time. None: the node's, and NodeOptions::wall.
   const dannan::contract::TimeSource* time = nullptr;
   const dannan::contract::WallClock* wall = nullptr;
+  // The decision trace, Macha's MaintenanceTraceHook: what the collector, repair's
+  // claim walks and the store's repair decide, in Macha's kinds and words. It
+  // reaches repair and the store unless RepairOptions::trace and
+  // DistributedStoreOptions::repair_trace name their own.
+  ledger::Collector::Trace trace;
 };
 
 // What one pass of the local stages did. A `_ran` is false when its gate held
@@ -345,6 +350,19 @@ class Node {
   static constexpr dannan::sched::Waits publish_inventory_waits = contract::ReachabilityProvider::answer_waits | dannan::sched::Waits::locks;
   bool publish_inventory();
 
+  // For an owner whose own pass drives the steps, as Macha's does until stage 8c
+  // (MaintenanceOptions::automatic off, one thread: the steps are single owner, and
+  // repair() is the other half). The node's collector over the provider registered
+  // for its domain, null with none; registering or unregistering a provider ends the
+  // one handed out. It works from the node's sightings, its budgets, the domain's
+  // wait, the pass's clocks and the trace. dagda.gc.* count the node's own passes,
+  // not an owner's steps. Throws std::logic_error while the node's thread runs.
+  static constexpr dannan::sched::ThreadSafety collector_safety = dannan::sched::ThreadSafety::single_owner;
+  ledger::Collector* collector();
+  // The node's own sightings, Macha's files (requirement L22). Valid while running().
+  ledger::UnreferencedSince& data_sightings();
+  ledger::UnreferencedSince& control_sightings();
+
   // One GC pass, due whatever the schedule and the node's activity says, and
   // one repair pass, on the caller's thread: what the maintenance thread
   // runs, for a test that drives the passes itself (with automatic off) or
@@ -440,6 +458,9 @@ class Node {
   // node's activity. Whether the collector is settled: its sweep complete
   // with nothing deferred, or nothing to run.
   bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
+  contract::ReachabilityProvider* registered_provider() const;
+  // The collector over `provider`, made when there is none or it is over another.
+  void ensure_collector_locked(contract::ReachabilityProvider& provider) DANNAN_REQUIRES(_maintenance_mutex);
   bool higher_class_active() const;
   // What rebalance and the scrub yield to within their slice.
   std::function<bool()> local_yield(const LocalTurn& turn) const;

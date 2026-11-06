@@ -236,6 +236,7 @@ void Node::open() {
   step("open distributed-store");
   auto store_options = _options.store;
   store_options.domain = _options.domain;
+  if (!store_options.repair_trace) store_options.repair_trace = _options.maintenance.trace;
   _store = std::make_unique<store::DistributedStore>(
       _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get(), _activity.get()}, store_options);
 
@@ -248,6 +249,7 @@ void Node::open() {
   auto repair = _options.repair;
   repair.extent_size = store_options.extent_size;
   if (!repair.time) repair.time = _options.maintenance.time;
+  if (!repair.trace) repair.trace = _options.maintenance.trace;
   _repair = std::make_unique<store::Repair>(_context, *_store, *_availability, *_ledger, repair, _activity.get());
 
   step("open storage-server");
@@ -389,14 +391,46 @@ void Node::unregister_reachability(const domain::DomainId& domain) {
   _providers.erase(domain);
 }
 
+contract::ReachabilityProvider* Node::registered_provider() const {
+  dannan::contract::Lock lock(_providers_mutex);
+  const auto found = _providers.find(_options.domain.id);
+  return found == _providers.end() ? nullptr : found->second;
+}
+
+void Node::ensure_collector_locked(contract::ReachabilityProvider& provider) {
+  if (_collector && _collector_provider == &provider) return;
+  ledger::CollectorOptions options;
+  static_cast<ledger::CollectorBudgets&>(options) = _options.maintenance.collector;
+  options.garbage_grace = _options.garbage_grace;
+  _collector = std::make_unique<ledger::Collector>(*_ledger, provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
+                                                   ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), pass_time(), pass_wall()},
+                                                   _cache.get(), _options.maintenance.trace);
+  _collector_provider = &provider;
+}
+
+ledger::Collector* Node::collector() {
+  if (_options.maintenance.automatic) throw std::logic_error("the node's maintenance thread owns its collector: an owner's pass needs automatic off");
+  dannan::contract::Lock maintenance(_maintenance_mutex);
+  if (!_repair) return nullptr;
+  auto* provider = registered_provider();
+  if (!provider) return nullptr;
+  ensure_collector_locked(*provider);
+  return _collector.get();
+}
+
+ledger::UnreferencedSince& Node::data_sightings() {
+  dannan::contract::Lock maintenance(_maintenance_mutex);
+  return *_data_sightings;
+}
+
+ledger::UnreferencedSince& Node::control_sightings() {
+  dannan::contract::Lock maintenance(_maintenance_mutex);
+  return *_control_sightings;
+}
+
 bool Node::publish_inventory() {
   dannan::contract::Lock maintenance(_maintenance_mutex);
-  contract::ReachabilityProvider* provider = nullptr;
-  {
-    dannan::contract::Lock lock(_providers_mutex);
-    const auto found = _providers.find(_options.domain.id);
-    if (found != _providers.end()) provider = found->second;
-  }
+  auto* provider = registered_provider();
   if (!provider) return false;
   ledger::NodeHorizonBuilder builder(*provider, _context.logger("dagda.horizon"));
   _ledger->publish(builder.inventory());
@@ -420,12 +454,7 @@ bool Node::higher_class_active() const {
 }
 
 bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop) {
-  contract::ReachabilityProvider* provider = nullptr;
-  {
-    dannan::contract::Lock lock(_providers_mutex);
-    const auto found = _providers.find(_options.domain.id);
-    if (found != _providers.end()) provider = found->second;
-  }
+  auto* provider = registered_provider();
   const auto note = [&](const std::function<void(GcFigures&)>& change) {
     dannan::contract::Lock lock(_gc_figures_mutex);
     change(_gc_figures);
@@ -441,15 +470,7 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
     });
     return true;
   }
-  if (!_collector || _collector_provider != provider) {
-    ledger::CollectorOptions options;
-    static_cast<ledger::CollectorBudgets&>(options) = _options.maintenance.collector;
-    options.garbage_grace = _options.garbage_grace;
-    _collector = std::make_unique<ledger::Collector>(*_ledger, *provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
-                                                     ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), pass_time(), pass_wall()},
-                                                     _cache.get());
-    _collector_provider = provider;
-  }
+  ensure_collector_locked(*provider);
   const bool busy = !forced && higher_class_active();
   ledger::PassDue due;
   due.garbage_due = !busy;
