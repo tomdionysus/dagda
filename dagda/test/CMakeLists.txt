@@ -27,6 +27,7 @@ add_executable(dagda_tests
   heads_cost_test.cpp
   heads_record_test.cpp
   heads_replica_test.cpp
+  heads_seed_test.cpp
   heads_tree_test.cpp
   heads_tree_vectors_test.cpp
   lease_claimed_collection_test.cpp
