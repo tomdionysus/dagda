@@ -249,9 +249,9 @@ struct DistributedStoreOptions {
   std::chrono::milliseconds prompt_retry{30000};
   // Opportunistic local copies queued (cache fill, promotion).
   size_t local_copy_bytes = 256 * 1024 * 1024;
-  // How long work on this node's devices waits for its admission (DATA
-  // credit, a device slot) when its caller named no deadline: background
-  // work, repair and opportunistic copies.
+  // How long work here waits for a control slot. DATA work whose caller named
+  // no deadline (background work, repair, opportunistic copies, a read or a
+  // write with none) waits under the arbiter's no-progress window instead.
   std::chrono::milliseconds admission_wait{30000};
   // Repair's decision trace (each copy pushed, pull and local drop, in
   // decision order), for tests: kind "repair" and the decision.
@@ -583,9 +583,9 @@ class DistributedStore final : public ControlObjectSource {
   std::shared_ptr<TicketRecord> arm_wait(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
                                          WriteDone done);
 
-  // Admission for this node's devices: DATA credit and a DATA slot, waited
-  // for up to `wait`; a control slot.
-  std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::chrono::milliseconds wait,
+  // Admission for this node's devices: DATA credit and a DATA slot, as
+  // store::admit_data takes `wait`; a control slot.
+  std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
                                           std::atomic_bool* cancelled = nullptr) const;
   std::optional<IoReserve::Slot> admit_control() const;
   void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);

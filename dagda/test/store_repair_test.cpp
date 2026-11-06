@@ -65,6 +65,7 @@
 #include "dagda/test/fixtures/store.h"
 #include "dannan/net/scheduler.h"
 #include "dannan/test/fixtures/gate.h"
+#include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda::store {
 namespace {
@@ -72,6 +73,7 @@ namespace {
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
 using dannan::identity::NodeId;
+using dannan::net::CallOutcome;
 using dannan::net::Handled;
 using dannan::net::MessageType;
 using dannan::sched::FrameType;
@@ -972,6 +974,173 @@ TEST(StoreRepair, ABusyPeerStillSaysWhatItDoesNotHold) {
     EXPECT_EQ(a.store().valid_on(peer, {held, absent}), (std::map<ObjectId, bool>{{absent, false}}));
   }
   EXPECT_EQ(ask(), (std::vector<V>{V::intact, V::absent}));
+}
+
+// A node as Macha runs one for these cases: no device reserve, and a wide
+// no-progress window beside limits so small that any absolute limit would end
+// the waits.
+ClusterNodeOptions waits_on_credit() {
+  auto out = options(2, 1, 8ULL * 1024 * 1024);
+  out.device_reserve = false;
+  out.no_progress = 1h;
+  out.admission_wait = 1ms;
+  return out;
+}
+
+// src/cluster/storage_server.cpp at Macha 9a08846 (get_object :195, put_object
+// :237): a served read or write with credit taken waits on, however long the
+// arbiter has been full; the answer comes when credit does.
+TEST(StoreRepair, AServedRequestWaitsForCreditPastAnyLimit) {
+  Cluster cluster;
+  auto& a = cluster.add("a", waits_on_credit());
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto peer = record_of(a, b.id());
+  const auto bytes = pattern(64 * 1024, 41);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  const auto new_bytes = pattern(64 * 1024, 42);
+  const auto new_id = object_id(new_bytes);
+
+  auto& credit = *b.credit();
+  auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  auto read = std::async(std::launch::async,
+                         [&] { return a.context().routes().call_and_wait(peer, message::get_object, message::encode_id(id), FrameType::foreground, 60s); });
+  auto write = std::async(std::launch::async, [&] {
+    return a.context().routes().call_and_wait(peer, message::put_object, message::encode_object(new_id, new_bytes), FrameType::speculative, 60s);
+  });
+  ASSERT_TRUE(wait_until([&] {
+    const auto stats = credit.stats();
+    return stats.foreground_waits == 1 && stats.speculative_waits == 1;
+  }));
+  // Well past the 1 ms any absolute limit would have allowed.
+  EXPECT_EQ(read.wait_for(50ms), std::future_status::timeout);
+  EXPECT_EQ(write.wait_for(0ms), std::future_status::timeout);
+  full.reset();
+  const auto answered_read = read.get();
+  ASSERT_TRUE(answered_read.reply);
+  EXPECT_EQ(answered_read.reply->type, message::object_reply);
+  const auto answered_write = write.get();
+  ASSERT_TRUE(answered_write.reply);
+  EXPECT_FALSE(dannan::net::refusal_of(*answered_write.reply).has_value());
+  EXPECT_TRUE(b.data().has(new_id));
+  EXPECT_EQ(credit.stats().no_progress_failures, 0u);
+}
+
+// The same handlers (:197-198, :239-240): after a stall a waited request answers
+// 503 stopping, and the probe that tries once (have_object :88-89) still answers
+// 503 storage_busy. Both are logged and counted as Macha's are.
+TEST(StoreRepair, AServedRequestAfterAStallAnswersStopping) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto stalls = waits_on_credit();
+  stalls.no_progress = 120s;
+  stalls.time = &time;
+  auto& a = cluster.add("a", waits_on_credit());
+  auto& b = cluster.add("b", stalls);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto peer = record_of(a, b.id());
+  const auto bytes = pattern(64 * 1024, 43);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+
+  auto& credit = *b.credit();
+  const auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  const auto answer = [](const CallOutcome& outcome) {
+    EXPECT_TRUE(outcome.reply);
+    return outcome.reply ? dannan::net::refusal_of(*outcome.reply) : std::nullopt;
+  };
+
+  const auto busy = answer(a.context().routes().call_and_wait(peer, message::have_object, message::encode_id(id), FrameType::speculative, 30s));
+  ASSERT_TRUE(busy.has_value());
+  EXPECT_EQ(busy->status, 503);
+  EXPECT_EQ(busy->code, "storage_busy");
+  EXPECT_EQ(busy->message, "DATA resource admission busy or stopping");
+
+  auto read = std::async(std::launch::async,
+                         [&] { return a.context().routes().call_and_wait(peer, message::get_object, message::encode_id(id), FrameType::foreground, 30s); });
+  ASSERT_TRUE(wait_until([&] { return credit.stats().foreground_waits == 1; }));
+  time.advance(121s);
+  credit.time_advanced();
+  const auto stopped = answer(read.get());
+  ASSERT_TRUE(stopped.has_value());
+  EXPECT_EQ(stopped->status, 503);
+  EXPECT_EQ(stopped->code, "stopping");
+  EXPECT_EQ(stopped->message, "DATA resource admission stopping");
+  EXPECT_EQ(credit.stats().no_progress_failures, 1u);
+  EXPECT_EQ(credit.stats().cancelled_waits, 0u);
+}
+
+// The store's own paths with no caller deadline (src/cluster/distributed_store.cpp
+// at Macha 9a08846: launch :307, put_here :1020, get_shared :1741 with no deadline,
+// ensure_local :2270): each waits for credit under the
+// no-progress window, past write_deadline, read_deadline and admission_wait alike.
+TEST(StoreRepair, AStoreCallWithNoDeadlineWaitsForCreditPastAnyLimit) {
+  Cluster cluster;
+  auto limited = waits_on_credit();
+  limited.store.write_deadline = 1ms;
+  limited.store.read_deadline = 1ms;
+  auto& node = cluster.add("node", limited);
+  node.start();
+  ASSERT_TRUE(cluster.converged());
+  const auto held_bytes = pattern(64 * 1024, 44);
+  const auto held = object_id(held_bytes);
+  ASSERT_TRUE(node.data().put(held, held_bytes));
+
+  auto& credit = *node.credit();
+  uint8_t salt = 45;
+  const auto waits_then_succeeds = [&](const char* what, const std::function<bool()>& call) {
+    SCOPED_TRACE(what);
+    const auto before = credit.stats();
+    const auto waited = before.foreground_waits + before.loader_waits + before.speculative_waits;
+    auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), before.capacity_bytes);
+    ASSERT_TRUE(full.has_value());
+    auto result = std::async(std::launch::async, call);
+    ASSERT_TRUE(wait_until([&] {
+      const auto stats = credit.stats();
+      return stats.foreground_waits + stats.loader_waits + stats.speculative_waits > waited;
+    }));
+    EXPECT_EQ(result.wait_for(50ms), std::future_status::timeout);
+    full.reset();
+    EXPECT_TRUE(result.get());
+  };
+  const auto fresh = [&] { return pattern(64 * 1024, salt++); };
+
+  waits_then_succeeds("get", [&] {
+    ReadOptions read;
+    read.frame = FrameType::foreground;
+    return node.store().get(held, read).has_value();
+  });
+  waits_then_succeeds("put", [&, bytes = fresh()] { return node.store().put(object_id(bytes), bytes); });
+  waits_then_succeeds("put_here", [&, bytes = fresh()] { return node.store().put_here(object_id(bytes), bytes); });
+  waits_then_succeeds("ensure_local", [&] { return node.store().ensure_local(held, true); });
+  EXPECT_EQ(credit.stats().no_progress_failures, 0u);
+  EXPECT_EQ(credit.stats().cancelled_waits, 0u);
+}
+
+// A caller with its own deadline keeps it: the read gives up, as Macha's
+// context.expired() does (:1741), with the window far off.
+TEST(StoreRepair, AStoreReadWithItsOwnDeadlineGivesUpAtIt) {
+  Cluster cluster;
+  auto& node = cluster.add("node", waits_on_credit());
+  node.start();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 49);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(node.data().put(id, bytes));
+  auto& credit = *node.credit();
+  const auto full = credit.try_acquire(DataWorkContext(FrameType::foreground, 0), credit.stats().capacity_bytes);
+  ASSERT_TRUE(full.has_value());
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  read.deadline = 1ms;
+  EXPECT_FALSE(node.store().get(id, read).has_value());
+  EXPECT_EQ(credit.stats().cancelled_waits, 1u);
+  EXPECT_EQ(credit.stats().no_progress_failures, 0u);
 }
 
 // test_min_write_floor_publishes_then_repair_converges_to_r2 (VALIDATION

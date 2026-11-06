@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "dagda/store/data_work.h"
+#include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/store.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
@@ -103,6 +104,129 @@ TEST(StoreDataWork, ACreditDeadlineIsOnTheInjectedTime) {
   EXPECT_EQ(arbiter.stats().cancelled_waits, 1u);
   // The constructor refuses a wait that could be unbounded.
   EXPECT_THROW(DataResourceArbiter(4 * 1024 * 1024, 1024 * 1024, 1, 0ms), std::invalid_argument);
+}
+
+// src/cluster/data_work.hpp at Macha 9a08846, acquire: a wait with no caller
+// deadline runs in no-progress windows, and any release anywhere re-arms the
+// window, so it outlasts any one window while anything moves. The release here
+// is a foreground lease's, which admits nothing to the waiting loader.
+TEST(StoreDataWork, AWaitWithNoDeadlineIsReArmedByAnyRelease) {
+  dannan::test::SteppedTime time;
+  DataResourceArbiter arbiter(4 * 1024 * 1024, 1024 * 1024, 1, 120s, {}, std::nullopt, time);
+  auto held = arbiter.try_acquire(DataWorkContext(FrameType::loader, 1024), 1024);
+  ASSERT_TRUE(held.has_value());
+  auto waiter = std::async(std::launch::async, [&] { return admit_data(&arbiter, nullptr, FrameType::loader, 1024, no_caller_deadline); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 1; }));
+  // Each release lands within a window of the last; together they span many.
+  for (int i = 0; i < 5; ++i) {
+    auto other = arbiter.try_acquire(DataWorkContext(FrameType::foreground, 1024), 1024);
+    ASSERT_TRUE(other.has_value());
+    time.advance(100s);
+    arbiter.time_advanced();
+    other.reset();
+  }
+  EXPECT_EQ(arbiter.stats().no_progress_failures, 0u);
+  EXPECT_EQ(arbiter.stats().cancelled_waits, 0u);
+  EXPECT_EQ(waiter.wait_for(0ms), std::future_status::timeout);
+  held.reset();
+  ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+  const auto admitted = waiter.get();
+  ASSERT_TRUE(admitted.has_value());
+  EXPECT_TRUE(admitted->credit.has_value());
+  EXPECT_EQ(arbiter.stats().no_progress_failures, 0u);
+}
+
+// The same code: a whole window with no release anywhere fails the wait, says
+// so in Macha's words, counts a no-progress failure rather than a cancelled wait,
+// and leaves the arbiter usable.
+TEST(StoreDataWork, AWaitWithNoDeadlineFailsAfterAWholeWindowWithNoRelease) {
+  dannan::test::SteppedTime time;
+  const auto sink = std::make_shared<test::RecordingSink>();
+  DataResourceArbiter arbiter(4 * 1024 * 1024, 1024 * 1024, 1, 120s, {}, dannan::status::ScopedLogger(sink, "credit"), time);
+  auto held = arbiter.try_acquire(DataWorkContext(FrameType::loader, 1024), 1024);
+  ASSERT_TRUE(held.has_value());
+  auto waiter = std::async(std::launch::async, [&] { return admit_data(&arbiter, nullptr, FrameType::loader, 1024, no_caller_deadline); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 1; }));
+  time.advance(121s);
+  arbiter.time_advanced();
+  ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+  EXPECT_FALSE(waiter.get().has_value());
+  const auto stats = arbiter.stats();
+  EXPECT_EQ(stats.no_progress_failures, 1u);
+  EXPECT_EQ(stats.cancelled_waits, 0u);
+  EXPECT_TRUE(
+      sink->saw("credit: DATA credit wait abandoned after 120000 ms with no release anywhere: class=loader bytes=1024 used=1024/4194304 "
+                "lower_active=1/1 waiting_viewers=0 waiting_loaders=0"));
+  held.reset();
+  EXPECT_TRUE(admit_data(&arbiter, nullptr, FrameType::loader, 1024, no_caller_deadline).has_value());
+}
+
+// A caller's own deadline stays absolute: a release does not extend it, and
+// its end is a cancelled wait, not a stall.
+TEST(StoreDataWork, ACallersOwnDeadlineIsNotReArmedByARelease) {
+  dannan::test::SteppedTime time;
+  const auto sink = std::make_shared<test::RecordingSink>();
+  DataResourceArbiter arbiter(4 * 1024 * 1024, 1024 * 1024, 1, 1h, {}, dannan::status::ScopedLogger(sink, "credit"), time);
+  const auto held = arbiter.try_acquire(DataWorkContext(FrameType::loader, 1024), 1024);
+  ASSERT_TRUE(held.has_value());
+  auto waiter = std::async(std::launch::async, [&] { return admit_data(&arbiter, nullptr, FrameType::loader, 1024, 10s); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 1; }));
+  {
+    auto other = arbiter.try_acquire(DataWorkContext(FrameType::foreground, 1024), 1024);
+    ASSERT_TRUE(other.has_value());
+    time.advance(9s);
+    arbiter.time_advanced();
+  }
+  time.advance(2s);
+  arbiter.time_advanced();
+  ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+  EXPECT_FALSE(waiter.get().has_value());
+  EXPECT_EQ(arbiter.stats().cancelled_waits, 1u);
+  EXPECT_EQ(arbiter.stats().no_progress_failures, 0u);
+  EXPECT_FALSE(sink->saw("abandoned"));
+}
+
+// Macha's zero waits for ever; Dagda's arbiter refuses zero, and a facade passes
+// this instead (TODO/2026-11-05-second-cutover.md, S.3). A window that long neither
+// overflows nor ends early, and still ends: it is finite.
+TEST(StoreDataWork, AHundredYearWindowDoesNotOverflow) {
+  constexpr std::chrono::milliseconds century = 24h * 365 * 100;
+  ASSERT_EQ(century.count(), 3153600000000);
+  dannan::test::SteppedTime time;
+  const auto sink = std::make_shared<test::RecordingSink>();
+  DataResourceArbiter arbiter(4 * 1024 * 1024, 1024 * 1024, 1, century, {}, dannan::status::ScopedLogger(sink, "credit"), time);
+  const auto held = arbiter.try_acquire(DataWorkContext(FrameType::loader, 1024), 1024);
+  ASSERT_TRUE(held.has_value());
+  auto waiter = std::async(std::launch::async, [&] { return admit_data(&arbiter, nullptr, FrameType::loader, 1024, no_caller_deadline); });
+  ASSERT_TRUE(wait_until([&] { return arbiter.stats().loader_waits == 1; }));
+  EXPECT_EQ(waiter.wait_for(50ms), std::future_status::timeout);
+  time.advance(24h * 365 * 99);
+  arbiter.time_advanced();
+  EXPECT_EQ(waiter.wait_for(50ms), std::future_status::timeout);
+  EXPECT_EQ(arbiter.stats().no_progress_failures, 0u);
+  time.advance(24h * 365 * 2);
+  arbiter.time_advanced();
+  ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+  EXPECT_FALSE(waiter.get().has_value());
+  EXPECT_EQ(arbiter.stats().no_progress_failures, 1u);
+  EXPECT_TRUE(sink->saw("abandoned after 3153600000000 ms"));
+}
+
+// Macha has no reserve. Where a node has one, a request with no deadline waits
+// for its slot as long as the window: never without a bound.
+TEST(StoreDataWork, ASlotWaitWithNoDeadlineEndsAtTheWindow) {
+  dannan::test::SteppedTime time;
+  DataResourceArbiter arbiter(4 * 1024 * 1024, 1024 * 1024, 0, 120s, {}, std::nullopt, time);
+  IoReserve io(IoReserveOptions{1, 0}, time);
+  const auto slot = io.try_data(DataWorkContext(FrameType::loader, 1024));
+  ASSERT_TRUE(slot.has_value());
+  auto waiter = std::async(std::launch::async, [&] { return admit_data(&arbiter, &io, FrameType::loader, 1024, no_caller_deadline); });
+  ASSERT_TRUE(wait_until([&] { return io.stats().data_waits == 1; }));
+  time.advance(121s);
+  io.time_advanced();
+  ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+  EXPECT_FALSE(waiter.get().has_value());
+  EXPECT_EQ(io.stats().data_refusals, 1u);
 }
 
 // The reserve: with DATA holding every slot it may and more DATA waiting,

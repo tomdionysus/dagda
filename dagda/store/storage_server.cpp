@@ -29,7 +29,11 @@ using dannan::sched::FrameType;
 
 Handled reply(dannan::net::MessageType type, Bytes payload) { return Handled::processed({type, std::move(payload), {}}); }
 
+// A request that tried once, or a control slot not free.
 Handled busy() { return Handled::failed(503, "storage_busy", "DATA resource admission busy or stopping"); }
+// A request that waited with no deadline and still has no admission: the node is
+// stopping, or its arbiter stalled for a whole no-progress window. Macha's words for both.
+Handled gave_up() { return Handled::failed(503, "stopping", "DATA resource admission stopping"); }
 
 }  // namespace
 
@@ -106,7 +110,7 @@ void StorageServer::refresh_loop(std::stop_token stop) {
 }
 
 std::optional<DataAdmission> StorageServer::admit_data(FrameType frame, uint64_t bytes, bool wait) {
-  return store::admit_data(_admission.credit, _admission.io, frame, bytes, wait ? _options.admission_wait : std::chrono::milliseconds::zero());
+  return store::admit_data(_admission.credit, _admission.io, frame, bytes, wait ? no_caller_deadline : std::optional(std::chrono::milliseconds::zero()));
 }
 
 std::optional<IoReserve::Slot> StorageServer::admit_control() { return store::admit_control(_admission.io, _options.admission_wait); }
@@ -219,7 +223,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     if (type == message::get_object) {
       const auto id = message::decode_id(request.payload);
       auto admitted = admit_data(frame, extent, true);
-      if (!admitted) return busy();
+      if (!admitted) return gave_up();
       // Not found is final only when no offline backend could hold it.
       const bool every_backend = _data.every_backend_online();
       auto data = _data.get(id);
@@ -248,7 +252,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       // costs no admission.
       if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
       const auto admitted = admit_data(frame, object.data.size(), true);
-      if (!admitted) return busy();
+      if (!admitted) return gave_up();
       _activity.note(frame, object.data.size());
       if (!_data.has(object.id)) _context.events().notify(_storage_event);
       if (type == message::put_object_deferred) {
@@ -350,7 +354,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       }
       // The claims' journal and the unlinks: DATA device work.
       const auto admitted = admit_data(frame, extent, true);
-      if (!admitted) return busy();
+      if (!admitted) return gave_up();
       answer.objects = remove_here({_data, _claims, _ledger, _cache}, std::move(remove.ids), remove.observed);
       advertise();
       return reply(message::remove_objects_reply, message::encode_removal(answer));

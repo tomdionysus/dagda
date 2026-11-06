@@ -62,7 +62,9 @@ struct AdmissionOptions {
   uint64_t data_inflight_bytes = 128ULL * 1024 * 1024;
   uint64_t foreground_reserve_bytes = 32ULL * 1024 * 1024;
   uint64_t background_concurrency = 4;
-  std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
+  // Positive: a facade given Macha's 0 passes the value named in S.3 of
+  // TODO/2026-11-05-second-cutover.md.
+  std::chrono::milliseconds no_progress = store::default_no_progress;
   // Background work admitted while the DATA device is slow.
   uint64_t min_background_under_pressure = 1;
   // What counts as slow, Macha's dht.io_pressure_*. A zero slowdown_percent turns the

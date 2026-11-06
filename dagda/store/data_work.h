@@ -30,6 +30,9 @@
 // enters the reserve, whose DATA share leaves it room.
 namespace dagda::store {
 
+// Macha's dht.data_credit_no_progress_deadline_ms default.
+inline constexpr std::chrono::milliseconds default_no_progress{120000};
+
 // Provenance and bounds for DATA-plane work (Macha's DataWorkContext): a
 // class other than control, a deadline on the injected time, a cancellation,
 // and a no-progress budget distinct from the deadline: slow work is not
@@ -154,6 +157,7 @@ class DataResourceArbiter {
   void time_advanced();
   // The time a work's deadline is set on.
   dannan::contract::TimePoint now() const { return _time.now(); }
+  std::chrono::milliseconds no_progress_deadline() const noexcept { return _no_progress_deadline; }
 
  private:
   static bool foreground(dannan::sched::FrameType frame) noexcept;
@@ -302,12 +306,17 @@ struct DataAdmission {
   std::optional<IoReserve::Slot> io;
 };
 
+// The wait of a caller that named no deadline.
+inline constexpr std::optional<std::chrono::milliseconds> no_caller_deadline = std::nullopt;
+
 // Admits DATA work of `frame` for `bytes` on this node's devices: credit,
-// then a slot, each waited for up to `wait` (zero: tried once). A null
-// arbiter or reserve admits at once. Nothing when either refuses. Throws
-// std::invalid_argument for the control frame.
+// then a slot. `wait` is the caller's own deadline, each waited for up to it;
+// zero tries once. With no_caller_deadline the credit wait runs under the
+// arbiter's no-progress window, as Macha's does, and the slot is waited for
+// one such window. A null arbiter or reserve admits at once. Nothing when
+// either refuses. Throws std::invalid_argument for the control frame.
 std::optional<DataAdmission> admit_data(DataResourceArbiter* credit, IoReserve* io, dannan::sched::FrameType frame, uint64_t bytes,
-                                        std::chrono::milliseconds wait, std::atomic_bool* cancelled = nullptr);
+                                        std::optional<std::chrono::milliseconds> wait, std::atomic_bool* cancelled = nullptr);
 // A control slot, waited for up to `wait`; an empty slot when there is no
 // reserve.
 std::optional<IoReserve::Slot> admit_control(IoReserve* io, std::chrono::milliseconds wait);

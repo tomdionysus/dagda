@@ -23,10 +23,14 @@ using dannan::sched::WorkClass;
 // a caller's cancellation flag.
 constexpr std::chrono::milliseconds cancellation_poll{25};
 
-// The wait from `now` to `until`, at least a millisecond, and no longer than
-// the cancellation poll when the work can be cancelled.
+// However far off a deadline is, one sleep is no longer than this: a very long
+// window never reaches the platform's wait.
+constexpr std::chrono::hours longest_sleep{1};
+
+// The wait from `now` to `until`, at least a millisecond, at most longest_sleep,
+// and no longer than the cancellation poll when the work can be cancelled.
 std::chrono::nanoseconds slice(TimePoint now, TimePoint until, bool cancellable) {
-  auto left = std::max<std::chrono::nanoseconds>(until - now, std::chrono::milliseconds(1));
+  auto left = std::clamp<std::chrono::nanoseconds>(until - now, std::chrono::milliseconds(1), longest_sleep);
   if (cancellable) left = std::min<std::chrono::nanoseconds>(left, cancellation_poll);
   return left;
 }
@@ -175,10 +179,11 @@ std::optional<DataResourceArbiter::Lease> DataResourceArbiter::acquire(const Dat
           ++_no_progress_failures;
           --waiters;
           _changed.notify_all();
+          // Macha's line word for word, its field names too: what an operator's search finds.
           abandoned = "DATA credit wait abandoned after " + std::to_string(_no_progress_deadline.count()) +
                       " ms with no release anywhere: class=" + dannan::sched::frame_type_name(frame) + " bytes=" + std::to_string(bytes) +
-                      " used=" + std::to_string(_used_bytes) + "/" + std::to_string(_capacity_bytes) + " background_active=" + std::to_string(_lower_active) +
-                      "/" + std::to_string(_background_concurrency) + " waiting_foreground=" + std::to_string(_waiting_foreground) +
+                      " used=" + std::to_string(_used_bytes) + "/" + std::to_string(_capacity_bytes) + " lower_active=" + std::to_string(_lower_active) + "/" +
+                      std::to_string(_background_concurrency) + " waiting_viewers=" + std::to_string(_waiting_foreground) +
                       " waiting_loaders=" + std::to_string(_waiting_loaders);
           break;
         }
@@ -394,17 +399,18 @@ IoReserveStats IoReserve::stats() const {
   return out;
 }
 
-std::optional<DataAdmission> admit_data(DataResourceArbiter* credit, IoReserve* io, FrameType frame, uint64_t bytes, std::chrono::milliseconds wait,
-                                        std::atomic_bool* cancelled) {
+std::optional<DataAdmission> admit_data(DataResourceArbiter* credit, IoReserve* io, FrameType frame, uint64_t bytes,
+                                        std::optional<std::chrono::milliseconds> wait, std::atomic_bool* cancelled) {
   DataAdmission out;
   if (credit) {
-    const bool waits = wait > std::chrono::milliseconds::zero();
-    const DataWorkContext work(frame, bytes, waits ? credit->now() + wait : TimePoint{}, cancelled);
-    out.credit = waits ? credit->acquire(work, bytes) : credit->try_acquire(work, bytes);
+    // No deadline here is the arbiter's no-progress window, not an unbounded wait.
+    const bool once = wait && *wait <= std::chrono::milliseconds::zero();
+    const DataWorkContext work(frame, bytes, wait && !once ? credit->now() + *wait : TimePoint{}, cancelled);
+    out.credit = once ? credit->try_acquire(work, bytes) : credit->acquire(work, bytes);
     if (!out.credit) return std::nullopt;
   }
   if (io) {
-    out.io = io->data(DataWorkContext(frame, bytes, {}, cancelled), wait);
+    out.io = io->data(DataWorkContext(frame, bytes, {}, cancelled), wait.value_or(credit ? credit->no_progress_deadline() : default_no_progress));
     if (!out.io) return std::nullopt;
   }
   if (!credit && !io) (void)DataWorkContext(frame, bytes);

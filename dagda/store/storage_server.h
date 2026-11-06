@@ -42,9 +42,9 @@ struct StorageServerOptions {
   bool hosts_extents = true;
   // How often the pool is refreshed and its figures advertised.
   std::chrono::milliseconds refresh_interval{10000};
-  // How long a served request waits for its admission (DATA credit, a
-  // device slot) before it is refused 503 storage_busy. Macha's waited for
-  // the arbiter's no-progress window; every wait here has a deadline.
+  // How long a served request waits for a control slot before it is refused
+  // 503 storage_busy. A DATA request names no deadline: it waits under the
+  // arbiter's no-progress window, as Macha's does.
   std::chrono::milliseconds admission_wait{30000};
   // The domain served: its name is the prefix a write or a claim is checked
   // under when the request names none (the maintainer, 2026-11-04 evening).
@@ -83,8 +83,10 @@ struct StorageServerAdmission {
 // store or the claims (put_control_object, get_control_object,
 // have_control_objects, retain_objects) holds a control slot and never DATA
 // credit (law 1). A trie question reads the state device only and takes
-// neither. Waits are bounded by admission_wait; a probe that must not wait
-// (have_object, have_valid_objects, delete_object) tries once.
+// neither. A read or write of DATA (get_object, put_object, remove_objects)
+// waits under the arbiter's no-progress window and fails 503 stopping, as
+// Macha's does; a probe that must not wait (have_object, have_objects,
+// have_valid_objects, delete_object) tries once and fails 503 storage_busy.
 //
 // The trie questions (requirement L7): a root question pins the node's
 // current held union under its hash, at most four, each dropped two minutes
