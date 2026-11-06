@@ -189,7 +189,10 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
 // before the first write, a crash finished by a second run. Only domain v1, and
 // it accepts a v18 marker too, so a forward run that crashed can be taken back.
 // Objects are byte for byte as Macha wrote them; a ledger holds what it held,
-// sealed under a fresh nonce. Waits on the devices; single owner.
+// sealed under a fresh nonce. From its first write to its last the state's
+// marker says it is on its way back, which the store and a forward run refuse,
+// so a crash can only be finished by running it again. Waits on the devices;
+// single owner.
 MigrationReport migrate_state_back(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends,
                                    const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody,
                                    const MigrationOptions& options = {});

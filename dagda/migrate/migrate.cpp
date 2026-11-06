@@ -778,6 +778,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     say(options, report.summary());
     return report;
   }
+  if (layout == store::state_layout_going_back)
+    throw MigrationRefused("state " + state.string() + " stopped on its way back to layout v18: finish that first, with --reverse");
   if (layout != state_layout_v18) throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor this domain's v19");
 
   struct BackendFound {
@@ -916,7 +918,7 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   // already v19, and this finishes going back from it. Every record is looked
   // at, so a disk already all v18 is reported as such.
   const auto layout = read_text(layout_marker);
-  if (layout != store::state_layout_marker(v19) && layout != state_layout_v18)
+  if (layout != store::state_layout_marker(v19) && layout != state_layout_v18 && layout != store::state_layout_going_back)
     throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor domain v1's v19; only Macha's domain goes back");
 
   const auto v18_marker = [](const dannan::identity::NodeId& node, const dannan::identity::NodeId& token) {
@@ -1000,6 +1002,10 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   std::vector<std::filesystem::path> backend_paths;
   for (const auto& backend : found) backend_paths.push_back(backend.path);
   remove_temporaries(state, backend_paths, options);
+  // From the first write to the last the state is part v18 and part v19. Under
+  // either marker Macha or the store would open it and read the other part as
+  // corrupt, and a forward run would call it done.
+  if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_back) + "\n");
   for (const auto& backend : found) {
     say(options, "backend " + backend.path.string());
     migrate_objects(backend.path, *domain_key, deriver, v19, report, proved, options);
@@ -1036,7 +1042,13 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
       if (const auto parsed = parse_v19(text, mirror)) rewrite(mirror, v18_marker(parsed->node, parsed->token));
     }
   }
-  if (layout != state_layout_v18) rewrite(layout_marker, std::string(state_layout_v18) + "\n");
+  if (layout != state_layout_v18) {
+    rewrite(layout_marker, std::string(state_layout_v18) + "\n");
+  } else if (!options.dry_run) {
+    // v18 when the run began (a forward run's crash, or nothing to do): it says
+    // so again, which is no change to report.
+    dannan::identity::durable_replace_file(layout_marker, std::string(state_layout_v18) + "\n");
+  }
   say(options, report.summary());
   return report;
 }

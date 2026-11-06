@@ -70,7 +70,9 @@ as it was, by file and id.
 runs the same way in the other direction with the same rules: no second copy,
 every refusal before the first write, a crash finished by a second run. It also
 accepts a v18 marker, so a forward run that crashed part-way can be taken back
-instead of finished. Only Macha's domain goes back. Objects and markers come
+instead of finished. From its first write to its last the state's marker says it
+is on its way back: the store and a forward run refuse it, since part of it is
+each layout, and running `--reverse` again finishes it. Only Macha's domain goes back. Objects and markers come
 back byte for byte as Macha wrote them; a ledger holds what it held, sealed under
 a fresh nonce. What Dagda wrote while the node ran v19 goes back with the rest.
 
