@@ -178,7 +178,7 @@ void Node::open() {
   const auto cache_bytes = _options.ledger_cache_bytes;
   const auto& self = _context.identity();
 
-  _activity = std::make_unique<dannan::status::ActivityClocks>(&_context.time().source());
+  _activity = std::make_unique<dannan::status::ActivityClocks>(&pass_time());
 
   step("open storage-pool");
   auto pool = _options.pool;
@@ -236,11 +236,14 @@ void Node::open() {
       _context, store::DistributedStore::Stores{*_data, *_control, *_cache, *_claims, _credit.get(), _io.get(), _ledger.get(), _activity.get()}, store_options);
 
   step("open availability");
-  _availability = std::make_unique<store::AvailabilityService>(_context, *_ledger, _options.availability);
+  auto availability = _options.availability;
+  if (!availability.time) availability.time = _options.maintenance.time;
+  _availability = std::make_unique<store::AvailabilityService>(_context, *_ledger, availability);
 
   step("open repair");
   auto repair = _options.repair;
   repair.extent_size = store_options.extent_size;
+  if (!repair.time) repair.time = _options.maintenance.time;
   _repair = std::make_unique<store::Repair>(_context, *_store, *_availability, *_ledger, repair, _activity.get());
 
   step("open storage-server");
@@ -289,7 +292,7 @@ void Node::open() {
       if (in >> due && due) _scrub_due_unix_ms = due;
     }
     if (!_scrub_due_unix_ms) {
-      _scrub_due_unix_ms = _options.wall->unix_ms() + static_cast<uint64_t>(std::max<int64_t>(1, _options.maintenance.scrub_interval.count()));
+      _scrub_due_unix_ms = pass_wall().unix_ms() + static_cast<uint64_t>(std::max<int64_t>(1, _options.maintenance.scrub_interval.count()));
       persist_scrub_due();
     }
     dannan::contract::Lock figures(_gc_figures_mutex);
@@ -398,6 +401,10 @@ bool Node::publish_inventory() {
 
 // ---- Maintenance ------------------------------------------------------------
 
+const dannan::contract::TimeSource& Node::pass_time() const { return _options.maintenance.time ? *_options.maintenance.time : _context.time().source(); }
+
+const dannan::contract::WallClock& Node::pass_wall() const { return _options.maintenance.wall ? *_options.maintenance.wall : *_options.wall; }
+
 bool Node::higher_class_active() const {
   auto& activity = *_activity;
   const auto quiet = _options.repair.foreground_quiet;
@@ -430,9 +437,9 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
     ledger::CollectorOptions options;
     static_cast<ledger::CollectorBudgets&>(options) = _options.maintenance.collector;
     options.garbage_grace = _options.garbage_grace;
-    _collector = std::make_unique<ledger::Collector>(
-        *_ledger, *provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
-        ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), _context.time().source(), *_options.wall}, _cache.get());
+    _collector = std::make_unique<ledger::Collector>(*_ledger, *provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
+                                                     ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), pass_time(), pass_wall()},
+                                                     _cache.get());
     _collector_provider = provider;
   }
   const bool busy = !forced && higher_class_active();
@@ -522,7 +529,7 @@ void Node::persist_scrub_due() {
 
 LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
   LocalStages out;
-  const auto now = _context.time().source().now();
+  const auto now = pass_time().now();
   const double seconds = _local_at ? std::max(0.0, std::chrono::duration<double>(now - *_local_at).count()) : 0.0;
   _local_at = now;
   const bool busy = !forced && higher_class_active();
@@ -535,7 +542,7 @@ LocalStages Node::local_stages_locked(bool forced, std::stop_token stop) {
   const double extent = static_cast<double>(_options.store.extent_size);
   const double burst = std::max(extent, bandwidth * 5.0);
   _local_credit = forced ? burst : std::min(burst, _local_credit + rate * seconds);
-  const auto wall_ms = _options.wall->unix_ms();
+  const auto wall_ms = pass_wall().unix_ms();
   const bool scrub_due = policy.scrub_fraction > 0.0 && wall_ms >= _scrub_due_unix_ms;
   // Outside a campaign nothing is banked, so a due date is not a burst.
   if (!scrub_due)
@@ -651,7 +658,7 @@ MaintenanceReport Node::run_maintenance_once() {
 }
 
 void Node::maintenance_loop(std::stop_token stop) {
-  const auto& time = _context.time().source();
+  const auto& time = pass_time();
   const auto interval = std::max(_options.maintenance.interval, std::chrono::milliseconds(1));
   const auto gc_interval = std::max(_options.maintenance.gc_interval, interval);
   auto next_repair = time.now();

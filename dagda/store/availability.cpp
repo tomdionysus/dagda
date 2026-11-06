@@ -93,7 +93,11 @@ class RemoteTrie final : public ledger::TrieSource {
 }  // namespace
 
 AvailabilityService::AvailabilityService(dannan::Context& context, const contract::ObjectLedger& ledger, AvailabilityOptions options)
-    : _context(context), _ledger(ledger), _options(options), _time(context.time().source()), _logger(context.logger("dagda.availability")) {}
+    : _context(context),
+      _ledger(ledger),
+      _options(options),
+      _time(options.time ? *options.time : context.time().source()),
+      _logger(context.logger("dagda.availability")) {}
 
 bool AvailabilityService::unavailable(const ObjectId& id) const {
   const auto current = _snapshot.handle();
