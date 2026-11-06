@@ -61,25 +61,30 @@ needs them. Tell the Macha session when the answer is Yes.
    journal lines mapped against the goldens.
 9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
 10. Dagda's own measurements on the Pis against Macha's baselines at 0.93.4, `../macha/TODO/2026-11-06-pi-baselines.md`, raw JSON in
-    `../macha/build/baselines/results/` (uncommitted). Its caveats: live-b was still filling, and live-a crashed four times from 17:18Z
-    to 18:11Z with heap corruption, cause not found, so its figures may not be a healthy 0.93.4's. The maintainer has not ruled on chasing it or on the
-    comparison rule. No baseline: direct store put and get on USB, claim journal latency alone, GC, scrub and compaction rates; the large
-    publication test is only "over 120 s". If the fault is in code Dagda moved, Dagda has it too, so a Yes waits on its cause.
+    `../macha/build/baselines/results/` (uncommitted). Committed at Macha `9020425`. Its caveats: live-b was still filling, and live-a crashed four times from 17:18Z to 18:11Z with heap
+    corruption, cause not found, so its figures may not be a healthy 0.93.4's. The maintainer (relayed): the corruption is left until after the port, so
+    no sanitizer result comes from Macha before then. The comparison rule is not yet ruled. No baseline: direct store put and get on USB, claim journal latency alone, GC, scrub and compaction rates; the large
+    publication test is only "over 120 s". The report says plainly that the cause is unknown, that the stacks show only where the damage surfaced,
+    that the one store frame is `ObjectTrie` under `StoragePool::held_view`, and what Dagda did and did not check; none of that clears or
+    implicates the moved code.
 11. The capabilities report.
 
 **Macha's freeze exception (the maintainer, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
-as 0.93.5, not yet committed: a frame that does not open no longer ends `load_history`'s scan, it looks forward byte by byte for the
+as 0.93.5, committed at Macha `9153011` on develop, laptop gate only, not tagged and not on the nodes: a frame that does not open no longer ends `load_history`'s scan, it looks forward byte by byte for the
 next frame that authenticates and leaves the damaged bytes in the file; a length over 2 GiB no longer throws; only when nothing later
-authenticates is the rest a torn tail. Dagda mirrors it when the commit lands, with `test_a_damaged_history_frame_loses_only_that_frame`
-and `test_a_torn_history_tail_is_still_cut`. The live nodes stay on 0.93.4 for the baselines. Until then Dagda's replica has the old
+authenticates is the rest a torn tail. Dagda mirrors it from that commit, with `test_a_damaged_history_frame_loses_only_that_frame`
+and `test_a_torn_history_tail_is_still_cut`. The live nodes stay on 0.93.4 for the baselines. Until the mirror merges Dagda's replica has the old
 shape. The other two read as unreachable and are reproduced: the cache's byte count at `reanchor_history`, and PREPARE then COMMIT with
 no certificate. `set-aside.meta` cannot be cut on Macha's bytes; the report names it as not shown there.
-No on-disk or wire form changes in 0.93.5, so the report names it: forms cut at `9a08846`, behaviour baseline the 0.93.5 commit once it lands,
+No on-disk or wire form changes in 0.93.5, so the report names it: forms cut at `9a08846`, behaviour baseline `9153011`,
 and the port branches from that commit. A `history.log` may now hold damaged bytes between good frames, which `dagda-migrate` and the
 comparison tool must read. New words for the journal mapping: Status reads 0.93.5, a torn tail's `reason=` reads "last frame failed
 AES-GCM authentication", and "record too large" is gone from this path.
 
-**Asked of the maintainer (2026-11-06), all answered above but R5, the baselines, which Macha runs now the TV import is cancelled.**
+**The maintainer (relayed, 2026-11-06): Dannan's tag and push are approved.** Dannan sends the tag when its last small commit is gated, which unblocks
+`feature/class-waits`.
+
+**Asked of the maintainer (2026-11-06), all answered above but the baselines' comparison rule.**
 
 ## The earlier table, kept for its gates and details; the goal above decides the order
 
