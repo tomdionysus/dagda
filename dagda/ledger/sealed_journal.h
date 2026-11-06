@@ -116,6 +116,25 @@ class SealedJournal {
   static Rekeyed rekey(const std::filesystem::path& path, const domain::StorageKey& from, const domain::StorageKey& to, std::array<uint8_t, 8> aad,
                        uint32_t max_read_frame);
 
+  struct ReadOnlyScan {
+    uint64_t frames = 0;
+    // Bytes after the last frame that opened.
+    uint64_t tail_bytes = 0;
+    // A whole frame would not open there, or `visit` threw: damage, or another
+    // key. A tail that is merely short is a torn append.
+    bool stopped_at_a_whole_frame = false;
+  };
+  // What replay would read, from a file that is left exactly as it is: nothing
+  // is created, truncated or written, and a missing file holds no frames.
+  // `visit` is called with each frame's plaintext. Throws std::runtime_error if
+  // the file cannot be read. Waits on the state device.
+  static ReadOnlyScan read_only(const std::filesystem::path& path, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame,
+                                const std::function<void(std::span<const uint8_t>)>& visit);
+  // The plaintext of the frame at `offset` of the open file `fd`, `size` bytes
+  // long. Throws std::runtime_error if it is not a whole frame that opens. Waits
+  // on the state device.
+  static Bytes read_only_frame(int fd, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame, uint64_t size, uint64_t offset);
+
   // Frames replayed or appended since open; bytes() is the file's length.
   uint64_t frames() const noexcept { return _frames; }
   uint64_t bytes() const noexcept { return _bytes; }

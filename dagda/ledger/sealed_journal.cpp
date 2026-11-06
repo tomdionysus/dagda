@@ -282,6 +282,51 @@ SealedJournal::Rekeyed SealedJournal::rekey(const std::filesystem::path& path, c
   return out;
 }
 
+SealedJournal::ReadOnlyScan SealedJournal::read_only(const std::filesystem::path& path, const domain::StorageKey& key, std::array<uint8_t, 8> aad,
+                                                     uint32_t max_read_frame, const std::function<void(std::span<const uint8_t>)>& visit) {
+  ReadOnlyScan out;
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    if (errno == ENOENT) return out;
+    throw std::runtime_error("cannot open journal " + path.string() + ": " + std::strerror(errno));
+  }
+  struct stat st{};
+  if (::fstat(fd, &st) != 0 || st.st_size < 0) {
+    const auto saved = errno;
+    ::close(fd);
+    throw std::runtime_error("cannot stat journal " + path.string() + ": " + std::strerror(saved));
+  }
+  const auto size = static_cast<uint64_t>(st.st_size);
+  uint64_t offset = 0;
+  try {
+    while (offset + frame_header <= size) {
+      std::array<uint8_t, 4> length_bytes{};
+      if (!pread_all(fd, length_bytes, offset)) throw std::runtime_error("cannot read journal " + path.string());
+      const uint32_t length = read_be32(length_bytes.data());
+      if (length > max_read_frame || offset + frame_header + length > size) break;
+      try {
+        visit(read_frame(fd, key, aad, max_read_frame, size, offset));
+      } catch (const std::exception&) {
+        out.stopped_at_a_whole_frame = true;
+        break;
+      }
+      offset += frame_header + length;
+      ++out.frames;
+    }
+  } catch (...) {
+    ::close(fd);
+    throw;
+  }
+  ::close(fd);
+  out.tail_bytes = size - offset;
+  return out;
+}
+
+Bytes SealedJournal::read_only_frame(int fd, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame, uint64_t size,
+                                     uint64_t offset) {
+  return read_frame(fd, key, aad, max_read_frame, size, offset);
+}
+
 void SealedJournal::reset() {
   close_fd();
   dannan::identity::durable_replace_file(_path, {});

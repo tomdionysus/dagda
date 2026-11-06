@@ -7,6 +7,12 @@
 
 #include "dagda/ledger/object_trie.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <list>
@@ -439,27 +445,7 @@ ObjectTrie::ObjectTrie(std::filesystem::path dir, std::shared_ptr<const domain::
   _nodes = open_nodes(_generation);
   if (!_root.empty()) _root.node = load(_root);
   _journal = std::make_unique<SealedJournal>(_dir / "journal.log", _key, journal_aad, max_frame, _logger);
-  _journal->replay(
-      [&](std::span<const uint8_t> plain) {
-        Reader reader(plain);
-        const auto version = reader.u8();
-        const bool u64_values = version == format1_journal_version;
-        if (version != journal_version && !u64_values) throw DecodeError("object trie journal of another version");
-        const auto count = reader.u32();
-        if (count > changes_per_frame) throw DecodeError("object trie journal frame too large");
-        std::vector<Change> changes;
-        changes.reserve(count);
-        for (uint32_t i = 0; i < count; ++i) {
-          Change change;
-          change.id.bytes = reader.fixed<32>();
-          if (reader.u8()) change.value = u64_values ? format1_value(reader.u64()) : reader.bytes(value_max);
-          if (!changes.empty() && !(changes.back().id < change.id)) throw DecodeError("object trie journal frame out of order");
-          changes.push_back(change);
-        }
-        reader.finish();
-        apply_unjournaled(changes);
-      },
-      max_frame, "object trie journal");
+  _journal->replay([&](std::span<const uint8_t> plain) { apply_unjournaled(decode_journal_frame(plain)); }, max_frame, "object trie journal");
   if (_format1) {
     // Each value becomes its eight big-endian bytes, in the current format.
     auto records = next(std::nullopt, _root.count);
@@ -575,6 +561,109 @@ void ObjectTrie::rekey(std::shared_ptr<const domain::StorageKey> key) {
   rewrite(std::move(key));
   // The emptied journal appends under the new key from here.
   _journal = std::make_unique<SealedJournal>(_dir / "journal.log", _key, journal_aad, max_frame, _logger);
+}
+
+std::vector<ObjectTrie::Change> ObjectTrie::decode_journal_frame(std::span<const uint8_t> plain) {
+  Reader reader(plain);
+  const auto version = reader.u8();
+  const bool u64_values = version == format1_journal_version;
+  if (version != journal_version && !u64_values) throw DecodeError("object trie journal of another version");
+  const auto count = reader.u32();
+  if (count > changes_per_frame) throw DecodeError("object trie journal frame too large");
+  std::vector<Change> changes;
+  changes.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    Change change;
+    change.id.bytes = reader.fixed<32>();
+    if (reader.u8()) change.value = u64_values ? format1_value(reader.u64()) : reader.bytes(value_max);
+    if (!changes.empty() && !(changes.back().id < change.id)) throw DecodeError("object trie journal frame out of order");
+    changes.push_back(change);
+  }
+  reader.finish();
+  return changes;
+}
+
+ObjectTrie::ReadOnlyWalk ObjectTrie::read_only(const std::filesystem::path& dir, const domain::StorageKey& key,
+                                               const std::function<void(const ObjectId&, std::span<const uint8_t>)>& visit) {
+  constexpr uint32_t lenient = 64U * 1024U * 1024U;
+  ReadOnlyWalk out;
+  uint64_t generation = 0;
+  bool format1 = false;
+  Child root;
+  if (std::ifstream in(dir / "root", std::ios::binary); in) {
+    const Bytes bytes{std::istreambuf_iterator<char>(in), {}};
+    Reader reader(bytes);
+    const auto magic = reader.fixed<8>();
+    format1 = magic == format1_root_magic;
+    if (magic != root_magic && !format1) throw DecodeError("object trie root of another format");
+    generation = reader.u64();
+    root.offset = reader.u64();
+    root.size = reader.u32();
+    root.count = reader.u64();
+    root.hash.bytes = reader.fixed<32>();
+    (void)reader.u64();
+    const auto check = reader.fixed<32>();
+    reader.finish();
+    if (sha256(std::span<const uint8_t>(bytes.data(), bytes.size() - 32)).bytes != check) throw DecodeError("object trie root is damaged");
+  }
+
+  // A later frame's change to an id wins, as replay's order gives it.
+  std::map<ObjectId, std::optional<Bytes>> journal;
+  const auto scan = SealedJournal::read_only(dir / "journal.log", key, journal_aad, lenient, [&](std::span<const uint8_t> plain) {
+    for (auto& change : decode_journal_frame(plain)) journal[change.id] = std::move(change.value);
+  });
+  out.journal_frames = scan.frames;
+  out.journal_tail_bytes = scan.tail_bytes;
+  out.journal_damaged = scan.stopped_at_a_whole_frame;
+
+  auto pending = journal.begin();
+  const auto emit = [&](const ObjectId& id, std::span<const uint8_t> value) {
+    visit(id, value);
+    ++out.records;
+  };
+  const auto saved_record = [&](const Record& record) {
+    for (; pending != journal.end() && pending->first < record.first; ++pending)
+      if (pending->second) emit(pending->first, *pending->second);
+    if (pending != journal.end() && pending->first == record.first) {
+      if (pending->second) emit(pending->first, *pending->second);
+      ++pending;
+      return;
+    }
+    emit(record.first, record.second);
+  };
+
+  if (root.count) {
+    const auto nodes = dir / ("nodes-" + std::to_string(generation) + ".bin");
+    const int fd = ::open(nodes.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) throw std::runtime_error("cannot open " + nodes.string() + ": " + std::strerror(errno));
+    const struct Closing {
+      int fd;
+      ~Closing() { ::close(fd); }
+    } closing{fd};
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 || st.st_size < 0) throw std::runtime_error("cannot stat " + nodes.string());
+    const auto size = static_cast<uint64_t>(st.st_size);
+    uint64_t saved = 0;
+    std::function<void(const Child&)> walk = [&](const Child& child) {
+      const auto node = decode(SealedJournal::read_only_frame(fd, key, nodes_aad, lenient, size, child.offset), format1);
+      if (node->hash != child.hash || node->count != child.count)
+        throw std::runtime_error("object trie node at " + std::to_string(child.offset) + " of " + nodes.string() + " does not match its parent");
+      if (node->leaf) {
+        saved += node->records.size();
+        for (const auto& record : node->records) saved_record(record);
+        return;
+      }
+      for (const auto& below : node->children)
+        if (!below.empty()) walk(below);
+    };
+    walk(root);
+    if (saved != root.count)
+      throw std::runtime_error("object trie " + dir.string() + " holds " + std::to_string(saved) + " records where its root says " +
+                               std::to_string(root.count));
+  }
+  for (; pending != journal.end(); ++pending)
+    if (pending->second) emit(pending->first, *pending->second);
+  return out;
 }
 
 std::optional<bool> ObjectTrie::probe(const std::filesystem::path& dir, const domain::StorageKey& key) {
