@@ -17,6 +17,10 @@
 // checkpoint.meta gives its result, which the replica's replay then holds to the
 // frame's hash. A delta frame with no such record is counted, not claimed.
 //
+// A real state with a damaged region does not exist among the fixtures: 0.93.4 cut such
+// a file at open, and no fixture ran 0.93.5. So the damage below is a test's, done to a
+// copy of real bytes, as Macha's 9153011 reads it.
+//
 // No frame of journal.log is proved here: 0.93.4 writes that file only empty, so no
 // fixture holds one (Macha's metadata.cpp:4039, :4070). The reader's bytes rest on
 // Macha's two cases, at the bytes they build.
@@ -24,12 +28,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
@@ -414,7 +420,7 @@ TEST_P(HeadsReplicaCheckedIn, EveryFrameOpensAndReplays) {
   const auto key = fixture_key();
   const auto counts = prove_state(*key, key, dir.path());
   EXPECT_GT(counts.frames, 0U);
-  EXPECT_EQ(counts.heads, 1U);
+  EXPECT_EQ(counts.heads, GetParam() == "twoheads" ? 2U : 1U);
   if (GetParam() == "state-scratch") {
     // Macha's README: 13 frames, 12 full and 1 delta, generation 8.
     EXPECT_EQ(counts.frames, 13U);
@@ -430,10 +436,14 @@ TEST_P(HeadsReplicaCheckedIn, EveryFrameOpensAndReplays) {
     EXPECT_EQ(counts.frames, 9U);
     EXPECT_EQ(counts.delta, 1U);
     EXPECT_EQ(counts.deltas_replayed, 1U);
+  } else if (GetParam() == "twoheads") {
+    // Macha's README: a crash with two accepted heads at generation 4, five whole frames.
+    EXPECT_EQ(counts.frames, 5U);
+    EXPECT_EQ(counts.delta, 0U);
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(Macha0934, HeadsReplicaCheckedIn, testing::Values("state-scratch", "branch", "delete", "seed"));
+INSTANTIATE_TEST_SUITE_P(Macha0934, HeadsReplicaCheckedIn, testing::Values("state-scratch", "branch", "delete", "seed", "twoheads"));
 
 struct FixtureState {
   const char* fixture;
@@ -441,6 +451,7 @@ struct FixtureState {
   size_t frames;
   size_t delta;
   size_t deltas_replayed;
+  size_t heads = 1;
 };
 
 class HeadsReplicaFixture : public testing::TestWithParam<FixtureState> {};
@@ -457,7 +468,7 @@ TEST_P(HeadsReplicaFixture, EveryFrameOpensAndReplays) {
   EXPECT_EQ(counts.frames, GetParam().frames);
   EXPECT_EQ(counts.delta, GetParam().delta);
   EXPECT_EQ(counts.deltas_replayed, GetParam().deltas_replayed);
-  EXPECT_EQ(counts.heads, 1U);
+  EXPECT_EQ(counts.heads, GetParam().heads);
   const auto frames = walk_frames(*key, read_file(directory / "history.log"));
   expect_matches_dump(frames, root / (std::string("macha-metadata-dump-") + GetParam().node + ".txt"));
 }
@@ -471,16 +482,18 @@ std::string fixture_name(const testing::TestParamInfo<FixtureState>& info) {
 
 // The counts are Macha's READMEs' and the dumps'. deltas_replayed: only a delta at a
 // head can be, its result being in checkpoint.meta; the rest are the owner's to replay.
-INSTANTIATE_TEST_SUITE_P(Macha0934, HeadsReplicaFixture,
-                         testing::Values(FixtureState{"state-scratch-0.93.4", "a", 13, 1, 0}, FixtureState{"state-scratch-0.93.4", "b", 13, 1, 0},
-                                         FixtureState{"state-scratch-0.93.4-branch", "a", 7, 2, 1}, FixtureState{"state-scratch-0.93.4-branch", "b", 7, 2, 1},
-                                         FixtureState{"state-scratch-0.93.4-delete", "a", 9, 1, 1}, FixtureState{"state-scratch-0.93.4-delete", "b", 9, 1, 1},
-                                         FixtureState{"state-scratch-0.93.4-markers", "a", 22, 4, 0},
-                                         FixtureState{"state-scratch-0.93.4-markers", "b", 14, 3, 0},
-                                         FixtureState{"state-scratch-0.93.4-truncated", "a", 4, 0, 0},
-                                         FixtureState{"state-scratch-0.93.4-truncated", "b", 51, 0, 0}, FixtureState{"state-scratch-0.93.4-seed", "a", 9, 0, 0},
-                                         FixtureState{"state-scratch-0.93.4-seed", "b", 9, 0, 0}),
-                         fixture_name);
+INSTANTIATE_TEST_SUITE_P(
+    Macha0934, HeadsReplicaFixture,
+    testing::Values(FixtureState{"state-scratch-0.93.4", "a", 13, 1, 0}, FixtureState{"state-scratch-0.93.4", "b", 13, 1, 0},
+                    FixtureState{"state-scratch-0.93.4-branch", "a", 7, 2, 1}, FixtureState{"state-scratch-0.93.4-branch", "b", 7, 2, 1},
+                    FixtureState{"state-scratch-0.93.4-delete", "a", 9, 1, 1}, FixtureState{"state-scratch-0.93.4-delete", "b", 9, 1, 1},
+                    FixtureState{"state-scratch-0.93.4-markers", "a", 22, 4, 0}, FixtureState{"state-scratch-0.93.4-markers", "b", 14, 3, 0},
+                    FixtureState{"state-scratch-0.93.4-truncated", "a", 4, 0, 0}, FixtureState{"state-scratch-0.93.4-truncated", "b", 51, 0, 0},
+                    FixtureState{"state-scratch-0.93.4-seed", "a", 9, 0, 0}, FixtureState{"state-scratch-0.93.4-seed", "b", 9, 0, 0},
+                    // Node a of -recovery has no heads.meta: its own cases, below.
+                    FixtureState{"state-scratch-0.93.4-recovery", "b", 9, 0, 0}, FixtureState{"state-scratch-0.93.4-twoheads", "a", 5, 0, 0, 2},
+                    FixtureState{"state-scratch-0.93.4-twoheads", "b", 4, 1, 1}),
+    fixture_name);
 
 // A real seed opens by Macha's rule and recovers a state whose checkpoint is damaged,
 // unaccepted: the record the checkpoint named, no certificate.
@@ -674,6 +687,294 @@ TEST(HeadsReplicaBytes, ASpaceCommitExtendsMachasStateWithTheNextDot) {
   EXPECT_EQ(next.dot->author, dot.author);
   EXPECT_EQ(next.dot->sequence, dot.sequence + 1);
   EXPECT_EQ(next.record.previous, first.hash);
+}
+
+std::unique_ptr<Replica> open_macha_state(const std::filesystem::path& directory, const std::shared_ptr<const domain::StorageKey>& key,
+                                          OpaqueCodec::Known known = {}) {
+  ReplicaOptions options;
+  options.directory = directory;
+  options.content_key = key;
+  options.local_key = key;
+  options.magics = machas_magics();
+  options.aad = machas_aad();
+  options.codec = std::make_shared<OpaqueCodec>(std::move(known));
+  options.logger = test::quiet_logger();
+  return std::make_unique<Replica>(std::move(options));
+}
+
+// A node recovered from its cache seed, as 0.93.4 left it: the marker holds, the seed
+// grants no authority, and what was set aside is left as it lies. Macha's own dump tool
+// aborted here (exit -6, "truncated input"); the node opened, and so does this.
+TEST(HeadsReplicaBytes, AMachaNodeInRecoveryOpensStillInRecovery) {
+  const auto files = read_checked_in("recovery");
+  dannan::test::TempDir dir;
+  for (const auto& [name, bytes] : files) write_file(dir.path() / name, bytes);
+  EXPECT_FALSE(files.contains("heads.meta"));
+  const auto key = fixture_key();
+  const auto stamp = std::string(".corrupt.1793982986266051000");
+
+  const auto frames = walk_frames(*key, files.at("history.log"));
+  ASSERT_EQ(frames.size(), 1U);
+  EXPECT_EQ(frames[0].entry.generation, 9U);
+  EXPECT_EQ(frames[0].entry.body, HistoryEntry::Body::full);
+  EXPECT_FALSE(frames[0].entry.previous_known);
+  EXPECT_EQ(hex(frames[0].entry.hash).substr(0, 16), "28597164ce6669b2");
+
+  // What was set aside: the flipped checkpoint keeps its damage, the rest still opens.
+  EXPECT_ANY_THROW((void)open_file(*key, checkpoint_magic, checkpoint_magic, files.at("checkpoint.meta" + stamp)));
+  const auto old_heads = decode_acceptance_set(open_file(*key, heads_magic, heads_magic, files.at("heads.meta" + stamp)));
+  ASSERT_EQ(old_heads.size(), 1U);
+  EXPECT_EQ(old_heads[0].hash, frames[0].entry.hash);
+  const auto old_frames = walk_frames(*key, files.at("history.log" + stamp));
+  ASSERT_EQ(old_frames.size(), 9U);
+  EXPECT_EQ(old_frames.back().entry.hash, frames[0].entry.hash);
+  EXPECT_TRUE(files.at("journal.log" + stamp).empty());
+
+  const auto author_plain = open_file(*key, author_magic, author_magic, files.at("author.meta"));
+  Reader author_reader(author_plain);
+  const NodeId author{author_reader.fixed<16>()};
+  for (int run = 0; run < 2; ++run) {
+    auto replica = open_macha_state(dir.path(), key);
+    EXPECT_TRUE(replica->recovery_required());
+    EXPECT_EQ(replica->committed().hash, frames[0].entry.hash);
+    EXPECT_EQ(replica->committed().generation, 9U);
+    EXPECT_TRUE(replica->accepted_heads().empty());
+    EXPECT_FALSE(replica->acceptance(frames[0].entry.hash).has_value());
+    EXPECT_EQ(replica->diagnostics().history_records, 1U);
+    EXPECT_TRUE(std::filesystem::exists(dir.path() / "recovery.required"));
+    EXPECT_TRUE(std::filesystem::exists(dir.path() / "author-chain-broken"));
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "heads.meta"));
+    for (const auto& [name, bytes] : files) EXPECT_EQ(read_file(dir.path() / name), bytes) << name;
+  }
+  // The marked chain: this node's next commit is a new author's, as Macha's is.
+  auto replica = open_macha_state(dir.path(), key);
+  const auto clock = opaque_fields(replica->committed().payload).clock;
+  const auto dot = replica->reserve_mutation_dot(author, clock);
+  EXPECT_NE(dot.author, author);
+  EXPECT_EQ(dot.sequence, 1U);
+}
+
+// The same state in Macha's tree: the short listing, the seed it came from, and the peer.
+TEST(HeadsReplicaBytes, AMachaNodeInRecoveryAgainstItsDumpSeedAndPeer) {
+  const auto root = macha_fixtures() / "state-scratch-0.93.4-recovery";
+  if (!std::filesystem::exists(root / "a/metadata")) GTEST_SKIP() << "state-scratch-0.93.4-recovery is not here (DAGDA_MACHA_FIXTURES)";
+  const auto key = fixture_key();
+  const auto frames = walk_frames(*key, read_file(root / "a/metadata/history.log"));
+  expect_matches_dump(frames, root / "macha-metadata-dump-a.txt");
+  ASSERT_EQ(frames.size(), 1U);
+  const auto seed = decode_record(open_file(*key, seed_magic, seed_magic, read_file(root / "cache-a/metadata/current.meta")));
+  EXPECT_EQ(seed.hash, frames[0].entry.hash);
+  // Node a's new frame holds what its peer's frame at generation 9 holds.
+  const auto peer = walk_frames(*key, read_file(root / "b/metadata/history.log"));
+  ASSERT_EQ(peer.size(), 9U);
+  EXPECT_EQ(peer.back().entry.hash, frames[0].entry.hash);
+  EXPECT_EQ(peer.back().entry.payload, frames[0].entry.payload);
+}
+
+// A crash between two heads and their merge: both certificates stand, neither is the
+// other's ancestor, and the preferred one is the higher hash (R4).
+TEST(HeadsReplicaBytes, TwoAcceptedHeadsAtAGenerationStayTwo) {
+  dannan::test::TempDir dir;
+  for (const auto& [name, bytes] : read_checked_in("twoheads")) write_file(dir.path() / name, bytes);
+  const auto key = fixture_key();
+  const auto replica = open_macha_state(dir.path(), key);
+  const auto heads = replica->accepted_heads();
+  ASSERT_EQ(heads.size(), 2U);
+  EXPECT_EQ(heads[0].generation, 4U);
+  EXPECT_EQ(heads[1].generation, 4U);
+  std::set<std::string> prefixes;
+  for (const auto& head : heads) prefixes.insert(hex(head.hash).substr(0, 8));
+  EXPECT_EQ(prefixes, (std::set<std::string>{"095a7813", "3dfada38"}));
+  EXPECT_EQ(hex(replica->committed().hash).substr(0, 8), "3dfada38");
+  EXPECT_FALSE(replica->recovery_required());
+  EXPECT_FALSE(replica->history_is_ancestor(heads[0].hash, heads[1].hash));
+  EXPECT_FALSE(replica->history_is_ancestor(heads[1].hash, heads[0].hash));
+  const auto base = replica->history_common_ancestor(heads[0].hash, heads[1].hash);
+  ASSERT_TRUE(base.has_value());
+  EXPECT_EQ(hex(*base).substr(0, 8), "e33439ac");
+}
+
+// The six kinds of damage Macha's test does to a frame.
+using RealDamage = void (*)(std::span<uint8_t> file, const Frame& frame);
+
+void put_u32(std::span<uint8_t> file, uint64_t at, uint32_t value) {
+  file[at] = static_cast<uint8_t>(value >> 24);
+  file[at + 1] = static_cast<uint8_t>(value >> 16);
+  file[at + 2] = static_cast<uint8_t>(value >> 8);
+  file[at + 3] = static_cast<uint8_t>(value);
+}
+
+const std::array<std::pair<const char*, RealDamage>, 6> real_damages{{
+    {"past_the_end", [](std::span<uint8_t> file, const Frame& frame) { put_u32(file, frame.offset, 0x10000000); }},
+    {"over_any_record", [](std::span<uint8_t> file, const Frame& frame) { put_u32(file, frame.offset, 0xFFFFFFFF); }},
+    {"short_inside", [](std::span<uint8_t> file, const Frame& frame) { put_u32(file, frame.offset, static_cast<uint32_t>((frame.bytes - 4) / 2)); }},
+    {"long_inside", [](std::span<uint8_t> file, const Frame& frame) { put_u32(file, frame.offset, static_cast<uint32_t>(frame.bytes - 4 + 9)); }},
+    {"zero", [](std::span<uint8_t> file, const Frame& frame) { put_u32(file, frame.offset, 0); }},
+    {"body_byte", [](std::span<uint8_t> file, const Frame& frame) { file[frame.offset + 4 + (frame.bytes - 4) / 2] ^= 0x5a; }},
+}};
+
+// A real state: a name under dagda/test/data, or "fixture/node" in Macha's tree (empty
+// when that is not here).
+SmallFiles load_real_state(const std::string& name) {
+  if (name.find('/') == std::string::npos) return read_checked_in(name);
+  SmallFiles out;
+  const auto directory = macha_fixtures() / name / "metadata";
+  if (!std::filesystem::exists(directory)) return out;
+  for (const auto& entry : std::filesystem::directory_iterator(directory))
+    if (entry.is_regular_file()) out[entry.path().filename().string()] = read_file(entry.path());
+  return out;
+}
+
+// What a reader holds of these frames with frame `lost` gone, by Macha's rule: a whole
+// frame stands alone, a delta needs its parent, and a hash's whole body is preferred.
+std::map<Hash256, size_t> held_without(const std::vector<Frame>& frames, std::optional<size_t> lost) {
+  std::map<Hash256, size_t> held;
+  for (size_t i = 0; i < frames.size(); ++i) {
+    if (lost && i == *lost) continue;
+    const auto& entry = frames[i].entry;
+    if (entry.body == HistoryEntry::Body::full) {
+      held[entry.hash] = i;
+    } else if (held.contains(entry.previous)) {
+      held.emplace(entry.hash, i);
+    }
+  }
+  return held;
+}
+
+void expect_held(const Replica& replica, const std::vector<Frame>& frames, const std::map<Hash256, size_t>& held, const Hash256& committed) {
+  for (size_t i = 0; i < frames.size(); ++i) {
+    const auto& frame = frames[i].entry;
+    const auto entry = replica.history_entry(frame.hash);
+    const auto at = held.find(frame.hash);
+    if (at == held.end()) {
+      // The committed head alone comes back, re-rooted from the checkpoint.
+      if (frame.hash != committed) {
+        EXPECT_FALSE(entry.has_value()) << "frame " << i;
+      }
+      continue;
+    }
+    ASSERT_TRUE(entry.has_value()) << "lost frame " << i;
+    if (at->second == i && frame.hash != committed) {
+      EXPECT_EQ(*entry, frame) << "frame " << i;
+    }
+  }
+}
+
+struct RealDamageCase {
+  const char* state;
+  size_t damage;
+};
+
+class HeadsReplicaDamagedCopy : public testing::TestWithParam<RealDamageCase> {};
+
+// Each frame of a real history.log in turn, one kind of damage: what the reader still
+// holds is everything but that frame and any delta that needed it, the bytes stay, a
+// node opens without recovery, and a commit past the damage survives another open. The
+// last frame has nothing readable after it, so it is the torn tail, cut and kept aside.
+TEST_P(HeadsReplicaDamagedCopy, EveryOtherRealFrameSurvives) {
+  const auto files = load_real_state(GetParam().state);
+  if (files.empty()) GTEST_SKIP() << GetParam().state << " is not here (DAGDA_MACHA_FIXTURES)";
+  const auto key = fixture_key();
+  const auto& history = files.at("history.log");
+  const auto frames = walk_frames(*key, history);
+  ASSERT_GT(frames.size(), 1U);
+  const auto committed = decode_record(open_file(*key, checkpoint_magic, checkpoint_magic, files.at("checkpoint.meta")));
+
+  OpaqueCodec::Known known;
+  for (const auto& frame : frames)
+    if (frame.entry.hash == committed.hash && frame.entry.body == HistoryEntry::Body::delta)
+      known[dannan::identity::sha256(frame.entry.payload)] = Bytes(committed.payload.begin(), committed.payload.end());
+
+  for (size_t lost = 0; lost < frames.size(); ++lost) {
+    SCOPED_TRACE("frame " + std::to_string(lost) + " at offset " + std::to_string(frames[lost].offset));
+    const bool last = lost + 1 == frames.size();
+    dannan::test::TempDir dir;
+    for (const auto& [name, bytes] : files)
+      if (name != "current.meta" && name != "history.log") write_file(dir.path() / name, bytes);
+    auto damaged = history;
+    real_damages[GetParam().damage].second(damaged, frames[lost]);
+    const auto log = dir.path() / "history.log";
+    write_file(log, damaged);
+
+    const auto held = held_without(frames, lost);
+    Record next;
+    {
+      auto replica = open_macha_state(dir.path(), key, known);
+      EXPECT_FALSE(replica->recovery_required());
+      EXPECT_EQ(replica->committed().hash, committed.hash);
+      expect_held(*replica, frames, held, committed.hash);
+
+      // Nothing before the end moved. Past it only a re-rooted head may have been added.
+      const auto kept = read_file(log);
+      const auto unchanged = last ? frames[lost].offset : damaged.size();
+      ASSERT_GE(kept.size(), unchanged);
+      EXPECT_TRUE(std::equal(damaged.begin(), damaged.begin() + static_cast<std::ptrdiff_t>(unchanged), kept.begin()));
+      bool kept_aside = false;
+      for (const auto& item : std::filesystem::directory_iterator(dir.path()))
+        kept_aside |= item.path().filename().string().rfind("history.log.corrupt.", 0) == 0;
+      EXPECT_EQ(kept_aside, last);
+
+      next = test::record_after(committed, Bytes(committed.payload.begin(), committed.payload.end()));
+      ASSERT_TRUE(replica->store_commit(next));
+      ASSERT_TRUE(replica->accept_commit({next.generation, next.hash, 1, {test::author(1)}}));
+    }
+    auto again = open_macha_state(dir.path(), key, known);
+    EXPECT_EQ(again->committed().hash, next.hash);
+    EXPECT_TRUE(again->history_entry(next.hash).has_value());
+    expect_held(*again, frames, held, committed.hash);
+  }
+}
+
+std::vector<RealDamageCase> every_real_damage() {
+  std::vector<RealDamageCase> out;
+  for (const char* state : {"state-scratch", "branch", "delete", "seed", "twoheads", "state-scratch-0.93.4-markers/a", "state-scratch-0.93.4-markers/b",
+                            "state-scratch-0.93.4-truncated/b"})
+    for (size_t damage = 0; damage < real_damages.size(); ++damage) out.push_back({state, damage});
+  return out;
+}
+
+std::string real_damage_name(const testing::TestParamInfo<RealDamageCase>& info) {
+  std::string name = std::string(info.param.state) + "_" + real_damages[info.param.damage].first;
+  for (auto& c : name)
+    if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+  return name;
+}
+
+INSTANTIATE_TEST_SUITE_P(Macha0934, HeadsReplicaDamagedCopy, testing::ValuesIn(every_real_damage()), real_damage_name);
+
+// A region bigger than the scan's window, in the middle of a real file, whatever it
+// holds: every real frame on both sides of it stays where it is read.
+TEST(HeadsReplicaBytes, ADamagedRegionInARealHistoryLosesNoFrame) {
+  const auto files = read_checked_in("state-scratch");
+  const auto key = fixture_key();
+  const auto& history = files.at("history.log");
+  const auto frames = walk_frames(*key, history);
+  ASSERT_EQ(frames.size(), 13U);
+  const auto committed = decode_record(open_file(*key, checkpoint_magic, checkpoint_magic, files.at("checkpoint.meta")));
+
+  std::mt19937 random(9153011);
+  Bytes region(2 * 1024 * 1024 + 512 * 1024);
+  for (auto& byte : region) byte = static_cast<uint8_t>(random());
+  const auto cut = static_cast<std::ptrdiff_t>(frames[6].offset);
+  Bytes damaged(history.begin(), history.begin() + cut);
+  damaged.insert(damaged.end(), region.begin(), region.end());
+  damaged.insert(damaged.end(), history.begin() + cut, history.end());
+
+  dannan::test::TempDir dir;
+  for (const auto& [name, bytes] : files)
+    if (name != "history.log" && name != "current.meta") write_file(dir.path() / name, bytes);
+  write_file(dir.path() / "history.log", damaged);
+  const auto replica = open_macha_state(dir.path(), key);
+  EXPECT_FALSE(replica->recovery_required());
+  EXPECT_EQ(replica->committed().hash, committed.hash);
+  expect_held(*replica, frames, held_without(frames, std::nullopt), committed.hash);
+  EXPECT_EQ(replica->diagnostics().history_records, frames.size());
+  EXPECT_EQ(read_file(dir.path() / "history.log"), damaged);
+
+  // The same scan with no replica, under v18's associated data: what S7's tools call.
+  const auto next = next_frame_from(dir.path() / "history.log", damaged.size(), frames[6].offset + 1, *key, history_magic);
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(*next, frames[6].offset + region.size());
 }
 
 }  // namespace
