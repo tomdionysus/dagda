@@ -311,6 +311,36 @@ void migrate_ledgers(const std::filesystem::path& state, std::shared_ptr<const d
 // nothing has been written. An unmarked trie with records is its "hold claims
 // but no ledger marker"; a probe cannot tell an empty trie, so an unmarked
 // one that has been written to refuses too and the operator decides.
+// The token a backend marker of either layout names; nothing for neither.
+std::optional<NodeId> marker_token(const std::string& text) {
+  if (const auto v18 = parse_backend_marker_v18(text)) return v18->token;
+  std::vector<std::string> fields;
+  std::istringstream in(text);
+  for (std::string field; in >> field;) fields.push_back(field);
+  if (fields.size() != 5 || fields[0] != store::backend_marker_v19) return std::nullopt;
+  return NodeId::parse(fields[2]);
+}
+
+// A backend the state's mirrors name and the run was not given would keep its
+// data v18 under a state marked v19, where no later run looks: its mirror moved
+// with the rest, and the next run says nothing to do. Refused before any write.
+void refuse_unnamed_backends(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends) {
+  std::vector<NodeId> named;
+  for (const auto& backend : backends)
+    if (const auto token = marker_token(read_text(backend / store::backend_marker_name))) named.push_back(*token);
+  const auto identities = state / "backend-identities";
+  std::error_code ec;
+  if (!std::filesystem::is_directory(identities, ec)) return;
+  for (const auto& entry : std::filesystem::directory_iterator(identities, ec)) {
+    if (!entry.is_regular_file() || entry.path().extension() != ".id") continue;
+    const auto token = marker_token(read_text(entry.path()));
+    if (!token || std::find(named.begin(), named.end(), *token) != named.end()) continue;
+    throw MigrationRefused("this state knows a backend with token " + dannan::identity::to_string(*token) + " (" + entry.path().string() +
+                           ") that no --backend names. Give every backend the node has; if that disk is gone for good, remove its mirror first");
+  }
+  if (ec) throw std::runtime_error("cannot list " + identities.string() + ": " + ec.message());
+}
+
 // Where the migration makes replacements under the state.
 std::vector<std::filesystem::path> known_ledgers_dirs(const std::filesystem::path& state) {
   std::vector<std::filesystem::path> dirs{state, state / "backend-identities", state / "retention"};
@@ -737,6 +767,13 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   if (!std::filesystem::exists(layout_marker)) throw MigrationRefused("state " + state.string() + " has no storage-layout marker: not a Dagda or Macha state");
   const auto layout = read_text(layout_marker);
   if (layout == store::state_layout_marker(to)) {
+    // Every backend it was given must be there too: one still v18 under a state
+    // marked v19 is a disk no run would otherwise come back to.
+    for (const auto& backend : backends) {
+      if (std::filesystem::exists(backend / store::backend_marker_name) && parse_backend_marker_v18(read_text(backend / store::backend_marker_name)))
+        throw MigrationRefused("state " + state.string() + " is layout v19 and backend " + backend.string() +
+                               " is v18: run --reverse with every backend named, then forward with every backend named");
+    }
     report.already_v19 = true;
     say(options, report.summary());
     return report;
@@ -764,6 +801,7 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     }
     throw MigrationRefused("backend " + backend.string() + " marker is \"" + text + "\": neither layout v18 nor domain v1's v19");
   }
+  refuse_unnamed_backends(state, backends);
   const auto control = options.control.empty() ? state / "metadata-objects" : options.control;
   const bool have_control = std::filesystem::is_directory(control, ec);
   const bool have_cache = !options.cache.empty() && std::filesystem::is_directory(options.cache, ec);
@@ -920,6 +958,7 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
       throw MigrationRefused("backend " + backend.string() + " marker is \"" + text + "\": neither layout v18 nor domain v1's v19");
     }
   }
+  refuse_unnamed_backends(state, backends);
   const auto control = options.control.empty() ? state / "metadata-objects" : options.control;
   const bool have_control = std::filesystem::is_directory(control, ec);
   const bool have_cache = !options.cache.empty() && std::filesystem::is_directory(options.cache, ec);
