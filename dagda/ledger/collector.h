@@ -96,6 +96,48 @@ struct PassReport {
   size_t pruned_data = 0;
 };
 
+// What inventory_step() found: the horizon a pass reads. `rebuilt`: built and
+// published by this step, so nothing destructive may use it in this pass, and
+// the caller schedules a pass after its quiet window that will. `held_back`: it
+// is behind, and the caller said not to rebuild it yet.
+struct InventoryStep {
+  contract::ObjectLedger::InventoryHandle inventory;
+  bool rebuilt = false;
+  bool held_back = false;
+};
+
+struct TombstoneStep {
+  contract::GateVerdict gate;
+};
+
+// What release_step() found. `head`: the sole accepted head, none while there
+// are several or none. `built`: a head the ledger did not hold was asked for,
+// and `complete` says whether what it answered was published. `release`: the
+// horizon the sweeps read, the previous one when the build was refused.
+struct ReleaseStep {
+  std::optional<contract::Hash256> head;
+  bool built = false;
+  bool complete = false;
+  contract::ObjectLedger::ReleaseHandle release;
+};
+
+struct ControlStep {
+  contract::GateVerdict gate;
+  size_t released = 0;
+  size_t removed = 0;
+  size_t pruned = 0;
+};
+
+// `orphan_grace`: how long DATA no reference has reached waits, so a caller
+// knows when a sweep that deferred one is worth repeating.
+struct DataStep {
+  contract::GateVerdict gate;
+  size_t released = 0;
+  store::StoragePool::MaintenanceResult swept;
+  size_t pruned = 0;
+  std::chrono::milliseconds orphan_grace{0};
+};
+
 // Garbage collection on one node (requirements L17 to L22): the inventory
 // and release horizons built from the owner's ReachabilityProvider and
 // published to the ledger, then the three destructive gates and what each
@@ -113,7 +155,18 @@ struct PassReport {
 // own clock, and a copy with any local claim is untouchable, checked again
 // just before the delete; deletion is the store's, lazily durable.
 //
-// Single owner: one thread runs every pass. The references outlive it.
+// The pass is five steps, public so that an owner's own pass can put its other
+// stages between them in its own order, as Macha's does (repair runs between
+// inventory_step() and tombstone_step()): inventory_step(), tombstone_step(),
+// release_step(), control_step(), data_step(). Each traces what it decides and
+// returns it. No step looks at the owner's stop: only `pause`, inside the
+// inventory's walk, may end one early with MaintenanceStopping, and no step
+// catches that or anything the provider throws, so what ends the pass and what
+// the rest of it does then is the caller's. A step whose turn is not due runs
+// its gate, traces it shut and does nothing else.
+//
+// Single owner: one thread runs every pass and every step. The references
+// outlive it.
 class Collector {
  public:
   // The decision trace: `kind` names what was decided (a gate, a horizon, a
@@ -131,6 +184,33 @@ class Collector {
   static constexpr dannan::sched::Waits pass_waits = contract::ReachabilityProvider::answer_waits | dannan::sched::Waits::data_device;
   PassReport pass(const PassDue& due);
 
+  // The horizon a pass reads, rebuilt and published when the provider's
+  // generation has moved or it is incomplete. `may_rebuild` false holds a stale
+  // one back (Macha's repair-only pass while its metadata is not ready), and
+  // never the first. Throws what the provider throws, and what `pause` throws.
+  static constexpr dannan::sched::ThreadSafety step_safety = dannan::sched::ThreadSafety::single_owner;
+  static constexpr dannan::sched::Waits inventory_step_waits = contract::ReachabilityProvider::answer_waits;
+  InventoryStep inventory_step(const std::function<void()>& pause = {}, bool may_rebuild = true);
+
+  // The tombstone gate and, open, what it decides, handed to the provider.
+  // Throws what the provider's collect_garbage throws.
+  static constexpr dannan::sched::Waits tombstone_step_waits = contract::ReachabilityProvider::answer_waits;
+  TombstoneStep tombstone_step(const PassDue& due, const InventoryStep& inventory);
+
+  // The release horizon, built and published when the sole accepted head moved.
+  // A head the provider cannot answer is an incomplete build, not a throw.
+  static constexpr dannan::sched::Waits release_step_waits = contract::ReachabilityProvider::answer_waits;
+  ReleaseStep release_step();
+
+  // The CONTROL gate and, open, its release, sweep and prune.
+  static constexpr dannan::sched::Waits control_step_waits = dannan::sched::local_waits;
+  ControlStep control_step(const PassDue& due, const InventoryStep& inventory, const ReleaseStep& release);
+
+  // The DATA gate and, open, its release, sweep and prune. `due.should_yield`
+  // is asked between objects.
+  static constexpr dannan::sched::Waits data_step_waits = dannan::sched::local_waits | dannan::sched::Waits::data_device;
+  DataStep data_step(const PassDue& due, const InventoryStep& inventory, const ReleaseStep& release);
+
   // The CONTROL sweep's step: up to `budget` objects of the CONTROL store
   // from its cursor. An object `live` refers to stays, and so does a claimed
   // one; an unreferenced one goes only once a CONTROL epoch later than the
@@ -141,7 +221,9 @@ class Collector {
   size_t control_gc_step(const contract::IdLookup& live, std::chrono::milliseconds grace, size_t budget, UnreferencedSince* sightings, uint64_t now_unix_ms);
 
  private:
+  contract::PassFacts facts(const PassDue& due, const InventoryStep& inventory) const;
   void trace(std::string_view kind, const std::string& detail) const;
+  void trace_gate(std::string_view gate, const contract::GateVerdict& verdict) const;
   void save_sightings(UnreferencedSince&, dannan::contract::TimePoint& saved, bool complete);
   void collect_tombstones(const contract::InventoryHorizon&);
 

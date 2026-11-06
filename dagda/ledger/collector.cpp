@@ -93,124 +93,171 @@ void Collector::collect_tombstones(const contract::InventoryHorizon& inventory) 
   _provider.collect_garbage(collection);
 }
 
-PassReport Collector::pass(const PassDue& due) {
-  PassReport report;
-  if (!due.garbage_due && !due.gc_due) return report;
+contract::PassFacts Collector::facts(const PassDue& due, const InventoryStep& inventory) const {
+  contract::PassFacts out;
+  out.garbage_due = due.garbage_due;
+  out.gc_due = due.gc_due;
+  out.busy = due.busy;
+  out.gc_waiting_for_event = due.gc_waiting_for_event;
+  out.rebuilt_inventory = inventory.rebuilt;
+  return out;
+}
 
-  // The horizons this pass reads: the ledger's, as published.
-  auto inventory = _ledger.inventory();
-  auto release = _ledger.release();
+void Collector::trace_gate(std::string_view gate, const contract::GateVerdict& verdict) const {
+  trace(gate, (verdict.permitted ? "open " : "shut ") + verdict.conditions);
+}
+
+InventoryStep Collector::inventory_step(const std::function<void()>& pause, bool may_rebuild) {
+  InventoryStep out;
+  // The horizon this pass reads: the ledger's, as published.
+  out.inventory = _ledger.inventory();
   const auto generation = _provider.generation();
-  if (!inventory || !inventory->complete() || inventory->generation() != generation) {
-    // The pass reads what the ledger holds, never its own copy.
-    _ledger.publish(_builder.inventory(due.pause));
-    inventory = _ledger.inventory();
-    report.rebuilt_inventory = true;
-    trace("inventory", "generation=" + std::to_string(inventory->generation()) + " live=" + std::to_string(inventory->size(RetentionClass::data)) +
-                           " control_live=" + std::to_string(inventory->size(RetentionClass::control)) +
-                           " garbage=" + std::to_string(inventory->garbage().size()) + " stale_garbage=" + std::to_string(inventory->stale_garbage().size()) +
-                           " " + flag("catalogue_complete", inventory->complete()));
-    _services.observations.add("maintenance.inventory.live_objects", inventory->size(RetentionClass::data));
+  const bool stale = !out.inventory || !out.inventory->complete() || out.inventory->generation() != generation;
+  if (!stale) return out;
+  if (out.inventory && !may_rebuild) {
+    out.held_back = true;
+    return out;
   }
+  // The pass reads what the ledger holds, never its own copy.
+  _ledger.publish(_builder.inventory(pause));
+  out.inventory = _ledger.inventory();
+  out.rebuilt = true;
+  trace("inventory",
+        "generation=" + std::to_string(out.inventory->generation()) + " live=" + std::to_string(out.inventory->size(RetentionClass::data)) +
+            " control_live=" + std::to_string(out.inventory->size(RetentionClass::control)) + " garbage=" + std::to_string(out.inventory->garbage().size()) +
+            " stale_garbage=" + std::to_string(out.inventory->stale_garbage().size()) + " " + flag("catalogue_complete", out.inventory->complete()));
+  _services.observations.add("maintenance.inventory.live_objects", out.inventory->size(RetentionClass::data));
+  return out;
+}
 
-  contract::PassFacts facts;
-  facts.garbage_due = due.garbage_due;
-  facts.gc_due = due.gc_due;
-  facts.busy = due.busy;
-  facts.gc_waiting_for_event = due.gc_waiting_for_event;
-  facts.rebuilt_inventory = report.rebuilt_inventory;
-  const auto trace_gate = [&](std::string_view gate, const contract::GateVerdict& verdict) {
-    trace(gate, (verdict.permitted ? "open " : "shut ") + verdict.conditions);
-  };
+TombstoneStep Collector::tombstone_step(const PassDue& due, const InventoryStep& inventory) {
+  TombstoneStep out;
+  out.gate = contract::tombstone_gate(facts(due, inventory), inventory.inventory.get());
+  trace_gate("gate.tombstones", out.gate);
+  if (out.gate.permitted && inventory.inventory) collect_tombstones(*inventory.inventory);
+  return out;
+}
 
-  report.tombstones = contract::tombstone_gate(facts, inventory.get());
-  trace_gate("gate.tombstones", *report.tombstones);
-  if (report.tombstones->permitted && inventory) collect_tombstones(*inventory);
-
+ReleaseStep Collector::release_step() {
+  ReleaseStep out;
+  out.release = _ledger.release();
   // Release is local and causal: the sole accepted head gives a complete
   // set and the clock of the claim writes it has observed. Claims from
   // branches it has not seen are not dominated by that clock and survive.
-  const auto head = _provider.release_head();
-  if (head && *head != (release ? release->head() : contract::Hash256{})) {
-    auto built = _builder.release(*head);
+  out.head = _provider.release_head();
+  if (out.head && *out.head != (out.release ? out.release->head() : contract::Hash256{})) {
+    auto built = _builder.release(*out.head);
+    out.built = true;
+    out.complete = built.complete;
     trace("release-horizon", std::string(built.complete ? "complete" : "incomplete") +
                                  " data_live=" + std::to_string(built.horizon->size(RetentionClass::data)) +
                                  " control_live=" + std::to_string(built.horizon->size(RetentionClass::control)));
     // Refused when incomplete: the ledger keeps the previous.
     (void)_ledger.publish(std::move(built));
-    release = _ledger.release();
+    out.release = _ledger.release();
   }
+  return out;
+}
 
-  facts.release_view = head.has_value();
-  facts.known_generation = _provider.known_generation();
-  report.control = contract::control_gate(facts, inventory.get());
+ControlStep Collector::control_step(const PassDue& due, const InventoryStep& inventory, const ReleaseStep& release) {
+  ControlStep out;
+  auto gate_facts = facts(due, inventory);
+  gate_facts.release_view = release.head.has_value();
+  gate_facts.known_generation = _provider.known_generation();
+  out.gate = contract::control_gate(gate_facts, inventory.inventory.get());
   // The rule every gate keeps: a newly built inventory is never used
   // destructively in the pass that built it.
-  if (report.rebuilt_inventory) trace("control-gate-in-rebuilding-pass", report.control->permitted ? "open" : "shut");
-  trace_gate("gate.control", *report.control);
-  if (report.control->permitted) {
-    // What another node's branch may still refer to is kept by the grace the
-    // sweep applies, on this node's clock.
-    if (release) {
-      report.released_control = _ledger.release_unreferenced(RetentionClass::control, *release, _options.release_budget);
-      _services.observations.add("retention.released.control", report.released_control);
-      if (report.released_control) trace("release.control", std::to_string(report.released_control));
-    }
-    report.removed_control = control_gc_step(inventory->lookup(RetentionClass::control), _options.garbage_grace, _options.control_budget, &_control_sightings,
-                                             _services.wall.unix_ms());
-    save_sightings(_control_sightings, _control_saved, false);
-    _services.observations.add("catalogue.control_gc.removed", report.removed_control);
-    if (report.removed_control) trace("control-gc", std::to_string(report.removed_control));
-    report.pruned_control = _ledger.prune_unclaimed(RetentionClass::control, _options.prune_budget);
-    _services.observations.add("retention.pruned.control", report.pruned_control);
-    if (report.pruned_control) trace("prune.control", std::to_string(report.pruned_control));
-    if (report.removed_control) _services.logger.debug("control GC removed=" + std::to_string(report.removed_control));
+  if (inventory.rebuilt) trace("control-gate-in-rebuilding-pass", out.gate.permitted ? "open" : "shut");
+  trace_gate("gate.control", out.gate);
+  if (!out.gate.permitted) return out;
+  // What another node's branch may still refer to is kept by the grace the
+  // sweep applies, on this node's clock.
+  if (release.release) {
+    out.released = _ledger.release_unreferenced(RetentionClass::control, *release.release, _options.release_budget);
+    _services.observations.add("retention.released.control", out.released);
+    if (out.released) trace("release.control", std::to_string(out.released));
   }
+  out.removed = control_gc_step(inventory.inventory->lookup(RetentionClass::control), _options.garbage_grace, _options.control_budget, &_control_sightings,
+                                _services.wall.unix_ms());
+  save_sightings(_control_sightings, _control_saved, false);
+  _services.observations.add("catalogue.control_gc.removed", out.removed);
+  if (out.removed) trace("control-gc", std::to_string(out.removed));
+  out.pruned = _ledger.prune_unclaimed(RetentionClass::control, _options.prune_budget);
+  _services.observations.add("retention.pruned.control", out.pruned);
+  if (out.pruned) trace("prune.control", std::to_string(out.pruned));
+  if (out.removed) _services.logger.debug("control GC removed=" + std::to_string(out.removed));
+  return out;
+}
 
+DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory, const ReleaseStep& release) {
+  DataStep out;
   // The sweep also catches objects that never got a retirement (a DATA put
   // whose process died before its commit). Recent and unstamped retirements
   // stay protected for the grace. Claims are checked before every delete, so
   // an inventory older than the known generation is still safe for orphans.
-  facts.known_generation = _provider.known_generation();
-  report.data = contract::data_gate(facts, inventory.get());
-  trace_gate("gate.data", *report.data);
-  if (report.data->reason != _last_skip_reason) {
-    _last_skip_reason = report.data->reason;
+  auto gate_facts = facts(due, inventory);
+  gate_facts.release_view = release.head.has_value();
+  gate_facts.known_generation = _provider.known_generation();
+  out.gate = contract::data_gate(gate_facts, inventory.inventory.get());
+  trace_gate("gate.data", out.gate);
+  if (out.gate.reason != _last_skip_reason) {
+    _last_skip_reason = out.gate.reason;
     _services.logger.debug(std::string("garbage collection sweep") + (_last_skip_reason.empty() ? " enabled" : " skipped: " + _last_skip_reason));
   }
-  if (!report.data->permitted) return report;
+  // A retirement carries its own deadline. Unretired bytes may be the data
+  // half of a publication with no reference yet, so they wait one retry
+  // window; a zero grace must not collapse it.
+  out.orphan_grace = std::max(_options.garbage_grace, _options.retry_window);
+  if (!out.gate.permitted) return out;
 
-  if (release) {
-    report.released_data = _ledger.release_unreferenced(RetentionClass::data, *release, _options.release_budget);
-    _services.observations.add("retention.released.data", report.released_data);
-    if (report.released_data) trace("release.data", std::to_string(report.released_data));
+  if (release.release) {
+    out.released = _ledger.release_unreferenced(RetentionClass::data, *release.release, _options.release_budget);
+    _services.observations.add("retention.released.data", out.released);
+    if (out.released) trace("release.data", std::to_string(out.released));
   } else if (!_release_incomplete_logged) {
     _release_incomplete_logged = true;
     _services.logger.debug("retention release skipped: horizon incomplete");
   }
   const auto now_ms = _services.wall.unix_ms();
   const auto now_ns = static_cast<int64_t>(now_ms) * 1'000'000;
+  const auto& live = *inventory.inventory;
   std::vector<ObjectId> protected_ids;
-  protected_ids.reserve(inventory->garbage().size());
-  for (const auto& candidate : inventory->garbage())
+  protected_ids.reserve(live.garbage().size());
+  for (const auto& candidate : live.garbage())
     if (!matured(candidate.retired_at_ns, now_ns, grace_ns(_options.garbage_grace))) protected_ids.push_back(candidate.id);
   std::sort(protected_ids.begin(), protected_ids.end());
   protected_ids.erase(std::unique(protected_ids.begin(), protected_ids.end()), protected_ids.end());
 
-  // A retirement carries its own deadline. Unretired bytes may be the data
-  // half of a publication with no reference yet, so they wait one retry
-  // window; a zero grace must not collapse it.
-  const auto orphan_grace = std::max(_options.garbage_grace, _options.retry_window);
-  report.swept_data = _data.gc_step(
-      inventory->lookup(RetentionClass::data), protected_ids, orphan_grace, _options.data_budget, due.should_yield,
+  out.swept = _data.gc_step(
+      live.lookup(RetentionClass::data), protected_ids, out.orphan_grace, _options.data_budget, due.should_yield,
       [this](const ObjectId& id) { return _ledger.retained(RetentionClass::data, id); }, &_data_sightings, now_ms, _options.garbage_grace);
-  save_sightings(_data_sightings, _data_saved, report.swept_data.complete);
-  if (report.swept_data.bytes) trace("gc", "reclaimed_bytes=" + std::to_string(report.swept_data.bytes));
-  _services.observations.add("maintenance.gc.examined", report.swept_data.objects);
-  _services.observations.add("maintenance.gc.reclaimed_bytes", report.swept_data.bytes);
-  report.pruned_data = _ledger.prune_unclaimed(RetentionClass::data, _options.prune_budget);
-  _services.observations.add("retention.pruned.data", report.pruned_data);
-  if (report.pruned_data) trace("prune.data", std::to_string(report.pruned_data));
+  save_sightings(_data_sightings, _data_saved, out.swept.complete);
+  if (out.swept.bytes) trace("gc", "reclaimed_bytes=" + std::to_string(out.swept.bytes));
+  _services.observations.add("maintenance.gc.examined", out.swept.objects);
+  _services.observations.add("maintenance.gc.reclaimed_bytes", out.swept.bytes);
+  out.pruned = _ledger.prune_unclaimed(RetentionClass::data, _options.prune_budget);
+  _services.observations.add("retention.pruned.data", out.pruned);
+  if (out.pruned) trace("prune.data", std::to_string(out.pruned));
+  return out;
+}
+
+PassReport Collector::pass(const PassDue& due) {
+  PassReport report;
+  if (!due.garbage_due && !due.gc_due) return report;
+  const auto inventory = inventory_step(due.pause);
+  report.rebuilt_inventory = inventory.rebuilt;
+  report.tombstones = tombstone_step(due, inventory).gate;
+  const auto release = release_step();
+  auto control = control_step(due, inventory, release);
+  report.control = std::move(control.gate);
+  report.released_control = control.released;
+  report.removed_control = control.removed;
+  report.pruned_control = control.pruned;
+  auto data = data_step(due, inventory, release);
+  report.data = std::move(data.gate);
+  report.released_data = data.released;
+  report.swept_data = data.swept;
+  report.pruned_data = data.pruned;
   return report;
 }
 
