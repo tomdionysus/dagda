@@ -136,6 +136,9 @@ Before writing anything:
 - a backend that is not a directory or has no `.macha.backend`, or whose
   marker is neither v18 nor domain v1's v19;
 - a store whose lock is held (the node is running);
+- a backend the state's `backend-identities` name and no `--backend` does, since
+  that disk would stay v18 under a state marked v19, where no later run looks;
+  a v19 state given a backend still v18 likewise;
 - a cluster key under which the first eight records found open under
   neither layout (the wrong key, or not a Dagda disk).
 

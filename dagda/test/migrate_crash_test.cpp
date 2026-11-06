@@ -179,5 +179,54 @@ TEST(MigrateCrash, TheTemporariesACrashLeavesAreRemovedByTheSecondRun) {
   expect_v19_opens(bed, v18);
 }
 
+// ---- A backend left out -------------------------------------------------------
+
+// A second backend the state's mirror names, left off the command line. The run
+// would finish, mark the state v19, mark the backend's mirror v19, and leave the
+// disk v18 with nothing that will ever migrate it: the next run says nothing to
+// do. Refused before any write, naming the backend.
+TEST(MigrateState, ABackendTheStateKnowsAndTheRunWasNotGivenIsRefused) {
+  StoreBed bed;
+  V18State v18(bed);
+  const auto second = v18.root / "data-2";
+  legacy::write_backend_marker_v18(v18.state, second, v18.node, filled(0xce));
+  const auto data = pattern(2048, 77);
+  legacy::write_loose_v18(second, *bed.key, object_id(data), data);
+  const auto before = v18.digest();
+  try {
+    (void)v18.migrate();
+    ADD_FAILURE() << "not refused";
+  } catch (const MigrationRefused& error) {
+    EXPECT_NE(std::string(error.what()).find(dannan::identity::to_string(filled(0xce))), std::string::npos) << error.what();
+    EXPECT_NE(std::string(error.what()).find("--backend"), std::string::npos) << error.what();
+  }
+  EXPECT_EQ(v18.digest(), before);
+  // Given, it migrates, and both markers follow.
+  MigrationOptions options;
+  options.cache = v18.cache;
+  const auto report = migrate_state(v18.state, {v18.backend, second}, v18.cluster(), v18.custody(), options);
+  EXPECT_EQ(report.loose_migrated, 9u);
+  EXPECT_EQ(report.markers_rewritten, 5u);
+  EXPECT_TRUE(read_text(second / ".macha.backend").starts_with("dagda-backend-v19"));
+}
+
+// A v19 state given a backend still v18 has something to do, and saying "nothing
+// to do" of it would strand the disk.
+TEST(MigrateState, AV19StateGivenAV18BackendIsRefusedNotCalledDone) {
+  StoreBed bed;
+  V18State v18(bed);
+  (void)v18.migrate();
+  const auto second = v18.root / "data-2";
+  legacy::write_backend_marker_v18(v18.state, second, v18.node, filled(0xce), false);
+  MigrationOptions options;
+  options.cache = v18.cache;
+  try {
+    (void)migrate_state(v18.state, {v18.backend, second}, v18.cluster(), v18.custody(), options);
+    ADD_FAILURE() << "not refused";
+  } catch (const MigrationRefused& error) {
+    EXPECT_NE(std::string(error.what()).find(second.string()), std::string::npos) << error.what();
+  }
+}
+
 }  // namespace
 }  // namespace dagda::migrate
