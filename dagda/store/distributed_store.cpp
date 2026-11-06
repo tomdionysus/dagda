@@ -26,6 +26,10 @@ namespace dagda::store {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+// A write's or a read's deadline is on the node's clock, which nothing notifies
+// when it moves other than with the steady clock: a wait looks again this often.
+constexpr std::chrono::milliseconds look_at_the_clock{25};
 using dannan::contract::Lock;
 using dannan::contract::ReadLock;
 using dannan::contract::WriteLock;
@@ -718,7 +722,7 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
 
 WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into) {
   _activity.note(options.frame, data.size());
-  const auto deadline = Clock::now() + write_deadline_of(options);
+  const auto deadline = _time.now() + write_deadline_of(options);
   // An ephemeral write runs in the background as the store's ordinary write.
   const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
   const bool deferred = options.deferred;
@@ -790,7 +794,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         // A write with a deadline of its own keeps it; one with none waits as a
         // peer's server would, and fails in its words.
         const bool own_deadline = options.deadline.count() > 0;
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - _time.now());
         const auto admitted =
             refusal ? std::nullopt
                     : admit_data(options.frame, data.size(), own_deadline ? std::optional(std::max(left, std::chrono::milliseconds(1))) : no_caller_deadline,
@@ -845,7 +849,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       size_t waited_unfinished = 0;
       size_t waited_ok = 0;
       auto wake = deadline;
-      const auto now = Clock::now();
+      const auto now = _time.now();
       for (auto& call : run->calls) {
         const bool member_waited = waited.contains(call.node.id);
         if (call.done) {
@@ -907,7 +911,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       }
       if (options.cancelled) wake = std::min(wake, now + std::chrono::milliseconds(20));
       wake = std::max(wake, now + std::chrono::milliseconds(1));
-      run->changed.wait_until(lock.native(), wake);
+      run->changed.wait_for(lock.native(), std::min<std::chrono::nanoseconds>(wake - now, look_at_the_clock));
     }
 
     // The evidence, built under the run's lock: a call answering from here on
@@ -1615,6 +1619,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     if (!admitted) return {};
     local = _data.get(id);
   }
+  if (_options.read_trace) _options.read_trace("local");
   if (local) {
     if (interactive) _activity.note(options.frame, local->size());
     return {buffer_of(std::move(*local)), ReadSource::local, _self, FetchAnswer::ok};
@@ -1625,6 +1630,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
     if (!admitted) return {};
     cached = _cache.get(id);
   }
+  if (_options.read_trace) _options.read_trace("cache");
   if (cached) {
     if (interactive) _activity.note(options.frame, cached->size());
     if (should_own(id)) enqueue_local_copy(id, *cached, true);
@@ -1637,7 +1643,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
 }
 
 ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist) {
-  const auto deadline = Clock::now() + (options.deadline.count() > 0 ? options.deadline : _options.read_deadline);
+  const auto deadline = _time.now() + (options.deadline.count() > 0 ? options.deadline : _options.read_deadline);
   const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;
@@ -1695,11 +1701,8 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
   std::shared_ptr<dannan::net::CallHandle> abandon;
   {
     Lock lock(fetch->mutex);
-    while (!fetch->done && Clock::now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed))) {
-      auto wake = deadline;
-      if (options.cancelled) wake = std::min(wake, Clock::now() + std::chrono::milliseconds(25));
-      fetch->changed.wait_until(lock.native(), wake);
-    }
+    while (!fetch->done && _time.now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
+      fetch->changed.wait_for(lock.native(), std::min<std::chrono::nanoseconds>(deadline - _time.now(), look_at_the_clock));
     --fetch->waiters;
     if (!fetch->done) {
       // The transfer belongs to the object, not to any one reader: it is
