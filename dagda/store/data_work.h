@@ -19,6 +19,7 @@
 #include "dagda/store/io_pressure.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/sched/class_waits.h"
 #include "dannan/sched/work.h"
 #include "dannan/status/log.h"
 
@@ -187,20 +188,13 @@ class DataResourceArbiter {
   uint64_t _lower_active DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _peak_lower_active DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _peak_used_bytes DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _waiting_foreground DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _waiting_loaders DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _waiting_speculative DANNAN_GUARDED_BY(_mutex) = 0;
   bool _stopping DANNAN_GUARDED_BY(_mutex) = false;
-  uint64_t _releases DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _foreground_admissions DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _loader_admissions DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _speculative_admissions DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _foreground_waits DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _loader_waits DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _speculative_waits DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _cancelled_waits DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _pressure_refusals DANNAN_GUARDED_BY(_mutex) = 0;
-  uint64_t _no_progress_failures DANNAN_GUARDED_BY(_mutex) = 0;
+  // Who waits, by class, and how each wait ended.
+  dannan::sched::ClassWaits _waits DANNAN_GUARDED_BY(_mutex);
 };
 
 // What a device admits at once, and how much of it only control work may
@@ -294,9 +288,9 @@ class IoReserve {
   std::condition_variable_any _changed;
   size_t _data DANNAN_GUARDED_BY(_mutex) = 0;
   size_t _control DANNAN_GUARDED_BY(_mutex) = 0;
-  size_t _control_waiting DANNAN_GUARDED_BY(_mutex) = 0;
   bool _stopping DANNAN_GUARDED_BY(_mutex) = false;
   IoReserveStats _stats DANNAN_GUARDED_BY(_mutex);
+  dannan::sched::ClassWaits _waits DANNAN_GUARDED_BY(_mutex);
 };
 
 // DATA credit and a DATA device slot, held together across one device
