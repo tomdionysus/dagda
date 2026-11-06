@@ -15,6 +15,26 @@ counts are its script's; a one-node fixture has a non-hosting peer beside it. No
 `Repair::pass` also wakes on a new survey list, which `claimed-objects-lost` forbids, and the survey has no injectable clock.
 Gate: `dagda_tests` 543 passing, 3 disabled, three whole runs on the Mac; the new cases 15 repeats before the last three cases, 5 after.
 
+## 2026-11-06: heads S3, the replica on disk (`feature/heads-s3`)
+
+`dagda/heads/`: `record.{h,cpp}` (record and hash, entry, certificate, dots, the clock and merge-parent sections an owner frames),
+`codec.h` (the owner's codec and `CostCounters`), `sealed_file.{h,cpp}` (frames, sealed files, space id, v19's AAD rules),
+`replica.{h,cpp}` (Macha's `MetadataReplica` at `9a08846` over a codec, under section 4.1's split: history, checkpoint and journal
+under the domain key; `heads.meta`, `author.meta` and a sealed `set-aside.meta` under the node-local key), `cache_seed.{h,cpp}`.
+Macha's magics are parameters; none is in the library. The test owner is neutral, `dagda/test/fixtures/heads.h`.
+
+Byte proof, `HeadsReplicaCheckedIn` and `HeadsReplicaFixture`: every frame of `history.log`, `checkpoint.meta`, `heads.meta` and
+`author.meta` of both nodes of `state-scratch-0.93.4` and its `-branch`, `-delete`, `-markers`, `-truncated`, `-seed` opens, re-seals
+to its own bytes under its own nonce, and matches the dump's listing; each whole frame re-hashes and materialises; a replica opens
+over a copy and reaches the same head, certificates, links and author. Four states are checked in as hex,
+`dagda/test/data/replica-0.93.4/`. A delta frame replays only where `checkpoint.meta` holds its result (the head of `-branch` and
+`-delete`); the other 11 deltas across those states need Macha's codec and are left for the port branch (section 4.3). No frame of
+`journal.log` is proved: 0.93.4 writes that file only empty.
+
+Macha's 32 S3 cases are named in the plan's 5.1; the replica half of SM:3848, `test_metadata_delta_state_model`, SM:2492; C3, C4, C15,
+C20, C25, C26; verify, replay and accept baselines. Not run under GCC or on arm64. Gate: `dagda_tests` 604 passing, 3 disabled,
+three whole runs on the Mac.
+
 ## 2026-11-06: heads S2, the tree over keys (`feature/heads-s2`)
 
 `dagda/heads/`: `tree.{h,cpp}` (build, update, apply, walk, lookup, scan, prefix, paged `entries`, diff, node diff, collect, stats,

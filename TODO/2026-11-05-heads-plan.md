@@ -563,7 +563,7 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_an_incremental_update_produces_the_tree_a_rebuild_would` | NT:629 | S2 | | `HeadsTree.AnIncrementalUpdateProducesTheTreeARebuildWould` |
 | `test_a_write_rewrites_a_path_rather_than_the_library` | NT:692 | S2 | | `HeadsTree.AWriteRewritesAPathRatherThanTheTree` |
 | `test_a_delta_applied_to_the_tree_lands_where_the_map_lands` | NT:721 | S2 | `HeadsTree.ADeltaAppliedToTheTreeLandsWhereAMapLands`. Keeps the spine-append half |
-| `test_history_replay_applies_a_delta_to_the_tree_not_the_map` | NT:780 | S3 | Needs replay's applier |
+| `test_history_replay_applies_a_delta_to_the_tree_not_the_map` | NT:780 | S3 | `HeadsReplica.ReplayAppliesADeltaToTheTree`. Needs replay's applier |
 | `test_a_prefix_scan_descends_rather_than_walking_the_library` | NT:862 | S2 | | `HeadsTree.APrefixScanDescendsRatherThanWalkingTheTree` |
 | `test_a_scan_seeks_and_stops_where_it_is_told` | NT:991 | S2 | | `HeadsTree.AScanSeeksAndStopsWhereItIsTold` |
 | `test_an_update_reaches_the_root_a_full_build_reaches` | NT:1038 | S2 | | `HeadsTree.AnUpdateReachesTheRootAFullBuildReaches` |
@@ -600,40 +600,40 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_a_node_truncates_its_history_with_its_peer_away_and_the_peer_converges` | RPC:6293 | S5 | |
 | `test_history_is_not_truncated_while_two_heads_are_held` | RPC:6378 | S6 | A read merges the two |
 | `test_unreconstructable_accepted_head_is_repaired_live_from_a_peer` | RPC:6448 | S5 | |
-| `test_metadata_record_payload_copy_is_shared` | SM:541 | S3 | |
+| `test_metadata_record_payload_copy_is_shared` | SM:541 | S3 | `HeadsRecord.APayloadCopyIsShared` |
 | `test_metadata_seed_sibling_replays_after_restart` | gone | Retired by Macha | See 5.2 |
-| `test_metadata_hash_streaming_matches_canonical_encoding` | SM:571 | S3 | |
-| `test_metadata_branch_merge_history_roundtrip` | SM:626 | S3 | Keeps the FS assertions |
-| `test_metadata_commit_store_acceptance_heads_roundtrip` | SM:739 | S3 | |
-| `test_accept_commit_refreshes_checkpoint_on_both_repair_and_ordinary_paths` | SM:877 | S3 | |
-| `test_merge_delta_primary_may_precede_merge_generation` | SM:933 | S3 | |
-| `test_merge_delta_with_generation_gap_reconstructs_after_cache_eviction_and_reopen` | SM:1007 | S3 | |
-| `test_unreconstructable_accepted_head_is_kept_at_startup_and_reanchored_live` | SM:1112 | S3 | |
-| `test_full_fallback_boundary_heals_when_parent_arrives` | SM:1273 | S3 | |
-| `test_compacted_direct_predecessor_cannot_resurface_as_head` | SM:1355 | S3 | |
-| `test_unreconstructable_accepted_head_is_rate_limited_not_hammered` | SM:1428 | S3 | |
-| `test_history_transfer_follows_only_materialization_dependencies` | SM:1524 | S3 | |
-| `test_pristine_joiner_adopts_compacted_cluster_head` | SM:1544 | S3 | |
-| `test_a_head_with_no_clock_is_nobodys_ancestor` | SM:1683 | S3 | |
-| `test_a_head_from_before_truncation_is_recognised_by_its_clock` | SM:1702 | S3 | |
-| `test_returning_replica_adopts_a_head_whose_ancestry_a_peer_truncated` | SM:1754 | S3 | |
-| `test_a_checkpoint_write_holds_no_reader_of_the_replica` | SM:1812 | S3 | |
-| `test_a_journal_compaction_holds_no_reader_of_the_replica` | SM:1872 | S3 | Fills the journal by hand; follows Q3 |
-| `test_a_head_set_aside_for_the_horizon_is_dropped` | SM:1928 | S3 | |
-| `test_the_set_aside_time_of_a_head_no_longer_held_is_forgotten` | SM:1987 | S3 | |
-| `test_metadata_recovery_cache_seed_is_not_accepted_authority` | SM:2024 | S3 | |
-| `test_metadata_journal_mid_frame_corruption_truncates_not_reseeds` | SM:2069 | S3 | Follows Q3 |
+| `test_metadata_hash_streaming_matches_canonical_encoding` | SM:571 | S3 | `HeadsRecord.TheHashStreamsTheCanonicalEncoding` |
+| `test_metadata_branch_merge_history_roundtrip` | SM:626 | S3 | `HeadsReplica.ABranchMergeRoundTripsThroughHistory`. Keeps the FS assertions |
+| `test_metadata_commit_store_acceptance_heads_roundtrip` | SM:739 | S3 | `HeadsReplica.CommitStoreAcceptanceAndHeadsRoundTrip` |
+| `test_accept_commit_refreshes_checkpoint_on_both_repair_and_ordinary_paths` | SM:877 | S3 | `HeadsReplica.AcceptRefreshesTheCheckpointOnBothPaths` |
+| `test_merge_delta_primary_may_precede_merge_generation` | SM:933 | S3 | `HeadsReplica.AMergeDeltasPrimaryMayPrecedeItsGeneration` |
+| `test_merge_delta_with_generation_gap_reconstructs_after_cache_eviction_and_reopen` | SM:1007 | S3 | `HeadsReplica.AGenerationGapDeltaReconstructsAfterEvictionAndReopen` |
+| `test_unreconstructable_accepted_head_is_kept_at_startup_and_reanchored_live` | SM:1112 | S3 | `HeadsReplica.AnUnreconstructableHeadIsKeptAtOpenAndReanchoredLive` |
+| `test_full_fallback_boundary_heals_when_parent_arrives` | SM:1273 | S3 | `HeadsReplica.AFullFallbackBoundaryHealsWhenItsParentArrives` |
+| `test_compacted_direct_predecessor_cannot_resurface_as_head` | SM:1355 | S3 | `HeadsReplica.ACompactedDirectPredecessorCannotResurfaceAsAHead` |
+| `test_unreconstructable_accepted_head_is_rate_limited_not_hammered` | SM:1428 | S3 | `HeadsReplica.AnUnreconstructableHeadIsRateLimited` |
+| `test_history_transfer_follows_only_materialization_dependencies` | SM:1524 | S3 | `HeadsRecord.HistoryTransferFollowsOnlyMaterializationDependencies` |
+| `test_pristine_joiner_adopts_compacted_cluster_head` | SM:1544 | S3 | `HeadsReplica.APristineJoinerAdoptsACompactedClusterHead` |
+| `test_a_head_with_no_clock_is_nobodys_ancestor` | SM:1683 | S3 | `HeadsReplica.AHeadWithNoClockIsNobodysAncestor` |
+| `test_a_head_from_before_truncation_is_recognised_by_its_clock` | SM:1702 | S3 | `HeadsReplica.AHeadFromBeforeTruncationIsRecognisedByItsClock` |
+| `test_returning_replica_adopts_a_head_whose_ancestry_a_peer_truncated` | SM:1754 | S3 | `HeadsReplica.AReturningReplicaAdoptsAHeadWhoseAncestryAPeerTruncated` |
+| `test_a_checkpoint_write_holds_no_reader_of_the_replica` | SM:1812 | S3 | `HeadsReplica.ACheckpointWriteHoldsNoReader` |
+| `test_a_journal_compaction_holds_no_reader_of_the_replica` | SM:1872 | S3 | `HeadsReplica.AJournalCompactionHoldsNoReader`. Fills the journal by hand; follows Q3 |
+| `test_a_head_set_aside_for_the_horizon_is_dropped` | SM:1928 | S3 | `HeadsReplica.AHeadSetAsideForTheHorizonIsDropped` |
+| `test_the_set_aside_time_of_a_head_no_longer_held_is_forgotten` | SM:1987 | S3 | `HeadsReplica.TheSetAsideTimeOfAHeadNoLongerHeldIsForgotten` |
+| `test_metadata_recovery_cache_seed_is_not_accepted_authority` | SM:2024 | S3 | `HeadsSeed.ASeedIsNotAcceptedAuthority` |
+| `test_metadata_journal_mid_frame_corruption_truncates_not_reseeds` | SM:2069 | S3 | `HeadsReplica.AJournalMidFrameCorruptionTruncatesNotReseeds`. Follows Q3 |
 | `test_metadata_legacy_prepare_journal_replays_deterministically` | gone | Retired by Macha | See 5.2 |
-| `test_protocol20_checkpoint_without_acceptance_never_self_promotes` | SM:2189 | S3 | |
-| `test_an_author_sequence_never_regresses` | SM:2231 | S3 | |
-| `test_a_broken_author_chain_starts_a_new_author` | SM:2257 | S3 | |
-| `test_a_lost_author_record_starts_a_new_author` | SM:2291 | S3 | |
-| `test_metadata_delta_chain_reuses_bounded_materialized_head` | SM:2365 | S3 | |
-| `test_metadata_history_payloads_are_disk_backed_and_byte_bounded` | SM:2581 | S3 | |
-| `test_cold_accepted_head_validation_caches_only_owned_results` | SM:2637 | S3 | |
-| `test_metadata_materialization_cache_never_validates_corrupt_delta` | SM:2699 | S3 | |
+| `test_protocol20_checkpoint_without_acceptance_never_self_promotes` | SM:2189 | S3 | `HeadsReplica.ACheckpointWithoutAcceptanceNeverSelfPromotes` |
+| `test_an_author_sequence_never_regresses` | SM:2231 | S3 | `HeadsReplica.AnAuthorSequenceNeverRegresses` |
+| `test_a_broken_author_chain_starts_a_new_author` | SM:2257 | S3 | `HeadsReplica.ABrokenAuthorChainStartsANewAuthor` |
+| `test_a_lost_author_record_starts_a_new_author` | SM:2291 | S3 | `HeadsReplica.ALostAuthorRecordStartsANewAuthor` |
+| `test_metadata_delta_chain_reuses_bounded_materialized_head` | SM:2365 | S3 | `HeadsReplica.ADeltaChainReusesABoundedMaterializedHead` |
+| `test_metadata_history_payloads_are_disk_backed_and_byte_bounded` | SM:2581 | S3 | `HeadsReplica.HistoryPayloadsAreDiskBackedAndByteBounded` |
+| `test_cold_accepted_head_validation_caches_only_owned_results` | SM:2637 | S3 | `HeadsReplica.ColdAcceptedHeadValidationCachesOnlyOwnedResults` |
+| `test_metadata_materialization_cache_never_validates_corrupt_delta` | SM:2699 | S3 | `HeadsReplica.TheCacheNeverValidatesACorruptDelta` |
 | `test_protocol20_state_rejects_legacy_authority_mutators` | gone | Retired by Macha | See 5.2 |
-| `test_storage_pool_and_persistent_cache` | SM:3616 | S3 | Seed lines `:3829-3844`. Rest retires against `StoreStoragePool.PoolsSpreadTraverseSweepAndRebalance`, `StorePersistentCache.TheCacheEvictsTheLeastRecentlyUsedAndReopens` |
+| `test_storage_pool_and_persistent_cache` | SM:3616 | S3 | `HeadsSeed.TheSeedSurvivesReopenAndFollowsTheCache`. Seed lines `:3829-3844`. Rest retires against `StoreStoragePool.PoolsSpreadTraverseSweepAndRebalance`, `StorePersistentCache.TheCacheEvictsTheLeastRecentlyUsedAndReopens` |
 | `test_metadata_identity_rpc` | SM:4183 | S5 | |
 | `test_local_metadata_store_falls_back_from_invalid_delta` | SM:4340 | S4 | |
 
@@ -653,12 +653,12 @@ Cases the mapping fates differently, that heads owes or that moved:
 
 | Case | At `9a08846` | What |
 |---|---|---|
-| `test_metadata_codec_and_replica` | SM:3848 | Split, the Macha session's answer: replica half (quarantine, seed, compaction) S3; codec half stays Macha's |
-| `test_metadata_delta_state_model` | `test_models.cpp:43` | S3 owes it on the neutral owner; Macha's stays |
+| `test_metadata_codec_and_replica` | SM:3848 | Split, the Macha session's answer: replica half (quarantine, seed, compaction) S3, `HeadsReplica.AStoredCommitIsNotAHeadUntilAcceptedAndHistoryGrowsByTheDelta`, `.AnUncommittedProposalSurvivesAndATornJournalTailIsPreserved`, `.CompactionBoundsTheJournal`, `HeadsSeed.ADamagedCheckpointRecoversFromTheSeedAndIsPreserved`, `.WithoutASeedAPrimaryFailureNamesTheFile`; codec half stays Macha's |
+| `test_metadata_delta_state_model` | `test_models.cpp:43` | S3, `HeadsReplica.TheDeltaStateModel` on the neutral owner; Macha's stays |
 | `test_replication_policy_change_on_restart` | RPC:4756 | Policy half is C11 |
 | `test_convergence_demand_coalesces_burst_and_keeps_same_generation_event` | `test_invariants.cpp:113` | KEEP in the mapping; the loop ruling moves the primitive to S5, and the case with it |
 | `test_a_new_namespace_is_a_tree_from_its_first_commit` | SM:2562 | New since `00861dd`. Neutral form S5; stays Macha's too |
-| `test_accepting_a_held_head_again_rebuilds_nothing` | SM:2492 | New. S3 |
+| `test_accepting_a_held_head_again_rebuilds_nothing` | SM:2492 | New. S3, `HeadsReplica.AcceptingAHeldHeadAgainRebuildsNothing` |
 | `test_a_namespace_tree_is_a_function_of_its_entries` | NS:609 | New. S2 |
 | `test_a_stale_tombstone_in_a_batch_is_erased_once` | NS:421 | New. S4 and S5, through the provider; the FS half stays Macha's |
 
