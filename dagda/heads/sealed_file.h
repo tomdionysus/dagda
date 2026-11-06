@@ -19,8 +19,8 @@
 #include "dagda/domain/storage_key.h"
 #include "dagda/heads/record.h"
 
-// How a head space's files are sealed (the plan's section 4.1). Pure; waits on
-// nothing; thread-safe.
+// How a head space's files are sealed (the plan's section 4.1). Pure, waits on
+// nothing and thread-safe, but for next_frame_from, which reads a file.
 //
 // A sealed file: magic, nonce 12, tag 16, u32 length, ciphertext. A journal or
 // history frame: u32 length, then nonce 12, tag 16, u32 length, ciphertext. Macha's
@@ -66,10 +66,30 @@ struct FrameEnvelope {
   std::array<uint8_t, 16> tag{};
   Bytes ciphertext;
 };
-// Throws DecodeError for a malformed envelope. Opening it is separate, because a
-// reader treats an envelope that will not parse and a seal that will not open
-// differently on a final frame.
+// Throws DecodeError for a malformed envelope. Opening it is separate, because the
+// journal's reader says different things of an envelope that will not parse and a
+// seal that will not open. History's reader asks only whether it opens: open_frame.
 FrameEnvelope parse_frame_envelope(std::span<const uint8_t> envelope);
 Bytes open_frame_envelope(const domain::StorageKey& key, std::span<const uint8_t> aad, const FrameEnvelope& envelope);
+
+// No history frame is longer than this, whatever a length word says.
+inline constexpr uint64_t max_history_frame_bytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+
+// The envelope opened, or nothing: whatever stopped it, its length word is not
+// evidence of where the next frame starts.
+std::optional<Bytes> open_frame(const domain::StorageKey& key, std::span<const uint8_t> aad, std::span<const uint8_t> envelope);
+
+// The next offset at or after `from` in a file of frames holding a frame that
+// authenticates, Macha's load_history at 9153011: a length word is outside the AEAD,
+// so this is how a reader finds its place after damage. Nothing when none does, or a
+// window cannot be read. Also for S7's migration and the comparison tool, which give
+// the key and the associated data of the layout they read.
+//
+// Reads the file, a 1 MiB window at a time, so it waits on that disk; thread-safe.
+// Linear in the bytes it passes: the two length fields rule out nearly every position
+// before any AES work, and only a position that passes them reads a frame, up to the
+// length it claims. `pause`, if given, runs per window and may throw to stop the walk.
+std::optional<uint64_t> next_frame_from(const std::filesystem::path& path, uint64_t file_size, uint64_t from, const domain::StorageKey& key,
+                                        std::span<const uint8_t> aad, const std::function<void()>& pause = {});
 
 }  // namespace dagda::heads

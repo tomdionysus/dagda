@@ -17,10 +17,12 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2147,6 +2149,341 @@ TEST(HeadsReplica, OpeningSkipsAFrameThatCannotReplayAndKeepsTheTail) {
   auto replica = bed.open("other");
   EXPECT_EQ(std::filesystem::file_size(other_history), kept);
   EXPECT_TRUE(any_file_starts_with(bed.path("other"), "history.log.corrupt."));
+}
+
+// test_a_damaged_history_frame_loses_only_that_frame (SM at Macha 9153011, 0.93.5). A
+// frame's length word is outside the AEAD, so damage to it looks like a torn tail.
+// Whatever it says, every intact frame after it stays, a node opens, and a commit made
+// afterwards survives the next open. Only bytes nothing can read are ever cut.
+TEST(HeadsReplica, ADamagedHistoryFrameLosesOnlyThatFrame) {
+  ReplicaBed bed;
+
+  struct Damage {
+    const char* name;
+    std::function<void(std::fstream&, uint64_t offset, uint32_t length)> apply;
+  };
+  const auto put_length = [](std::fstream& file, uint64_t offset, uint32_t value) {
+    const std::array<char, 4> bytes{static_cast<char>(value >> 24), static_cast<char>(value >> 16), static_cast<char>(value >> 8), static_cast<char>(value)};
+    file.seekp(static_cast<std::streamoff>(offset));
+    file.write(bytes.data(), bytes.size());
+  };
+  const std::vector<Damage> damages{
+      {"length past the end of the file", [&](auto& file, uint64_t offset, uint32_t) { put_length(file, offset, 0x10000000); }},
+      {"length over any record", [&](auto& file, uint64_t offset, uint32_t) { put_length(file, offset, 0xFFFFFFFF); }},
+      {"length short, inside the file", [&](auto& file, uint64_t offset, uint32_t length) { put_length(file, offset, length / 2); }},
+      {"length long, inside the file", [&](auto& file, uint64_t offset, uint32_t length) { put_length(file, offset, length + 9); }},
+      {"length zero", [&](auto& file, uint64_t offset, uint32_t) { put_length(file, offset, 0); }},
+      // Macha's writes 0x5a over the byte, which is no damage once in 256 seals. Flipped here.
+      {"a body byte",
+       [](auto& file, uint64_t offset, uint32_t length) {
+         const auto at = static_cast<std::streamoff>(offset + 4 + length / 2);
+         char byte{};
+         file.seekg(at);
+         file.get(byte);
+         file.seekp(at);
+         file.put(static_cast<char>(byte ^ 0x5a));
+       }},
+  };
+
+  size_t index = 0;
+  for (const auto& damage : damages) {
+    SCOPED_TRACE(damage.name);
+    const auto name = "damaged-" + std::to_string(index++);
+    const auto history = bed.path(name) / "history.log";
+    auto state = head_with({});
+
+    std::vector<Record> chain;
+    std::vector<uint64_t> offsets;
+    Record head = bed.genesis();
+    const auto next_record = [&](uint64_t generation) {
+      state.clock[author(1)] = generation;
+      return record_of(generation, head.hash, state);
+    };
+    {
+      auto writer = bed.open(name);
+      for (uint64_t generation = 2; generation <= 9; ++generation) {
+        offsets.push_back(std::filesystem::file_size(history));
+        auto next = next_record(generation);
+        ASSERT_TRUE(writer->store_commit(next));
+        chain.push_back(next);
+        head = next;
+      }
+    }
+    const auto size_before = std::filesystem::file_size(history);
+
+    // The fourth of eight, with intact frames on both sides of it.
+    constexpr size_t damaged = 3;
+    const auto length = static_cast<uint32_t>(offsets[damaged + 1] - offsets[damaged] - 4);
+    {
+      std::fstream file(history, std::ios::binary | std::ios::in | std::ios::out);
+      damage.apply(file, offsets[damaged], length);
+    }
+
+    const auto check_survivors = [&](Replica& replica) {
+      for (size_t i = 0; i < chain.size(); ++i) {
+        if (i == damaged) continue;
+        const auto entry = replica.history_entry(chain[i].hash);
+        ASSERT_TRUE(entry.has_value()) << "lost frame " << i;
+        EXPECT_EQ(entry->payload, Bytes(chain[i].payload.begin(), chain[i].payload.end()));
+      }
+    };
+    auto after = next_record(10);
+    {
+      auto reopened = bed.open(name);
+      check_survivors(*reopened);
+      EXPECT_FALSE(reopened->history_entry(chain[damaged].hash).has_value());
+      EXPECT_EQ(std::filesystem::file_size(history), size_before);
+      ASSERT_TRUE(reopened->store_commit(after));
+    }
+    // What was appended past the damage is found again, and the damage has not spread.
+    auto again = bed.open(name);
+    check_survivors(*again);
+    EXPECT_TRUE(again->history_entry(after.hash).has_value());
+  }
+}
+
+// test_a_torn_history_tail_is_still_cut (SM at Macha 9153011). A frame cut short by a
+// crash has nothing readable after it: it is cut, kept aside, and everything before it
+// stays. A byte that is not a frame at all goes the same way.
+TEST(HeadsReplica, ATornHistoryTailIsStillCut) {
+  ReplicaBed bed;
+  const auto history = bed.path() / "history.log";
+
+  auto state = head_with({});
+  std::vector<Record> chain;
+  uint64_t last_frame = 0;
+  Record head = bed.genesis();
+  {
+    auto writer = bed.open();
+    for (uint64_t generation = 2; generation <= 5; ++generation) {
+      state.clock[author(1)] = generation;
+      auto next = record_of(generation, head.hash, state);
+      last_frame = std::filesystem::file_size(history);
+      ASSERT_TRUE(writer->store_commit(next));
+      chain.push_back(next);
+      head = next;
+    }
+  }
+  std::filesystem::resize_file(history, std::filesystem::file_size(history) - 7);
+  {
+    auto reopened = bed.open();
+    for (size_t i = 0; i + 1 < chain.size(); ++i) EXPECT_TRUE(reopened->history_entry(chain[i].hash).has_value());
+    EXPECT_FALSE(reopened->history_entry(chain.back().hash).has_value());
+    EXPECT_EQ(std::filesystem::file_size(history), last_frame);
+  }
+  size_t kept_aside = 0;
+  for (const auto& item : std::filesystem::directory_iterator(bed.path()))
+    kept_aside += item.path().filename().string().find("history.log") == 0 && item.path().filename() != "history.log";
+  EXPECT_EQ(kept_aside, 1U);
+}
+
+// Beyond Macha's two: what 9153011 says that they do not assert. The journal's words on
+// a tail, and that a length over any record no longer reaches a seed.
+TEST(HeadsReplica, ATornHistoryTailSaysWhyAndNeverReachesTheSeed) {
+  const auto length_of = [](uint32_t value) {
+    dannan::net::Writer out;
+    out.u32(value);
+    return out.take();
+  };
+  const auto sealed_junk = [] {
+    dannan::net::Writer envelope;
+    envelope.fixed(std::array<uint8_t, 12>{});
+    envelope.fixed(std::array<uint8_t, 16>{});
+    envelope.bytes(Bytes{0x42});
+    const auto payload = envelope.take();
+    dannan::net::Writer frame;
+    frame.u32(static_cast<uint32_t>(payload.size()));
+    frame.raw(payload);
+    return frame.take();
+  };
+  struct Tail {
+    Bytes bytes;
+    const char* reason;
+  };
+  const std::vector<Tail> tails{
+      {sealed_junk(), "reason=last frame failed AES-GCM authentication"},  {length_of(0), "reason=last frame failed AES-GCM authentication"},
+      {length_of(0x10000000), "reason=incomplete trailing frame"},         {length_of(0xFFFFFFFF), "reason=incomplete trailing frame"},
+      {Bytes{1, 2, 3}, "reason=trailing bytes after last complete frame"},
+  };
+
+  size_t index = 0;
+  for (const auto& tail : tails) {
+    SCOPED_TRACE(tail.reason);
+    ReplicaBed bed;
+    const auto name = "tail-" + std::to_string(index++);
+    const auto history = bed.path(name) / "history.log";
+    const auto record = record_of(2, bed.genesis().hash, head_with({"kept"}));
+    {
+      auto replica = bed.open(name);
+      ASSERT_TRUE(replica->store_commit(record));
+      ASSERT_TRUE(replica->accept_commit(accepted_by_two(record)));
+    }
+    const auto kept = std::filesystem::file_size(history);
+    {
+      std::ofstream out(history, std::ios::binary | std::ios::app);
+      out.write(reinterpret_cast<const char*>(tail.bytes.data()), static_cast<std::streamsize>(tail.bytes.size()));
+    }
+    const auto sink = std::make_shared<test::RecordingSink>();
+    auto options = bed.options(name);
+    options.logger = test::logger_into(sink);
+    options.recovery_seed = bed.genesis();
+    Replica replica(std::move(options));
+    EXPECT_TRUE(sink->saw(tail.reason));
+    EXPECT_FALSE(sink->saw("record too large"));
+    EXPECT_EQ(std::filesystem::file_size(history), kept);
+    EXPECT_TRUE(any_file_starts_with(bed.path(name), "history.log.corrupt."));
+    EXPECT_FALSE(replica.recovery_required());
+    EXPECT_EQ(replica.committed().hash, record.hash);
+  }
+
+  // A length over any record in the middle of the file reaches no seed either.
+  ReplicaBed bed;
+  const auto history = bed.path() / "history.log";
+  const auto first = record_of(2, bed.genesis().hash, head_with({"first"}));
+  const auto second = record_after(first, neutral_payload(head_with({"second"})));
+  uint64_t second_frame = 0;
+  {
+    auto replica = bed.open();
+    ASSERT_TRUE(replica->store_commit(first));
+    ASSERT_TRUE(replica->accept_commit(accepted_by_two(first)));
+    second_frame = std::filesystem::file_size(history);
+    ASSERT_TRUE(replica->store_commit(second));
+    ASSERT_TRUE(replica->accept_commit(accepted_by_two(second)));
+  }
+  const auto third_frame = std::filesystem::file_size(history);
+  {
+    auto replica = bed.open();
+    ASSERT_TRUE(replica->store_commit(record_after(second, neutral_payload(head_with({"third"})))));
+  }
+  {
+    std::fstream file(history, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(static_cast<std::streamoff>(second_frame));
+    const std::array<char, 4> over{'\xff', '\xff', '\xff', '\xff'};
+    file.write(over.data(), over.size());
+  }
+  const auto sink = std::make_shared<test::RecordingSink>();
+  auto options = bed.options();
+  options.logger = test::logger_into(sink);
+  options.recovery_seed = bed.genesis();
+  Replica replica(std::move(options));
+  EXPECT_FALSE(replica.recovery_required());
+  EXPECT_FALSE(std::filesystem::exists(bed.path() / "recovery.required"));
+  EXPECT_EQ(replica.committed().hash, second.hash);
+  EXPECT_TRUE(sink->saw("offset=" + std::to_string(second_frame) + ": frame does not authenticate"));
+  EXPECT_GT(std::filesystem::file_size(history), third_frame);
+}
+
+// 9153011: a frame that authenticates and will not decode is skipped by its length, even
+// at the end of the file, where a frame that does not authenticate would be a tail.
+TEST(HeadsReplica, AnAuthenticatedFrameThatWillNotDecodeIsNeverATail) {
+  ReplicaBed bed;
+  const auto history = bed.path() / "history.log";
+  const auto record = record_of(2, bed.genesis().hash, head_with({"kept"}));
+  {
+    auto replica = bed.open();
+    ASSERT_TRUE(replica->store_commit(record));
+    ASSERT_TRUE(replica->accept_commit(accepted_by_two(record)));
+  }
+  const auto aad = heads::replica_aad(test::neutral_domain(), test::neutral_space())(test::neutral_magics().history);
+  const auto frame = heads::seal_frame(*bed.content_key, aad, Bytes{0xEE});
+  {
+    std::ofstream out(history, std::ios::binary | std::ios::app);
+    out.write(reinterpret_cast<const char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
+  }
+  const auto size = std::filesystem::file_size(history);
+  auto replica = bed.open();
+  EXPECT_EQ(std::filesystem::file_size(history), size);
+  EXPECT_FALSE(any_file_starts_with(bed.path(), "history.log.corrupt."));
+  EXPECT_EQ(replica->committed().hash, record.hash);
+}
+
+// What lies beyond one window: Macha's overlap of 35 bytes, read at its edge, with a frame
+// starting on each side of it. Dagda's own over Macha's: a stop passes through the scan,
+// window by window, leaving the file as it was, and the scan is reachable with no replica.
+TEST(HeadsReplica, TheForwardScanWalksWindowsAndAStopLeavesTheFile) {
+  constexpr uint64_t window = 1024 * 1024;
+  constexpr uint64_t header = 36;
+  const auto aad = heads::replica_aad(test::neutral_domain(), test::neutral_space())(test::neutral_magics().history);
+  std::mt19937 random(9153011);
+  for (const uint64_t from_start : {window - header - 1, window - header, window - header + 1, window - 1, window, window + 7, 3 * window}) {
+    SCOPED_TRACE(from_start);
+    ReplicaBed bed;
+    const auto history = bed.path() / "history.log";
+    const auto first = record_of(2, bed.genesis().hash, head_with({"first"}));
+    const auto last = record_after(first, neutral_payload(head_with({"last"})));
+    uint64_t boundary = 0;
+    {
+      auto replica = bed.open();
+      ASSERT_TRUE(replica->store_commit(first));
+      ASSERT_TRUE(replica->accept_commit(accepted_by_two(first)));
+      boundary = std::filesystem::file_size(history);
+      ASSERT_TRUE(replica->store_commit(last));
+      ASSERT_TRUE(replica->accept_commit(accepted_by_two(last)));
+    }
+    std::ifstream in(history, std::ios::binary);
+    Bytes whole(std::istreambuf_iterator<char>(in), {});
+    in.close();
+    // The scan starts one past the first bad byte, so the next frame is `from_start` from there.
+    Bytes region(from_start + 1);
+    for (auto& byte : region) byte = static_cast<uint8_t>(random());
+    Bytes damaged(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(boundary));
+    damaged.insert(damaged.end(), region.begin(), region.end());
+    damaged.insert(damaged.end(), whole.begin() + static_cast<std::ptrdiff_t>(boundary), whole.end());
+    {
+      std::ofstream out(history, std::ios::binary | std::ios::trunc);
+      out.write(reinterpret_cast<const char*>(damaged.data()), static_cast<std::streamsize>(damaged.size()));
+    }
+    const auto next = heads::next_frame_from(history, damaged.size(), boundary + 1, *bed.content_key, aad);
+    ASSERT_TRUE(next.has_value());
+    EXPECT_EQ(*next, boundary + region.size());
+    size_t windows = 0;
+    EXPECT_TRUE(heads::next_frame_from(history, damaged.size(), boundary + 1, *bed.content_key, aad, [&] { ++windows; }).has_value());
+    EXPECT_EQ(windows, 1 + from_start / (window - header + 1));
+    EXPECT_FALSE(heads::next_frame_from(history, damaged.size(), *next + 1, *bed.content_key, aad).has_value());
+
+    if (from_start == 3 * window) {
+      // At open, with a seed on offer: the first window's pause stops it, and nothing moved.
+      auto stopping = bed.options();
+      size_t calls = 0;
+      stopping.pause = [&calls] {
+        if (++calls > 3) throw contract::MaintenanceStopping();
+      };
+      stopping.recovery_seed = bed.genesis();
+      EXPECT_THROW((Replica(std::move(stopping))), contract::MaintenanceStopping);
+      EXPECT_FALSE(std::filesystem::exists(bed.path() / "recovery.required"));
+      EXPECT_FALSE(any_file_starts_with(bed.path(), "history.log.corrupt."));
+      EXPECT_EQ(std::filesystem::file_size(history), damaged.size());
+    }
+
+    auto replica = bed.open();
+    EXPECT_EQ(replica->committed().hash, last.hash);
+    EXPECT_TRUE(replica->history_contains(first.hash));
+    EXPECT_TRUE(replica->history_contains(last.hash));
+    EXPECT_EQ(replica->diagnostics().history_records, 3U);
+    EXPECT_EQ(std::filesystem::file_size(history), damaged.size());
+  }
+}
+
+// A torn tail over the quarantine limit is cut and not kept, as it always was.
+TEST(HeadsReplica, ATornHistoryTailOverTheLimitIsCutAndNotKept) {
+  ReplicaBed bed;
+  const auto history = bed.path() / "history.log";
+  const auto record = record_of(2, bed.genesis().hash, head_with({"kept"}));
+  {
+    auto replica = bed.open();
+    ASSERT_TRUE(replica->store_commit(record));
+    ASSERT_TRUE(replica->accept_commit(accepted_by_two(record)));
+  }
+  const auto kept = std::filesystem::file_size(history);
+  std::filesystem::resize_file(history, kept + 16ULL * 1024 * 1024 + 1);
+  const auto sink = std::make_shared<test::RecordingSink>();
+  auto options = bed.options();
+  options.logger = test::logger_into(sink);
+  Replica replica(std::move(options));
+  EXPECT_EQ(std::filesystem::file_size(history), kept);
+  EXPECT_FALSE(any_file_starts_with(bed.path(), "history.log.corrupt."));
+  EXPECT_TRUE(sink->saw("<discarded: over quarantine limit>"));
+  EXPECT_EQ(replica.committed().hash, record.hash);
 }
 
 // S3's seam for S4: a corrupt delta frame the codec refuses at open is a skipped
