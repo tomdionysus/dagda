@@ -1051,6 +1051,54 @@ TEST_F(StepsBed, TheSweepUsesTheNodesOwnSightings) {
   EXPECT_TRUE(std::filesystem::exists(node.node().state() / "retention" / "unreferenced-data.bin"));
 }
 
+// second-cutover B6: what Macha's pass records (maintenance.cpp:642-655, 812-821,
+// 919-920, 1049-1054), as its steps record it here, split as Macha's is by whether a
+// higher class was present as the transfer ended.
+TEST_F(StepsBed, APassRecordsMachasObservations) {
+  auto& observations = node.node().context().observations();
+  const auto series = [&](const std::string& name) {
+    const auto snapshot = observations.snapshot();
+    const auto found = snapshot.histograms.find(name);
+    return found == snapshot.histograms.end() ? uint64_t{0} : found->second.count;
+  };
+  const auto counter = [&](const std::string& name) -> std::optional<uint64_t> {
+    const auto snapshot = observations.snapshot();
+    const auto found = snapshot.counters.find(name);
+    if (found == snapshot.counters.end()) return std::nullopt;
+    return found->second;
+  };
+
+  make_due();
+  const auto built = series("maintenance.inventory.build_us");
+  const auto horizon = series("maintenance.release_horizon.build_us");
+  const auto steps = series("maintenance.repair.step_us.idle");
+  const auto bytes = counter("maintenance.repair.bytes.idle").value_or(0);
+  loop().pass();
+  EXPECT_GT(series("maintenance.inventory.build_us"), built);
+  EXPECT_GT(series("maintenance.release_horizon.build_us"), horizon);
+  EXPECT_GT(series("maintenance.repair.step_us.idle"), steps);
+  EXPECT_GT(counter("maintenance.repair.bytes.idle").value_or(0), bytes);
+  EXPECT_GT(counter("maintenance.repair.push_examined.idle").value_or(0), 0u);
+  EXPECT_TRUE(counter("maintenance.repair.pull_examined.idle").has_value());
+  EXPECT_TRUE(counter("maintenance.repair.retained_repairs").has_value());
+
+  // The sweep's, once the gate is open and it has something to examine.
+  loop().move(foreground_quiet * 2);
+  loop().pass();
+  ASSERT_TRUE(loop().last_data);
+  ASSERT_TRUE(loop().last_data->gate.permitted) << loop().last_data->gate.reason;
+  ASSERT_GT(loop().last_data->swept.objects, 0u);
+  EXPECT_GT(series("maintenance.gc.step_us"), 0u);
+  EXPECT_GT(series("maintenance.gc.per_object_ns"), 0u);
+
+  // A higher class present as the step ends.
+  make_due();
+  node.node().dagda_node().activity().note(dannan::sched::FrameType::foreground, 64 * 1024);
+  loop().pass();
+  EXPECT_GT(series("maintenance.repair.step_us.loaded"), 0u);
+  EXPECT_TRUE(counter("maintenance.repair.bytes.loaded").has_value());
+}
+
 // A failure in the inventory: Macha's outer catch logs it and the rest of the pass
 // is skipped; the horizon stands and the next pass asks again.
 TEST_F(StepsBed, AFailedInventoryEndsThePassAndTheNextAsksAgain) {
