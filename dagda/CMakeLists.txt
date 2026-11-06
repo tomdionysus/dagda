@@ -18,6 +18,9 @@ add_library(dagda SHARED
   domain/storage_key.cpp
   domain/wrap.cpp
   heads/control_node_store.cpp
+  heads/record.cpp
+  heads/replica.cpp
+  heads/sealed_file.cpp
   heads/tree.cpp
   lease/fence.cpp
   lease/keeper.cpp
