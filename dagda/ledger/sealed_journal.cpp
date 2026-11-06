@@ -229,6 +229,21 @@ std::optional<bool> SealedJournal::probe(const std::filesystem::path& path, cons
   return true;
 }
 
+bool SealedJournal::holds_only_a_torn_frame(const std::filesystem::path& path, uint32_t max_read_frame) {
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  if (ec || size == 0) return false;
+  if (size < frame_header) return true;
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) throw std::runtime_error("cannot open journal " + path.string() + ": " + std::strerror(errno));
+  std::array<uint8_t, 4> length_bytes{};
+  const bool read = pread_all(fd, length_bytes, 0);
+  ::close(fd);
+  if (!read) throw std::runtime_error("cannot read journal " + path.string());
+  const uint32_t length = read_be32(length_bytes.data());
+  return length <= max_read_frame && frame_header + length > size;
+}
+
 SealedJournal::Rekeyed SealedJournal::rekey(const std::filesystem::path& path, const domain::StorageKey& from, const domain::StorageKey& to,
                                             std::array<uint8_t, 8> aad, uint32_t max_read_frame) {
   Rekeyed out;

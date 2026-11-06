@@ -179,6 +179,25 @@ TEST(MigrateCrash, TheTemporariesACrashLeavesAreRemovedByTheSecondRun) {
   expect_v19_opens(bed, v18);
 }
 
+// A claims journal holding only the torn front of its first frame (a crash of
+// Macha's just after a checkpoint emptied it) holds nothing: the store's replay
+// drops it. It is not a ledger under another key, and no run can get past a
+// refusal of it.
+TEST(MigrateCrash, AJournalHoldingOnlyATornFrameIsNotRefused) {
+  StoreBed bed;
+  V18State v18(bed);
+  // Whole frames out, a short tail in.
+  legacy::write_file(v18.state / "retention" / "claims.log", Bytes(20, 0x33));
+  // And a ledger with no root that holds the same.
+  const auto empty_trie = v18.state / "ledger" / ("data-" + dannan::identity::to_string(filled(0xee)));
+  legacy::write_file(empty_trie / "journal.log", Bytes(20, 0x44));
+  const auto report = v18.migrate();
+  EXPECT_EQ(report.markers_rewritten, 3u);
+  ledger::RetentionStore claims(v18.state, v18.node_local(), test::quiet_logger());
+  EXPECT_EQ(claims.claims(contract::RetentionClass::data, v18.loose[1].first).adds, (std::map<NodeId, uint64_t>{{v18.origin, 1}}));
+  EXPECT_EQ(std::filesystem::file_size(v18.state / "retention" / "claims.log"), 0u);
+}
+
 // ---- A backend left out -------------------------------------------------------
 
 // A second backend the state's mirror names, left off the command line. The run

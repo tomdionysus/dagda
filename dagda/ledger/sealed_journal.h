@@ -96,6 +96,11 @@ class SealedJournal {
   // the state device.
   static std::optional<bool> probe(const std::filesystem::path& path, const domain::StorageKey& key, std::array<uint8_t, 8> aad, uint32_t max_read_frame,
                                    uint64_t offset = 0);
+  // Whether the file holds nothing but the front of a first frame: too short for
+  // a frame's header, or a length that runs past its end. A crash's torn append,
+  // which replay drops; no key opens it and no key is proved by it. Waits on the
+  // state device.
+  static bool holds_only_a_torn_frame(const std::filesystem::path& path, uint32_t max_read_frame);
   struct Rekeyed {
     uint64_t frames = 0;
     // Bytes after the last frame that opened under `from`: a torn tail,

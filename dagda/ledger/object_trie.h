@@ -195,7 +195,7 @@ class ObjectTrie {
   void rekey(std::shared_ptr<const domain::StorageKey> key);
   // Whether the trie in `dir` is sealed under `key`: its published root's
   // node, or failing a saved root its journal's first frame, opens under it.
-  // Nothing for an empty trie (no saved node, no journal frame), which any
+  // Nothing for an empty trie (no saved node, no whole journal frame), which any
   // key opens. Reads one node and nothing else; a trie must be probed before
   // it is opened under a key that may be wrong, since opening replays the
   // journal and truncates it at the first frame that will not open. Waits
