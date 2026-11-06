@@ -29,12 +29,17 @@ answer that counts is Yes, with nothing attached. A bounded claim, an exception 
 frozen at `9a08846`. There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
 needs them. Tell the Macha session when the answer is Yes.
 
-**How it ends (Tom, relayed, 2026-11-06):** the Macha session builds the port, "when the dannan and dagda agents have finished all
-tasks and reported their capabilities, and this agent is satisfied that macha can be ported with no loss of functionality onto
-their codebases, which will be frozen during the port." So `../macha` stays read only for Dagda, and this plan ends with a
-capabilities report to the Macha session, with the evidence for each, naming what the port needs from Dagda. Dagda is frozen
-during the port; how a defect found then is handled is being asked. What can only run over the port (retirements run, goldens
-through the facade, the real migration) is named in the report as the port's to run, with Dagda's part ready.
+**How it ends (Tom, relayed, 2026-11-06):**
+- This plan ends with a capabilities report to the Macha session, with the evidence for each, naming what the port needs from Dagda,
+  and saying plainly what could not be shown without a running port. "you are the review", to the Macha session: its judgement of
+  that report is the review, and the review by this session after a clear is gone.
+- The Macha session builds the port, once satisfied, "which will be frozen during the port": Dagda frozen, `../macha` read only for
+  Dagda. Macha stays at `9a08846` (0.92.5 tag aside: 808fa0f is older; its live code is 0.93.4) until the port starts.
+- A defect the port finds: "The port will pause until the relevant agent has identified and fixed the fault, with testing. The port
+  will then continue with the relevant codebase frozen again."
+- Proof on the nodes: "We will convert macnessa and inverbeg store backends and install there to test, prove and iterate." The real
+  migration runs on the live disks after the port is built, with no 670 GB copy, spare hardware or separate timed run. So
+  `dagda-migrate`'s resume, refusals and comparison tool must be ready before then. `--reverse` stays built, not a gate.
 
 **The work, in this order. Each item is Dagda's to do.**
 
@@ -52,13 +57,14 @@ through the facade, the real migration) is named in the report as the port's to 
 6. The before and after comparison tool: objects by id and plaintext hash across DATA, CONTROL and cache, removed objects staying
    gone, held tries, claims and dots, retention marker, reference counts, sightings, markers, accounting, and metadata heads,
    certificates and history replay.
-7. Crash and power-cut cases per migration phase. The migration's fsync cost, if the whole-disk run shows it matters.
-8. Retirements run, not read, wherever a Macha case compiles over the port. Goldens widened: full path, activity, the store's
-   journal lines mapped.
+7. Crash cases per migration phase, ready before the first real run on the live disks, in process (a power cut is the nodes' to show).
+8. Retirements compared assertion by assertion where they cannot yet run; those that need the port named in the report. The store's
+   journal lines mapped against the goldens.
 9. Linux, ASan, UBSan and TSan on the final tree, with class-waits merged. Answer the `mutex lock failed` report.
-10. Baselines against Dagda's own measurements, on the Pis.
+10. Dagda's own measurements on the Pis against Macha's baselines, when the TV import has finished and they exist.
+11. The capabilities report.
 
-**Asked of Tom through the Macha session, once (2026-11-06), with what each is for:** see `COMPLETED.md` when answered.
+**Asked of Tom (2026-11-06), all answered above but R5, the baselines, which wait on the TV import.**
 
 ## The earlier table, kept for its gates and details; the goal above decides the order
 
@@ -94,7 +100,7 @@ by eye. Nothing in them has been run against Macha.
 | P6 | Dropped for now (Tom: "I'll decide later"): the real run, there and back, the rehearsal. The dry run over macnessa's real state stands as done | Second-cutover "Migration plan", when he decides | Tom |
 | P7 | First stage: S, 8a and 8b, one disk event | S.4, 8a.4, 8b.4; all 11 crash-matrix rows; the Status golden | P1 to P6, the first cutover |
 | P8 | Later stage: heads S2 to S7, 8c with `dagda-migrate` moving `<state>/metadata/` and the seed, Dagda's loop with `test_maintenance_trace`, then 8d, against `808fa0f` | Heads plan section 3, re-read at `808fa0f`; 8c.4, 8d.4; `macha-metadata-dump` output identical | 95 gap-heads cases each get a session or a named retirement |
-| P8b | The independent review, the gate Tom set: "by fresh agents I meant the library agents, after a clear". This session, its context cleared, reviews Dagda from the code and the nodes only | The review's findings closed | P1 to P8 as they land |
+| P8b | Gone: the Macha session's judgement of the capabilities report is the review (Tom) | | |
 | P9 | Lugh and Lir: L1 to L9, then `Context` v1 frozen, tag `0.1.0` | Stack document's requirements | P8 |
 
 **Macha is frozen at `cac5998` until the libraries are ready (Tom, relayed by the Macha session,
