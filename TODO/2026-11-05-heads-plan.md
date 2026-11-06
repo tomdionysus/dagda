@@ -130,7 +130,7 @@ metadata plane; lease renew and release. Section 6 names each.
   tree)`, and `head_fields(state)`: the clock, merge parents and floor Dagda reads. For Macha these are a
   function of both halves, because head and FS fields interleave in SM14 and up. State is an opaque shared
   handle, so a delta can share what it did not touch.
-- **`Merge`**: `merge(base?, a, b) -> state | conflict`. Macha ignores `base`.
+- **`Merge`**: `merge(base?, heads) -> state | why`, as built in S6: `heads` is the two in hash order with their states, a reader and the node store the merged tree is written through, and a result carries the delta against the primary, the objects to claim and the conflict counts. A conflict is in the owner's blob. Macha ignores `base`, and a merge is only given one if it says it reads it (`reads_base`).
 - **`TreeValues`**: the leaf value codec, what a value references, the optional child tree (the extent spine).
   The domain strings and limits are parameters of the space; Macha's are section 1, item 4 and H18.
 - **`ReachabilityProvider`**: exists (`dagda/contract/reachability.h`).
@@ -555,8 +555,8 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_a_node_that_is_not_a_tree_node_throws` | NE:225 | S2 | | `HeadsTree.ANodeThatIsNotATreeNodeThrows` |
 | `test_a_manager_without_a_store_pages_a_map_backed_view` | NE:242 | Stays Macha's | The map is Macha's working form, Dagda has none. Name is stale (F8) |
 | `test_tombstones_live_in_batches_in_a_tree_backed_head` | NS:336 | S4 | `NodeHeads.RetirementsLiveInBatchesInATreeBackedHead`. Keeps the FS-delete half |
-| `test_reconciling_two_tree_backed_branches_keeps_the_namespace` | NS:565 | S6 | |
-| `test_a_merge_claims_what_it_introduces` | NS:852 | S6 | |
+| `test_reconciling_two_tree_backed_branches_keeps_the_namespace` | NS:565 | S6 | `HeadsReconcile.TwoTreeBackedBranchesKeepTheSpace` |
+| `test_a_merge_claims_what_it_introduces` | NS:852 | S6 | `HeadsReconcile.AMergeClaimsWhatItIntroduces`; `.AMergesClaimsOnPeersAreDeferredIfTheyFail` for `mgr:1262-1270` |
 | `test_the_tree_round_trips_every_namespace_it_is_given` | NT:78 | S2 | | `HeadsTree.TheTreeRoundTripsEveryKeySetItIsGiven` |
 | `test_the_root_is_a_function_of_the_entry_set_and_nothing_else` | NT:136 | S2 | | `HeadsTree.TheRootIsAFunctionOfTheEntrySetAndNothingElse` |
 | `test_changing_one_file_rewrites_a_path_to_the_root_and_not_the_library` | NT:159 | S2 | | `HeadsTree.ChangingOneValueRewritesAPathToTheRootAndNotTheTree` |
@@ -574,8 +574,8 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_a_commit_claims_the_nodes_it_introduced_and_prunes_the_rest` | NT:1191 | S4 | `HeadsCommit.ACommitClaimsTheNodesItIntroducedAndPrunesTheRest` |
 | `test_a_diff_is_the_paths_that_differ_and_reads_only_their_leaves` | NT:1436 | S2 | | `HeadsTree.ADiffIsTheKeysThatDifferAndReadsOnlyTheirLeaves` |
 | `test_distant_changes_read_no_leaf_between_them` | NT:1477 | S2 | | `HeadsTree.DistantChangesReadNoLeafBetweenThem` |
-| `test_a_tree_merge_is_the_merge_of_the_materialised_heads` | NT:1505 | S6 | Keeps the FS outcomes |
-| `test_baseline_reconcile_materialised_against_tree` | NT:1628 | S6 | Merge baseline |
+| `test_a_tree_merge_is_the_merge_of_the_materialised_heads` | NT:1505 | S6 | `HeadsReconcile.ATreeMergeIsTheMergeOfTheMaterialisedHeads`. The oracle and the forty rounds over the neutral owner; the rename and the returning directory stay Macha's |
+| `test_baseline_reconcile_materialised_against_tree` | NT:1628 | S6 | `HeadsCost.MergeFollowsWhatDiffersAndNotTheKeys`, merge baseline; the BENCH lines kept, Macha's library sizes and FS outcomes its own |
 | `test_a_commit_is_published_only_once_its_objects_are_claimed` | `test_node_services.cpp:362` | S4 | `NodeHeads.ACommitIsPublishedOnlyOnceItsObjectsAreClaimed`. Keeps "a hole is not an object" |
 | `test_rpc_metadata_mutations_use_bounded_isolated_executor` | RPC:2282 | Retired against Dannan | Compared at S5, all 38 by name and the queue case's body: `Scheduler.AQueueOverItsByteBoundRefusesAndCounts` (per class, no handler run, counted), `.HeldWorkersOfOneClassNeverDelayAnother`, `.HeldOrderedWorkDelaysNoOtherClass`, `.RecordsTimingsPerTypeAndPerFrameClass`, `.ATimingRecordsItsWaitAndHandlerTime`, `.ControlClassOrderedWorkGoesFirstAndKeepsAQuarterOfTheQueue` (jobs), `.ARequestIsChargedUntilItsHandlerReturns`; C14 for Dagda's types. "The session stays open after a refusal" has no assertion of its own in those: it rests on Dannan's refusal being a reply |
 | `test_rpc_metadata_executor_orders_each_peer_and_parallelises_peers` | RPC:2428 | Retired against Dannan | `Scheduler.OrderedWorkKeepsEachPeersOrderAndRunsPeersSideBySide`; C14 |
@@ -583,24 +583,24 @@ From `2026-11-05-test-mapping.md`, its later sections applied. Names and lines a
 | `test_rpc_metadata_executor_cancellation_disconnect_and_shutdown` | RPC:2681 | Retired against Dannan | Compared at S5. Cancel: `Scheduler.ACancelledQueuedRequestNeverRuns`. Disconnect, `abort()`: `Client.ACallHandleCancelsPromotesAndAborts`, `Server.AClosedSessionsQueuedWorkIsNotStartedAndItsRunningWorkFinishes`. Shutdown: `Scheduler.StoppingFinishesRunningWorkAndDropsTheQueue` |
 | `test_joiner_cannot_form_genesis` | RPC:2978 | S5 | `HeadsFounding.AJoinerCannotFormGenesis` |
 | `test_bootstrap_joiner_requires_complete_checkpoint_survey` | RPC:2999 | S5 | `HeadsFounding.AJoinerRequiresACompleteCheckpointSurvey`. A real peer stopped within its dead_after, not a phantom: placement is no longer on that path |
-| `test_nodes_seeking_different_copy_counts_share_one_namespace` | RPC:3060 | S5 | `HeadsExchange.NodesSeekingDifferentCopyCountsShareOneSpace`. Writes in turn; a fork is S6's |
-| `test_two_node_mutual_bootstrap_metadata_write_floor` | RPC:3114 | S6 | Needs merge. Carried as a known failure in Macha's `TODO/ACTIVE.md:146` |
+| `test_nodes_seeking_different_copy_counts_share_one_namespace` | RPC:3060 | S5 | `HeadsExchange.NodesSeekingDifferentCopyCountsShareOneSpace`. Writes in turn; the fork is `HeadsReconcile.NodesSeekingDifferentCopyCountsForkAndMerge` |
+| `test_two_node_mutual_bootstrap_metadata_write_floor` | RPC:3114 | S6 | `HeadsReconcile.TwoNodesFormingAtOnceConverge`. Carried as a known failure in Macha's `TODO/ACTIVE.md:146`; `metadata_voters` and `data_replication` are its record's |
 | `test_service_metadata_repair_coalesces_real_generation_burst` | RPC:3212 | S5 | `HeadsExchange.RepairCoalescesARealGenerationBurst` |
 | `test_failed_convergence_retries_once_per_burst_of_events` | RPC:3328 | S5 | `HeadsExchange.FailedConvergenceRetriesOncePerBurstOfEvents`. The pass's clock stepped, not five real seconds |
-| `test_service_same_generation_sibling_notice_triggers_reconciliation` | RPC:3556 | S6 | |
-| `test_a_head_from_an_unknown_history_is_merged` | RPC:3737 | S6 | |
-| `test_a_head_that_cannot_be_merged_is_set_aside` | RPC:3806 | S6 | |
-| `test_concurrent_reads_during_divergence_produce_one_reconciliation` | RPC:3859 | S6 | |
+| `test_service_same_generation_sibling_notice_triggers_reconciliation` | RPC:3556 | S6 | `HeadsReconcile.ASameGenerationSiblingNoticeTriggersReconciliation`. Its two sleeps around the duplicate replaced by asserting at the sender |
+| `test_a_head_from_an_unknown_history_is_merged` | RPC:3737 | S6 | `HeadsReconcile.AHeadFromAnUnknownHistoryIsMerged` |
+| `test_a_head_that_cannot_be_merged_is_set_aside` | RPC:3806 | S6 | `HeadsReconcile.AHeadThatCannotBeMergedIsSetAside`; `.AHeadHoldingNoTreeIsSetAside` for `mgr:1196-1197` |
+| `test_concurrent_reads_during_divergence_produce_one_reconciliation` | RPC:3859 | S6 | `HeadsReconcile.ConcurrentReadsDuringDivergenceProduceOneReconciliation` |
 | `test_lagging_third_replica_catches_up_linear_burst_in_bounded_runs` | RPC:4037 | S5 | `HeadsExchange.ALaggingThirdReplicaCatchesUpALinearBurstInBoundedRuns`, and `.AHistoryPushFillsItsWindowOfEightAndNoMore` |
 | `test_a_file_touch_commits_while_a_holder_is_away` | RPC:4214 | S5 | `HeadsExchange.ATouchCommitsWhileAHolderIsAway` |
 | `test_commit_replicas_ordered_local_then_nearest` | RPC:4317 | S5 | `HeadsExchange.CommitReplicasAreOrderedLocalThenNearest` |
-| `test_disjoint_metadata_pairs_branch_and_reconcile` | RPC:4590 | S6 | |
+| `test_disjoint_metadata_pairs_branch_and_reconcile` | RPC:4590 | S6 | `HeadsReconcile.DisjointPairsBranchAndReconcile` |
 | `test_metadata_commits_with_whichever_nodes_remain` | RPC:5148 | S5 | `HeadsExchange.CommitsWithWhicheverNodesRemain` |
 | `test_metadata_repair_stalled_on_a_silent_peer_does_not_block_local_writes` | RPC:5588 | S5 | `HeadsExchange.RepairStalledOnASilentPeerDoesNotBlockLocalWrites` |
 | `test_a_commit_is_claimed_here_when_the_peer_never_answers_the_claim` | RPC:5660 | S5 | `HeadsExchange.ACommitIsClaimedHereWhenThePeerNeverAnswersTheClaim`. The head's tree in place of Macha's catalogue root |
 | `test_a_peer_that_stalls_on_a_commit_is_not_waited_for_again` | RPC:5758 | S5 | `HeadsExchange.APeerThatStallsOnACommitIsNotWaitedForAgain` |
 | `test_a_node_truncates_its_history_with_its_peer_away_and_the_peer_converges` | RPC:6293 | S5 | `HeadsExchange.ANodeTruncatesItsHistoryWithItsPeerAwayAndThePeerConverges` |
-| `test_history_is_not_truncated_while_two_heads_are_held` | RPC:6378 | S6 | A read merges the two |
+| `test_history_is_not_truncated_while_two_heads_are_held` | RPC:6378 | S6 | `HeadsReconcile.HistoryIsNotTruncatedWhileTwoHeadsAreHeld`. A read merges the two |
 | `test_unreconstructable_accepted_head_is_repaired_live_from_a_peer` | RPC:6448 | S5 | `HeadsExchange.AnUnreconstructableHeadIsRepairedLiveFromAPeer` |
 | `test_metadata_record_payload_copy_is_shared` | SM:541 | S3 | `HeadsRecord.APayloadCopyIsShared` |
 | `test_metadata_seed_sibling_replays_after_restart` | gone | Retired by Macha | See 5.2 |
@@ -736,6 +736,7 @@ Others of the same kind, found reading, with the same standing: reproduce, do no
 - **R9.** `note_author_accepted` is memory until the next reserve (`md.cpp:2233-2237`).
 - **R10.** A corrupt `author.meta` throws from `reserve_mutation_dot` (`md.cpp:2160-2162`); no recovery path, so writes stop. D3.
 - **R11.** Message `get_metadata_identity` replies with the committed identity (`metadata_server.cpp:125`). SM:4183 compares with `current_identity()`, which is equal unless a journal is mid-replay.
+- **R13.** New, session S6, by reading and pinned by `HeadsReconcile.AFoldStepWithoutThisNodesHeadTakesANewAuthor`. A fold takes the two lowest hashes first, and those may both lack this node's latest mutation. A merge's dot is reserved against their clock (`mgr:1255-1256`), and `reserve_mutation_dot` rotates when a clock "lacks a mutation this node had accepted" (`md.cpp`, H12), so this node takes a new author for a step in a fold whose end carries that mutation anyway. Correct, and an author it did not need. Not run on Macha.
 - **R12, resolved.** One damaged length word cut every later history frame, and a length over 2 GiB threw into seed recovery (`load_history` before `9153011`). The one row here that was a defect: Tom ruled it fixed in Macha first, as 0.93.5 (`9153011`, freeze exception; forms unchanged), and Dagda mirrors it (`load_history`, `next_frame_from` in `sealed_file.h`). A frame that does not open means looking forward for the next that authenticates; the damaged bytes stay; only when nothing later authenticates is the rest a torn tail. So `history.log` may hold damaged bytes between good frames, and section 4.1's "skipping it and quarantining a tail" now reads that way. Then `98b816d`: a failed read, in the main loop or the scan, stops the load and cuts nothing; what was not read is read at the next open, and heads needing it come from peers. Mirrored, with the whole load tested at each place a read can fail (`AFailedReadOfHistoryCutsNothing`), which Macha has by reading for its main loop.
 
 ## 8. Torrent
@@ -778,7 +779,7 @@ The `-torrent` fixture is owed by the Macha session at S7: it cuts it on a node 
 - **Q2. `<state>/metadata/` under v19: which key and which path.** You ruled it migrates at 8c, the domain in every AAD, ledgers under the node-local key. "Ledger" did not name these files. *Recommended:* section 4.1: content under the domain's key, as objects are, so a node without the domain's key cannot read it; `heads.meta`, `author.meta` and `set-aside.meta`, this node's own standing, under the node-local key; everything moves to `<state>/heads/<space id hex>/`. *The alternative:* keep `metadata/` as the name, and all under the domain's key: less to build, and the literal rule unmet for those three.
 - **Q3. The journal reader.** Macha's `load_journal` has no production writer (its `TODO/ACTIVE.md:26-27`, "a question for the operator"); `compact()`'s thresholds, `pending_history_` and `cur_` differing from `committed_` stand only on it. *Recommended:* Dagda keeps the reader in S3, because the frozen code has it, its two cases gate it and a Yes must not rest on the live nodes being clean; it gets no writer. Retire it in Macha first, then here, if you want it gone. Answering "none" removes SM:1872 and SM:2069's replica half with named retirements.
 - **Q4. What `renew` means.** See 2.4. *Recommended:* it writes nothing and reports standing. Not needed for Macha.
-- **Q5. `base` and determinism.** History truncates per node, so two reconcilers may differ in holding the ancestor. A merge that uses `base` then can yield sibling merge commits, against H8. Macha is unaffected: it passes none, and the catalogue's use is outside the commit (`mgr:1952-1961`). *Recommended:* state it in the contract; pin with C40.
+- **Q5. `base` and determinism.** History truncates per node, so two reconcilers may differ in holding the ancestor. A merge that uses `base` then can yield sibling merge commits, against H8. Macha is unaffected: it passes none, and the catalogue's use is outside the commit (`mgr:1952-1961`). *Recommended:* state it in the contract; pin with C40. *Done as recommended, S6:* the contract is on `heads::Merge`; a question for Tom only if he would rather refuse a merge that reads `base`.
 - **Q6. A real state for the gate.** F11. *Recommended:* a copy at 0.93.4, migrated and replayed on Macha's port branch, before the later stage. If you decide against, the Yes says what it rests on.
 
 Standing and not reopened: O(state) per delta, the policy disagreement loop, wire-sized allocations and the rest of Macha's design defects, "left" (Macha `TODO/ACTIVE.md:79-82`); Dagda follows. Bounding each `reserve` by what remains costs nothing and needs no format change, so S3 does it; the cited `metadata.cpp:1951` could not be matched at `b080c38` and I did not look for it again.
