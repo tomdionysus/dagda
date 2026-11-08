@@ -16,6 +16,7 @@
 
 #include "dagda/domain/storage_key.h"
 #include "dagda/ledger/object_trie.h"
+#include "dannan/contract/thread_safety.h"
 #include "dannan/status/log.h"
 
 namespace dagda::ledger {
@@ -35,8 +36,9 @@ inline constexpr std::array<uint8_t, 8> reference_counts_magic{'M', 'R', 'E', 'F
 // (its namespace reference counts): two tries and `state`, the tries sealed
 // under the node-local key.
 //
-// Single owner (the owner's census); views are read from any thread. Every
-// operation waits on the state device.
+// Single owner (the owner's census); views and totals are read from any
+// thread (the node's status timer reads the totals). Every operation but
+// totals() waits on the state device.
 class ReferenceCounts {
  public:
   // Opens or creates the counts in `dir`, `cache_bytes` shared by the tries,
@@ -51,7 +53,8 @@ class ReferenceCounts {
   // The root the counts are at; none before the first count and after an
   // interrupted change.
   std::optional<ObjectId> root() const noexcept { return _root; }
-  Totals totals() const noexcept { return _totals; }
+  // As last set, both figures from one reset or change. Waits on nothing.
+  Totals totals() const;
 
   // Replaces every count: one item per reference, in any order.
   void reset(const std::optional<ObjectId>& root, std::vector<ObjectId> extents, std::vector<ObjectId> nodes, Totals);
@@ -76,7 +79,9 @@ class ReferenceCounts {
   ObjectTrie _extents;
   ObjectTrie _nodes;
   std::optional<ObjectId> _root;
-  Totals _totals;
+  // Memory only: the status timer reads the totals while the owner sets them.
+  mutable dannan::contract::Mutex _totals_mutex;
+  Totals _totals DANNAN_GUARDED_BY(_totals_mutex);
 };
 
 }  // namespace dagda::ledger
