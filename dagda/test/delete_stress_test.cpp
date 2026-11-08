@@ -1081,10 +1081,8 @@ class StressBed {
     options.store.write_copies = 2;
     options.store.extent_size = 1024 * 1024;
     options.store.write_stall = 500ms;
-    options.store.write_deadline = 10s;
-    options.store.read_deadline = 5s;
     options.store.control_call = 3s;
-    options.store.call_horizon = 15s;
+    options.store.call_no_progress = 15s;
     options.store.prompt_retry = 1s;
     options.admission_wait = 5s;
     options.no_progress = 10s;
