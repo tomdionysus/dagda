@@ -25,6 +25,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/migrate/heads_metadata.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/retag.h"
 #include "dagda/store/local_format.h"
@@ -484,6 +485,10 @@ void remove_temporaries(const std::filesystem::path& state, const std::vector<st
   if (options.dry_run) return;
   auto dirs = known_ledgers_dirs(state);
   dirs.insert(dirs.end(), backends.begin(), backends.end());
+  const auto places = heads_places(state, options.cache, options.space_name);
+  dirs.push_back(places.v18_directory);
+  dirs.push_back(places.v19_directory);
+  if (!options.cache.empty()) dirs.push_back(places.v18_seed.parent_path());
   std::error_code ec;
   for (const auto& dir : dirs) {
     if (!std::filesystem::is_directory(dir, ec)) continue;
@@ -495,6 +500,43 @@ void remove_temporaries(const std::filesystem::path& state, const std::vector<st
     }
     if (ec) throw std::runtime_error("cannot list " + dir.string() + ": " + ec.message());
   }
+}
+
+// The later stage on a state whose objects and ledgers are v19 already: the
+// metadata alone. From the first write to the last the marker says so, which
+// Macha and the store both refuse; a second run finishes from it without reading
+// the disks again.
+void migrate_heads_alone(const std::filesystem::path& state, const std::filesystem::path& layout_marker, const dannan::identity::ClusterKey& cluster,
+                         const dannan::identity::KeyCustody& custody, const MigrationOptions& options, MigrationReport& report) {
+  std::vector<std::unique_ptr<store::StorageLock>> locks;
+  const auto lock = [&](const std::filesystem::path& root) {
+    try {
+      locks.push_back(std::make_unique<store::StorageLock>(root));
+    } catch (const std::exception& error) {
+      throw MigrationRefused(root.string() + " is in use (is the node running?): " + error.what());
+    }
+  };
+  std::error_code ec;
+  lock(state);
+  if (!options.cache.empty() && std::filesystem::is_directory(options.cache, ec)) lock(options.cache);
+  const auto domain_key = domain::StorageKey::derive_v1(cluster);
+  const auto node_local = domain::StorageKey::derive_node_local(custody);
+  {
+    MigrationOptions quiet = options;
+    quiet.dry_run = true;
+    quiet.after_step = {};
+    quiet.say = {};
+    MigrationReport scratch;
+    migrate_heads_metadata(state, domain_key, node_local, quiet, scratch, true);
+  }
+  say(options, "state " + state.string() + ": nothing refused");
+  remove_temporaries(state, {}, options);
+  if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_forward_heads) + "\n");
+  migrate_heads_metadata(state, domain_key, node_local, options, report, false);
+  if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, store::state_layout_marker(store::SealingScheme::v19(domain::domain_v1)) + "\n");
+  ++report.markers_rewritten;
+  say(options, "marker " + layout_marker.string());
+  step(options, report);
 }
 
 }  // namespace
@@ -536,8 +578,11 @@ bool migration_temporary(std::string_view file_name) {
   const auto digits = [](std::string_view text) { return std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }); };
   if (!digits(suffix.substr(0, dot)) || !digits(suffix.substr(dot + 1))) return false;
   const auto base = file_name.substr(0, at);
+  // The heads' metadata: history.log, and every sealed file (checkpoint, heads,
+  // author, set-aside, the seed at either name).
   return base == "storage-layout" || base == store::backend_marker_name || base == "claims.log" || base == "unreferenced-data.bin" ||
-         base == "unreferenced-control.bin" || base == "root" || base == "journal.log" || base.ends_with(".id");
+         base == "unreferenced-control.bin" || base == "root" || base == "journal.log" || base.ends_with(".id") || base == "history.log" ||
+         base.ends_with(".meta");
 }
 
 RecordLayout record_layout(const domain::StorageKey& key, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 12> nonce,
@@ -744,6 +789,13 @@ std::string MigrationReport::summary() const {
       << pack_tail_bytes << " torn tail bytes left\n";
   out << "ledgers: " << ledgers_migrated << (reverse ? " re-sealed under the domain key, " : " re-sealed under the node-local key, ") << ledgers_already
       << " already, " << ledgers_empty << " empty; " << ledger_tail_bytes_dropped << " torn tail bytes dropped\n";
+  if (!heads_space.empty()) {
+    out << "metadata of space " << heads_space << ": directory " << metadata_directory << ", seed " << metadata_seed << "\n";
+    out << "metadata frames: " << metadata_frames_migrated << " moved, " << metadata_frames_already << " already; " << metadata_damaged_spans
+        << " damaged spans (" << metadata_damaged_bytes << " bytes) and " << metadata_tail_bytes << " torn tail bytes carried as they were\n";
+    out << "metadata files: " << metadata_files_migrated << " moved, " << metadata_files_already << " already; at most " << metadata_peak_extra_bytes
+        << " bytes beside them at once\n";
+  }
   out << "markers rewritten: " << markers_rewritten << "\n";
   out << "bytes read: " << bytes_read << ", written: " << bytes_written << "\n";
   for (const auto& what : unreadable) out << "left as it was: " << what << "\n";
@@ -762,7 +814,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   const auto layout_marker = state / "storage-layout";
   if (!std::filesystem::exists(layout_marker)) throw MigrationRefused("state " + state.string() + " has no storage-layout marker: not a Dagda or Macha state");
   const auto layout = read_text(layout_marker);
-  if (layout == store::state_layout_marker(to)) {
+  const bool heads_stopped = layout == store::state_layout_going_forward_heads;
+  if (layout == store::state_layout_marker(to) || heads_stopped) {
     // Every backend it was given must be there too: one still v18 under a state
     // marked v19 is a disk no run would otherwise come back to.
     for (const auto& backend : backends) {
@@ -770,7 +823,16 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
         throw MigrationRefused("state " + state.string() + " is layout v19 and backend " + backend.string() +
                                " is v18: run --reverse with every backend named, then forward with every backend named");
     }
+    // The metadata's pass, which the later stage asks for and a stopped one
+    // finishes whatever it is asked.
+    if (heads_stopped || (options.heads && heads_metadata_pending(state, options.cache, options.space_name))) {
+      migrate_heads_alone(state, layout_marker, cluster, custody, options, report);
+      say(options, report.summary());
+      return report;
+    }
     report.already_v19 = true;
+    if (heads_metadata_pending(state, options.cache, options.space_name))
+      say(options, "metadata " + (state / "metadata").string() + " is still Macha's: --heads moves it, at the port's later stage");
     say(options, report.summary());
     return report;
   }
@@ -845,6 +907,23 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
     if (have_cache) migrate_objects(options.cache, *domain_key, deriver, to, scratch, proved, probe);
     check_retention(state, *domain_key, *node_local);
     migrate_ledgers(state, domain_key, node_local, scratch, quiet);
+    quiet.cache = options.cache;
+    quiet.space_name = options.space_name;
+    if (options.heads) {
+      migrate_heads_metadata(state, *domain_key, *node_local, quiet, scratch, true);
+    } else {
+      // The first stage leaves the metadata as Macha's, for Macha's replica to read.
+      // One a run with --heads left part way would be read by it as damage: a
+      // history file under the other associated data is one torn tail to it.
+      try {
+        migrate_heads_metadata(state, *domain_key, *node_local, quiet, scratch, true);
+      } catch (const MigrationRefused&) {
+      }
+      if (scratch.metadata_started)
+        throw MigrationRefused("the metadata of state " + state.string() +
+                               " is part way to the heads' layout, which Macha's replica would read as damage: finish it with --heads, or take it back "
+                               "with --reverse");
+    }
   }
 
   say(options, "state " + state.string() + ": nothing refused");
@@ -873,6 +952,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   // Then every ledger: the held tries, the claims and their tries, the
   // reference counts.
   migrate_ledgers(state, domain_key, node_local, report, options);
+  // Then the metadata, when the later stage asks.
+  if (options.heads) migrate_heads_metadata(state, *domain_key, *node_local, options, report, false);
 
   // Markers last: the backends', their mirrors, then the state's.
   const auto rewrite = [&](const std::filesystem::path& path, const std::string& text) {
@@ -920,7 +1001,7 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   // at, so a disk already all v18 is reported as such.
   const auto layout = read_text(layout_marker);
   if (layout != store::state_layout_marker(v19) && layout != state_layout_v18 && layout != store::state_layout_going_back &&
-      layout != store::state_layout_going_forward)
+      layout != store::state_layout_going_forward && layout != store::state_layout_going_forward_heads)
     throw MigrationRefused("state " + state.string() + " is \"" + layout + "\": neither layout v18 nor domain v1's v19; only Macha's domain goes back");
 
   const auto v18_marker = [](const dannan::identity::NodeId& node, const dannan::identity::NodeId& token) {
@@ -1000,6 +1081,9 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
     if (have_control) migrate_objects(control, *domain_key, deriver, v19, scratch, proved, probe);
     if (have_cache) migrate_objects(options.cache, *domain_key, deriver, v19, scratch, proved, probe);
     migrate_ledgers(state, node_local, domain_key, scratch, quiet);
+    quiet.cache = options.cache;
+    quiet.space_name = options.space_name;
+    migrate_heads_metadata(state, *domain_key, *node_local, quiet, scratch, true);
   }
   std::vector<std::filesystem::path> backend_paths;
   for (const auto& backend : found) backend_paths.push_back(backend.path);
@@ -1021,6 +1105,8 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
     migrate_objects(options.cache, *domain_key, deriver, v19, report, proved, options);
   }
   migrate_ledgers(state, node_local, domain_key, report, options);
+  // The metadata, whatever moved of it: Macha's binary reads only its own.
+  migrate_heads_metadata(state, *domain_key, *node_local, options, report, false);
 
   // Markers last, as going forward: a disk is v19 until everything is v18.
   const auto rewrite = [&](const std::filesystem::path& path, const std::string& text) {

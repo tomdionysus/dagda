@@ -167,12 +167,13 @@ TEST(MigrateCompare, AStateMigratedWholePassesWithEveryCategorySized) {
   EXPECT_EQ(report.summary().find("RESULT: FAIL"), std::string::npos);
 }
 
-// Until S7's reader is there, the metadata is NOT CHECKED and nothing passes,
-// however whole the rest.
+// A pass given no metadata reader leaves the metadata NOT CHECKED and nothing
+// passes, however whole the rest. (dagda-migrate always gives one since S7.)
 TEST(MigrateCompare, WithNoMetadataReaderTheMetadataIsNotCheckedAndTheComparisonFails) {
   Bed bed;
-  const auto options = bed.pass_options(metadata_manifest_reader());
+  const auto options = bed.pass_options(nullptr);
   EXPECT_EQ(options.metadata, nullptr);
+  EXPECT_NE(metadata_manifest_reader(), nullptr);
   (void)bed.pass("before", options);
   (void)bed.v18.migrate();
   const auto summary = bed.pass("after", options);
@@ -180,10 +181,10 @@ TEST(MigrateCompare, WithNoMetadataReaderTheMetadataIsNotCheckedAndTheComparison
   const auto report = bed.compare();
   EXPECT_FALSE(report.passed());
   EXPECT_EQ(report.difference_count, 0u) << report.summary();
-  EXPECT_EQ(report.not_checked_count, 3u) << report.summary();
-  for (const auto* name : {"metadata certificates", "metadata heads", "metadata history"}) {
-    const auto* category = report.category(name);
-    ASSERT_NE(category, nullptr) << name;
+  EXPECT_EQ(report.not_checked_count, metadata_kinds().size()) << report.summary();
+  for (const auto& kind : metadata_kinds()) {
+    const auto* category = report.category("metadata " + kind);
+    ASSERT_NE(category, nullptr) << kind;
     EXPECT_EQ(category->result(), CategoryResult::not_checked);
   }
   EXPECT_NE(report.summary().find("metadata heads: sized 0 before, 0 after: NOT CHECKED"), std::string::npos) << report.summary();
@@ -940,7 +941,8 @@ TEST(MigrateCompareTool, TheToolWritesTheManifestsAndSaysTheResult) {
     const auto [code, output] = run(with({"--write-manifest", before}), "before.log");
     EXPECT_EQ(code, std::optional<int>(0)) << read_text(bed.bed.dir.path() / "before.log");
     EXPECT_NE(output.find("manifest of layout v18"), std::string::npos) << output;
-    EXPECT_NE(output.find("metadata heads: NOT CHECKED"), std::string::npos) << output;
+    // The state holds no metadata: every metadata category says so.
+    EXPECT_NE(output.find("metadata heads: ZERO"), std::string::npos) << output;
     EXPECT_NE(output.find("objects backend:" + bed.v18.backend.string() + " loose: sized 5"), std::string::npos) << output;
   }
   {
@@ -957,13 +959,14 @@ TEST(MigrateCompareTool, TheToolWritesTheManifestsAndSaysTheResult) {
     EXPECT_NE(read_text(bed.bed.dir.path() / "again.log").find("never overwrites"), std::string::npos);
   }
   {
-    // Whole, and yet NOT CHECKED: this build has no metadata reader, so it fails.
+    // Whole, and the metadata read: a state with none passes, each category ZERO.
+    // (Before S7 this said NOT CHECKED and failed: the tool had no reader.)
     const auto [code, output] = run({"--compare-before", before, "--compare-after", after}, "compare.log");
-    EXPECT_EQ(code, std::optional<int>(1)) << output;
+    EXPECT_EQ(code, std::optional<int>(0)) << output;
     EXPECT_NE(output.find("sized 5 before, 5 after: SAME"), std::string::npos) << output;
-    EXPECT_NE(output.find("metadata history: sized 0 before, 0 after: NOT CHECKED"), std::string::npos) << output;
-    EXPECT_NE(output.find("RESULT: FAIL: 0 differences, 3 not checked"), std::string::npos) << output;
-    EXPECT_EQ(output.find("RESULT: PASS"), std::string::npos) << output;
+    EXPECT_NE(output.find("metadata history: sized 0 before, 0 after: ZERO"), std::string::npos) << output;
+    EXPECT_NE(output.find("RESULT: PASS"), std::string::npos) << output;
+    EXPECT_EQ(output.find("RESULT: FAIL"), std::string::npos) << output;
   }
   {
     // A difference is named on standard output.

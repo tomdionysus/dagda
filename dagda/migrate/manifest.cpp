@@ -26,6 +26,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/migrate/heads_metadata.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/manifest_format.h"
 #include "dagda/migrate/migrate.h"
@@ -40,10 +41,13 @@
 
 namespace dagda::migrate {
 
-std::shared_ptr<MetadataManifestReader> metadata_manifest_reader() {
-  // Heads session S7 returns its reader here. Until then there is none, and the
-  // comparison reports heads, certificates and history as NOT CHECKED.
-  return nullptr;
+const std::vector<std::string>& metadata_kinds() {
+  static const std::vector<std::string> kinds{"author", "certificates", "checkpoint", "heads", "history", "journal", "markers", "seed", "set-aside"};
+  return kinds;
+}
+
+std::shared_ptr<MetadataManifestReader> metadata_manifest_reader(std::string_view space_name) {
+  return std::make_shared<HeadsMetadataReader>(std::string(space_name));
 }
 
 namespace {
@@ -1140,9 +1144,9 @@ void Pass::read_others(ManifestFile& file) {
 }
 
 void Pass::read_metadata(ManifestFile& file) {
-  const std::vector<std::string> kinds{"certificates", "heads", "history"};
+  const auto& kinds = metadata_kinds();
   if (!_options.metadata) {
-    const std::string why = "no metadata reader in this build: heads session S7 adds it";
+    const std::string why = "no metadata reader was given to this pass";
     for (const auto& kind : kinds) {
       file.begin("9\x01" + kind, "metadata " + kind, SectionKind::metadata, why);
       file.end();
@@ -1178,7 +1182,7 @@ void Pass::read_metadata(ManifestFile& file) {
       close();
       open_kind(at + 1);
     }
-    file.item(bytes_of(fact.name), fact.value);
+    file.item(bytes_of(fact.name), encode_metadata_value(fact.unknown, fact.value));
   });
   while (at + 1 < kinds.size()) {
     close();
