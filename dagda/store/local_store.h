@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -97,6 +98,10 @@ struct LocalStoreOptions {
   // role, never the domain's. Required with a ledger_dir: a node without
   // custody has no such key and cannot keep a ledger.
   std::shared_ptr<const domain::StorageKey> ledger_key{};
+  // A test's seam, empty otherwise: run on the appending thread once a pack
+  // record is written and the pack's writer lock let go, before the index
+  // lock is taken again.
+  std::function<void(const ObjectId&)> after_pack_append{};
 
   // Loose objects only, as the cache and some tests keep them.
   static LocalStoreOptions loose_only(uint64_t limit) {
@@ -443,6 +448,7 @@ class LocalStore final : public contract::ObjectStore {
   const dannan::contract::WallClock& _wall;
   // Object and pack file I/O; called only with _mutex released.
   LocalStoreFiles& _files;
+  const std::function<void(const ObjectId&)> _after_pack_append;
   ObjectLocks _object_locks;
 
   std::atomic<uint64_t> _used{0};

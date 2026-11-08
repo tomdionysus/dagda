@@ -103,6 +103,7 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _logger(std::move(services.logger)),
       _wall(services.wall),
       _files(files),
+      _after_pack_append(std::move(options.after_pack_append)),
       _durability_domain(std::move(durability_domain)) {
   if (_role == domain::Role::member && !_key) throw std::invalid_argument("local store needs a storage key");
   if (!options.ledger_dir.empty() && !options.ledger_key)
@@ -458,27 +459,30 @@ bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, con
     // The pack stream has its own single-writer lock; _mutex stays free
     // during encryption and I/O so unrelated reads are not trapped behind an
     // append.
-    Lock pack_io_lock(_pack_io_mutex);
-    try {
-      select_active_pack_locked(total);
-      target = _active_pack;
-      start = _active_pack_size;
-      _files.append(target, encoded, payload);
-      _active_pack_size += total;
-    } catch (...) {
-      // A failed append (ENOSPC, EIO, a short write) must not leave the live
-      // process appending behind a torn record. Restore the previous boundary
-      // when possible; if the rollback itself fails, abandon this pack so later
-      // writes never append behind the torn bytes. Restart recovery truncates
-      // it.
-      if (!target.empty() && _files.truncate(target, start)) {
-        _active_pack_size = start;
-      } else {
-        _active_pack.clear();
-        _active_pack_size = 0;
+    {
+      Lock pack_io_lock(_pack_io_mutex);
+      try {
+        select_active_pack_locked(total);
+        target = _active_pack;
+        start = _active_pack_size;
+        _files.append(target, encoded, payload);
+        _active_pack_size += total;
+      } catch (...) {
+        // A failed append (ENOSPC, EIO, a short write) must not leave the live
+        // process appending behind a torn record. Restore the previous boundary
+        // when possible; if the rollback itself fails, abandon this pack so later
+        // writes never append behind the torn bytes. Restart recovery truncates
+        // it.
+        if (!target.empty() && _files.truncate(target, start)) {
+          _active_pack_size = start;
+        } else {
+          _active_pack.clear();
+          _active_pack_size = 0;
+        }
+        throw;
       }
-      throw;
     }
+    if (_after_pack_append) _after_pack_append(id);
   }
   if (entry) {
     entry->file = target;
