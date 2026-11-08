@@ -227,8 +227,9 @@ struct DistributedStoreOptions {
   size_t extent_size = 16 * 1024 * 1024;
   // A peer whose put has moved no byte for this long is spilled past.
   std::chrono::milliseconds write_stall{2500};
-  // The bound on a peer's put or fetch (Dannan's CallWatch): one that has received
-  // no byte of its answer for this long is cancelled (the peer told, its reply slot
+  // The bound on a peer's put or fetch (Dannan's CallWatch): one that has sent no
+  // byte of its request and received none of its answer for this long (Dannan 0.5.1
+  // counts both, as Macha's touch does) is cancelled (the peer told, its reply slot
   // freed, a late reply dropped), and the copy is owed to prompt replication. One
   // still moving goes on, however long, as Macha's does, past the write or read that
   // started it if that had a deadline, so a slow peer's acknowledgement still reaches
