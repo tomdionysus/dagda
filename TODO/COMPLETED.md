@@ -3,6 +3,31 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-08: heads S7, the metadata migration, its comparison and conformance (`feature/heads-s7`)
+
+`dagda-migrate --heads` (`dagda/migrate/heads_metadata.{h,cpp}`): Macha's `<state>/metadata/` becomes `<state>/heads/<space id hex>/` (space
+`macha/namespace`, `--space` names another) and `<cache>/metadata/current.meta` becomes `<space id hex>.meta`, by the plan's 4.1. History and journal:
+each frame that authenticates keeps length, nonce and ciphertext, its tag derived to v19's associated data; damaged spans and a torn tail are carried byte
+for byte at their offsets; written whole beside itself, read back as the replica reads it (same spans, same offsets) before the rename. Checkpoint and seed
+retagged, nonce and ciphertext kept; `heads.meta` and `author.meta` re-sealed under the node-local key, plaintext byte for byte; `set-aside.meta` sealed for the first
+time; everything else goes with the directory, renamed last. Peak extra space: one history file. On a v19 state the pass runs alone under a new marker,
+`dagda-state-layout-going-forward-heads`, which the store refuses naming `--heads` (`store/state_layout.{h,cpp}`, the one store change); a stopped pass is
+finished by any run; a first-stage run refuses metadata left part way. `--reverse` always brings the metadata back, from any point. Steps: seed written,
+seed removed, history, journal, checkpoint, heads, author, set-aside, directory, marker: a crash case after each, both ways (`MigrateHeadsCrash.*`).
+
+The comparison: `metadata_manifest_reader()` is `HeadsMetadataReader`, nine categories (author, certificates, checkpoint, heads with their replay chain,
+history by offset, journal, markers, seed, set-aside), read under whichever layout holds them. A damaged span or a file opening under neither is compared
+by bytes and NOT CHECKED when the same, as a damaged pack span is. Manifest format 2. Every real fixture (20 nodes, `state-scratch` 0.92 included, torrent,
+recovery, twoheads) migrated from v18 through both stages compares PASS, replicas open equal, and back compares PASS 18 to 18. A damage test per item.
+`--resume` from a real partial through the command line: 600 objects, killed by SIGKILL after two durable checkpoints, resumed, equal to a whole pass.
+
+C41 to C46 written. Forms on real bytes (opaque, by magic): SM3/SMA8 (old fixture), SM4, SM7, SM9 (checkpoints only); DLT5, 7, 9, 10, 11; genesis. Not
+on real bytes: SM16, SM17, SM19 in history, DLT6, DLT8, a journal frame, a plain `set-aside.meta`. Torrent's README counts (DLT9 15 ...) are the head's
+chain of 29; history on node a holds DLT9 18, DLT5 17, DLT10 5, DLT11 1. Replay is the chain only: applying Macha's deltas is the port branch's.
+Found: the old `state-scratch` (pre-0.93) begins at the old genesis and holds forms the opaque owner cannot open, carried unchanged either way.
+Gate: `dagda_tests` 1015 passing, 6 disabled, one whole run on the Mac at `2ba4666` (962 at the start). `g++-15 -fsyntax-only` clean on the
+changed sources; not linked or run under GCC or on arm64; no live disk.
+
 ## 2026-11-06: heads S6, the reconciler (`feature/heads-s6`)
 
 `Exchange::read_group` folds several heads (`mgr:1127-1315` at `98b816d`): two at a time in hash order, under a reconciliation lock taken lazily (`IoMutex`, after the space's mutation mutex), generation max plus one, previous the lower hash, one merge parent, the higher. `MergeUnavailable` and `DecodeError` set aside the head that is not this node's own; a stop goes through everything. A merge's claims are as Macha's: a dot its clock does not carry (R3), here only, nothing refused for an object not held, the peers' share deferred on failure. `heads::Merge` is now `merge(base?, MergeHeads)`, its result carrying the delta (kept only when strictly smaller), the objects to claim and conflict counts, and it holds Q5's contract; `base` is computed only for a merge whose `reads_base()` says so. A space with no merge keeps two heads and says so. `dagda.heads.<space>.reconciliations`, `conflicts_created`, `conflicts_superseded`; observations `heads.reconcile_us`, `heads.reconcile_wait_us`, which Macha's facade maps from `metadata.reconcile_*`. `converged_waits` and `repair_waits` gained the data device: a merge's claims check presence. The neutral owner's merge is `test/fixtures/heads_merge.h`, Macha's two merge functions with the filesystem out.
