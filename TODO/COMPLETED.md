@@ -82,6 +82,18 @@ Found, for the Macha session (none fixed): RPC:2999's phantom-id hunt seeks a pl
 Tom dropped mutation testing partway through this session, so none is claimed as a gate. Checked under GCC 15 by `-fsyntax-only`; not linked or run under GCC or on arm64. Only the final commit was run; the commits before it were not each built.
 Gate: `dagda_tests` 847 passing, 4 disabled, one whole run on the Mac at this code, by Tom's change to the brief (one run, not three), under other sessions' load.
 
+## 2026-11-07: a concurrent-delete stress case under the sanitizers (`feature/delete-stress`)
+
+`dagda/test/delete_stress_test.cpp`, two opt-in cases sized by `DAGDA_STRESS_*`: a 4-node cluster with storms of deletes, Macha's loop on the real
+clock, held readers, head spaces, stops and ledger rebuilds; and held tries through checkpoints and rewrites. No production code changed. Run on
+macOS, with Dannan 0.4.1 rebuilt sanitized; OpenSSL, GTest and libc++ not. ASan and UBSan, 1894 s of stress: no report, but every cluster run ran out
+of its settle bound, so its end asserts prove nothing. TSan, 1901 s counted: 11 of 13 cluster runs passed; one ended in a SEGV, one never settled.
+Found, none fixed, for Tom: Dannan's `Session` delivers after its `Node` is gone when an in-process stop shares the io context (TSan: writes to a
+`RetainedMemoryLedger` and a null `_server` at `scheduler.cpp:98`); `Node::publish_status` reads `ReferenceCounts::_totals` unlocked;
+`HeldLedger::stats` races the journal's `_bytes`. Open, cause unknown: two unsanitized Release aborts inside libmalloc, and two runs with a
+held-ledger entry for an object no disk lists. This clears nothing about macnessa, a Linux node on glibc that does not run Dannan's `Session`.
+Gate: `dagda_tests` 797 passing, 6 disabled.
+
 ## 2026-11-06: the node's seams for Macha's loop (`feature/node-seams`)
 
 `Node::run_local_stages(stop)` throws `MaintenanceStopping` past its catch; `begin_local_stages`, `local_rebalance`, `retention_compact`,

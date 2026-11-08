@@ -1552,6 +1552,9 @@ class StressBed {
     {
       std::unique_lock gate(member.gate);
       const auto stopping = Steady::now();
+      // The node's own thread stops first: it calls the owner, which reaches the node
+      // through this ClusterNode, whose pointer to it goes as stop() begins.
+      member.node->dagda_node().stop();
       member.node->stop();
       _tally.add("chaos.stop_ms", static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Steady::now() - stopping).count()));
       std::cout << "STRESS restart round=" << round << " " << member.node->name() << " rebuild="
