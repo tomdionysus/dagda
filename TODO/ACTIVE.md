@@ -89,6 +89,15 @@ needs them. Tell the Macha session when the answer is Yes.
     - The delete stress case (opt-in): two Release-only heap aborts with no writer found, in runs with in-process restarts; a held-ledger entry
       for an object no disk lists; races in `Node::publish_status` against `ReferenceCounts` (Dagda only) and `HeldLedger::stats` (unused, as
       Macha's). Settling under sanitizers often stalled in the quiet window. None explains macnessa's crashes, nor clears the moved code.
+      Pinned down 2026-11-08 (`4002e9c`): the abort also happens with restarts and the instant delete both off (one in 14 Release runs,
+      freed under `HeldLedger::held_with_prefix` from `verify_step`), so it is not Dannan's restart use-after-free; ASan, UBSan and the
+      malloc checkers found nothing in 14 runs; no writer found. The held-ledger entry is pack compaction racing a packed put: the put's
+      record is in the active pack but not yet indexed, compaction counts it dead, can take the active pack as victim and unlinks it, and
+      the object is lost while the ledger still says held; on a remove the same gap brings a deleted object back. Macha `98b816d` has the
+      same lines (`local_store.cpp:821-867`, `:1694`, `:1700-1714`, `:1842`), and `StoragePool::get` stops at the first backend's empty
+      answer (`storage_pool.cpp:591-610`). Pinned as Macha's by two cases on the seam `LocalStoreOptions::after_pack_append`; the fix is
+      Tom's. The status race is fixed (`ReferenceCounts::_totals` under its own mutex). The quiet window is Macha's design: a node whose
+      arrivals come faster than the window never sweeps until they stop.
     - A transient 409 when a DATA and a CONTROL id coincide (the Macha session's review of `f0cbb23..826a149`): a delete marks the id alone, so
       a claim of the other class on that id is refused until the delete ends. Macha's behaviour, kept: one `RetentionStore` per node
       (`local_state.cpp:156`) behind one `ClaimLocks` keyed by id (`claim_store.hpp:102-144`), checked at `storage_server.cpp:374-381`.
