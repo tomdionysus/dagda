@@ -21,8 +21,11 @@
 // --cache the persistent cache's path, if the node has one. KEY opens the
 // node's custody: --passphrase-env VAR (the passphrase in that environment
 // variable) or --credential NAME [--credentials-dir DIR], as dannan-node
-// takes it. --dry-run classifies and reports without writing. --reverse goes
-// back from v19 to v18, so the node can return to Macha 0.92.x.
+// takes it. --dry-run classifies and reports without writing. --heads moves
+// Macha's metadata (<state>/metadata/) and the cache seed to the heads' layout
+// too, the port's later stage; a state already v19 runs that pass alone; --space
+// names the head space, macha/namespace unless given. --reverse goes back from
+// v19 to v18, the metadata included, so the node can return to Macha 0.93.x.
 //
 // Exit 0 when the state is v19 (migrated now, or already); 1 when refused
 // or failed, the reason on stderr; 2 for a usage error.
@@ -39,6 +42,8 @@
 // every difference by name. Exit 0 only when nothing differs and everything was
 // checked; 1 for any difference, anything NOT CHECKED, or a manifest that is not
 // whole.
+
+#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +67,7 @@ struct Arguments {
   bool dry_run = false;
   bool reverse = false;
   bool resume = false;
+  bool heads = false;
   bool version = false;
 };
 
@@ -83,6 +89,10 @@ Arguments parse(int argc, char** argv) {
     }
     if (option == "--resume") {
       out.resume = true;
+      continue;
+    }
+    if (option == "--heads") {
+      out.heads = true;
       continue;
     }
     if (option.rfind("--", 0) != 0 || i + 1 >= argc) throw std::invalid_argument("expected --option value, at " + option);
@@ -119,9 +129,9 @@ dannan::identity::KeySource key_source(const Arguments& arguments) {
 
 constexpr const char* usage =
     "usage: dagda-migrate --state DIR --node-state DIR --cluster-key FILE (--passphrase-env VAR | --credential NAME [--credentials-dir DIR])\n"
-    "                     [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run] [--reverse]\n"
+    "                     [--backend DIR]... [--control DIR] [--cache DIR] [--heads] [--space NAME] [--dry-run] [--reverse]\n"
     "       dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY [--backend DIR]... [--control DIR] [--cache DIR]\n"
-    "                     --write-manifest FILE [--resume]\n"
+    "                     [--space NAME] --write-manifest FILE [--resume]\n"
     "       dagda-migrate --compare-before FILE --compare-after FILE [--expect-before 18] [--expect-after 19]\n"
     "       dagda-migrate --version\n";
 
@@ -179,6 +189,8 @@ int main(int argc, char** argv) {
     if (arguments.options.contains("control")) options.control = arguments.options.at("control");
     if (arguments.options.contains("cache")) options.cache = arguments.options.at("cache");
     options.dry_run = arguments.dry_run;
+    options.heads = arguments.heads;
+    if (arguments.options.contains("space")) options.space_name = arguments.options.at("space");
     // Read, never made: load_or_create would mint an id no disk carries.
     if (!std::filesystem::exists(node_state / "node-id"))
       throw std::runtime_error("no node-id in " + node_state.string() + ": --node-state is the directory holding the id the node's disks carry");
@@ -191,8 +203,18 @@ int main(int argc, char** argv) {
       pass.node = options.node;
       pass.node_state = node_state;
       pass.resume = arguments.resume;
-      pass.metadata = dagda::migrate::metadata_manifest_reader();
+      pass.metadata = dagda::migrate::metadata_manifest_reader(options.space_name);
       pass.say = say_line;
+      // A test's way to stop a pass where a kill would find it: after this many
+      // durable checkpoints the tool waits, saying so, for the signal that ends it.
+      if (const char* hold = std::getenv("DAGDA_MIGRATE_TEST_HOLD_AFTER_CHECKPOINTS")) {
+        const auto after = std::stoull(hold);
+        pass.after_checkpoint = [after, seen = uint64_t{0}]() mutable {
+          if (++seen != after) return;
+          std::cout << "holding after checkpoint " << seen << std::endl;
+          for (;;) ::pause();
+        };
+      }
       const auto summary = dagda::migrate::write_manifest(arguments.options.at("write-manifest"), state, cluster, custody, pass);
       std::cout << summary.summary();
       return 0;

@@ -344,9 +344,11 @@ class Comparison {
       case SectionKind::pack_files:
         difference(category, name + " is lost");
         break;
-      case SectionKind::metadata:
-        difference(category, name + " is lost");
+      case SectionKind::metadata: {
+        const auto value = decode_metadata_value(item.value).value;
+        difference(category, name + " is lost (" + std::string(value.begin(), value.end()) + ")");
         break;
+      }
       case SectionKind::not_checked:
         break;
     }
@@ -511,9 +513,21 @@ class Comparison {
         break;
       }
       case SectionKind::bytes:
-      case SectionKind::metadata:
         if (a.value != b.value) difference(category, name + " has changed");
         break;
+      case SectionKind::metadata: {
+        // A fact's value is text; a reader's that is not is shown as it is.
+        const auto before = decode_metadata_value(a.value);
+        const auto after = decode_metadata_value(b.value);
+        const auto text = [](const Bytes& value) { return std::string(value.begin(), value.end()); };
+        if (before.value != after.value)
+          difference(category, name + " has changed from \"" + text(before.value) + "\" to \"" + text(after.value) + "\"");
+        else if (before.unknown != after.unknown)
+          difference(category, name + " is " + (after.unknown ? "unknown" : "known") + " now and was not before");
+        else if (before.unknown)
+          unchecked(category, name + ": " + text(before.value) + ": what it held cannot be known");
+        break;
+      }
       case SectionKind::not_checked:
         break;
     }

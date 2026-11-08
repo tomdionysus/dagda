@@ -135,6 +135,25 @@ struct MigrationReport {
   uint64_t bytes_written = 0;
   // Records left as they were, by file and id, with why.
   std::vector<std::string> unreadable;
+  // The heads' metadata (dagda/migrate/heads_metadata.h): the space, frames of
+  // history.log and journal.log whose tags moved and those already moved; damaged
+  // spans between frames and torn tails, carried byte for byte; the other sealed
+  // files moved or already; the seed and the directory ("migrated", "already",
+  // "unreadable" or "none"; "moved", "already" or "none"); and the most the pass
+  // needed beside the files it read, one history file written whole beside itself.
+  std::string heads_space{};
+  uint64_t metadata_frames_migrated = 0;
+  uint64_t metadata_frames_already = 0;
+  uint64_t metadata_damaged_spans = 0;
+  uint64_t metadata_damaged_bytes = 0;
+  uint64_t metadata_tail_bytes = 0;
+  uint64_t metadata_files_migrated = 0;
+  uint64_t metadata_files_already = 0;
+  std::string metadata_seed{};
+  std::string metadata_directory{};
+  uint64_t metadata_peak_extra_bytes = 0;
+  // Something of the metadata is in the layout the run goes to already.
+  bool metadata_started = false;
   // The run went back to v18.
   bool reverse = false;
   // Records looked at, and when the run began: the progress lines' rate.
@@ -161,6 +180,14 @@ struct MigrationOptions {
   // The run goes from v19 to v18. Set by migrate_state_back; read by the
   // record functions.
   bool reverse = false;
+  // Move Macha's metadata and the cache seed to the heads' layout too
+  // (heads_metadata.h): the later stage of the port, when Dagda's heads take over
+  // from Macha's own replica. Without it `<state>/metadata/` is left byte for byte,
+  // as the first stage needs. A state already v19 runs the metadata pass alone. A
+  // run going back always brings the metadata back.
+  bool heads = false;
+  // The head space Macha's metadata becomes.
+  std::string space_name = "macha/namespace";
   // Stop at the first record that opens: the key proved and no more read.
   // With dry_run, what a run does before its first write.
   bool probe_only = false;

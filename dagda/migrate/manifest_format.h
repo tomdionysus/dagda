@@ -32,7 +32,8 @@ namespace dagda::migrate::manifest_format {
 using store::ObjectId;
 
 inline constexpr std::array<uint8_t, 8> magic{'D', 'A', 'G', 'D', 'A', 'M', 'A', 'N'};
-inline constexpr uint32_t format_version = 1;
+// 2: a metadata item's value says whether its meaning can be known.
+inline constexpr uint32_t format_version = 2;
 
 enum class RecordType : uint8_t { header = 1, begin = 2, item = 3, end = 4, trailer = 5 };
 
@@ -140,6 +141,14 @@ struct OtherValue {
 };
 Bytes encode(const OtherValue&);
 OtherValue decode_other_value(std::span<const uint8_t>);
+
+// A metadata fact's value: whether its meaning cannot be known, then its bytes.
+struct MetadataValue {
+  bool unknown = false;
+  Bytes value;
+};
+Bytes encode_metadata_value(bool unknown, std::span<const uint8_t> value);
+MetadataValue decode_metadata_value(std::span<const uint8_t>);
 
 // be64: a key that sorts as the number does.
 Bytes number_key(uint64_t);

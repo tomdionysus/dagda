@@ -28,6 +28,9 @@ std::string state_layout_marker(const SealingScheme& sealing);
 // would take the other part for corrupt. Macha refuses any marker but its own.
 inline constexpr std::string_view state_layout_going_forward = "dagda-state-layout-going-forward";
 inline constexpr std::string_view state_layout_going_back = "dagda-state-layout-going-back";
+// The later stage's run on a state whose objects and ledgers are v19: the heads'
+// metadata is part way from Macha's `<state>/metadata/` to its space's directory.
+inline constexpr std::string_view state_layout_going_forward_heads = "dagda-state-layout-going-forward-heads";
 
 // The reason a v18 state or backend is refused: it names the command that
 // migrates it and the state path.

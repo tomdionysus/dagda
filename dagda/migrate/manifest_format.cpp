@@ -174,6 +174,18 @@ OtherValue decode_other_value(std::span<const uint8_t> bytes) {
   return value;
 }
 
+Bytes encode_metadata_value(bool unknown, std::span<const uint8_t> value) {
+  Writer writer;
+  writer.u8(unknown ? 1 : 0);
+  writer.raw(value);
+  return writer.take();
+}
+
+MetadataValue decode_metadata_value(std::span<const uint8_t> bytes) {
+  if (bytes.empty() || bytes[0] > 1) throw ManifestDamaged("a metadata item's value is not one");
+  return MetadataValue{bytes[0] == 1, Bytes(bytes.begin() + 1, bytes.end())};
+}
+
 Bytes number_key(uint64_t number) {
   Writer writer;
   writer.u64(number);

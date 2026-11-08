@@ -61,18 +61,25 @@ struct MetadataManifestInput {
   uint32_t layout = 0;
 };
 
-// One thing the metadata holds: `kind` is "certificates", "heads" or "history"
-// and `name` what the comparison calls it. Two facts of a name compare by value.
+// One thing the metadata holds: `kind` is one of metadata_kinds() and `name`
+// what the comparison calls it. Two facts of a name compare by value. `unknown`
+// marks bytes whose meaning cannot be known (a damaged span, a file that opens
+// under neither form): compared byte for byte, and NOT CHECKED when they are the
+// same, as a damaged span of a pack is.
 struct MetadataFact {
   std::string kind;
   std::string name;
   Bytes value;
+  bool unknown = false;
 };
 
-// The seam heads session S7 fills (TODO/2026-11-05-heads-plan.md section 4):
-// heads, certificates and history replay, read under either layout. Until a
-// reader is given all three categories are NOT CHECKED and the comparison
-// fails, so nothing passes without them.
+// The kinds a manifest holds, in order: author, certificates, checkpoint, heads,
+// history, journal, markers, seed, set-aside.
+const std::vector<std::string>& metadata_kinds();
+
+// The seam heads session S7 filled (TODO/2026-11-05-heads-plan.md section 4):
+// what the metadata holds, read under either layout. Without a reader every
+// category is NOT CHECKED and the comparison fails, so nothing passes without it.
 class MetadataManifestReader {
  public:
   virtual ~MetadataManifestReader() = default;
@@ -85,8 +92,9 @@ class MetadataManifestReader {
   virtual bool covers(const std::filesystem::path& root, const std::filesystem::path& relative) const = 0;
 };
 
-// The reader dagda-migrate runs with: nothing until S7 returns its own here.
-std::shared_ptr<MetadataManifestReader> metadata_manifest_reader();
+// The reader dagda-migrate runs with: Macha's metadata as the head space
+// `space_name` (heads_metadata.h).
+std::shared_ptr<MetadataManifestReader> metadata_manifest_reader(std::string_view space_name = "macha/namespace");
 
 // ---- The pass ---------------------------------------------------------------
 

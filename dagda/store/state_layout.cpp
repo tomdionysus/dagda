@@ -41,6 +41,9 @@ void open_state_layout(const std::filesystem::path& state, const SealingScheme& 
     if (value == state_layout_going_forward)
       throw std::runtime_error("state " + state.string() + " stopped part way to layout v19: finish it with `dagda-migrate --state " + state.string() +
                                " ...`");
+    if (value == state_layout_going_forward_heads)
+      throw std::runtime_error("state " + state.string() + " stopped part way through moving its metadata: finish it with `dagda-migrate --heads --state " +
+                               state.string() + " ...`");
     if (value == state_layout_going_back)
       throw std::runtime_error("state " + state.string() + " stopped on its way back to layout v18: finish it with `dagda-migrate --reverse --state " +
                                state.string() + " ...`");
