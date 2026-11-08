@@ -21,7 +21,7 @@ migration is run once, by the operator, with the node stopped:
 
 ```
 dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
-              [--backend DIR]... [--control DIR] [--cache DIR] [--dry-run]
+              [--backend DIR]... [--control DIR] [--cache DIR] [--heads] [--space NAME] [--dry-run]
 ```
 
 - `--state`: Dagda's state directory (the `storage-layout` marker, the
@@ -44,6 +44,12 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
 - `--control DIR`: the control store's path when it is not
   `<state>/metadata-objects`.
 - `--cache DIR`: the persistent cache's path, if the node keeps one.
+- `--heads`: move Macha's metadata and the cache seed too (below, "The
+  metadata"). The port's later stage, when Dagda's heads take over from Macha's
+  own replica; at the first stage leave it off, and `metadata/` stays Macha's
+  byte for byte. On a state already v19 the run does this pass alone.
+- `--space NAME`: the head space Macha's metadata becomes, `macha/namespace`
+  unless given. The port's facade must open the space by the same name.
 - `--dry-run`: classify and report; change no data. It still takes each
   store's lock, which can leave an empty lock file. The refusals are the same
   as a real run's.
@@ -54,8 +60,8 @@ claims ledger or claims with no `ledger` marker, and every ledger probed.
 The tool reads only the ledgers it knows by name: `ledger/control`,
 `ledger/data-*`, `ledger/referenced/{extents,nodes}`,
 `retention/{claims.log,ledger-data,ledger-control}` and the two
-`retention/unreferenced-*.bin`. Everything else under the state is left
-byte for byte, `metadata/` among it until heads define it.
+`retention/unreferenced-*.bin`, and with `--heads` the metadata below. Everything
+else under the state is left byte for byte, `metadata/` among it without `--heads`.
 
 Exit code 0 means the state is v19 (migrated now, or already); 1 means
 refused or failed, with the reason on standard error; 2 is a usage error.
@@ -112,16 +118,33 @@ by category:
 | reference counts | Every count in `ledger/referenced/{extents,nodes}`; `state` (root and totals) | `count of <id> changed from 2 to 3` |
 | sightings | Every first sighting of each table, in the clear before and sealed after | `sighting of <id> changed from A to B` |
 | other files | Every other regular file under the state and each store, by size and SHA-256, so nothing is left out for not being known | `file availability/last-survey.bin has changed` |
-| metadata | Heads, certificates and history replay. **NOT CHECKED today, which fails:** heads session S7 adds the reader (`metadata_manifest_reader`, `dagda/migrate/manifest.h`) | |
+| metadata author | `author.meta` opened: the author id, reserved, accepted and past ids, byte for byte | `metadata author: author.meta has changed from "..." to "..."` |
+| metadata certificates | Every certificate of `heads.meta`: generation, required, replicas | `metadata certificates: <hash> is lost (...)` |
+| metadata checkpoint | `checkpoint.meta` opened: generation, hash, previous, the payload's size and SHA-256 | `metadata checkpoint: checkpoint.meta has changed ...` |
+| metadata heads | Each certified head and how history replays it: from which whole record through how many deltas, or where the chain breaks | `metadata heads: <hash> has changed from "replays from ..." to "not in history"` |
+| metadata history | Every span of `history.log` by offset: a frame that authenticates (generation, hash, previous, body, merge parents, the payload's SHA-256, and whether its hash recomputes or its delta's parent comes before it), damaged bytes between frames, a torn tail | `metadata history: 00000000000000001024 frame is lost (...)` |
+| metadata journal | `journal.log` the same | |
+| metadata markers | Every other file of the space's directory by size and SHA-256: `recovery.required`, `author-chain-broken`, quarantines | `metadata markers: recovery.required is lost (...)` |
+| metadata seed | The seed opened, at either name, and any other file beside it | `metadata seed: seed is lost (...)` |
+| metadata set-aside | `set-aside.meta`'s plaintext (plain under v18, sealed under v19) | |
 
 **What is NOT CHECKED, and so can never pass:** a record that opens on neither
 side, whose plaintext cannot be proved, even though the migration did not hurt it;
 a damaged span in a pack, whose objects cannot even be named; a ledger that does
 not read under the layout's key, or whose journal holds a whole frame that will not
 open; a backend the state's mirrors name and no `--backend` does; anything under a
-store that is not a regular file. A real disk with a rotted object therefore does
+store that is not a regular file; damaged bytes between two history frames, and a
+metadata file or seed that opens under neither layout, compared byte for byte and
+the same, whose meaning cannot be known. A real disk with a rotted object therefore does
 not get a PASS: the operator gets the names and judges them, and a repair from the
 other node's copy can be compared afterwards with the store's own tools.
+
+The metadata is read wherever it is, `<state>/heads/<space id hex>/` under v19's
+forms or `<state>/metadata/` under v18's, so a comparison across the first stage
+(metadata not moved) and across the later stage (moved) both read it. Replay here is
+the chain, not the content: Dagda holds no codec of Macha's, so it can say a head's
+deltas lead back to a whole record whose hash recomputes, and not what applying them
+gives. That is proved on Macha's port branch with its codec linked.
 
 Torn tails, on a pack or a journal, are what the store's recovery drops. They are
 counted and do not fail. What a crash left beside a file being replaced
@@ -178,7 +201,9 @@ migration. No figure here has been measured on that disk.
 
 ## Going back
 
-`--reverse` takes a v19 node back to v18, so it can return to Macha 0.92.x. It
+`--reverse` takes a v19 node back to v18, so it can return to Macha 0.93.x, and
+Macha's binary returns only once it has finished: the metadata comes back with
+everything else, whether or not `--heads` moved it, and part way or whole. It
 runs the same way in the other direction with the same rules: no second copy,
 every refusal before the first write, a crash finished by a second run. It also
 accepts a v18 marker, so a forward run that crashed part-way can be taken back
@@ -187,6 +212,59 @@ is on its way back: the store and a forward run refuse it, since part of it is
 each layout, and running `--reverse` again finishes it. Only Macha's domain goes back. Objects and markers come
 back byte for byte as Macha wrote them; a ledger holds what it held, sealed under
 a fresh nonce. What Dagda wrote while the node ran v19 goes back with the rest.
+
+## The metadata
+
+With `--heads`, after the ledgers and before the markers (or alone, on a state
+already v19), Macha's `<state>/metadata/` becomes the head space's directory
+`<state>/heads/<space id hex>/`, and the seed `<cache>/metadata/current.meta`
+becomes `<cache>/metadata/<space id hex>.meta` (the heads plan's section 4.1):
+
+- `history.log` and `journal.log`: every frame that authenticates keeps its
+  length, nonce and ciphertext and has its tag moved from v18's associated data
+  (the magic) to v19's (`dagda/heads/19`, the domain, the space, the magic), by
+  the same derivation as an object's. The file is written whole beside itself
+  (`history.log.tmp.<pid>.<n>`), read back as the replica reads it under v19 (the
+  same frames at the same offsets, the same bytes between them, or nothing is
+  renamed), synced and renamed over the old.
+- **Damaged bytes between frames** (Macha 0.93.5 leaves them; the replica skips
+  them and reads on) **are carried byte for byte**, at the same offset, and listed
+  by offset and length. A frame that authenticates is never dropped. A torn tail
+  after the last frame that authenticates is carried too, for the reader to cut
+  and quarantine at the next open as Macha's does. So the file keeps its size and
+  every frame its offset; only 16 bytes a frame change.
+- `checkpoint.meta` and the seed: the same, one sealed record each, under the
+  domain's key; the seed is written at its new name, then the old removed.
+- `heads.meta` and `author.meta`, this node's standing: opened under the domain's
+  key and sealed under the node-local key, a fresh nonce, the plaintext byte for
+  byte, so the author continues and no head loses its certificate.
+- `set-aside.meta`: plain in Macha's, sealed for the first time (magic
+  `DHTMSAS1`), its bytes kept as they are, parsed or not.
+- Everything else in the directory (`recovery.required`, `author-chain-broken`,
+  `*.corrupt.<stamp>`) goes with the directory, byte for byte.
+- The directory is renamed last: present at its new place is done. Each file
+  before that says by which key and associated data it opens how far a run got.
+
+**Extra space:** one `history.log` (or `journal.log`) beside itself, at most;
+the report says how many bytes, and the run refuses if the filesystem lacks them
+with a mebibyte to spare. The sealed files are each replaced by a file of their
+own size. Nothing else is copied.
+
+**Refused before the first write:** `checkpoint.meta`, `heads.meta` or
+`author.meta` opening under neither layout ("open it once under Macha 0.93.4,
+which recovers from the seed or from peers, and run again"); nothing opening at
+all (the wrong key); history holding frames of both layouts; both directories
+present; too little space; a lock held. A seed that opens under neither is listed
+and left at its old name: losing it costs only a recovery.
+
+**A crash** at any point is finished by running again. From the first write to the
+last the state's marker says `dagda-state-layout-going-forward-heads` (or, from v18
+in one run, `going-forward`), which Macha refuses as it refuses any marker but its
+own, and the store refuses naming `--heads`: a history file part one layout and
+part the other never reaches a reader, which would cut it as one torn tail. A run
+without `--heads` on a state left so finishes it anyway, and a first-stage run on a
+v18 state whose metadata is part way is refused rather than leave it for Macha's
+replica. `--reverse` takes it back from any point.
 
 ## What it does, in place
 
