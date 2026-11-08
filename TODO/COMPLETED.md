@@ -28,6 +28,39 @@ Found: the old `state-scratch` (pre-0.93) begins at the old genesis and holds fo
 Gate: `dagda_tests` 1015 passing, 6 disabled, one whole run on the Mac at `2ba4666` (962 at the start). `g++-15 -fsyntax-only` clean on the
 changed sources; not linked or run under GCC or on arm64; no live disk.
 
+## 2026-11-08: three findings from the delete stress case (`feature/stress-findings`)
+
+Release on the Mac (x86_64, libmalloc), under heavy load from other sessions (load average 120 to 490). `DAGDA_STRESS_INSTANT_PERCENT` (50 by default,
+0 is Macha's: every delete left to the collector). Runs of 90 s asked (90 to 190 s of load each), settle bound 120 s:
+- Heap aborts (A). Restarts off: 8 runs, 822 s of load, no abort. Restarts and the instant delete off: 14 runs, 1326 s, one silent SIGABRT
+  77 s after start (`abort <- malloc_report <- HeldLedger::held_with_prefix <- LocalStore::verify_step <- StoragePool::verify_step <- StressLoop`):
+  heap corruption found on a free, as before, so it is neither the restart's Dannan use-after-free nor the instant delete; it is in what runs
+  without them (Dagda's moved code, Dannan's live sessions, or a library). With `MallocScribble`, `MallocGuardEdges` and `MallocCheckHeapEach`
+  (200000): 6 runs, 755 s, nothing. ASan and UBSan on the same configuration (Dannan 0.5.0 rebuilt sanitized here; OpenSSL, GTest and libc++ not;
+  `detect_container_overflow=0`, as GTest's uninstrumented containers trip it): 8 runs, 2090 s, no report. Writer not found, so no mechanism and no
+  fix; the two aborting stacks share only reading an `ObjectTrie` (`collect` under `held_with_prefix`, `records_not_held`) and freeing its copies.
+- A lost object (B), reproduced without restarts (run 101: "cannot open pack: No such file or directory" on n1, every read). A pack append lets
+  the pack lock go before the index lock is taken again (`append_pack_record_locked`, `local_store.cpp:437-486`). Compaction takes both in that gap
+  (`:1498`), snapshots an index without the put's record (`:1349`), counts it dead, may take the active pack as its victim, rewrites the rest
+  (`:1391`, `:1451`) and unlinks it (`:1473`); the put then indexes its record in the unlinked pack and the held ledger says held (`:815-816`). Reads
+  throw and are logged; after a restart the ledger alone says held, no pack or file holds it, `list()` misses it and `get` finds nothing, as the
+  earlier runs saw. `StoragePool::get` then answers with the first holding backend's nothing without asking the next (`storage_pool.cpp:726-741`).
+  The same gap on a remove carries the object forward past its own tombstone: what a remove reported gone is held again at the next start.
+  Macha's lines at `98b816d` are the same (`local_store.cpp:821-867`, `:1170-1172`, `:1694`, `:1745`, `:1819-1820`, `:1842`;
+  `storage_pool.cpp:591-610`): not fixed, for the maintainer. `LocalStoreOptions::after_pack_append` is a test seam; two cases pin the loss and the return.
+- The status race (C), Dagda's: `ReferenceCounts::totals()` is read under its own lock; the census sets both figures under it. A case reads the
+  totals while the census sets them.
+- The quiet window: from reading, Macha's loop at `98b816d` (`maintenance.cpp:343-364`) and the stress loop alike arm the sweep's quiet window at
+  a pass's start whenever an event or the generation moved, and that pass then skips the sweep; it runs only after a whole window with no storage,
+  metadata, topology or claims event. A busy live node with objects arriving more often than the window (writes, replication, repair's own pulls,
+  which notify `storage` at `distributed_store.cpp:2883`) never sweeps until the flow stops: Macha's design, a real starvation, not the test's.
+  Under the sanitizers the stall the earlier runs saw is more of it: slow passes, repair still pulling, peers' pushes and the owners' garbage
+  commits on the one shared head keep moving the count. Not changed. Under ASan here the Macha-loop nodes mostly settled; the strays that stayed
+  were mostly n3's, the node's own maintenance thread, its log saying the sweep was enabled: not looked into.
+- The case's end check compares the held view and `list()` taken at different moments while maintenance runs, so a few runs fail on a count
+  that `explain_disagreement` then finds equal: the check's race, not the store's. Left.
+Gate: `dagda_tests` 965 passing, 6 disabled, one whole run on the Mac at this code (962 at the start).
+
 ## 2026-11-06: heads S6, the reconciler (`feature/heads-s6`)
 
 `Exchange::read_group` folds several heads (`mgr:1127-1315` at `98b816d`): two at a time in hash order, under a reconciliation lock taken lazily (`IoMutex`, after the space's mutation mutex), generation max plus one, previous the lower hash, one merge parent, the higher. `MergeUnavailable` and `DecodeError` set aside the head that is not this node's own; a stop goes through everything. A merge's claims are as Macha's: a dot its clock does not carry (R3), here only, nothing refused for an object not held, the peers' share deferred on failure. `heads::Merge` is now `merge(base?, MergeHeads)`, its result carrying the delta (kept only when strictly smaller), the objects to claim and conflict counts, and it holds Q5's contract; `base` is computed only for a merge whose `reads_base()` says so. A space with no merge keeps two heads and says so. `dagda.heads.<space>.reconciliations`, `conflicts_created`, `conflicts_superseded`; observations `heads.reconcile_us`, `heads.reconcile_wait_us`, which Macha's facade maps from `metadata.reconcile_*`. `converged_waits` and `repair_waits` gained the data device: a merge's claims check presence. The neutral owner's merge is `test/fixtures/heads_merge.h`, Macha's two merge functions with the filesystem out.
