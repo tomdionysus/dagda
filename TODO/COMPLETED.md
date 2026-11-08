@@ -3,6 +3,21 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-08: compaction waits for appends to be indexed (`feature/compaction-gap`)
+
+The stress findings' pack race, closed at the maintainer's word (2026-11-08: fix in Dagda now, in Macha after the freeze). A pack record is written under
+`_pack_io_mutex` and indexed after `_mutex` is taken again; a compaction in that gap counted it dead, could unlink its pack, and lost a put or
+brought a removed object back at the next start. The gap also let a compaction overwrite an index entry an in-flight remove or put had just
+changed. Now an append counts itself in `LocalStore::_unindexed_appends` from the moment its record is in the pack until it returns holding
+`_mutex`, from which every caller indexes without letting go (put, both touches, remove); `compact_packs_locked`, which holds `_pack_io_mutex`
+throughout so no append can start, waits under `_mutex` for none before it reads the index. The two cases that pinned the loss as Macha's became
+`StoreLocalStore.ACompactionWaitsForAPutInItsAppendGap` and `...ARemoveInItsAppendGap`: a compaction started on another thread in the gap must
+not finish there, and the object is kept (or stays gone) in the process and after a restart. Both failed first on the old code (the compaction
+finished in the gap, the put's object was indexed in the unlinked pack, the removed one was back). Macha 98b816d keeps the gap; Dagda is safer
+here, and the capabilities report says so. Not changed: `StoragePool::get` stopping at the first backend's empty answer, Macha's too.
+
+Gate: `dagda_tests` 1018 passing, 6 disabled, one whole run (the count stands: two cases rewritten, none added or removed).
+
 ## 2026-11-08: heads S7, the metadata migration, its comparison and conformance (`feature/heads-s7`)
 
 `dagda-migrate --heads` (`dagda/migrate/heads_metadata.{h,cpp}`): Macha's `<state>/metadata/` becomes `<state>/heads/<space id hex>/` (space
