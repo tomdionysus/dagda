@@ -104,6 +104,15 @@ needs them. Tell the Macha session when the answer is Yes.
       a claim of the other class on that id is refused until the delete ends. Macha's behaviour, kept: one `RetentionStore` per node
       (`local_state.cpp:156`) behind one `ClaimLocks` keyed by id (`claim_store.hpp:102-144`), checked at `storage_server.cpp:374-381`.
       Named in the report, not Dagda's to close.
+    - Lost wakeups (the Macha session's audit, its found-issues item 14, 2026-11-08; for the report, no Macha change wanted now). Every
+      notify in Dagda's tree checked (2026-11-08): none has the shape. Differences from Macha, each already closed in Dagda: the local
+      writer's and the durability worker's waits take the stop token (`distributed_store.cpp:1892`, `durability_domain.cpp:193`), so
+      `request_stop` wakes them through `condition_variable_any`'s own lock; prompt replication waits timed while a retry is queued
+      (`:1512-1518`); the scan's completion and failure are set under the mutex their waiters read (`local_store.cpp:175-181`,
+      `:1749-1754`); the exchange's replicator, `time_advanced` and maintenance wakes take the waiter's mutex before notifying
+      (`exchange.cpp:1146-1152`, `node.cpp:607-614`, `data_work.cpp:204-211`). The same as Macha: the local writer's DATA admission
+      carries no cancellation, so a store stopped while it waits for credit is held until a release or the no-progress window (120 s on
+      the live nodes); Macha's flag without a notify gives the same bound. Where a caller's flag exists, ClassWaits polls it every 25 ms.
     - From S7: Macha's facade must open the head space as `macha/namespace` (the migration's default), and a node whose space opens before
       the metadata pass has run starts empty with nothing to refuse it. To settle with the Macha session before the port.
 11. The capabilities report.
