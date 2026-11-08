@@ -20,6 +20,7 @@
 namespace dagda::ledger {
 namespace {
 
+using dannan::contract::Lock;
 using dannan::net::Reader;
 using dannan::net::Writer;
 
@@ -95,20 +96,27 @@ ReferenceCounts::ReferenceCounts(std::filesystem::path dir, std::shared_ptr<cons
     reader.finish();
     if (!clean) return;
     if (has_root) _root = root;
+    Lock lock(_totals_mutex);
     _totals = totals;
   } catch (const std::exception& error) {
     _logger.warn("reference counts state unreadable path=" + (_dir / "state").string() + " error=" + error.what());
   }
 }
 
+ReferenceCounts::Totals ReferenceCounts::totals() const {
+  Lock lock(_totals_mutex);
+  return _totals;
+}
+
 void ReferenceCounts::write_state(bool clean) const {
+  const auto totals = this->totals();
   Writer writer;
   writer.fixed(reference_counts_magic);
   writer.u8(clean ? 1 : 0);
   writer.u8(_root ? 1 : 0);
   writer.fixed(_root ? _root->bytes : ObjectId{}.bytes);
-  writer.u64(_totals.entries);
-  writer.u64(_totals.extent_count);
+  writer.u64(totals.entries);
+  writer.u64(totals.extent_count);
   const auto& bytes = writer.data();
   dannan::identity::durable_replace_file(_dir / "state", std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 }
@@ -118,7 +126,10 @@ void ReferenceCounts::reset(const std::optional<ObjectId>& root, std::vector<Obj
   _extents.replace_all(counted(std::move(extents)));
   _nodes.replace_all(counted(std::move(nodes)));
   _root = root;
-  _totals = totals;
+  {
+    Lock lock(_totals_mutex);
+    _totals = totals;
+  }
   write_state(true);
 }
 
@@ -132,7 +143,10 @@ bool ReferenceCounts::change(const ObjectId& root, std::vector<ObjectId> extents
   _extents.apply(*extent_changes);
   _nodes.apply(*node_changes);
   _root = root;
-  _totals = totals;
+  {
+    Lock lock(_totals_mutex);
+    _totals = totals;
+  }
   write_state(true);
   return true;
 }

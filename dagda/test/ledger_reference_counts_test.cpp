@@ -15,10 +15,12 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <thread>
 
 #include "dagda/ledger/reference_counts.h"
 #include "dagda/test/fixtures/ledger.h"
@@ -114,6 +116,44 @@ TEST(LedgerReferenceCounts, TheStateIsLayoutV18s) {
   EXPECT_EQ(opened.root(), std::optional(root));
   EXPECT_EQ(opened.totals().entries, 1u);
   EXPECT_EQ(opened.totals().extent_count, 1u);
+}
+
+// The node's status timer reads the totals while the census sets them: each read
+// is one reset's or one change's pair, never half of each. A race here is what
+// ThreadSanitizer reported from the delete stress case; this case shows it there.
+TEST(LedgerReferenceCounts, TotalsAreReadWholeWhileTheCensusSetsThem) {
+  dannan::test::TempDir dir;
+  std::mt19937_64 random(41);
+  ReferenceCounts counts(dir.path(), key_of(5), 1 << 20, quiet_logger());
+  const auto a = id_of(random);
+  const auto root = id_of(random);
+  std::atomic_bool done{false};
+  uint64_t reads = 0;
+  bool torn = false;
+  bool fell = false;
+  std::thread status([&] {
+    uint64_t last = 0;
+    while (!done.load()) {
+      const auto totals = counts.totals();
+      torn = torn || totals.entries != totals.extent_count;
+      fell = fell || totals.entries < last;
+      last = totals.entries;
+      ++reads;
+    }
+  });
+  counts.reset(root, {a}, {}, {1, 1});
+  for (uint64_t n = 2; n <= 60; ++n) {
+    if (n % 2)
+      counts.reset(root, {a}, {}, {n, n});
+    else
+      ASSERT_TRUE(counts.change(root, {a}, {}, {}, {}, {n, n}));
+  }
+  done.store(true);
+  status.join();
+  EXPECT_FALSE(torn);
+  EXPECT_FALSE(fell);
+  EXPECT_GT(reads, 0u);
+  EXPECT_EQ(counts.totals().entries, 60u);
 }
 
 }  // namespace
