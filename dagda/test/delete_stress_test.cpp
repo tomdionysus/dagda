@@ -137,6 +137,9 @@ struct Params {
   uint64_t storm_objects = env_u64("DAGDA_STRESS_STORM_OBJECTS", 2000);
   // Seconds between restarts; zero, none.
   uint64_t restart_seconds = env_u64("DAGDA_STRESS_RESTART_SECONDS", 30);
+  // The share of delete batches, in percent, that the instant delete (Dagda's, not
+  // Macha's) also takes at once; zero leaves every one to the collector, as Macha.
+  uint64_t instant_percent = env_u64("DAGDA_STRESS_INSTANT_PERCENT", 50);
   // The wait a retirement and an unreferenced object sit out.
   uint64_t grace_ms = env_u64("DAGDA_STRESS_GRACE_MS", 4000);
   uint64_t pass_floor_ms = env_u64("DAGDA_STRESS_PASS_FLOOR_MS", 20);
@@ -1060,8 +1063,8 @@ class StressBed {
     out << "seconds=" << _params.seconds << " settle=" << _params.settle_seconds << " seed=" << _params.seed << " nodes=" << _params.nodes
         << " writers=" << _params.writers << " preload=" << _params.preload << " max_live=" << _params.max_live << " deleters=" << _params.deleters
         << " batch=" << _params.batch << " storm_objects=" << _params.storm_objects << " restart_seconds=" << _params.restart_seconds
-        << " grace_ms=" << _params.grace_ms << " pass_floor_ms=" << _params.pass_floor_ms << " ledger_cache=" << _params.ledger_cache_bytes
-        << " trie_records=" << _params.trie_records;
+        << " instant_percent=" << _params.instant_percent << " grace_ms=" << _params.grace_ms << " pass_floor_ms=" << _params.pass_floor_ms
+        << " ledger_cache=" << _params.ledger_cache_bytes << " trie_records=" << _params.trie_records;
     return out.str();
   }
 
@@ -1329,9 +1332,9 @@ class StressBed {
     _storm_left.fetch_sub(static_cast<int64_t>(ids.size()));
     _tally.add("delete.retired", ids.size());
     _tally.add("delete.batches");
-    // Half go at once as well. The rest wait for the collector: it is what Macha at
-    // 9a08846 does for all of them, its instant delete being Dagda's.
-    if (random() % 2) return;
+    // Some go at once as well, half by default. The rest wait for the collector: it is
+    // what Macha at 9a08846 does for all of them, its instant delete being Dagda's.
+    if (random() % 100 >= _params.instant_percent) return;
     (void)on(index, [&](ClusterNode& node) {
       const auto evidence = node.store().remove(ids, observed, {}, 5000ms);
       _tally.add(evidence.finished ? "delete.instant_finished" : "delete.instant_unfinished");
@@ -1600,7 +1603,7 @@ class StressBed {
       out << " " << disk.filename().string() << "=" << std::filesystem::exists(test::object_path(disk, id), error);
     }
     for (const auto& line : node.log().lines())
-      if (line.find(name) != std::string::npos) out << "\n  log: " << line.substr(0, 420);
+      if (line.find(name) != std::string::npos) out << "\n  log: " << line.substr(0, 1200);
     return out.str();
   }
 
