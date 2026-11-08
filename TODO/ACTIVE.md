@@ -89,6 +89,12 @@ needs them. Tell the Macha session when the answer is Yes.
     - The delete stress case (opt-in): two Release-only heap aborts with no writer found, in runs with in-process restarts; a held-ledger entry
       for an object no disk lists; races in `Node::publish_status` against `ReferenceCounts` (Dagda only) and `HeldLedger::stats` (unused, as
       Macha's). Settling under sanitizers often stalled in the quiet window. None explains live-a's crashes, nor clears the moved code.
+    - A transient 409 when a DATA and a CONTROL id coincide (the Macha session's review of `f0cbb23..826a149`): a delete marks the id alone, so
+      a claim of the other class on that id is refused until the delete ends. Macha's behaviour, kept: one `RetentionStore` per node
+      (`local_state.cpp:156`) behind one `ClaimLocks` keyed by id (`claim_store.hpp:102-144`), checked at `storage_server.cpp:374-381`.
+      Named in the report, not Dagda's to close.
+    - From S7: Macha's facade must open the head space as `macha/namespace` (the migration's default), and a node whose space opens before
+      the metadata pass has run starts empty with nothing to refuse it. To settle with the Macha session before the port.
 11. The capabilities report.
 
 **Macha's freeze exception (the maintainer, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
