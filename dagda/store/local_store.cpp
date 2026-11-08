@@ -433,6 +433,17 @@ bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, con
   uint64_t total = 0;
   std::filesystem::path target;
   uint64_t start = 0;
+  // Counted from the moment the record is in its pack until this returns with
+  // _mutex held, from which the caller changes the index without letting go.
+  struct Unindexed {
+    LocalStore& store;
+    bool counted = false;
+    ~Unindexed() {
+      if (!counted) return;
+      store._unindexed_appends.fetch_sub(1, std::memory_order_acq_rel);
+      store._appends_indexed_cv.notify_all();
+    }
+  } unindexed{*this};
   {
     Unlocked unlocked(lock, _mutex);
     std::span<const uint8_t> payload;
@@ -467,6 +478,8 @@ bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, con
         start = _active_pack_size;
         _files.append(target, encoded, payload);
         _active_pack_size += total;
+        _unindexed_appends.fetch_add(1, std::memory_order_acq_rel);
+        unindexed.counted = true;
       } catch (...) {
         // A failed append (ENOSPC, EIO, a short write) must not leave the live
         // process appending behind a torn record. Restore the previous boundary
@@ -1332,6 +1345,11 @@ int64_t LocalStore::age_ms(std::filesystem::file_time_type time) const { return 
 
 bool LocalStore::compact_packs_locked(Lock& lock) {
   if (!_pack_threshold || _pack_dead_bytes == 0) return true;
+  // A record written but not yet indexed would count as dead below, and its pack
+  // could be compacted away under it (a put lost, a removed object back at the
+  // next start). Holding _pack_io_mutex, no append can start; those written need
+  // only _mutex, which the wait lets go, to be indexed.
+  _appends_indexed_cv.wait(lock.native(), [&]() DANNAN_REQUIRES(_mutex) { return _unindexed_appends.load(std::memory_order_acquire) == 0; });
 
   struct PackUsage {
     std::filesystem::path file;

@@ -507,6 +507,13 @@ class LocalStore final : public contract::ObjectStore {
   std::map<ObjectId, PackEntry> _packed DANNAN_GUARDED_BY(_mutex);
   mutable std::map<std::filesystem::path, size_t> _active_pack_readers DANNAN_GUARDED_BY(_mutex);
   mutable std::condition_variable _pack_readers_cv;
+  // Pack records written but not yet in _packed: counted under _pack_io_mutex
+  // once a record is in its pack, and no longer once the appender holds _mutex
+  // again, which it keeps until it has changed the index. Compaction holds
+  // _pack_io_mutex, so no more can start, and waits under _mutex for none
+  // before it reads the index (compact_packs_locked).
+  std::atomic<size_t> _unindexed_appends{0};
+  std::condition_variable _appends_indexed_cv;
   uint64_t _pack_dead_bytes DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _next_pack_sequence DANNAN_GUARDED_BY(_pack_io_mutex) = 1;
   std::filesystem::path _active_pack DANNAN_GUARDED_BY(_pack_io_mutex);

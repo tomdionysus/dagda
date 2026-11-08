@@ -348,11 +348,10 @@ TEST(StoreLocalStore, ACompactionWhoseOldPackSurvivedIsReclaimedLater) {
   EXPECT_EQ(reopened->get(object_id(live)), std::optional<Bytes>{live});
 }
 
-// One compaction run on the appending thread, in the gap between a watched
-// object's pack append and its index change: the pack lock is free there and so
-// is the index lock, so a compaction may take both and run to its end. One of the
-// interleavings the locks allow; a compaction that snapshots in the gap and
-// installs after the append's thread goes on ends the same way.
+// A compaction started on another thread in the gap between a watched object's
+// pack append and its index change, while the appending thread waits there: the
+// pack lock is free and so is the index lock, so only the store itself can keep
+// the compaction from running to its end inside the gap.
 class CompactionInTheGap {
  public:
   void watch(const ObjectId& id) {
@@ -367,29 +366,31 @@ class CompactionInTheGap {
         if (!_watched || *_watched != id) return;
         _watched.reset();
       }
-      _compacted.store(store->compact_packs());
+      _compaction = std::async(std::launch::async, [&store] { return store->compact_packs(); });
+      _finished_in_gap = ready(_compaction, std::chrono::milliseconds(200));
     };
   }
-  bool compacted() const { return _compacted.load(); }
+  bool finished_in_gap() const { return _finished_in_gap; }
+  // Once, after the append's call has returned.
+  bool compacted() { return _compaction.valid() && ready(_compaction) && _compaction.get(); }
 
  private:
   std::mutex _mutex;
   std::optional<ObjectId> _watched;
-  std::atomic_bool _compacted{false};
+  std::future<bool> _compaction;
+  bool _finished_in_gap = false;
 };
 
-// Found from the delete stress case: a node's held ledger and pack index named an
-// object no pack held, and every read logged "cannot read local object". A put's
-// record is appended to the active pack under the pack lock, which is let go
-// before the index lock is taken again (append_pack_record_locked). A compaction
-// that takes both in that gap snapshots an index without the record, counts its
-// bytes dead, may pick that very pack as its victim, rewrites the rest and unlinks
-// it (compact_packs_locked); the put then indexes its record in the unlinked pack
-// and the ledger says held. Macha's local_store.cpp at 98b816d has the same lines
-// (the append's gap :821-867, the put's index :1170-1172, the snapshot :1694, the
-// victim's entries :1745, the install :1819-1820, the unlink :1842), so this pins
-// the loss as it stands, for the maintainer; it is not fixed here.
-TEST(StoreLocalStore, ACompactionInAPutsAppendGapLosesTheObjectAsMachasDoes) {
+// Found from the delete stress case: a node's held ledger named an object no pack
+// held, and every read logged "cannot read local object". A put's record is
+// appended to the active pack under the pack lock, which is let go before the
+// index lock is taken again. A compaction in that gap counted the record dead,
+// could pick that very pack, rewrote the rest and unlinked it, and the put then
+// indexed its record in the unlinked pack. Macha's local_store.cpp at 98b816d has
+// the same gap (:844-866, the snapshot :1694, the unlink :1842); the maintainer chose to
+// close it here (2026-11-08). Compaction now waits for every written record to be
+// indexed before it reads the index.
+TEST(StoreLocalStore, ACompactionWaitsForAPutInItsAppendGap) {
   StoreBed bed;
   CompactionInTheGap between;
   const auto root = bed.dir.path() / "store";
@@ -398,7 +399,7 @@ TEST(StoreLocalStore, ACompactionInAPutsAppendGapLosesTheObjectAsMachasDoes) {
   options.ledger_dir = bed.dir.path() / "ledger";
   options.after_pack_append = between.seam(store);
   const auto kept = pattern(8 * 1024, 51);
-  const auto lost = pattern(8 * 1024, 52);
+  const auto fresh = pattern(8 * 1024, 52);
   std::filesystem::path pack;
   {
     store = bed.open(root, options);
@@ -410,38 +411,33 @@ TEST(StoreLocalStore, ACompactionInAPutsAppendGapLosesTheObjectAsMachasDoes) {
       ASSERT_TRUE(store->remove(object_id(gone)));
     }
     pack = only_pack(root);
-    between.watch(object_id(lost));
-    ASSERT_TRUE(store->put(object_id(lost), lost));
+    between.watch(object_id(fresh));
+    ASSERT_TRUE(store->put(object_id(fresh), fresh));
+    EXPECT_FALSE(between.finished_in_gap());
     ASSERT_TRUE(between.compacted());
-    // The put indexed its record in the pack compaction unlinked.
-    EXPECT_EQ(store->object_path(object_id(lost)), pack);
+    // The compaction ran after the put was indexed and carried it forward.
     EXPECT_FALSE(std::filesystem::exists(pack));
-    EXPECT_TRUE(store->has(object_id(lost)));
-    EXPECT_TRUE(store->held_view().held(object_id(lost)));
-    EXPECT_ANY_THROW((void)store->get(object_id(lost)));
+    EXPECT_NE(store->object_path(object_id(fresh)), pack);
+    EXPECT_EQ(store->get(object_id(fresh)), std::optional<Bytes>{fresh});
+    EXPECT_TRUE(store->held_view().held(object_id(fresh)));
     EXPECT_EQ(store->get(object_id(kept)), std::optional<Bytes>{kept});
     store.reset();
   }
-  // After a restart, as in the stress case: the ledger still says held, no pack
-  // or file holds it, the list does not name it, and a read finds nothing.
   options.after_pack_append = {};
   auto reopened = bed.open(root, options);
-  EXPECT_TRUE(reopened->has(object_id(lost)));
-  EXPECT_TRUE(reopened->held_view().held(object_id(lost)));
-  EXPECT_FALSE(reopened->is_packed(object_id(lost)));
-  EXPECT_EQ(reopened->get(object_id(lost)), std::nullopt);
+  EXPECT_TRUE(reopened->is_packed(object_id(fresh)));
+  EXPECT_EQ(reopened->get(object_id(fresh)), std::optional<Bytes>{fresh});
+  EXPECT_TRUE(reopened->held_view().held(object_id(fresh)));
   const auto listed = reopened->list();
-  EXPECT_EQ(std::count(listed.begin(), listed.end(), object_id(lost)), 0);
+  EXPECT_EQ(std::count(listed.begin(), listed.end(), object_id(fresh)), 1);
   EXPECT_EQ(reopened->get(object_id(kept)), std::optional<Bytes>{kept});
 }
 
-// The same gap on a remove: the tombstone is appended to the active pack, a
-// compaction with the object still in its snapshot copies its record forward into
-// a newer pack and unlinks the victim, tombstone and all. Whichever way the index
-// ends in this process (a compaction that installs after the remove puts the copy
-// back in it), at the next start the newer pack's copy stands: an object a remove
-// reported gone is held again. Macha's lines as above; pinned, not fixed.
-TEST(StoreLocalStore, ACompactionInARemovesAppendGapBringsTheObjectBackAsMachasDoes) {
+// The same gap on a remove: the tombstone is in the active pack but the index
+// still names the object, so a compaction there copied the record forward into a
+// newer pack and unlinked the tombstone with its victim, and the object a remove
+// reported gone was held again at the next start. Closed as above.
+TEST(StoreLocalStore, ACompactionWaitsForARemoveInItsAppendGap) {
   StoreBed bed;
   CompactionInTheGap between;
   const auto root = bed.dir.path() / "store";
@@ -459,15 +455,20 @@ TEST(StoreLocalStore, ACompactionInARemovesAppendGapBringsTheObjectBackAsMachasD
     ASSERT_TRUE(store->remove(object_id(gone)));
     between.watch(object_id(back));
     ASSERT_TRUE(store->remove(object_id(back)));
+    EXPECT_FALSE(between.finished_in_gap());
     ASSERT_TRUE(between.compacted());
+    EXPECT_FALSE(store->has(object_id(back)));
     EXPECT_FALSE(store->held_view().held(object_id(back)));
+    EXPECT_EQ(store->get(object_id(back)), std::nullopt);
     store.reset();
   }
   options.after_pack_append = {};
   auto reopened = bed.open(root, options);
-  EXPECT_TRUE(reopened->is_packed(object_id(back)));
-  EXPECT_TRUE(reopened->has(object_id(back)));
-  EXPECT_EQ(reopened->get(object_id(back)), std::optional<Bytes>{back});
+  EXPECT_FALSE(reopened->is_packed(object_id(back)));
+  EXPECT_FALSE(reopened->has(object_id(back)));
+  EXPECT_EQ(reopened->get(object_id(back)), std::nullopt);
+  const auto listed = reopened->list();
+  EXPECT_EQ(std::count(listed.begin(), listed.end(), object_id(back)), 0);
 }
 
 // Macha: test_held_device_io_blocks_only_its_own_object. Device I/O on one
