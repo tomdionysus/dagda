@@ -75,6 +75,20 @@ needs them. Tell the Macha session when the answer is Yes.
     publication test is only "over 120 s". The report says plainly that the cause is unknown, that the stacks show only where the damage surfaced,
     that the one store frame is `ObjectTrie` under `StoragePool::held_view`, and what Dagda did and did not check; none of that clears or
     implicates the moved code.
+10b. Open, found 2026-11-07 and 08 (each named in the report until closed):
+    - Dannan, asked of the Dannan session: bytes sent do not count as call progress (Macha `net.cpp:1575`, Dannan `session.cpp:98`), so a moving
+      upload looks silent; a peer not yet in the roster gets 403 where Macha accepts; a use-after-free on an in-process restart (TSan,
+      `session.cpp:107-116`). Macha's 30 s publication budget waits on the first.
+    - Dagda is pinned at Dannan 0.5.0 (`build/deps/prefix-0.5.0`). Peer calls run under `call_no_progress`, 300 s by default: the agent's choice,
+      past a peer's 120 s credit wait; Macha's is unbounded, Dagda's rule forbids that, so a silent peer on a live session is a named difference.
+    - A full control store: live-a's filled 4G on 2026-11-06 and refused every control write for about 40 hours, silently (status healthy,
+      73,842 "control object unavailable" lines, a namespace write answered 400), freed by nothing until the limit was raised and Macha restarted.
+      Dagda must behave and recover the same; the silent status and unbounded retry are Macha's defects for after the freeze. live-b stood at 94%.
+    - W1 (a peer may sweep an old unreferenced object just as another node re-references it, before it hears of the commit): Macha's behaviour,
+      kept, costs one replica until repair; the fix is the maintainer's, the Macha session recommends after the port. Nothing restores a lost claim record.
+    - The delete stress case (opt-in): two Release-only heap aborts with no writer found, in runs with in-process restarts; a held-ledger entry
+      for an object no disk lists; races in `Node::publish_status` against `ReferenceCounts` (Dagda only) and `HeldLedger::stats` (unused, as
+      Macha's). Settling under sanitizers often stalled in the quiet window. None explains live-a's crashes, nor clears the moved code.
 11. The capabilities report.
 
 **Macha's freeze exception (the maintainer, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
