@@ -95,8 +95,10 @@ needs them. Tell the Macha session when the answer is Yes.
       record is in the active pack but not yet indexed, compaction counts it dead, can take the active pack as victim and unlinks it, and
       the object is lost while the ledger still says held; on a remove the same gap brings a deleted object back. Macha `98b816d` has the
       same lines (`local_store.cpp:821-867`, `:1694`, `:1700-1714`, `:1842`), and `StoragePool::get` stops at the first backend's empty
-      answer (`storage_pool.cpp:591-610`). Pinned as Macha's by two cases on the seam `LocalStoreOptions::after_pack_append`; the fix is
-      Tom's. The status race is fixed (`ReferenceCounts::_totals` under its own mutex). The quiet window is Macha's design: a node whose
+      answer (`storage_pool.cpp:591-610`). Tom chose to fix it in Dagda now and in Macha after the freeze (2026-11-08): compaction now
+      waits, under the pack lock it already holds, for every written record to be indexed (`LocalStore::_unindexed_appends`), proved by
+      `StoreLocalStore.ACompactionWaitsForAPutInItsAppendGap` and `...ARemoveInItsAppendGap`, which failed first. Dagda is safer than Macha
+      here; the report says so. The pool's first-empty-answer read is still Macha's and still open. The status race is fixed (`ReferenceCounts::_totals` under its own mutex). The quiet window is Macha's design: a node whose
       arrivals come faster than the window never sweeps until they stop.
     - A transient 409 when a DATA and a CONTROL id coincide (the Macha session's review of `f0cbb23..826a149`): a delete marks the id alone, so
       a claim of the other class on that id is refused until the delete ends. Macha's behaviour, kept: one `RetentionStore` per node
