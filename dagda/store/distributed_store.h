@@ -153,6 +153,16 @@ struct WriteOptions {
   std::chrono::milliseconds deadline{0};
   dannan::sched::FrameType frame = dannan::sched::FrameType::loader;
   std::atomic_bool* cancelled = nullptr;
+  // A window over the whole write, not a call (Macha's publication budget,
+  // fuse.publication_no_progress_deadline, 30 s): re-armed by a copy landing, a
+  // fallback starting, any pending call that moved within it, or `progress`
+  // moving; when nothing does for the whole budget, the pending calls are
+  // cancelled and the write ends with what landed, the rest owed to prompt
+  // replication. Zero: none, as every Macha write but publication.
+  std::chrono::milliseconds no_progress_budget{0};
+  // Progress elsewhere in the caller's pipeline, shared by its workers; read only
+  // with a budget.
+  const std::atomic_uint64_t* progress = nullptr;
   // The scope the write is checked under (WriteScope): a replica that
   // refuses it stores nothing and says why in the evidence.
   std::optional<dannan::contract::Principal> principal;

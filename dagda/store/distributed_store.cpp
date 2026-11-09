@@ -846,6 +846,15 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   // This node, when it holds a copy, is first in order, and only its launch waits.
   for (size_t i = 0; i < initial; ++i) launch(order[i]);
 
+  // The caller's budget over the whole write (Macha's put_impl, 98b816d
+  // :352-386): any copy landing, fallback starting, pending call moving within it
+  // or move of the caller's counter re-arms it.
+  const auto budget = options.no_progress_budget;
+  const bool budgeted = budget.count() > 0;
+  uint64_t progress_seen = budgeted && options.progress ? options.progress->load(std::memory_order_relaxed) : 0;
+  auto window_started = _time.now();
+  size_t done_seen = 0;
+
   size_t success = 0;
   {
     Lock lock(run->mutex);
@@ -855,10 +864,14 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       size_t stalled = 0;
       size_t waited_unfinished = 0;
       size_t waited_ok = 0;
+      size_t done = 0;
+      bool moving = false;
       const auto now = _time.now();
       auto wake = own_deadline ? deadline : now + look_at_the_clock;
       for (auto& call : run->calls) {
         const bool member_waited = waited.contains(call.node.id);
+        if (call.done) ++done;
+        if (!call.done && call.handle && call.handle->idle_for() < budget) moving = true;
         if (call.done) {
           if (call.ok) {
             ++success;
@@ -891,6 +904,20 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       }
       const bool satisfied = level == Durability::durable ? (waited_ok == waited.size() && success > 0) : (floor && success >= floor);
       if (satisfied) break;
+      if (budgeted) {
+        const auto counted = options.progress ? options.progress->load(std::memory_order_relaxed) : progress_seen;
+        if (done != done_seen || moving || counted != progress_seen) window_started = now;
+        done_seen = done;
+        progress_seen = counted;
+        if (now - window_started >= budget) {
+          for (auto& call : run->calls)
+            if (!call.done && call.handle) call.handle->cancel();
+          _logger.debug("object write made no progress within budget id=" + to_string(id) + " budget_ms=" + std::to_string(budget.count()) +
+                        " success=" + std::to_string(success) + " sought=" + std::to_string(floor));
+          break;
+        }
+        wake = std::min(wake, window_started + budget);
+      }
       if ((options.cancelled && options.cancelled->load(std::memory_order_relaxed)) || _stopping.load()) {
         for (auto& call : run->calls)
           if (!call.done && call.handle) call.handle->cancel();
@@ -903,6 +930,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         lock.unlock();
         launch(node);
         lock.lock();
+        window_started = _time.now();
         continue;
       }
       const size_t untried = order.size() - next_fallback;
