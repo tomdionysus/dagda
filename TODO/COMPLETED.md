@@ -3,6 +3,32 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-09: seed 102's leftover objects are Macha's sweep deferral (`feature/seed-102`)
+
+The stress failure (n0, restarted without a rebuild, holding hundreds of unreferenced objects at the end of the settle bound) is Macha's
+behaviour, not a Dagda defect. A sweep pass runs in slices; `StoragePool::gc_step` (`storage_pool.cpp:1111-1160`, Macha 98b816d
+`storage_pool.cpp:1030-1083`) reports `deferred` for its own slice only. An unreferenced object is deferred the first time a pass sees it
+(its sighting must ripen for the grace), so the first pass after a long shut gate only sights; the slice that completes the next pass
+reports no deferral when every unripe object fell in an earlier slice, and the loop (Macha `maintenance.cpp:1077-1089`, the stress loop's
+copy at `delete_stress_test.cpp:746-747`) sets the quiet window to "complete; waiting for an event" with those objects still on disk. In
+the settle window the next event is the head's tick, every 30 s. n0 is hit because it is the biggest: its gate stayed shut (foreground
+busy and the quiet window, Macha `maintenance.cpp:357-364`) from its restart to the settle, so it held about 13,000 objects, 8,800
+unreferenced, and a pass of it took about 44 s; two passes, a lost deferral and a 30 s wait do not fit in 120 s. The ids left were
+the ones a later pass had not yet reached: the packed index is walked in id order, hence `5c..5d` and up.
+
+Evidence: one probed Release run of seed 102, restarts on, on 0.5.1 (231 s, load 51 falling to 28) that passed: n0's passes logged
+13 slices and 13,282 objects, all deferred (8,779 strays left); then 14 slices, 13,660 objects, deferred in the pass but not in its
+last slice, 302 strays left and the gate "complete; waiting for an event"; the next event 10 s later cleared them. n2's second pass lost
+its deferral the same way with nothing left. The failed runs' "complete; waiting for an event" at 706 strays is the same state. Dannan
+plays no part in the mechanism; 0.5.1 can only change timing. Seed 102 was not run on 0.5.0: it passed here on 0.5.1, so a pass on
+0.5.0 would show nothing. Not verified: the failing runs' own slices (they were not probed).
+
+Pinned, not changed: `StoreStoragePool.TheSliceThatCompletesASweepSaysNothingOfEarlierDeferrals`. The fix (the loop ORs `deferred`
+across a pass, or `gc_step` carries it in the cursor until the pass completes) is Macha's loop's and the maintainer's to decide; until then the
+stress case can fail on a slow node.
+
+Gate: `dagda_tests` 1019 passing (1018 and the pin), 6 disabled, one whole run on the Mac (346 s, load 14 to 57).
+
 ## 2026-11-09: the repin to Dannan 0.5.1 (`feature/repin-051`)
 
 Dannan 0.5.1 (`337cc48`) in `build/deps/prefix-0.5.1`. `find_package(dannan 0.5.1 CONFIG REQUIRED)`: Dannan's version file is SameMinorVersion,
