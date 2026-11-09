@@ -79,6 +79,7 @@ needs them. Tell the Macha session when the answer is Yes.
     - Dannan, asked of the Dannan session: bytes sent do not count as call progress (Macha `net.cpp:1575`, Dannan `session.cpp:98`), so a moving
       upload looks silent; a peer not yet in the roster gets 403 where Macha accepts; a use-after-free on an in-process restart (TSan,
       `session.cpp:107-116`). Macha's 30 s publication budget waits on the first.
+    - Pinned at Dannan 0.5.2 (2026-11-09), the tag the port freezes on; suite 1019. Before it:
     - Repinned to Dannan 0.5.1 (2026-11-09, `620f172`, suite 1018, `build/deps/prefix-0.5.1`): bytes sent now count as progress, a peer
       is announced before its first request, a closing session no longer destroys its running handler. The stress case in 17 Release runs
       (3601 s) had no heap abort (at the old one in 14 that clears nothing) and no held-ledger orphan; new: seed 102 with restarts on
