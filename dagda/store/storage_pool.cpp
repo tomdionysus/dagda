@@ -1122,7 +1122,13 @@ StoragePool::MaintenanceResult StoragePool::gc_step(const contract::IdLookup& li
     const auto item = next_physical(_gc_cursor, pass_complete);
     if (!item) {
       result.complete = pass_complete;
-      if (pass_complete && sightings) sightings->pass_complete();
+      if (pass_complete) {
+        // Of the whole pass, not this slice: deferrals that fell in earlier
+        // slices still need the grace (Macha reports only the slice's).
+        result.deferred = _gc_pass_deferred;
+        _gc_pass_deferred = false;
+        if (sightings) sightings->pass_complete();
+      }
       return result;
     }
     ++result.objects;
@@ -1132,7 +1138,7 @@ StoragePool::MaintenanceResult StoragePool::gc_step(const contract::IdLookup& li
       continue;
     }
     if (sightings && !sightings->matured(id, now_unix_ms, unreferenced_grace)) {
-      result.deferred = true;
+      result.deferred = _gc_pass_deferred = true;
       continue;
     }
 
@@ -1150,7 +1156,7 @@ StoragePool::MaintenanceResult StoragePool::gc_step(const contract::IdLookup& li
         result.bytes += bytes;
         if (sightings) sightings->forget(id);
       } else {
-        result.deferred = true;
+        result.deferred = _gc_pass_deferred = true;
       }
     } catch (const std::exception& error) {
       _services.logger.debug("garbage collection skipped local object " + to_string(id) + " on " + item->path.string() + ": " + error.what());
