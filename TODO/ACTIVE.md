@@ -79,7 +79,19 @@ needs them. Tell the Macha session when the answer is Yes.
     - Dannan, asked of the Dannan session: bytes sent do not count as call progress (Macha `net.cpp:1575`, Dannan `session.cpp:98`), so a moving
       upload looks silent; a peer not yet in the roster gets 403 where Macha accepts; a use-after-free on an in-process restart (TSan,
       `session.cpp:107-116`). Macha's 30 s publication budget waits on the first.
-    - Dagda is pinned at Dannan 0.5.0 (`build/deps/prefix-0.5.0`). Peer calls run under `call_no_progress`, 300 s by default: the agent's choice,
+    - Repinned to Dannan 0.5.1 (2026-11-09, `620f172`, suite 1018, `build/deps/prefix-0.5.1`): bytes sent now count as progress, a peer
+      is announced before its first request, a closing session no longer destroys its running handler. The stress case in 17 Release runs
+      (3601 s) had no heap abort (at the old one in 14 that clears nothing) and no held-ledger orphan; new: seed 102 with restarts on
+      fails twice in two, n0 (restarted without a ledger rebuild) still holding 460 to 700 objects nothing refers to at the end of the
+      settle window, its sweep gate "complete; waiting for an event", ids clustered by prefix. Not yet known whether it is new with 0.5.1,
+      the quiet-window starvation already recorded, or a sweep that misses objects after a restart. Open.
+    - Macha's 30 s publication budget is `fuse.publication_no_progress_deadline`, a write-wide no-progress window passed only by
+      publication (Macha `config.hpp:132-140`, `fuse_frontend.cpp:3576-3582`, `distributed_store.cpp:352-386`): it restarts on any copy
+      landing, a fallback starting, any call idle under 30 s or the shared counter moving; when it fires, unfinished calls are cancelled
+      and the write succeeds if one copy landed (the rest owed to prompt replication), else StorageUnavailable. Dagda has no write-wide
+      budget (`run_write`, `distributed_store.cpp:852-922`; `DataWorkContext` carries the fields unread). Recommendation: add it per
+      write, off by default, and keep `call_no_progress` above the 120 s credit wait. The maintainer's, with the 300 s default.
+    - Earlier: Dagda was pinned at Dannan 0.5.0 (`build/deps/prefix-0.5.0`). Peer calls run under `call_no_progress`, 300 s by default: the agent's choice,
       past a peer's 120 s credit wait; Macha's is unbounded, Dagda's rule forbids that, so a silent peer on a live session is a named difference.
     - A full control store: live-a's filled 4G on 2026-11-06 and refused every control write for about 40 hours, silently (status healthy,
       73,842 "control object unavailable" lines, a namespace write answered 400), freed by nothing until the limit was raised and Macha restarted.
