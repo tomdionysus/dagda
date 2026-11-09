@@ -670,36 +670,51 @@ TEST(StoreStoragePool, AClaimedCopyIsUntouchable) {
   EXPECT_EQ(asked[late], 3);
 }
 
-// Pins Macha's behaviour (98b816d, storage_pool.cpp:1030-1083): `deferred` says
-// what this slice put off, not the pass. The slice that completes a pass whose
-// deferrals all fell in earlier slices says none, and Macha's loop then waits
-// for an event (maintenance.cpp:1077-1089) with unripe sightings still on disk:
-// the seed 102 stress failure. Kept as Macha's until Tom says otherwise.
-TEST(StoreStoragePool, TheSliceThatCompletesASweepSaysNothingOfEarlierDeferrals) {
+// The slice that completes a sweep says whether anything in the whole pass was
+// put off, not only in that slice. Macha's gc_step (98b816d, storage_pool.cpp:
+// 1030-1083) says only the slice's, so when a pass's deferrals all fell in
+// earlier slices its loop waits for an event (maintenance.cpp:1077-1089) with
+// unripe objects on disk: the seed 102 stress failure. Tom chose to fix it here
+// (2026-11-09), so Macha's loop, unchanged, waits for the grace instead.
+TEST(StoreStoragePool, TheSliceThatCompletesASweepReportsEveryDeferralInItsPass) {
   StoreBed bed;
   const auto disk = bed.dir.path() / "disk";
   std::filesystem::create_directories(disk);
   auto pool = bed.pool(bed.dir.path() / "state", {{disk, 64 * mib}});
+  std::vector<ObjectId> ids;
   for (uint8_t seed = 1; seed <= 3; ++seed) {
     const auto bytes = pattern(32 * 1024, seed);
     ASSERT_TRUE(pool->put(object_id(bytes), bytes));
+    ids.push_back(object_id(bytes));
     std::filesystem::last_write_time(object_path(disk, object_id(bytes)), std::filesystem::file_time_type::clock::now() - 48h);
   }
   ledger::UnreferencedSince sightings(bed.dir.path() / "state" / "retention" / "unreferenced-data.bin", bed.node_local,
                                       dannan::status::ScopedLogger(bed.sink, "sightings"));
   const std::vector<ObjectId> none;
   const uint64_t day0 = 1'000'000'000'000;
+  const auto pass = [&](uint64_t now, size_t& deferred_slices) {
+    StoragePool::MaintenanceResult last;
+    for (int slice = 0; slice < 16; ++slice) {
+      last = pool->gc_step(none, none, 24h, 1, {}, {}, &sightings, now, 30 * 24h);
+      if (last.complete) break;
+      if (last.deferred) ++deferred_slices;
+    }
+    return last;
+  };
   size_t deferred_slices = 0;
-  StoragePool::MaintenanceResult last;
-  for (int slice = 0; slice < 16; ++slice) {
-    last = pool->gc_step(none, none, 24h, 1, {}, {}, &sightings, day0, 30 * 24h);
-    if (last.complete) break;
-    if (last.deferred) ++deferred_slices;
-  }
-  ASSERT_TRUE(last.complete);
+  const auto first = pass(day0, deferred_slices);
+  ASSERT_TRUE(first.complete);
   EXPECT_EQ(deferred_slices, 3u);
-  EXPECT_FALSE(last.deferred);
+  EXPECT_TRUE(first.deferred);
   EXPECT_EQ(sightings.size(), 3u);
+
+  // Ripe a month on: everything goes, nothing is put off, and the pass says so.
+  deferred_slices = 0;
+  const auto ripe = pass(day0 + static_cast<uint64_t>(std::chrono::milliseconds(31 * 24h).count()), deferred_slices);
+  ASSERT_TRUE(ripe.complete);
+  EXPECT_EQ(deferred_slices, 0u);
+  EXPECT_FALSE(ripe.deferred);
+  for (const auto& id : ids) EXPECT_FALSE(pool->has(id));
 }
 
 // Macha (tests/test_presence.cpp): test_a_backend_offline_and_readopted_leaves_presence_exact.

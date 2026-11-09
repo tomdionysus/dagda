@@ -333,6 +333,10 @@ class StoragePool final : public contract::ObjectStore {
   Cursor _rebalance_cursor;
   Cursor _scrub_cursor;
   Cursor _gc_cursor;
+  // Whether the sweep put anything off since its pass began; the slice that
+  // completes the pass reports it, so a host waits for the grace rather than an
+  // event. Owned with _gc_cursor.
+  bool _gc_pass_deferred = false;
   mutable std::atomic<uint64_t> _diag_gets{0};
   mutable std::atomic<uint64_t> _diag_get_bytes{0};
   mutable std::atomic<uint64_t> _diag_get_ms{0};
