@@ -83,8 +83,14 @@ needs them. Tell the Macha session when the answer is Yes.
       is announced before its first request, a closing session no longer destroys its running handler. The stress case in 17 Release runs
       (3601 s) had no heap abort (at the old one in 14 that clears nothing) and no held-ledger orphan; new: seed 102 with restarts on
       fails twice in two, n0 (restarted without a ledger rebuild) still holding 460 to 700 objects nothing refers to at the end of the
-      settle window, its sweep gate "complete; waiting for an event", ids clustered by prefix. Not yet known whether it is new with 0.5.1,
-      the quiet-window starvation already recorded, or a sweep that misses objects after a restart. Open.
+      settle window, its sweep gate "complete; waiting for an event", ids clustered by prefix. Found (`0bce3e9`): Macha's behaviour, not
+      Dannan's and not new with 0.5.1. `gc_step` reports `deferred` for its own slice only (`storage_pool.cpp:1134-1135`, Macha
+      `storage_pool.cpp:1030-1083`), and Macha's loop reads it from the slice that completes the pass (`maintenance.cpp:1079-1087`), so a
+      pass whose not-yet-mature objects all fell in earlier slices ends "complete; waiting for an event" with them on disk until the next
+      event. n0, gated shut since its restart, needed two 44 s passes plus that wait, more than the 120 s settle. Pinned by
+      `StoreStoragePool.TheSliceThatCompletesASweepSaysNothingOfEarlierDeferrals`. Garbage is late, never lost or wrongly deleted. The
+      fix (the loop ORs `deferred` across a pass, or `gc_step` carries it in its cursor) is the maintainer's; until then the stress case can fail
+      on a slow node.
     - Macha's 30 s publication budget is `fuse.publication_no_progress_deadline`, a write-wide no-progress window passed only by
       publication (Macha `config.hpp:132-140`, `fuse_frontend.cpp:3576-3582`, `distributed_store.cpp:352-386`): it restarts on any copy
       landing, a fallback starting, any call idle under 30 s or the shared counter moving; when it fires, unfinished calls are cancelled
