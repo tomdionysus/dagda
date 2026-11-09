@@ -3,6 +3,28 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-09: the repin to Dannan 0.5.1 (`feature/repin-051`)
+
+Dannan 0.5.1 (`337cc48`) in `build/deps/prefix-0.5.1`. `find_package(dannan 0.5.1 CONFIG REQUIRED)`: Dannan's version file is SameMinorVersion,
+so this asks for 0.5.1 or a later 0.5 patch. The README and CONTRIBUTING build lines name the tag. Nothing broke: the additions (PathStats
+counters, finish_wait, drop hooks) are not used. One comment changed: `call_no_progress` now says a call is idle only when it has neither sent
+nor received a byte, which 0.5.1 made true; the same change means `write_stall` spills only a put that moves nothing either way, as Macha's
+`touch` on each sent fragment does (Macha `src/cluster/net.cpp:1571-1576`), no longer an upload still sending.
+
+The delete stress case, Release on the Mac, runs of 90 s asked, settle bound 120 s, load average 12 to 220 (other sessions): 17 runs, 3601 s.
+Restarts on: 5 runs, 1076 s, and a rerun of seed 102, 267 s. Restarts off: 5 runs, 979 s. Restarts and the instant delete off: 6 runs, 1279 s.
+No heap abort in any run, so the Release abort (one in 14 before, with restarts and instant delete off) did not recur; that clears nothing at
+that rate. No held-ledger entry for an object no disk lists. Two failures:
+- Seed 102, restarts on, twice of two: n0, restarted in round 2 without a rebuild, keeps hundreds of unreferenced objects past the settle bound
+  (461; on the rerun 706, then 615, the ones named all in `5c..5d`, as if one sweep was walking the id space slowly), its gate mostly
+  "complete; waiting for an event", and the retired objects the end samples are read back from n0 (`holds a removed object`, other nodes'
+  reads with source remote). The other nodes settled. Not looked into: whether n0's sweep is starved or misses them after the restart.
+- Seed 203, restarts off: n2 and n3 held view and disks differ by about 20 at the end, `explain_disagreement` then finds view_held=1 for the
+  objects it names: the end check's own race, recorded before.
+
+Not done: no run of these seeds on 0.5.0, so whether seed 102 is new with 0.5.1 is not known; no sanitizer runs.
+Gate: `dagda_tests` 1018 passing, 6 disabled, one whole run on the Mac at `14185e3` (323 s).
+
 ## 2026-11-08: compaction waits for appends to be indexed (`feature/compaction-gap`)
 
 The stress findings' pack race, closed at the maintainer's word (2026-11-08: fix in Dagda now, in Macha after the freeze). A pack record is written under
