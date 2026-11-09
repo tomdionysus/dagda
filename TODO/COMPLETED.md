@@ -3,6 +3,24 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-09: the sweep's pass-wide deferral and Macha's publication budget (`feature/sweep-deferral`)
+
+Both at Tom's word (2026-11-09: "Yes, fix those").
+
+- The sweep (`StoragePool::gc_step`): the slice that completes a pass now reports whether anything in the whole pass was put off
+  (`_gc_pass_deferred`, beside `_gc_cursor`), not only in that slice. Macha's loop, unchanged, then waits for the grace rather than an
+  event with unripe objects on disk (the seed 102 stress failure). The pin became
+  `StoreStoragePool.TheSliceThatCompletesASweepReportsEveryDeferralInItsPass`, which failed first and also proves the flag clears after a
+  pass with nothing deferred. Dagda differs from Macha 98b816d here, safely; the report says so.
+- The publication budget: `WriteOptions::no_progress_budget` and `progress`, a window over the whole write as Macha's put_impl
+  (98b816d `distributed_store.cpp:352-386`): re-armed by a copy landing, a fallback starting, a pending call that moved within it, or the
+  caller's counter moving; when it runs out the pending calls are cancelled and the write ends with what landed, the rest owed to prompt
+  replication. Off by default; Macha's publication passes 30 s at the port. `call_no_progress` stays 300 s, above a peer's 120 s credit
+  wait. Cases `StoreRepair.AWriteWithABudgetEndsWhenNothingMovesForIt` and `...AWritesBudgetIsReArmedByItsPipelinesProgress`; the first
+  failed first (the write still waiting 31 s on).
+
+Gate: `dagda_tests` 1021 passing, 6 disabled, one whole run at the final code (1019 before; two cases added, one rewritten).
+
 ## 2026-11-09: repin to Dannan 0.5.2 (`feature/repin-052`)
 
 Dannan 0.5.2 (tag on main `14bb3d9`), the tag the port freezes on: a client stop no longer waits out a call's deadline while a duplicate
