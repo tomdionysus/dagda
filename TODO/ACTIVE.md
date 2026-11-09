@@ -89,15 +89,14 @@ needs them. Tell the Macha session when the answer is Yes.
       `storage_pool.cpp:1030-1083`), and Macha's loop reads it from the slice that completes the pass (`maintenance.cpp:1079-1087`), so a
       pass whose not-yet-mature objects all fell in earlier slices ends "complete; waiting for an event" with them on disk until the next
       event. n0, gated shut since its restart, needed two 44 s passes plus that wait, more than the 120 s settle. Pinned by
-      `StoreStoragePool.TheSliceThatCompletesASweepSaysNothingOfEarlierDeferrals`. Garbage is late, never lost or wrongly deleted. The
-      fix (the loop ORs `deferred` across a pass, or `gc_step` carries it in its cursor) is the maintainer's; until then the stress case can fail
-      on a slow node.
+      the pin. Garbage is late, never lost or wrongly deleted. Fixed in Dagda at the maintainer's word (2026-11-09): `gc_step` carries the deferral
+      across the pass (`_gc_pass_deferred`); Macha's loop after the freeze. The maintainer: no more stress runs.
     - Macha's 30 s publication budget is `fuse.publication_no_progress_deadline`, a write-wide no-progress window passed only by
       publication (Macha `config.hpp:132-140`, `fuse_frontend.cpp:3576-3582`, `distributed_store.cpp:352-386`): it restarts on any copy
       landing, a fallback starting, any call idle under 30 s or the shared counter moving; when it fires, unfinished calls are cancelled
       and the write succeeds if one copy landed (the rest owed to prompt replication), else StorageUnavailable. Dagda has no write-wide
-      budget (`run_write`, `distributed_store.cpp:852-922`; `DataWorkContext` carries the fields unread). Recommendation: add it per
-      write, off by default, and keep `call_no_progress` above the 120 s credit wait. The maintainer's, with the 300 s default.
+      budget then. Added at the maintainer's word (2026-11-09): `WriteOptions::no_progress_budget` and `progress`, off by default, Macha's
+      publication passes 30 s at the port; `call_no_progress` stays 300 s, above the 120 s credit wait (settles the 300 s question).
     - Earlier: Dagda was pinned at Dannan 0.5.0 (`build/deps/prefix-0.5.0`). Peer calls run under `call_no_progress`, 300 s by default: the agent's choice,
       past a peer's 120 s credit wait; Macha's is unbounded, Dagda's rule forbids that, so a silent peer on a live session is a named difference.
     - A full control store: live-a's filled 4G on 2026-11-06 and refused every control write for about 40 hours, silently (status healthy,
