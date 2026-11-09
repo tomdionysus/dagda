@@ -3,6 +3,13 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-09: repin to Dannan 0.5.2 (`feature/repin-052`)
+
+Dannan 0.5.2 (tag on main `14bb3d9`), the tag the port freezes on: a client stop no longer waits out a call's deadline while a duplicate
+session is retired, a write's progress is recorded before its bytes are counted, and one supervisor test skips as root. No API change.
+`find_package(dannan 0.5.2 CONFIG REQUIRED)`; CONTRIBUTING and README name the tag; built into `build/deps/prefix-0.5.2`. Nothing in Dagda
+changed. Gate: `dagda_tests` 1019 passing, 6 disabled, one whole run.
+
 ## 2026-11-09: seed 102's leftover objects are Macha's sweep deferral (`feature/seed-102`)
 
 The stress failure (n0, restarted without a rebuild, holding hundreds of unreferenced objects at the end of the settle bound) is Macha's
