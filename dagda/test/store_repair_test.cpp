@@ -1410,6 +1410,82 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   EXPECT_TRUE(a.data().has(id));
 }
 
+// Macha's publication budget (98b816d, distributed_store.cpp:352-386): a window
+// over the whole write. A member silent for it is cancelled and the write ends
+// with the copy that landed, long before the call's own 300 s bound.
+TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 61);
+  const auto id = object_id(bytes);
+  WriteOptions publication;
+  publication.level = Durability::durable;
+  publication.no_progress_budget = 30s;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(31s);
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(a.id()), nullptr);
+  EXPECT_EQ(evidence.on(a.id())->state, ReplicaState::acknowledged);
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::pending);
+  EXPECT_TRUE(a.data().has(id));
+}
+
+// Progress anywhere in the caller's pipeline re-arms the window, as Macha's shared
+// counter does: the write goes on past the budget while the counter moves, and
+// ends a whole budget after it stops.
+TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 300s;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 62);
+  const auto id = object_id(bytes);
+  std::atomic_uint64_t progress{0};
+  WriteOptions publication;
+  publication.level = Durability::durable;
+  publication.no_progress_budget = 30s;
+  publication.progress = &progress;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  for (int step = 0; step < 4; ++step) {
+    time.advance(20s);
+    progress.fetch_add(1);
+  }
+  // 80 s on, past two budgets, but the counter moved within each.
+  EXPECT_EQ(write.wait_for(2s), std::future_status::timeout);
+  // The last move is seen when the write next looks, which may be after the
+  // first of these: a whole budget after that, it ends.
+  for (int step = 0; step < 3 && write.wait_for(5s) != std::future_status::ready; ++step) time.advance(31s);
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::pending);
+  EXPECT_TRUE(a.data().has(id));
+}
+
 // A caller's own deadline stays: the write returns at it with the peer's copy
 // pending, the peer's answer reaches its ticket, and no window has passed.
 TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
