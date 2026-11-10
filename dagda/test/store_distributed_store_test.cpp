@@ -1488,5 +1488,107 @@ TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
   EXPECT_EQ(store.take_foreground_bytes(), 0u);
 }
 
+// Refuses every request of `type`, as a peer with no room would.
+test::Interpose refuse(MessageType type) {
+  return [type](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == type) return Handled::failed(507, "storage_full", "storage limit reached");
+    return std::nullopt;
+  };
+}
+
+// S28: put_here and put_deferred_here (Macha's distributed_store.cpp:1016-1050
+// at 98b816d). On a node holding extents the copy is here and the call returns,
+// the second copy prompt replication's; on a node that holds none they are a
+// put and a deferred put, the copy landing on an owner and nothing kept here.
+TEST(StoreDistributedStore, PutHereIsLocalFirstAndAPutWhereNoExtentsAreHeld) {
+  Cluster cluster;
+  auto& s1 = cluster.add("s1", options(2));
+  auto& s2 = cluster.add("s2", options(2));
+  auto edge_options = options(2);
+  edge_options.hosts_extents = false;
+  auto& edge = cluster.add("edge", edge_options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto here = pattern(64 * 1024, 101);
+  ASSERT_TRUE(s1.store().put_here(object_id(here), here));
+  EXPECT_TRUE(s1.data().has(object_id(here)));
+  ASSERT_TRUE(wait_until([&] { return s1.store().prompt_replication_stats().copies == 1; }));
+  EXPECT_TRUE(s2.data().has(object_id(here)));
+
+  ASSERT_FALSE(edge.store().holds_extents());
+  const auto put = pattern(64 * 1024, 102);
+  ASSERT_TRUE(edge.store().put_here(object_id(put), put));
+  EXPECT_FALSE(edge.data().has(object_id(put)));
+  EXPECT_TRUE(s1.data().has(object_id(put)) || s2.data().has(object_id(put)));
+
+  const auto deferred = pattern(64 * 1024, 103);
+  const auto evidence = edge.store().put_deferred_here(object_id(deferred), deferred);
+  EXPECT_GT(evidence.holders(), 0u);
+  EXPECT_EQ(evidence.on(edge.id()), nullptr);
+  EXPECT_FALSE(edge.data().has(object_id(deferred)));
+  EXPECT_TRUE(s1.data().has(object_id(deferred)) || s2.data().has(object_id(deferred)));
+}
+
+// S26: a prompt copy refused is retried after 30, 60, 120 and 240 s on the
+// node's clock, five attempts in all, then left to repair (Macha's
+// distributed_store.cpp:1230 and :1264-1266 at 98b816d).
+TEST(StoreDistributedStore, PromptReplicationRetriesAt30_60_120And240SecondsThenGivesUp) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto writer = options(2);
+  writer.time = &time;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose(refuse(message::put_object));
+  const auto failures = [&] { return a.store().prompt_replication_stats().failures; };
+
+  const auto data = pattern(64 * 1024, 104);
+  ASSERT_TRUE(a.store().put_here(object_id(data), data));
+  ASSERT_TRUE(wait_until([&] { return failures() == 1; }));
+  uint64_t seen = 1;
+  for (const auto delay : {30s, 60s, 120s, 240s}) {
+    time.advance(delay - 1s);
+    // The loop looks at least once a second: two seconds is two looks.
+    EXPECT_FALSE(wait_until([&] { return failures() > seen; }, 2s)) << "retried before " << delay.count() << " s";
+    time.advance(1s);
+    ASSERT_TRUE(wait_until([&] { return failures() == seen + 1; })) << "no retry at " << delay.count() << " s";
+    ++seen;
+  }
+  EXPECT_EQ(a.store().prompt_replication_stats().dropped, 1u);
+  time.advance(3600s);
+  EXPECT_FALSE(wait_until([&] { return failures() > 5; }, 2s));
+  EXPECT_EQ(a.store().prompt_replication_stats().copies, 0u);
+}
+
+// S26: at most 4096 refused copies wait for their retry; one more drops the
+// soonest due (Macha's distributed_store.cpp:1318-1320). Time stands still, so
+// none comes due and each object is tried once.
+TEST(StoreDistributedStore, PromptReplicationKeepsAtMost4096Retries) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto writer = options(2);
+  writer.time = &time;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose(refuse(message::put_object));
+  constexpr unsigned objects = 4097;
+  for (unsigned i = 0; i < objects; ++i) {
+    auto bytes = pattern(64, static_cast<uint8_t>(i));
+    bytes[0] = static_cast<uint8_t>(i >> 8);
+    bytes[1] = 0xa5;
+    ASSERT_TRUE(a.store().put_here(object_id(bytes), bytes));
+  }
+  ASSERT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().failures == objects; }, 300s));
+  const auto stats = a.store().prompt_replication_stats();
+  EXPECT_EQ(stats.dropped, 1u);
+  EXPECT_EQ(stats.queued, 0u);
+  EXPECT_EQ(stats.copies, 0u);
+}
+
 }  // namespace
 }  // namespace dagda::store
