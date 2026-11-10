@@ -3,6 +3,23 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-10: Macha's unmoved metadata refuses a heads node (`feature/namespace-refusal`)
+
+Settled with the Macha session (2026-11-10): the head space is `macha/namespace`, the migration's default, and a node is refused rather
+than started empty beside Macha's metadata, as the maintainer's ruling for a v18 disk.
+
+- `Node::open`, right after the state layout is accepted and before anything else is written: with `heads` on, Macha's
+  `<state>/metadata` or its cache seed `<cache>/metadata/current.meta` refuses the node, naming `dagda-migrate --heads --state <state>`.
+  With `heads` off (Macha's own replica running, the port's first stage) it opens; a state with neither opens as before. The two paths
+  are `heads::machas_metadata_directory` and `heads::machas_metadata_seed`, which the migration's `heads_places` now reads too (one copy).
+  Case `Node.MachasUnmovedMetadataRefusesAHeadsNodeNamingTheMigration`, which failed first (both nodes started empty).
+- A race in yesterday's `StoreRepair.AWriteWithABudgetEndsWhenNothingMovesForIt`, found by this gate's first run hanging: the local copy
+  landing re-arms the window, and when the write saw it after the test's single 31 s step the window re-armed at the new time and nothing
+  stepped again. The budget is right (Macha's re-arms on a landed copy too); the case now steps 31 s until the write ends, three steps at
+  most, 93 s, short of the call's 300 s, as its sibling does.
+
+Gate: `dagda_tests` 1022 passing, 6 disabled, one whole run at the final code.
+
 ## 2026-11-09: the sweep's pass-wide deferral and Macha's publication budget (`feature/sweep-deferral`)
 
 Both at the maintainer's word (2026-11-09: "Yes, fix those").

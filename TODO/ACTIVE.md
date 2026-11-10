@@ -101,7 +101,7 @@ needs them. Tell the Macha session when the answer is Yes.
       past a peer's 120 s credit wait; Macha's is unbounded, Dagda's rule forbids that, so a silent peer on a live session is a named difference.
     - A full control store: live-a's filled 4G on 2026-11-06 and refused every control write for about 40 hours, silently (status healthy,
       73,842 "control object unavailable" lines, a namespace write answered 400), freed by nothing until the limit was raised and Macha restarted.
-      Dagda must behave and recover the same; the silent status and unbounded retry are Macha's defects for after the freeze. live-b stood at 94%.
+      Dagda must behave and recover the same; the silent status and unbounded retry are Macha's defects for after the freeze. live-b stood at 94% of 4G; it was raised to 8G on 2026-11-08.
     - W1 (a peer may sweep an old unreferenced object just as another node re-references it, before it hears of the commit): Macha's behaviour,
       kept, costs one replica until repair; the fix is the maintainer's, the Macha session recommends after the port. Nothing restores a lost claim record.
     - The delete stress case (opt-in): two Release-only heap aborts with no writer found, in runs with in-process restarts; a held-ledger entry
@@ -131,8 +131,12 @@ needs them. Tell the Macha session when the answer is Yes.
       (`exchange.cpp:1146-1152`, `node.cpp:607-614`, `data_work.cpp:204-211`). The same as Macha: the local writer's DATA admission
       carries no cancellation, so a store stopped while it waits for credit is held until a release or the no-progress window (120 s on
       the live nodes); Macha's flag without a notify gives the same bound. Where a caller's flag exists, ClassWaits polls it every 25 ms.
-    - From S7: Macha's facade must open the head space as `macha/namespace` (the migration's default), and a node whose space opens before
-      the metadata pass has run starts empty with nothing to refuse it. To settle with the Macha session before the port.
+    - From S7, settled 2026-11-10: Macha's facade opens the head space as `macha/namespace` (the migration's default), and a heads node
+      finding Macha's unmoved metadata is refused naming `dagda-migrate --heads` (`COMPLETED.md`, 2026-11-10).
+    - The maintainer, 2026-11-10: live-b's control store is 8G (since 2026-11-08 12:49Z, 3.9G used); the baselines are done, and what the port
+      finds is fixed after it. Dagda's arm64 run (plain, and ASan with UBSan, GCC 14) is on live-b at the lowest priority, as Dannan's,
+      Macha untouched. The rehearsal on live-a's state copy (`--reverse`, `--resume` from a real partial) comes before the first live
+      conversion, not before the port is built.
 11. The capabilities report.
 
 **Macha's freeze exception (the maintainer, relayed by the Macha session, 2026-11-06).** The history tail cut S3 found is fixed in Macha first,
