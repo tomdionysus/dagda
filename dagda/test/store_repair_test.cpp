@@ -1434,7 +1434,10 @@ TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
   publication.no_progress_budget = 30s;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
   ASSERT_TRUE(gate.wait_for_entries(1));
-  time.advance(31s);
+  // The local copy landing re-arms the window, and the write may see it after
+  // the first step: a budget after that, it ends. Three steps are 93 s, far
+  // short of the call's 300 s, so only the budget can end it.
+  for (int step = 0; step < 3 && write.wait_for(5s) != std::future_status::ready; ++step) time.advance(31s);
   ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
   const auto evidence = write.get();
   ASSERT_NE(evidence.on(a.id()), nullptr);
