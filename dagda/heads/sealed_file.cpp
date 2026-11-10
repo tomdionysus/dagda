@@ -45,6 +45,10 @@ SpaceId space_id(const domain::DomainId& domain, std::string_view name) {
 
 std::filesystem::path space_directory(const std::filesystem::path& state, const SpaceId& space) { return state / "heads" / dannan::identity::hex(space); }
 
+std::filesystem::path machas_metadata_directory(const std::filesystem::path& state) { return state / "metadata"; }
+
+std::filesystem::path machas_metadata_seed(const std::filesystem::path& cache) { return cache / "metadata" / "current.meta"; }
+
 AadRule replica_aad(const domain::DomainId& domain, const SpaceId& space) {
   return [domain, space](const Magic& magic) { return space_aad("dagda/heads/19", domain, space, magic); };
 }

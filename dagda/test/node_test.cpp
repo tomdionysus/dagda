@@ -126,6 +126,42 @@ TEST(Node, AV18DiskIsRefusedNamingTheMigrationAndNothingChanges) {
   EXPECT_EQ(test::legacy::tree_digest(b.state()), b_before);
 }
 
+// Macha's metadata not yet moved to its head space (a v19 state between the
+// migration's stages, or one whose --heads never ran): a node running head
+// spaces is refused naming the metadata pass, rather than starting its spaces
+// empty beside it (the Macha session, 2026-11-10, as Tom's ruling for a v18
+// disk), and nothing changes. The cache's old seed alone refuses too. With
+// heads off, Macha's own replica still runs on it and the node opens.
+TEST(Node, MachasUnmovedMetadataRefusesAHeadsNodeNamingTheMigration) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  a.start();
+  a.stop();
+  std::filesystem::create_directories(a.state() / "metadata");
+  std::ofstream(a.state() / "metadata" / "history.log") << "Macha's";
+  const auto before = test::legacy::tree_digest(a.state());
+  auto why = refusal_of(a);
+  EXPECT_NE(why.find("dagda-migrate --heads --state " + a.state().string()), std::string::npos) << why;
+  EXPECT_FALSE(a.running());
+  EXPECT_EQ(test::legacy::tree_digest(a.state()), before);
+
+  a.options().heads = false;
+  a.start();
+  EXPECT_TRUE(a.running());
+  a.stop();
+
+  auto& b = cluster.add("b");
+  b.options().cache.path = cluster.dir() / "b-cache";
+  b.start();
+  b.stop();
+  std::filesystem::create_directories(cluster.dir() / "b-cache" / "metadata");
+  std::ofstream(cluster.dir() / "b-cache" / "metadata" / "current.meta") << "Macha's seed";
+  why = refusal_of(b);
+  EXPECT_NE(why.find("dagda-migrate --heads --state " + b.state().string()), std::string::npos) << why;
+  EXPECT_NE(why.find("current.meta"), std::string::npos) << why;
+  EXPECT_FALSE(b.running());
+}
+
 // No custody, no node-local key: the ledgers would have no key, so the
 // node is refused and says why.
 TEST(Node, ANodeWithoutCustodyIsRefused) {

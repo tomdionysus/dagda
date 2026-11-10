@@ -17,6 +17,7 @@
 
 #include "dagda/context.h"
 #include "dagda/contract/stopping.h"
+#include "dagda/heads/sealed_file.h"
 #include "dagda/ledger/node_horizon_builder.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/sealing.h"
@@ -160,6 +161,15 @@ void Node::open() {
     store::open_state_layout(_options.state, scheme);
   } catch (const std::exception& error) {
     throw NodeRefused(error.what());
+  }
+  // Macha's metadata not yet moved: its spaces would start empty beside it.
+  if (_options.heads) {
+    std::error_code ec;
+    for (const auto& macha : {heads::machas_metadata_directory(_options.state),
+                              _options.cache.path.empty() ? std::filesystem::path() : heads::machas_metadata_seed(_options.cache.path)})
+      if (!macha.empty() && std::filesystem::exists(macha, ec))
+        throw NodeRefused(macha.string() + " is Macha's metadata, not yet moved to its head space: move it first with `dagda-migrate --heads --state " +
+                          _options.state.string() + " ...`, or open the node with heads off while Macha's own replica runs");
   }
   const auto lock_reloadable = [&](const std::filesystem::path& root) {
     try {

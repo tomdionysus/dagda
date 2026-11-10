@@ -46,7 +46,6 @@ constexpr const char* checkpoint_name = "checkpoint.meta";
 constexpr const char* heads_name = "heads.meta";
 constexpr const char* author_name = "author.meta";
 constexpr const char* set_aside_name = "set-aside.meta";
-constexpr const char* seed_v18_name = "current.meta";
 
 // Room kept beyond the largest file written whole beside itself.
 constexpr uint64_t space_margin = 1024 * 1024;
@@ -691,10 +690,10 @@ std::string replay_text(const heads::Hash256& head, const std::map<heads::Hash25
 HeadsPlaces heads_places(const std::filesystem::path& state, const std::filesystem::path& cache, std::string_view space_name) {
   HeadsPlaces out;
   out.space = heads::space_id(domain::domain_v1, space_name);
-  out.v18_directory = state / "metadata";
+  out.v18_directory = heads::machas_metadata_directory(state);
   out.v19_directory = heads::space_directory(state, out.space);
   if (!cache.empty()) {
-    out.v18_seed = cache / "metadata" / seed_v18_name;
+    out.v18_seed = heads::machas_metadata_seed(cache);
     out.v19_seed = cache / "metadata" / (hex(out.space) + ".meta");
   }
   return out;
