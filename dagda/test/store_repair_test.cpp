@@ -53,6 +53,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <map>
 #include <thread>
@@ -2077,6 +2079,187 @@ TEST(StoreRepair, ATrieQuestionNamesAPinnedSnapshot) {
   ASSERT_TRUE(too_large.reply);
   ASSERT_TRUE(dannan::net::refusal_of(*too_large.reply).has_value());
   EXPECT_EQ(dannan::net::refusal_of(*too_large.reply)->status, 413);
+}
+
+// A served request's refusal, as status and code; none for an answer.
+std::optional<std::pair<uint16_t, std::string>> refused(const CallOutcome& outcome) {
+  EXPECT_TRUE(outcome.reply.has_value());
+  if (!outcome.reply) return std::pair<uint16_t, std::string>{0, "no reply"};
+  const auto refusal = dannan::net::refusal_of(*outcome.reply);
+  if (!refusal) return std::nullopt;
+  return std::pair{refusal->status, refusal->code};
+}
+
+// L7: at most four snapshots pinned (Macha's availability_service.hpp:177 at
+// 98b816d, pinned_max): a fifth root question drops the oldest, which is then
+// 410 snapshot_gone, while the four newer still answer.
+TEST(StoreRepair, ATrieDiffPinsAtMostFourSnapshots) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto peer = record_of(a, b.id());
+  const auto ask = [&](const ledger::TrieQuestion& question) {
+    return a.context().routes().call_and_wait(peer, message::trie_diff, ledger::encode_trie_question(question), FrameType::speculative, 5s);
+  };
+  std::vector<decltype(ledger::ObjectTrie::Summary{}.hash)> roots;
+  for (uint8_t round = 0; round < 5; ++round) {
+    (void)local_objects(b, 1, 1024, static_cast<uint8_t>(90 + round));
+    // The held trie takes the object when its ledger does: ask until the root moves.
+    ledger::ObjectTrie::Summary summary;
+    ASSERT_TRUE(wait_until([&] {
+      const auto root = ask(ledger::TrieQuestion{});
+      if (!root.reply || root.reply->type != message::trie_diff_reply) return false;
+      summary = ledger::decode_trie_root(root.reply->payload);
+      return summary.count == round + 1u;
+    }));
+    roots.push_back(summary.hash);
+  }
+  ledger::TrieQuestion children;
+  children.kind = ledger::TrieQuestionKind::children;
+  children.prefixes = {ledger::ObjectTrie::Prefix{}};
+  children.at = roots.front();
+  const auto oldest = refused(ask(children));
+  ASSERT_TRUE(oldest.has_value());
+  EXPECT_EQ(oldest->first, 410);
+  EXPECT_EQ(oldest->second, "snapshot_gone");
+  for (size_t i = 1; i < roots.size(); ++i) {
+    children.at = roots[i];
+    EXPECT_FALSE(refused(ask(children)).has_value()) << "pin " << i;
+  }
+}
+
+// L7: a pin is dropped after two minutes unused (Macha's pinned_for), and one
+// in use is kept. Both Macha (98b816d availability_service.cpp:335) and the
+// server read the real clock for it, not the node's time source, so stepping
+// the node's time cannot reach it: disabled until the pins take the injected
+// time, a finding for Tom.
+TEST(StoreRepair, DISABLED_ATrieDiffPinIsDroppedAfterTwoMinutesUnused) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto serving = options(2);
+  serving.time = &time;
+  auto& b = cluster.add("b", serving);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  (void)local_objects(b, 10, 1024, 97);
+  const auto peer = record_of(a, b.id());
+  const auto ask = [&](const ledger::TrieQuestion& question) {
+    return a.context().routes().call_and_wait(peer, message::trie_diff, ledger::encode_trie_question(question), FrameType::speculative, 5s);
+  };
+  const auto root = ask(ledger::TrieQuestion{});
+  ASSERT_TRUE(root.reply && root.reply->type == message::trie_diff_reply);
+  ledger::TrieQuestion children;
+  children.kind = ledger::TrieQuestionKind::children;
+  children.prefixes = {ledger::ObjectTrie::Prefix{}};
+  children.at = ledger::decode_trie_root(root.reply->payload).hash;
+  // Used within the two minutes, it stays; each use restarts them.
+  time.advance(119s);
+  EXPECT_FALSE(refused(ask(children)).has_value());
+  time.advance(119s);
+  EXPECT_FALSE(refused(ask(children)).has_value());
+  // Unused for longer, it is gone.
+  time.advance(121s);
+  const auto gone = refused(ask(children));
+  ASSERT_TRUE(gone.has_value());
+  EXPECT_EQ(gone->first, 410);
+}
+
+// L7: while a node is still listing what it holds, a root question is 503
+// holdings_seeding (Macha's availability_service.cpp:339). Its DATA ledger is
+// removed while it is down and its objects directory holds one it cannot
+// read, so the walk that would seed the ledger fails and retries.
+TEST(StoreRepair, ARootQuestionWhileHoldingsSeedIsRefused) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  (void)local_objects(b, 3, 1024, 98);
+  b.stop();
+  for (const auto& entry : std::filesystem::directory_iterator(b.state() / "ledger"))
+    if (entry.path().filename().string().rfind("data-", 0) == 0) std::filesystem::remove_all(entry.path());
+  const auto unreadable = b.backend() / "objects" / "zz";
+  std::filesystem::create_directories(unreadable / "zz");
+  std::filesystem::permissions(unreadable, std::filesystem::perms::none);
+  struct Restore {
+    std::filesystem::path path;
+    ~Restore() { std::filesystem::permissions(path, std::filesystem::perms::owner_all); }
+  } restore{unreadable};
+  b.start();
+  ASSERT_TRUE(cluster.converged());
+  const auto answer = a.context().routes().call_and_wait(record_of(a, b.id()), message::trie_diff, ledger::encode_trie_question(ledger::TrieQuestion{}),
+                                                         FrameType::speculative, 5s);
+  const auto seeding = refused(answer);
+  ASSERT_TRUE(seeding.has_value());
+  EXPECT_EQ(seeding->first, 503);
+  EXPECT_EQ(seeding->second, "holdings_seeding");
+  b.stop();
+}
+
+// S30: the serving side refuses in Macha's codes (storage_server.cpp at
+// 98b816d, :204-205, :236, :247, :395): a DATA object past the extent size is
+// 413 too_large; a put to a full store 507 storage_full; a delete of a claimed
+// object 409 claimed, the object kept, and of an unclaimed one done; a get of
+// what is not held 404 with every backend online and 503 storage_unavailable
+// with one offline, since that one could hold it.
+TEST(StoreRepair, TheServerRefusesInMachasCodes) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2, 1, 4 * extent));
+  const auto offline = cluster.dir() / "c-offline";
+  std::filesystem::create_directories(offline);
+  std::ofstream(offline / backend_marker_name) << "not a marker\n";
+  auto with_offline = options(2);
+  with_offline.more_backends = {offline};
+  auto& c = cluster.add("c", with_offline);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_FALSE(c.data().every_backend_online());
+  const auto call = [&](ClusterNode& to, MessageType type, const Bytes& payload) {
+    return refused(a.context().routes().call_and_wait(record_of(a, to.id()), type, payload, FrameType::foreground, 10s));
+  };
+
+  const auto large = pattern(extent + 1, 81);
+  const auto too_large = call(b, message::put_object, message::encode_object(object_id(large), large));
+  ASSERT_TRUE(too_large.has_value());
+  EXPECT_EQ(*too_large, (std::pair<uint16_t, std::string>{413, "too_large"}));
+  EXPECT_FALSE(b.data().has(object_id(large)));
+
+  const auto kept = pattern(64 * 1024, 82);
+  const auto loose = pattern(64 * 1024, 83);
+  ASSERT_TRUE(b.data().put(object_id(kept), kept));
+  ASSERT_TRUE(b.data().put(object_id(loose), loose));
+  EXPECT_TRUE(b.store().retain_data_here({object_id(kept)}, contract::RetentionDot{b.id(), 1}).empty());
+  const auto claimed = call(b, message::delete_object, message::encode_id(object_id(kept)));
+  ASSERT_TRUE(claimed.has_value());
+  EXPECT_EQ(*claimed, (std::pair<uint16_t, std::string>{409, "claimed"}));
+  EXPECT_TRUE(b.data().has(object_id(kept)));
+  EXPECT_FALSE(call(b, message::delete_object, message::encode_id(object_id(loose))).has_value());
+  EXPECT_FALSE(b.data().has(object_id(loose)));
+
+  const auto nowhere = object_id(pattern(4096, 84));
+  const auto not_found = call(b, message::get_object, message::encode_id(nowhere));
+  ASSERT_TRUE(not_found.has_value());
+  EXPECT_EQ(*not_found, (std::pair<uint16_t, std::string>{404, "not_found"}));
+  const auto unavailable = call(c, message::get_object, message::encode_id(nowhere));
+  ASSERT_TRUE(unavailable.has_value());
+  EXPECT_EQ(*unavailable, (std::pair<uint16_t, std::string>{503, "storage_unavailable"}));
+
+  // Full: objects until the pool refuses one, then a put over the wire.
+  for (unsigned i = 0; i < 256; ++i) {
+    auto bytes = pattern(256 * 1024, static_cast<uint8_t>(i));
+    bytes[1] = static_cast<uint8_t>(i >> 8);
+    bytes[2] = 0xf5;
+    if (!b.data().put(object_id(bytes), bytes)) break;
+    ASSERT_LT(i, 255u) << "b never filled";
+  }
+  const auto more = pattern(256 * 1024, 85);
+  const auto full = call(b, message::put_object, message::encode_object(object_id(more), more));
+  ASSERT_TRUE(full.has_value());
+  EXPECT_EQ(*full, (std::pair<uint16_t, std::string>{507, "storage_full"}));
 }
 
 // A node down while writes land, then back: the survey finds what it lacks
