@@ -45,6 +45,10 @@ using SpaceId = Hash256;
 SpaceId space_id(const domain::DomainId& domain, std::string_view name);
 // <state>/heads/<space id hex>
 std::filesystem::path space_directory(const std::filesystem::path& state, const SpaceId& space);
+// Where Macha's metadata (0.93.x) lies until `dagda-migrate --heads` moves it to
+// its space: <state>/metadata, and its cache seed <cache>/metadata/current.meta.
+std::filesystem::path machas_metadata_directory(const std::filesystem::path& state);
+std::filesystem::path machas_metadata_seed(const std::filesystem::path& cache);
 
 // The associated data a magic seals under. A parameter so a reader can be given
 // another layout's (S7's migration, and Macha's frames as a byte proof).
