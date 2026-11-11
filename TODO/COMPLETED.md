@@ -3,6 +3,32 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-11: gate lifetimes, two raced cases, Dannan 0.5.3, and Macha 0.93.6's yielded wake (`feature/gate-lifetime`)
+
+At the maintainer's word (2026-11-11, all four as recommended).
+
+- Gate lifetimes, from the TSan run at ff77156 (3 races, a Gate destroyed before the Cluster whose threads still used it): in 17 cases the
+  Gate is now declared before the Cluster. The whole plain run then hung for two hours in
+  `StoreRepair.AWriteWithNoDeadlineFailsAPeerSilentForTheWindow`: its assertion failed, and the `std::async` future, declared after the
+  GateOpener, waited on its thread before the gate opened. Every such future (10 in 9 cases) now has its own GateOpener after it, so a
+  failure fails rather than hangs.
+- Two raced cases: prompt replication counts a failure before it queues the retry and applies the 4096 cap
+  (`distributed_store.cpp:1560-1626`), so `PromptReplicationKeepsAtMost4096Retries` and the schedule case wait for the drop (TSan found
+  it). The silent-peer write had the budget case's race (2026-11-10): the local copy landing re-arms the window, so it now steps 301 s
+  until the write ends, three steps at most.
+- Dannan 0.5.3 (tag on main `899faea`): 0.5.2's library with the installed config asking for Boost 1.83, the floor it builds with, so
+  the Pis build with Debian's Boost and no private 1.87 prefix. Built into `build/deps/prefix-0.5.3`; README and CONTRIBUTING name it.
+- Macha 0.93.6 (`a931fe5`): maintenance slept up to 31 hours on both live nodes when a viewer arrived during a repair step, because
+  the yielded step set no wake. Dagda's own loop cannot do this: every pass sets the next an interval on, and every wait is at most one
+  interval (`node.cpp:912-969`). The test's copy of Macha's loop (`maintenance_steps_test.cpp`) had it, and now sets `repair_continue`
+  for `RepairSettled::yielded` as 0.93.6 does. Its park read the pacing afresh where Macha's reads `repair_busy` from the pass's start
+  (`maintenance.cpp:1362`); it now reads the pass's, or the new case could not fail. Case
+  `StepsBed.RepairResumesAfterYieldingToAViewerThatArrivedMidStep` failed first (the copy never pushed). `repair.h` says a yielded turn
+  owes another after an interval. Noted, not changed: the copy has no busy wake (Macha's `maintenance.cpp:1327-1336`), and the bed's
+  repair quiet window is Dagda's 2 s, not the trace's 50 ms, which the case spaces its passes past.
+
+Gate: `dagda_tests` 1029 passing, 7 disabled, one whole run at the final code on Dannan 0.5.3.
+
 ## 2026-11-10: Macha's unmoved metadata refuses a heads node (`feature/namespace-refusal`)
 
 Settled with the Macha session (2026-11-10): the head space is `macha/namespace`, the migration's default, and a node is refused rather
