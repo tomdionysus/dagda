@@ -599,6 +599,16 @@ class MachaLoop {
         deadline = now;
       }
     }
+    if (busy) {
+      // A busy pass suppressed GC, repair and rebalance; it re-evaluates as soon as
+      // the foreground quiet period is met, or at once if it already has, rather
+      // than sleeping until an unrelated event (maintenance.cpp:1327-1336). The
+      // window is the one `busy` was read against, repair's.
+      auto& activity = _node.dagda_node().activity();
+      const auto idle = std::min(activity.idle_for(dannan::sched::WorkClass::foreground), activity.idle_for(dannan::sched::WorkClass::loader));
+      const auto quiet = std::chrono::duration_cast<std::chrono::milliseconds>(_node.options().repair.foreground_quiet);
+      deadline = std::min(deadline, now + (idle < quiet ? quiet - idle : std::chrono::milliseconds{}));
+    }
     auto& repair = _node.repair();
     if (_network_quiet_until != TimePoint::max()) {
       const auto turn = repair.turn_wait(now, paced);
@@ -1264,6 +1274,23 @@ TEST_F(StepsBed, SettleAsksInMachasOrder) {
   expect(unfinished, done, store::RepairSettled::more_work);
   expect(waiting, done, store::RepairSettled::waiting_for_credit);
   expect(idle, done, store::RepairSettled::quiescent);
+}
+
+// Macha's busy wake (maintenance.cpp:1327-1336): a pass that began with a viewer
+// or the loader present held GC, repair and rebalance back, and looks again when
+// the quiet window ends, not at the next unrelated event.
+TEST_F(StepsBed, ABusyPassWakesWhenTheQuietWindowEnds) {
+  // Repair quiet and the sweep waiting: nothing else is due.
+  loop().advance(100ms);
+  ASSERT_EQ(loop().settled, store::RepairSettled::quiescent);
+  node.node().dagda_node().activity().note(dannan::sched::FrameType::foreground, 64 * 1024);
+  loop().pass();
+  ASSERT_TRUE(node.node().repair().paced_by() & store::paced_by_foreground);
+  const auto passes = loop().passes;
+  const auto quiet = std::chrono::duration_cast<std::chrono::milliseconds>(node.node().options().repair.foreground_quiet);
+  loop().move(quiet);
+  loop().settle();
+  EXPECT_GT(loop().passes, passes);
 }
 
 // test_repair_resumes_after_yielding_to_a_viewer_that_arrived_mid_step (Macha
