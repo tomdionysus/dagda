@@ -1691,7 +1691,8 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
                                         std::optional<dannan::contract::TimePoint> until) {
   // None of the caller's: no clock of its own, as Macha's. The wait ends when the
   // fetch does, and each peer's answer is under call_no_progress.
-  const auto deadline = until ? until : options.deadline.count() > 0 ? std::optional(_time.now() + options.deadline) : std::nullopt;
+  // No deadline is the end of time.
+  const auto deadline = until ? *until : options.deadline.count() > 0 ? _time.now() + options.deadline : dannan::contract::TimePoint::max();
   const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;
@@ -1749,10 +1750,10 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
   std::shared_ptr<dannan::net::CallHandle> abandon;
   {
     Lock lock(fetch->mutex);
-    while (!fetch->done && !_stopping.load() && (!deadline || _time.now() < *deadline) &&
-           !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
-      fetch->changed.wait_for(lock.native(), deadline ? std::min<std::chrono::nanoseconds>(*deadline - _time.now(), look_at_the_clock)
-                                                      : std::chrono::nanoseconds(look_at_the_clock));
+    while (!fetch->done && !_stopping.load() && _time.now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
+      fetch->changed.wait_for(lock.native(), deadline == dannan::contract::TimePoint::max()
+                                                 ? std::chrono::nanoseconds(look_at_the_clock)
+                                                 : std::min<std::chrono::nanoseconds>(deadline - _time.now(), look_at_the_clock));
     --fetch->waiters;
     if (!fetch->done) {
       // The transfer belongs to the object, not to any one reader: it is
