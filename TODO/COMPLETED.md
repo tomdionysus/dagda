@@ -3,6 +3,26 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-11: arm64 on live-b, root skips and GCC's warnings (`feature/gcc-and-root`)
+
+At the maintainer's word (2026-11-11, as recommended). The arm64 run on live-b (Pi 5, GCC 14.2, Debian's Boost 1.83 found by Dannan 0.5.3's
+config) at ddba991: plain build clean of errors with 46 warnings; 958 passed, 3 failed, 68 skipped (Macha's fixtures absent), 7
+disabled. The three failures are root's: root ignores the directory modes the fault injection relies on. They now skip as root, as
+Dannan's do (`node_seams_test.cpp` x2, `StoreRepair.ARootQuestionWhileHoldingsSeedIsRefused`). The 46 warnings:
+
+- 38 `-Wconversion` at `std::span` of a record's bytes: the record had a conversion operator and is a contiguous range, two ways to
+  make the span. The operator is gone (`heads/record.h`).
+- 1 `-Wmaybe-uninitialized` in `get_remote` (`store/distributed_store.cpp`), a false positive over an optional deadline: no deadline
+  is now `TimePoint::max()`, with the wait capped at a look at the clock.
+- 4 dangling elses braced and a lambda parameter that shadowed gtest's `info` renamed (3 warnings, one per instantiation), in four
+  test files.
+
+Not finished on the Pi: live-b went down at about 01:30 while building ASan (-j2) beside the plain run with Macha's fixtures (143 of
+1029 passed, none failed when it stopped), and came back at 18:34 with no persistent journal, so the cause is unknown. The maintainer's word:
+leave the Pi alone. So the ASan and fixture runs on arm64 and GCC's count at these fixes are not done; GCC's zero is unconfirmed.
+
+Gate: `dagda_tests` 1030 passing, 7 disabled on the Mac (Clang), one whole run at the final code.
+
 ## 2026-11-11: Macha's busy wake in the test's copy of its loop (`feature/busy-wake`)
 
 At the maintainer's word (2026-11-11), asked for by the Macha session: the copy stands for Macha's loop as the port drives Dagda's steps, so a
