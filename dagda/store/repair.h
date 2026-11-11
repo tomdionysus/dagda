@@ -114,6 +114,12 @@ struct RepairWalks {
 // higher class; there is work left, or work was done, so another turn is due
 // after one interval; only a claim walk still waits for credit; or nothing to
 // do, the credit is dropped and repair waits for an event.
+//
+// Yielded owes another turn after one interval too, as more_work does. The class
+// it yielded to may have arrived after the turn began, so a wake computed from
+// what the pass found when it began (a busy wake, the share's next turn) may not
+// be set, and with the credit past an extent no credit wake is either: a caller
+// that waits only on those sleeps until an unrelated event (Macha 0.93.6).
 enum class RepairSettled : uint8_t { credit, yielded, more_work, waiting_for_credit, quiescent };
 
 // How a turn reads a peer's foreground traffic, whenever it asks whether a higher

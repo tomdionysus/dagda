@@ -511,7 +511,10 @@ class MachaLoop {
           enter("settle");
           settled = repair.settle(walks, step);
           if (settled == store::RepairSettled::credit) repair.note_gate(store::RepairGate::credit, paced);
-          if (settled == store::RepairSettled::more_work) repair_continue = true;
+          // Yielded, work is left. The higher class may have arrived after the pass
+          // began, so neither the busy wake nor the share's next turn may be set:
+          // look again after an interval, when the share decides (Macha 0.93.6).
+          if (settled == store::RepairSettled::yielded || settled == store::RepairSettled::more_work) repair_continue = true;
           if (settled == store::RepairSettled::quiescent) _network_quiet_until = TimePoint::max();
         }
 
@@ -542,7 +545,7 @@ class MachaLoop {
     }
 
     if (gc_due_this_pass && !busy) arm_retirement_wake();
-    park(gc_due_this_pass, busy, repair_continue);
+    park(gc_due_this_pass, busy, paced, repair_continue);
   }
 
  private:
@@ -585,7 +588,8 @@ class MachaLoop {
     }
     if (earliest) _gc_quiet_until = _traced.time.now() + std::chrono::nanoseconds(*earliest);
   }
-  void park(bool gc_due_this_pass, bool busy, bool repair_continue) {
+  // `paced`: as the pass found it when it began, Macha's repair_busy (maintenance.cpp:1362).
+  void park(bool gc_due_this_pass, bool busy, uint8_t paced, bool repair_continue) {
     const auto now = _traced.time.now();
     auto deadline = TimePoint::max();
     if (_gc_quiet_until != TimePoint{} && _gc_quiet_until != TimePoint::max()) {
@@ -597,7 +601,6 @@ class MachaLoop {
     }
     auto& repair = _node.repair();
     if (_network_quiet_until != TimePoint::max()) {
-      const auto paced = repair.paced_by();
       const auto turn = repair.turn_wait(now, paced);
       if (turn > 0ms) deadline = std::min(deadline, now + turn);
       const double extent = static_cast<double>(_node.options().repair.extent_size);
@@ -1261,6 +1264,45 @@ TEST_F(StepsBed, SettleAsksInMachasOrder) {
   expect(unfinished, done, store::RepairSettled::more_work);
   expect(waiting, done, store::RepairSettled::waiting_for_credit);
   expect(idle, done, store::RepairSettled::quiescent);
+}
+
+// test_repair_resumes_after_yielding_to_a_viewer_that_arrived_mid_step (Macha
+// a931fe5, 0.93.6): a viewer arriving while a repair step runs makes the step
+// yield. The pass began with no viewer, so neither its busy wake nor the share's
+// next turn is set, and the credit is past an extent: repair must still come back
+// within an interval, not sleep until an unrelated event.
+TEST_F(StepsBed, RepairResumesAfterYieldingToAViewerThatArrivedMidStep) {
+  // The peer never pulls (its maintenance is off): only this node's push delivers it.
+  const auto id = next_write();
+  ASSERT_FALSE(node.peer().data().has(id));
+  bool viewer_arrives = true;
+  loop().before_step = [&](const std::string& step) {
+    if (step != "transfer" || !viewer_arrives) return;
+    // Past repair's 25 ms slice, so the step yields to the viewer whether or not
+    // one was present when the pass began.
+    node.traced().time.advance(30ms);
+    node.node().dagda_node().activity().note(dannan::sched::FrameType::foreground, 64 * 1024);
+  };
+  // The viewer meets every step, past the write's own wakes (the collector's quiet
+  // window and the turns a pass that began busy earns), each pass beginning once
+  // repair's quiet window has passed, until one that began with no viewer present
+  // yields with nothing else due.
+  const auto quiet = std::chrono::duration_cast<std::chrono::milliseconds>(node.node().options().repair.foreground_quiet);
+  loop().settle();
+  for (int step = 0; step < 3; ++step) {
+    loop().move(quiet + interval);
+    loop().settle();
+  }
+  ASSERT_EQ(loop().settled, store::RepairSettled::yielded);
+  ASSERT_FALSE(node.peer().data().has(id));
+
+  // The viewer has gone. Nothing else is due, so only repair's own wake can
+  // deliver the copy.
+  viewer_arrives = false;
+  loop().settle();
+  loop().move(interval * 3);
+  loop().settle();
+  EXPECT_TRUE(node.peer().data().has(id));
 }
 
 // Macha reads a peer's foreground traffic once a pass: a viewer who appears during
