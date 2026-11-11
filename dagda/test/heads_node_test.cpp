@@ -272,6 +272,7 @@ TEST(NodeHeads, TheContractOpensAnEveryNodeSpaceAndRefusesReplicas) {
 // The executor rule and a deadline: a mutation's completion is posted to the caller's
 // executor, never inline, and the deadline answers a mutation still held.
 TEST(NodeHeads, TheContractCompletesOnTheCallersExecutorAndByTheDeadline) {
+  dannan::test::Gate held;
   Cluster cluster;
   ClusterNodeOptions options;
   options.spaces = {neutral_spec()};
@@ -304,7 +305,6 @@ TEST(NodeHeads, TheContractCompletesOnTheCallersExecutorAndByTheDeadline) {
   EXPECT_THROW(heads.read(id, HeadRead::local, -1ms), std::invalid_argument);
 
   // Held in its edit, a mutation answers at its deadline and may yet land.
-  dannan::test::Gate held;
   dannan::test::GateOpener opener(held);
   const auto late = heads.mutate_delta(id, neutral_mutation([&](NeutralEditing&) { held.enter_and_wait(); }), 100ms);
   EXPECT_FALSE(late.finished);
