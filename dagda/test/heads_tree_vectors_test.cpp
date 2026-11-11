@@ -355,7 +355,7 @@ INSTANTIATE_TEST_SUITE_P(Macha093, HeadsTreeVectors,
                                          "library_tiny_fanout", "remove_everything", "leaf_cap", "every_key_a_boundary", "branch_cap", "packed_fallback_keyed",
                                          "packed_fallback_extents", "extents_0", "extents_1", "extents_8", "extents_9", "extents_600", "extent_chunk_cap",
                                          "holes", "shared_spine", "provenance", "field_ranges", "key_bytes"),
-                         [](const testing::TestParamInfo<std::string>& info) { return info.param; });
+                         [](const testing::TestParamInfo<std::string>& named) { return named.param; });
 
 // The index's roots and counts agree with the case list above, and the checked-in copy
 // keeps every one of them named.

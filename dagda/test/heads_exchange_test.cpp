@@ -1619,7 +1619,9 @@ TEST(NodeHeads, AThrowInEitherLeavesTheRestRunning) {
     const auto report = a.run_maintenance_once();
     EXPECT_TRUE(report.local.packs_ran) << which;
     EXPECT_TRUE(report.local.verify_ran) << which;
-    if (which == "head-repair") EXPECT_TRUE(report.local.history_truncate_ran);
+    if (which == "head-repair") {
+      EXPECT_TRUE(report.local.history_truncate_ran);
+    }
   }
 }
 
