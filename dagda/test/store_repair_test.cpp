@@ -48,6 +48,7 @@
 //   survey's assertions; their path table is Macha's).
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -2190,6 +2191,7 @@ TEST(StoreRepair, DISABLED_ATrieDiffPinIsDroppedAfterTwoMinutesUnused) {
 // removed while it is down and its objects directory holds one it cannot
 // read, so the walk that would seed the ledger fails and retries.
 TEST(StoreRepair, ARootQuestionWhileHoldingsSeedIsRefused) {
+  if (::geteuid() == 0) GTEST_SKIP() << "running as root, which reads a directory whatever its permissions";
   Cluster cluster;
   auto& a = cluster.add("a", options(2));
   auto& b = cluster.add("b", options(2));

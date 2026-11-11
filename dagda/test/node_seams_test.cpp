@@ -10,6 +10,7 @@
 // stages one by one, and its own collector.
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -567,6 +568,7 @@ TEST(NodeSeams, AStopWhileCompactionWaitsForTheWalkComesThroughAndTheNextRunFini
 // backend's deferred compaction is what lands the stop. The second is not visited,
 // the stop comes out of the stage, and the next runs finish both.
 TEST(NodeSeams, AStopBetweenBackendsComesThroughAndTheNextRunFinishes) {
+  if (::geteuid() == 0) GTEST_SKIP() << "running as root, which writes a pack directory whatever its permissions";
   std::atomic<int> deferred{0};
   std::stop_source stop;
   HandBuiltNode built([&](NodeOptions& options) {
@@ -604,6 +606,7 @@ TEST(NodeSeams, AStopBetweenBackendsComesThroughAndTheNextRunFinishes) {
 // says so, and what it compacted stands: the next run has nothing left to do, and a
 // reopened node holds every claim.
 TEST(NodeSeams, AStopInsideTheClaimsCompactionWaitsForItsEndThenComesThrough) {
+  if (::geteuid() == 0) GTEST_SKIP() << "running as root, which removes a checkpoint file whatever its directory's permissions";
   std::stop_source stop;
   HandBuiltNode built(nullptr);
   const dannan::identity::NodeId origin = [] {
