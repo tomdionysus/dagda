@@ -209,13 +209,13 @@ TEST(StoreRepair, APushSendsItsBatchTogetherAndAsksNothing) {
     EXPECT_EQ(peer.calls_of(message::put_object), 0u);
   }
   {
+    dannan::test::Gate puts;
     Cluster cluster;
     auto& writer = cluster.add("writer", options(2));
     auto& peer = cluster.add("peer", options(2));
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
     const auto live = local_objects(writer, 8, 24 * 1024, 40);
-    dannan::test::Gate puts;
     dannan::test::GateOpener opener(puts);
     peer.interpose(hold(message::put_object, puts));
     const dannan::net::ServerLimits limits;
@@ -1352,6 +1352,7 @@ TEST(StoreRepair, AReadWithNoDeadlineHasItsWholeRemoteLimitAfterALocalWait) {
 TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
   dannan::test::SteppedTime time;
   // Stepping the writer's clock must not make its peer look dead.
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto writer = options(2, 2, 8ULL * 1024 * 1024);
   writer.time = &time;
@@ -1361,7 +1362,6 @@ TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) 
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 57);
@@ -1369,6 +1369,8 @@ TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) 
   WriteOptions durable;
   durable.level = Durability::durable;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(200s);
   // The watch looks at most every 250 ms: a second is several looks.
@@ -1385,6 +1387,7 @@ TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) 
 // write says what is owed.
 TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto writer = options(2, 2, 8ULL * 1024 * 1024);
   writer.time = &time;
@@ -1394,7 +1397,6 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 58);
@@ -1402,6 +1404,8 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   WriteOptions durable;
   durable.level = Durability::durable;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(301s);
   ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
@@ -1417,6 +1421,7 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
 // with the copy that landed, long before the call's own 300 s bound.
 TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto writer = options(2, 2, 8ULL * 1024 * 1024);
   writer.time = &time;
@@ -1426,7 +1431,6 @@ TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 61);
@@ -1435,6 +1439,8 @@ TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
   publication.level = Durability::durable;
   publication.no_progress_budget = 30s;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   // The local copy landing re-arms the window, and the write may see it after
   // the first step: a budget after that, it ends. Three steps are 93 s, far
@@ -1454,6 +1460,7 @@ TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
 // ends a whole budget after it stops.
 TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto writer = options(2, 2, 8ULL * 1024 * 1024);
   writer.time = &time;
@@ -1463,7 +1470,6 @@ TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 62);
@@ -1474,6 +1480,8 @@ TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
   publication.no_progress_budget = 30s;
   publication.progress = &progress;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   for (int step = 0; step < 4; ++step) {
     time.advance(20s);
@@ -1495,6 +1503,7 @@ TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
 // pending, the peer's answer reaches its ticket, and no window has passed.
 TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto writer = options(2, 2, 8ULL * 1024 * 1024);
   writer.time = &time;
@@ -1504,7 +1513,6 @@ TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 59);
@@ -1513,6 +1521,8 @@ TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
   durable.level = Durability::durable;
   durable.deadline = 10s;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(11s);
   ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
@@ -1530,6 +1540,7 @@ TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
 // read waits for its peer with no limit of its own.
 TEST(StoreRepair, AReadWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto reader = waits_on_credit();
   reader.time = &time;
@@ -1541,12 +1552,13 @@ TEST(StoreRepair, AReadWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
   const auto bytes = pattern(64 * 1024, 60);
   const auto id = object_id(bytes);
   ASSERT_TRUE(b.data().put(id, bytes));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::get_object, gate));
   ReadOptions read;
   read.frame = FrameType::foreground;
   auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(200s);
   EXPECT_EQ(result.wait_for(1s), std::future_status::timeout);
@@ -1559,6 +1571,7 @@ TEST(StoreRepair, AReadWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) {
 // asked and has its own window, and the read lands however long that all took.
 TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto reader = waits_on_credit();
   reader.time = &time;
@@ -1573,7 +1586,6 @@ TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
   ASSERT_TRUE(b.data().put(id, bytes));
   ASSERT_TRUE(c.data().put(id, bytes));
   // Whichever peer is asked first stays silent.
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   std::atomic_bool taken{false};
   const test::Interpose first_is_silent = [&](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
@@ -1585,6 +1597,8 @@ TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
   ReadOptions read;
   read.frame = FrameType::foreground;
   auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(301s);
   ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
@@ -1595,6 +1609,7 @@ TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
 // than waiting on, and says to try later.
 TEST(StoreRepair, AReadWithNoDeadlineEndsWhenItsOnlyPeerIsSilentForTheWindow) {
   dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
   Cluster cluster(std::chrono::hours(24));
   auto reader = waits_on_credit();
   reader.time = &time;
@@ -1606,12 +1621,13 @@ TEST(StoreRepair, AReadWithNoDeadlineEndsWhenItsOnlyPeerIsSilentForTheWindow) {
   const auto bytes = pattern(64 * 1024, 62);
   const auto id = object_id(bytes);
   ASSERT_TRUE(b.data().put(id, bytes));
-  dannan::test::Gate gate;
   dannan::test::GateOpener opener(gate);
   b.interpose(hold(message::get_object, gate));
   ReadOptions read;
   read.frame = FrameType::foreground;
   auto result = std::async(std::launch::async, [&] { return a.store().read(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(301s);
   ASSERT_EQ(result.wait_for(30s), std::future_status::ready);

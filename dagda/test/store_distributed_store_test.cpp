@@ -114,13 +114,13 @@ TEST(DistributedStore, APutIsLoaderActivityNotViewerActivity) {
 // owner that advertises no room.
 TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
   {
+    dannan::test::Gate owners_answer;
     Cluster cluster;
     auto& writer = cluster.add("writer", options(3));
     auto& first = cluster.add("first", options(3));
     auto& second = cluster.add("second", options(3));
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
-    dannan::test::Gate owners_answer;
     dannan::test::GateOpener opener(owners_answer);
     first.interpose(hold(message::put_object, owners_answer));
     second.interpose(hold(message::put_object, owners_answer));
@@ -231,6 +231,7 @@ TEST(DistributedStore, ClaimsAskNothingMoreAboutObjectsNobodyHolds) {
 // stalled, well inside its deadline, and the same put reaches the peer once
 // it answers.
 TEST(DistributedStore, APutToASilentReplicaReturnsOnTheLocalCopy) {
+  dannan::test::Gate held;
   Cluster cluster;
   auto silent_options = options(2, 2);
   silent_options.store.write_stall = 50ms;
@@ -238,7 +239,6 @@ TEST(DistributedStore, APutToASilentReplicaReturnsOnTheLocalCopy) {
   auto& peer = cluster.add("peer", silent_options);
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  dannan::test::Gate held;
   dannan::test::GateOpener opener(held);
   peer.interpose(hold(message::put_object_deferred, held));
 
@@ -266,6 +266,7 @@ TEST(DistributedStore, APutToASilentReplicaReturnsOnTheLocalCopy) {
 // missing object share a single fetch and a single buffer; the reply's
 // retained memory lives as long as the last reader's handle.
 TEST(DistributedStore, ConcurrentReadersShareOneFetchAndBuffer) {
+  dannan::test::Gate reply_gate;
   Cluster cluster;
   auto& reader = cluster.add("reader", options(2));
   auto& peer = cluster.add("peer", options(2));
@@ -274,7 +275,6 @@ TEST(DistributedStore, ConcurrentReadersShareOneFetchAndBuffer) {
   const auto bytes = pattern(512 * 1024, 73);
   const auto id = object_id(bytes);
   ASSERT_TRUE(peer.data().put(id, bytes));
-  dannan::test::Gate reply_gate;
   dannan::test::GateOpener opener(reply_gate);
   peer.interpose(hold(message::get_object, reply_gate));
   const auto held = [&] {
@@ -286,8 +286,12 @@ TEST(DistributedStore, ConcurrentReadersShareOneFetchAndBuffer) {
   ReadOptions read;
   read.deadline = 30s;
   auto first = std::async(std::launch::async, [&] { return reader.store().read(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(reply_gate);
   ASSERT_TRUE(reply_gate.wait_for_entries(1));
   auto second = std::async(std::launch::async, [&] { return reader.store().read(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release_second(reply_gate);
   // The second reader joins the fetch in flight; it has no signal to wait on.
   std::this_thread::sleep_for(20ms);
   reply_gate.open();
@@ -722,12 +726,12 @@ TEST(DistributedStore, ADeferredWritesBarrierAcrossPeerRestarts) {
 // Ephemeral: received and queued, returned at once while the copies are
 // still being made; the ticket reports them as they land.
 TEST(DistributedStore, EphemeralReturnsAtOnceAndItsTicketReportsTheCopies) {
+  dannan::test::Gate held;
   Cluster cluster;
   auto& writer = cluster.add("writer", options(2, 2));
   auto& peer = cluster.add("peer", options(2, 2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  dannan::test::Gate held;
   dannan::test::GateOpener opener(held);
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 41);
@@ -750,12 +754,12 @@ TEST(DistributedStore, EphemeralReturnsAtOnceAndItsTicketReportsTheCopies) {
 // Persisted: on disk on one node, returned without waiting for any other,
 // even with write_copies 2; the rest is owed.
 TEST(DistributedStore, PersistedReturnsOnTheFirstCopyOnDisk) {
+  dannan::test::Gate held;
   Cluster cluster;
   auto& writer = cluster.add("writer", options(2, 2));
   auto& peer = cluster.add("peer", options(2, 2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  dannan::test::Gate held;
   dannan::test::GateOpener opener(held);
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 42);
@@ -861,13 +865,13 @@ TEST(DistributedStore, DurableSkipsADeadMemberAndCatchesItUp) {
 // deadline, never longer; the evidence says pending, and the ticket reports
 // once the member's copy lands.
 TEST(DistributedStore, DurableWaitsForASilentLiveMemberToTheDeadline) {
+  dannan::test::Gate held;
   Cluster cluster;
   auto& writer = cluster.add("writer", options(3));
   cluster.add("one", options(3));
   auto& silent = cluster.add("silent", options(3));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
-  dannan::test::Gate held;
   dannan::test::GateOpener opener(held);
   silent.interpose(hold(message::put_object, held));
 
@@ -1019,6 +1023,7 @@ TEST(DistributedStore, AReadNamesTheNodeThatServedIt) {
 // is one copy here either way.
 TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
   dannan::test::Gate gate;
+  dannan::test::Gate second_gate;
   Cluster cluster;
   auto& writer = cluster.add("writer", options(2, 1));
   auto& peer = cluster.add("peer", options(2, 1));
@@ -1054,7 +1059,6 @@ TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
   EXPECT_GE(settled->holders(), 1u);
 
   // write_copies 1: returned on the one copy, whoever else is held.
-  dannan::test::Gate second_gate;
   peer.interpose([&second_gate](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
     if (seen == message::put_object) second_gate.enter_and_wait();
     return std::nullopt;
