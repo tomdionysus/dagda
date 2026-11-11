@@ -1095,7 +1095,9 @@ TEST_P(MigrateHeadsReal, EveryRealStateMovesComparesAndComesBack) {
     if (name == "heads.meta" || name == "author.meta") continue;
     EXPECT_EQ(macha::read_file(bed.v18_dir() / name), macha::read_file(entry.path())) << name;
   }
-  if (seed_before) EXPECT_EQ(macha::read_file(bed.v18_seed()), *seed_before);
+  if (seed_before) {
+    EXPECT_EQ(macha::read_file(bed.v18_seed()), *seed_before);
+  }
   EXPECT_EQ(open_replica(bed.v18_dir(), false, bed), before);
   (void)bed.pass("back");
   const auto there_and_back = bed.compare("before", "back", 18, 18);
@@ -1142,8 +1144,9 @@ TEST(HeadsConformance, MachasFramesCertificatesAndBranchesAsOpaqueBytes) {
       if (entry.body == heads::HistoryEntry::Body::full) {
         EXPECT_EQ(heads::record_hash(entry.generation, entry.previous, entry.payload), entry.hash);
         // The constant is 0.93's (766617e); the older state-scratch began at the old one.
-        if (entry.generation == 1 && std::string(real.fixture).starts_with("state-scratch-0.93.4"))
+        if (entry.generation == 1 && std::string(real.fixture).starts_with("state-scratch-0.93.4")) {
           EXPECT_EQ(hex(entry.hash), "87ad4c58cd1ccdd1326698d186eeb0ce54e5bf0cb8b1829b688a54584b6d7f06");
+        }
       }
       const std::string form(entry.payload.begin(), entry.payload.begin() + std::min<size_t>(8, entry.payload.size()));
       ++forms[(entry.body == heads::HistoryEntry::Body::full ? "full " : "delta ") + form];

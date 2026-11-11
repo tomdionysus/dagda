@@ -101,8 +101,8 @@ struct Recorder final : dannan::Routes {
                                          std::chrono::milliseconds, dannan::net::CallWatch) override {
     return {};
   }
-  dannan::net::CallOutcome call_and_wait(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, FrameType,
-                                         std::chrono::milliseconds, dannan::net::CallWatch) override {
+  dannan::net::CallOutcome call_and_wait(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, FrameType, std::chrono::milliseconds,
+                                         dannan::net::CallWatch) override {
     return {};
   }
 };
@@ -629,8 +629,11 @@ TEST_F(HeadsWireFixture, ASurveyOfTwoRealHeadsImportsBoth) {
 
   auto& source = *from.dagda_node().spaces()->exchange(from.api().heads().id_of("test/opaque"));
   auto& target = *to.dagda_node().spaces()->exchange(to.api().heads().id_of("test/opaque"));
-  for (const auto& [hash, entry] : entries)
-    if (entry.body == HistoryEntry::Body::full) ASSERT_TRUE(source.space().replica().import_history(entry)) << hex(hash.bytes);
+  for (const auto& [hash, entry] : entries) {
+    if (entry.body == HistoryEntry::Body::full) {
+      ASSERT_TRUE(source.space().replica().import_history(entry)) << hex(hash.bytes);
+    }
+  }
   for (const auto& certificate : certificates) ASSERT_TRUE(source.space().accept(certificate));
   ASSERT_EQ(source.space().replica().accepted_heads().size(), 2u);
   from.interpose(at_from.hook());
