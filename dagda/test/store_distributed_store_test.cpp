@@ -1561,7 +1561,7 @@ TEST(StoreDistributedStore, PromptReplicationRetriesAt30_60_120And240SecondsThen
     ASSERT_TRUE(wait_until([&] { return failures() == seen + 1; })) << "no retry at " << delay.count() << " s";
     ++seen;
   }
-  EXPECT_EQ(a.store().prompt_replication_stats().dropped, 1u);
+  EXPECT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().dropped == 1; }));
   time.advance(3600s);
   EXPECT_FALSE(wait_until([&] { return failures() > 5; }, 2s));
   EXPECT_EQ(a.store().prompt_replication_stats().copies, 0u);
@@ -1587,7 +1587,9 @@ TEST(StoreDistributedStore, PromptReplicationKeepsAtMost4096Retries) {
     bytes[1] = 0xa5;
     ASSERT_TRUE(a.store().put_here(object_id(bytes), bytes));
   }
+  // A failure is counted before its retry is queued and the cap applied: the drop follows it.
   ASSERT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().failures == objects; }, 300s));
+  EXPECT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().dropped >= 1; }));
   const auto stats = a.store().prompt_replication_stats();
   EXPECT_EQ(stats.dropped, 1u);
   EXPECT_EQ(stats.queued, 0u);
