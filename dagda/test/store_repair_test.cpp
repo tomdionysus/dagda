@@ -1407,7 +1407,9 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
-  time.advance(301s);
+  // The local copy landing re-arms the window, and the write may see it after
+  // the first step: a window after that, it ends.
+  for (int step = 0; step < 3 && write.wait_for(5s) != std::future_status::ready; ++step) time.advance(301s);
   ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
   const auto evidence = write.get();
   ASSERT_NE(evidence.on(b.id()), nullptr);
