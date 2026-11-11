@@ -3,6 +3,18 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-11: Macha's busy wake in the test's copy of its loop (`feature/busy-wake`)
+
+At the maintainer's word (2026-11-11), asked for by the Macha session: the copy stands for Macha's loop as the port drives Dagda's steps, so a
+missing wake is a fidelity gap. Macha's pass that began busy (a viewer or the loader present) wakes when the foreground quiet window
+ends, or at once if it already has (`maintenance.cpp:1327-1336`); the copy's park had no such wake, so a busy pass with nothing else
+due slept until an event. The park now has it, over the activity clocks' `idle_for`, against repair's quiet window, the one `busy` was
+read against (Macha's single `foreground_quiet`; the copy's 50 ms constant would wake a still-busy pass and spin). Case
+`StepsBed.ABusyPassWakesWhenTheQuietWindowEnds` failed first (no pass after the window). Test code only: Dagda's own loop waits at
+most an interval.
+
+Gate: `dagda_tests` 1030 passing, 7 disabled, one whole run at the final code.
+
 ## 2026-11-11: gate lifetimes, two raced cases, Dannan 0.5.3, and Macha 0.93.6's yielded wake (`feature/gate-lifetime`)
 
 At the maintainer's word (2026-11-11, all four as recommended).
