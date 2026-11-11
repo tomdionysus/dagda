@@ -61,8 +61,9 @@ class SharedBytes {
   const uint8_t* data() const noexcept { return _bytes->data(); }
   Bytes::const_iterator begin() const noexcept { return _bytes->begin(); }
   Bytes::const_iterator end() const noexcept { return _bytes->end(); }
+  // A contiguous range: std::span takes it as one. No conversion operator besides,
+  // or GCC sees two ways to make the span and warns at each.
   std::span<const uint8_t> span() const noexcept { return *_bytes; }
-  operator std::span<const uint8_t>() const noexcept { return *_bytes; }
 
   friend bool operator==(const SharedBytes& a, const SharedBytes& b) { return a._bytes == b._bytes || *a._bytes == *b._bytes; }
   friend bool operator==(const SharedBytes& a, const Bytes& b) { return *a._bytes == b; }
