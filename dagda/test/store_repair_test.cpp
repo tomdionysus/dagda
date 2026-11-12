@@ -2150,11 +2150,9 @@ TEST(StoreRepair, ATrieDiffPinsAtMostFourSnapshots) {
 }
 
 // L7: a pin is dropped after two minutes unused (Macha's pinned_for), and one
-// in use is kept. Both Macha (98b816d availability_service.cpp:335) and the
-// server read the real clock for it, not the node's time source, so stepping
-// the node's time cannot reach it: disabled until the pins take the injected
-// time, a finding for Tom.
-TEST(StoreRepair, DISABLED_ATrieDiffPinIsDroppedAfterTwoMinutesUnused) {
+// in use is kept. Macha (98b816d availability_service.cpp:335) reads the real
+// clock for it; the server reads the node's time source, so stepping reaches it.
+TEST(StoreRepair, ATrieDiffPinIsDroppedAfterTwoMinutesUnused) {
   dannan::test::SteppedTime time;
   Cluster cluster;
   auto& a = cluster.add("a", options(2));
