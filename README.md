@@ -184,7 +184,7 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.1.1, on Dannan 0.5.3. Built and tested: the local store and its
+Version 0.1.2, on Dannan 0.5.3. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
 evidence, tickets, availability and repair; an instant delete beside the collector's

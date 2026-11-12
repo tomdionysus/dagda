@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 # The tag, this number and --version are the same.
-project(dagda VERSION 0.1.1 LANGUAGES CXX)
+project(dagda VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
