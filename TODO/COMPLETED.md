@@ -3,6 +3,21 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-12: arm64 at 0.1.0 on corvus-develop
+
+Tom (2026-11-12): "No more builds on inverbeg. There's an identical Pi you can use at 10.44.1.202." corvus-develop, Pi 5, Debian 13,
+GCC 14.2, Debian's Boost 1.83 and GoogleTest 1.16. Dannan 0.5.3 and Dagda `0.1.0` from git archives, Macha's fixtures copied without
+`state-macnessa`, under `/root/dagda-arm64`; one job at a time, nice 19, idle I/O, -j2 (`build/scratch/arm64_run_202.sh`, logs in
+`build/scratch/a202/logs/`).
+
+- Plain: 0 warnings (the 46 at `ddba991` are gone); 1028 passed, 0 failed, 3 skipped (the root cases), 6 disabled. Every fixture
+  case ran.
+- ASan with UBSan: 1028 passed, 0 failed, 3 skipped, 6 disabled, no sanitizer report. 14 build warnings, all `-Wmaybe-uninitialized`
+  inside libstdc++'s `std::regex` (through gtest) in `contract_include_direction_test.cpp`, with sanitizers only: a GCC false
+  positive in system headers, left alone.
+- The board logged one "Undervoltage detected!" during the plain build, normalised in 2 s (`throttled=0x50000`). inverbeg is the same
+  board and went down under an ASan build, so its supply is the likely cause; for Tom.
+
 ## 2026-11-12: the trie diff's pins on the node's time (`feature/trie-pin-clock`), and inverbeg's journal
 
 At Tom's word (2026-11-12). The server aged the pins on `std::chrono::steady_clock`, as Macha does (98b816d

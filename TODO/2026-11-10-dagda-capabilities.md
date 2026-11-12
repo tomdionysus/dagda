@@ -36,11 +36,17 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as Tom
   This was the first GCC link and run since S2. The 3 failures were root's: root ignores the directory modes the permission-fault
   cases rely on, and they now skip as root, as Dannan's do (`48370f3`). The 68 skipped needed Macha's fixtures, which were not on the
   Pi. GCC gave 46 warnings, none an error. All are fixed (`6d37738`, `e01e11a`, `9fafb90`); the fixes are covered by the Mac run
-  above, but GCC has not compiled them.
-- **arm64 not finished:** ASan with UBSan, and the plain run with Macha's fixtures. inverbeg went down at about 01:30 on 2026-11-11.
-  At that point it was compiling ASan (-j2, nice 19, idle I/O) beside the fixture run, which had passed 143 cases with no failure.
-  It came back at 18:34. It keeps no persistent journal, so the cause is unknown. Macha is active on it again. Tom's word: leave the
-  Pi alone. So there is no ASan run and no GCC compile at this tree.
+  above, and GCC confirms them at `0.1.0` (below).
+- **arm64 at `0.1.0`, on corvus-develop** (10.44.1.202, a Pi 5 like inverbeg; GCC 14.2, Debian's Boost 1.83 and GoogleTest 1.16;
+  Dannan 0.5.3; one job at a time, nice 19, idle I/O; Macha's fixtures without `state-macnessa`), 2026-11-12:
+  - Plain: build with **0 warnings**; **1028 passed, 0 failed, 3 skipped** (the root cases), 6 disabled. Every fixture case ran.
+  - ASan with UBSan (`-fno-sanitize-recover=undefined`): **1028 passed, 0 failed, 3 skipped**, 6 disabled, no sanitizer report.
+    The build gave 14 warnings, all `-Wmaybe-uninitialized` inside libstdc++'s `std::regex` through gtest, in one test file
+    (`contract_include_direction_test.cpp`), only with sanitizers on; a GCC false positive in system headers, left alone.
+- **inverbeg** went down from about 01:30 to 18:34 on 2026-11-11, during an ASan build beside the fixture run. Its journal was
+  volatile, so the cause is unknown; it is persistent now. corvus-develop logged one "Undervoltage detected!" during the plain build
+  (normalised in 2 s, `throttled=0x50000`), so under-voltage under C++ build load is the likely cause on these Pis. No more builds
+  on inverbeg (Tom, 2026-11-12).
 - **TSan, macOS, at `ff77156` on Dannan 0.5.2:** 1028 passed. There were 5 reports. 2 are Boost's kqueue reactor race, with no
   Dagda frame, as on 2026-11-05. 3 were test-only: a `dannan::test::Gate` was destroyed before the Cluster whose threads used it.
   Those are fixed (`c5a86a2`). It also showed a raced wait in the prompt replication cases, fixed in `e8bf934`. No
@@ -362,7 +368,8 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
 - **The trie pin clock**, a difference from Macha: the server's pins age on the node's time source (`1adc6d1`); Macha's on the
   real clock. Live nodes run the real clock, so they behave the same.
 - **inverbeg's outage** on 2026-11-11, from about 01:30 to 18:34, under Dagda's ASan build and fixture run beside Macha: cause
-  unknown, because the journal was volatile. It is persistent now (2026-11-12), so another outage will leave its cause.
+  unknown, because the journal was volatile. It is persistent now (2026-11-12), so another outage will leave its cause. Its twin
+  corvus-develop under-volted once under the same kind of build: the Pis' supplies are worth a look before the port loads them.
 - **The pool's first-empty-answer `get`** (kept, above).
 - **The stress case's end check** compares two views taken at different moments: its race, not the store's (`COMPLETED.md:223-224`).
 - **The store's journal lines against the goldens** (`ACTIVE.md` item 8) are not mapped; the goldens are to be re-cut on 0.93.4.
@@ -379,5 +386,5 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
 5. **A real state imported and started:** no Dagda node has opened a migrated macnessa or inverbeg state.
 6. **The migration rehearsal** listed above.
 7. **Reliability over time** on real hardware: no soak.
-8. **macnessa's heap corruption:** in Macha's code at 0.93.4; nothing here shows it absent from Dagda.
-9. **Dagda under ASan and Macha's fixtures on arm64, and GCC at this tree:** not finished (Head and gates).
+8. **macnessa's heap corruption:** in Macha's code at 0.93.4; nothing here shows it absent from Dagda. Dagda's own suite ran clean
+   under ASan and UBSan on arm64 at `0.1.0`, which is not the same thing.
