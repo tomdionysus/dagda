@@ -176,6 +176,48 @@ class ReadOnlyLocks {
   std::vector<std::filesystem::path> _absent;
 };
 
+// The partial a pass writes, held for the whole pass by an exclusive flock, so a
+// --resume started while another pass still writes it is refused before it reads a
+// byte, and a pass never writes beside another. `create` makes the file, which must
+// not exist; otherwise it opens the one a stopped pass left.
+class HeldPartial {
+ public:
+  HeldPartial() = default;
+  HeldPartial(const std::filesystem::path& path, bool create) {
+    _fd = create ? ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600) : ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+    if (_fd < 0) {
+      if (create && errno == EEXIST) throw MigrationRefused(path.string() + " appeared as this pass began: another pass is writing it");
+      throw std::runtime_error("cannot open " + path.string() + ": " + std::strerror(errno));
+    }
+    if (::flock(_fd, LOCK_EX | LOCK_NB) != 0) {
+      const int error = errno;
+      ::close(_fd);
+      _fd = -1;
+      if (error == EWOULDBLOCK) throw MigrationRefused(path.string() + " is being written by another pass: let it finish, or stop it first");
+      throw std::runtime_error("cannot lock " + path.string() + ": " + std::strerror(error));
+    }
+  }
+  ~HeldPartial() { release(); }
+  HeldPartial(const HeldPartial&) = delete;
+  HeldPartial& operator=(const HeldPartial&) = delete;
+  HeldPartial& operator=(HeldPartial&& other) noexcept {
+    if (this != &other) {
+      release();
+      _fd = other._fd;
+      other._fd = -1;
+    }
+    return *this;
+  }
+
+  void release() {
+    if (_fd >= 0) ::close(_fd);
+    _fd = -1;
+  }
+
+ private:
+  int _fd = -1;
+};
+
 // What a stopped pass left, to go on from.
 struct OpenSection {
   Begin begin;
@@ -219,8 +261,9 @@ class ManifestFile {
       _open = resumed->open;
       return;
     }
-    _fd = ::open(_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0600);
-    if (_fd < 0) throw std::runtime_error("cannot create " + _path.string() + ": " + std::strerror(errno));
+    // Made, empty, by the pass that holds it (HeldPartial).
+    _fd = ::open(_path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+    if (_fd < 0) throw std::runtime_error("cannot open " + _path.string() + ": " + std::strerror(errno));
     Bytes head(magic.begin(), magic.end());
     dannan::net::Writer version;
     version.u32(format_version);
@@ -1223,8 +1266,16 @@ void Pass::run(const std::filesystem::path& manifest) {
     throw MigrationRefused(partial.string() + " exists from a pass that stopped: give --resume to go on from it, or remove it to start again");
 
   const auto header = make_header();
-  if (had_partial) _resumed = read_partial(partial, header);
-  if (had_partial && !_resumed) std::filesystem::remove(partial);
+  HeldPartial held;
+  if (had_partial) {
+    held = HeldPartial(partial, false);
+    _resumed = read_partial(partial, header);
+    if (!_resumed) {
+      std::filesystem::remove(partial);
+      held.release();
+    }
+  }
+  if (!_resumed) held = HeldPartial(partial, true);
   if (_resumed) {
     _proved = _resumed->proved;
     _unreadable = _resumed->unreadable;

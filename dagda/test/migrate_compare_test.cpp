@@ -714,6 +714,42 @@ TEST(MigrateComparePass, APassStoppedAtAnyCheckpointResumes) {
   EXPECT_GE(stops, 13u);
 }
 
+// The rehearsal on live-a's copy (2026-11-12): a --resume started while the pass
+// that writes the partial still ran wrote into it beside that pass, and left a manifest
+// that failed its own checksum. A pass holds its partial: a resume of one being written
+// is refused and touches nothing, and the pass writing it finishes whole.
+TEST(MigrateComparePass, AResumeOfAPartialAnotherPassIsWritingIsRefused) {
+  Bed bed;
+  auto whole = bed.pass_options();
+  whole.checkpoint_records = 1;
+  (void)bed.pass("whole", whole);
+  size_t seen = 0;
+  bool refused = false;
+  std::string why;
+  auto writing = whole;
+  writing.after_checkpoint = [&] {
+    if (++seen != 3) return;
+    const auto partial = bed.manifests / "busy.partial";
+    const auto before = legacy::read_file(partial);
+    auto resume = whole;
+    resume.resume = true;
+    try {
+      (void)bed.pass("busy", resume);
+    } catch (const MigrationRefused& error) {
+      refused = true;
+      why = error.what();
+    }
+    EXPECT_EQ(legacy::read_file(partial), before);
+  };
+  (void)bed.pass("busy", writing);
+  EXPECT_TRUE(refused);
+  EXPECT_NE(why.find("another pass"), std::string::npos) << why;
+  ComparisonOptions same;
+  same.after_layout = 18;
+  const auto report = compare_manifests(bed.manifests / "whole", bed.manifests / "busy", same);
+  EXPECT_TRUE(report.passed()) << report.summary();
+}
+
 // A partial cut through a block goes on from the last block that holds.
 TEST(MigrateComparePass, APartialTornAtItsEndResumes) {
   struct Stop {};
