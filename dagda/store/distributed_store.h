@@ -248,9 +248,23 @@ struct DistributedStoreOptions {
   // no such bound on a data call (data_no_progress_deadline 0): a peer that keeps its
   // session and never answers holds a call there for ever.
   std::chrono::milliseconds call_no_progress{300000};
-  // Each presence, claim and CONTROL call to one peer (Macha's
-  // max(dead_after, connect_timeout)).
+  // A claim, a single presence probe and a CONTROL presence batch to one peer: Macha's
+  // bounded control call, which gives up after max(dead_after, connect_timeout).
   std::chrono::milliseconds control_call{30000};
+  // The latest each other call to a peer may end, moving or not, named by its purpose
+  // as Macha's port names them (its call_deadline.hpp, the maintainer 2026-11-11). A put, a get
+  // or a repair push, still under call_no_progress:
+  std::chrono::milliseconds object_transfer_call{std::chrono::minutes(30)};
+  // A presence batch (have_objects, have_valid_objects):
+  std::chrono::milliseconds presence_call{std::chrono::minutes(2)};
+  // A delete asked of a peer:
+  std::chrono::milliseconds delete_call{std::chrono::minutes(2)};
+  // A CONTROL object put to or fetched from a peer:
+  std::chrono::milliseconds metadata_call{std::chrono::minutes(5)};
+  // A call other than a transfer that Macha's port waits on synchronously (a CONTROL
+  // fetch, a delete) ends sooner when it moves no byte for this long: Macha's
+  // control_no_progress_deadline.
+  std::chrono::milliseconds control_no_progress{30000};
   size_t retention_check_batch_size = 2000;
   size_t retention_check_concurrency = 8;
   // Threads that run writes and reads for the asynchronous calls and the
@@ -612,6 +626,8 @@ class DistributedStore final : public ControlObjectSource {
   std::optional<IoReserve::Slot> admit_control() const;
   // How a peer's put or fetch is watched: it has no other limit past a caller's own.
   dannan::net::CallWatch peer_call_watch() const;
+  // A synchronous call other than a transfer: control_no_progress.
+  dannan::net::CallWatch control_call_watch() const;
   void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);
   void trace_repair(const std::string& detail) const;
   void note_unsourceable(const ObjectId& id);

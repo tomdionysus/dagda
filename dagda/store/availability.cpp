@@ -31,7 +31,8 @@ using ledger::TrieQuestionKind;
 // snapshot its root question pinned there.
 class RemoteTrie final : public ledger::TrieSource {
  public:
-  RemoteTrie(dannan::Routes& routes, NodeRecord peer, std::chrono::milliseconds deadline) : _routes(routes), _peer(std::move(peer)), _deadline(deadline) {}
+  RemoteTrie(dannan::Routes& routes, NodeRecord peer, std::chrono::milliseconds deadline, std::chrono::milliseconds no_progress)
+      : _routes(routes), _peer(std::move(peer)), _deadline(deadline), _watch{no_progress, std::nullopt} {}
 
   ObjectTrie::Summary root() override {
     const auto summary = ledger::decode_trie_root(ask(question(TrieQuestionKind::root, {})));
@@ -70,7 +71,8 @@ class RemoteTrie final : public ledger::TrieSource {
     return out;
   }
   Bytes ask(const TrieQuestion& question) {
-    auto outcome = _routes.call_and_wait(_peer, message::trie_diff, ledger::encode_trie_question(question), dannan::sched::FrameType::speculative, _deadline);
+    auto outcome =
+        _routes.call_and_wait(_peer, message::trie_diff, ledger::encode_trie_question(question), dannan::sched::FrameType::speculative, _deadline, _watch);
     ++_questions;
     if (!outcome.reply) throw std::runtime_error("peer did not answer trie_diff: " + (outcome.failure.empty() ? std::string("no reply") : outcome.failure));
     if (outcome.reply->type != message::trie_diff_reply) {
@@ -85,6 +87,7 @@ class RemoteTrie final : public ledger::TrieSource {
   dannan::Routes& _routes;
   const NodeRecord _peer;
   const std::chrono::milliseconds _deadline;
+  const dannan::net::CallWatch _watch;
   dannan::identity::Hash256 _at{};
   uint64_t _questions = 0;
   uint64_t _bytes = 0;
@@ -176,7 +179,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     std::vector<RemoteTrie> tries;
     tries.reserve(hosts.size());
     std::vector<ledger::TrieSource*> sources;
-    for (const auto& host : hosts) sources.push_back(&tries.emplace_back(_context.routes(), host, _options.call));
+    for (const auto& host : hosts) sources.push_back(&tries.emplace_back(_context.routes(), host, _options.call, _options.call_no_progress));
     std::vector<ledger::PeerDiff> diffs;
     next.survey = ledger::survey_by_diff(view.trie, *missing_here, inventory->lookup(contract::RetentionClass::data), sources, diffs, pause);
     ledger::PeerLacks lacks;

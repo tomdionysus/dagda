@@ -54,9 +54,12 @@ struct ExchangeOptions {
   // `dead_after`: by then the roster has dropped it or it is answering.
   std::chrono::milliseconds write_stall{2500};
   std::chrono::milliseconds dead_after{30000};
-  // What bounds any other call to a peer: control_no_progress_deadline. A call Macha
-  // left to the transport has this deadline here.
-  std::chrono::milliseconds call_deadline{30000};
+  // What bounds any other call to a peer: a metadata call in Macha's port (its
+  // call_deadline.hpp, the maintainer 2026-11-11). One it waits on synchronously ends sooner when
+  // it moves no byte for call_no_progress (control_no_progress_deadline); a commit
+  // call is watched by write_stall instead, and an asynchronous one by nothing else.
+  std::chrono::milliseconds call_deadline{std::chrono::minutes(5)};
+  std::chrono::milliseconds call_no_progress{30000};
   // dht.metadata_cache: a decoded view is reused this long with no notice (H31).
   std::chrono::milliseconds view_ttl{250};
   // How often the generation is advertised, beside each acceptance: Macha's heartbeat.
@@ -311,7 +314,8 @@ class Exchange {
 
   NodeId self() const;
   Bytes addressed(Bytes payload) const;
-  PendingCall start_call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame, std::chrono::milliseconds deadline);
+  PendingCall start_call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame, std::chrono::milliseconds deadline,
+                         dannan::net::CallWatch watch = {});
   // The outcome, by the call's deadline; throws std::runtime_error while stopping.
   dannan::net::CallOutcome wait_call(PendingCall& pending);
   dannan::net::CallOutcome call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame);

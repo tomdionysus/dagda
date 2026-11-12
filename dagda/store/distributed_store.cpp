@@ -33,7 +33,6 @@ constexpr std::chrono::milliseconds look_at_the_clock{25};
 
 // Dannan's call takes a deadline. A peer's put or fetch is bounded by its no-progress
 // watch instead, as Macha's has no absolute limit: this is past any transfer.
-constexpr std::chrono::milliseconds no_absolute_limit = std::chrono::hours(24 * 365 * 10);
 using dannan::contract::Lock;
 using dannan::contract::ReadLock;
 using dannan::contract::WriteLock;
@@ -504,7 +503,7 @@ DistributedStore::DistributedStore(dannan::Context& context, Stores stores, Dist
       _storage_event(context.events().kind("storage")),
       _credit(stores.credit),
       _io(stores.io),
-      _control_fetch(context, stores.control, options.control_call),
+      _control_fetch(context, stores.control, options.metadata_call, dannan::net::CallWatch{options.control_no_progress, std::nullopt}),
       _repair(std::make_unique<RepairState>()),
       _shared(std::make_shared<Shared>()) {
   if (!_options.replication) throw std::invalid_argument("the store needs at least one replica");
@@ -837,8 +836,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     // A call runs on past the write while it moves, so a slow peer's answer still
     // reaches the ticket.
     auto handle = _context.routes().call(
-        node, type, payload, options.frame, no_absolute_limit, _executor, [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); },
-        peer_call_watch());
+        node, type, payload, options.frame, _options.object_transfer_call, _executor,
+        [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); }, peer_call_watch());
     Lock lock(run->mutex);
     run->calls[index].handle = std::move(handle);
   };
@@ -1155,7 +1154,7 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
   // other would each wait on the other's slot.
   const auto started = Clock::now();
   const auto outcome =
-      _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, no_absolute_limit, peer_call_watch());
+      _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, _options.object_transfer_call, peer_call_watch());
   const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
   if (ok) note_network(data.size(), Clock::now() - started);
   return ok;
@@ -1814,7 +1813,7 @@ void DistributedStore::fetch_next(const std::shared_ptr<SharedFetch>& fetch) {
   }
   const auto started = Clock::now();
   auto handle = _context.routes().call(
-      target, message::get_object, message::encode_id(fetch->id), frame, no_absolute_limit, _executor,
+      target, message::get_object, message::encode_id(fetch->id), frame, _options.object_transfer_call, _executor,
       [weak = std::weak_ptr<Shared>(_shared), fetch, target, work, started](CallOutcome outcome) {
         const auto shared = weak.lock();
         if (shared) {
@@ -1989,7 +1988,7 @@ std::map<NodeId, std::map<ObjectId, bool>> DistributedStore::batched_have_object
       chunks.emplace_back(node, std::move(chunk));
     }
   }
-  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), _options.retention_check_concurrency, _options.control_call);
+  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), _options.retention_check_concurrency, _options.presence_call);
   for (size_t i = 0; i < chunks.size(); ++i) {
     const auto& [node, ids] = chunks[i];
     std::vector<bool> present(ids.size(), false);
@@ -2190,7 +2189,7 @@ bool DistributedStore::offer_control_on(const NodeRecord& target, const std::vec
     sizes.push_back(bytes->size());
     requests.push_back({target, message::put_control_object, message::encode_object(id, *bytes), frame});
   }
-  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), window, _options.control_call);
+  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), window, _options.metadata_call);
   bool ok = true;
   for (size_t i = 0; i < outcomes.size(); ++i) {
     if (outcomes[i].reply && outcomes[i].reply->type == dannan::net::message::ok) {
@@ -2436,6 +2435,12 @@ dannan::net::CallWatch DistributedStore::peer_call_watch() const {
   return watch;
 }
 
+dannan::net::CallWatch DistributedStore::control_call_watch() const {
+  dannan::net::CallWatch watch;
+  watch.no_progress = _options.control_no_progress;
+  return watch;
+}
+
 void DistributedStore::note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed) {
   // Background credit is spent an extent at a time, so the estimate must
   // reflect an extent's cost: a transfer under half an extent is round trip
@@ -2465,7 +2470,7 @@ std::map<ObjectId, bool> DistributedStore::valid_on(const NodeRecord& target, co
                         ids.begin() + static_cast<std::ptrdiff_t>(std::min(ids.size(), offset + message::max_valid_batch)));
     requests.push_back({target, message::have_valid_objects, message::encode_ids(chunks.back()), FrameType::speculative});
   }
-  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), chunks.size(), _options.control_call);
+  const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), chunks.size(), _options.presence_call);
   for (size_t i = 0; i < chunks.size(); ++i) {
     const auto& outcome = outcomes[i];
     if (!outcome.reply || outcome.reply->type != message::have_valid_objects_reply) continue;
@@ -2505,7 +2510,8 @@ void DistributedStore::erase_all(const ObjectId& id) {
         }
         (void)_cache.remove(id);
       } else {
-        (void)_context.routes().call_and_wait(target, message::delete_object, message::encode_id(id), FrameType::speculative, _options.control_call);
+        (void)_context.routes().call_and_wait(target, message::delete_object, message::encode_id(id), FrameType::speculative, _options.delete_call,
+                                              control_call_watch());
       }
     } catch (const std::exception& error) {
       _logger.debug("object delete " + target.host + ": " + error.what());
@@ -2829,7 +2835,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       std::vector<Request> requests;
       for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
       const auto dispatched = Clock::now();
-      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), no_absolute_limit, peer_call_watch());
+      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.object_transfer_call, peer_call_watch());
       std::set<ObjectId> failed;
       uint64_t delivered = 0;
       for (size_t i = 0; i < sends.size(); ++i) {

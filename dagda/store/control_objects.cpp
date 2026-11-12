@@ -14,8 +14,8 @@
 
 namespace dagda::store {
 
-ControlObjectFetch::ControlObjectFetch(dannan::Context& context, LocalStore& control, std::chrono::milliseconds per_peer)
-    : _context(context), _control(control), _per_peer(per_peer), _logger(context.logger("dagda.control")) {}
+ControlObjectFetch::ControlObjectFetch(dannan::Context& context, LocalStore& control, std::chrono::milliseconds per_peer, dannan::net::CallWatch watch)
+    : _context(context), _control(control), _per_peer(per_peer), _watch(watch), _logger(context.logger("dagda.control")) {}
 
 bool ControlObjectFetch::pull(const ObjectId& id, const Observer& observe) {
   if (_control.valid(id)) return true;
@@ -27,7 +27,8 @@ bool ControlObjectFetch::pull(const ObjectId& id, const Observer& observe) {
     if (target.id == self) continue;
     ++asked;
     const auto started = std::chrono::steady_clock::now();
-    const auto outcome = _context.routes().call_and_wait(target, message::get_control_object, payload, dannan::sched::FrameType::speculative, _per_peer);
+    const auto outcome =
+        _context.routes().call_and_wait(target, message::get_control_object, payload, dannan::sched::FrameType::speculative, _per_peer, _watch);
     if (!outcome.reply) {
       last_failure = target.host + ": " + outcome.failure;
       continue;

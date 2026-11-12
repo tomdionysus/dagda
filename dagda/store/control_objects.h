@@ -32,14 +32,16 @@ class ControlObjectSource {
 // and it takes no DATA credit (the control store is not on the DATA device).
 // What a peer sends is checked against the id before it is kept.
 //
-// Thread-safe. pull() waits on the peers, each for at most `per_peer`; never
-// from one of the io context's threads.
+// Thread-safe. pull() waits on the peers, each for at most `per_peer` and less
+// when the call moves nothing for `watch`; never from one of the io context's
+// threads.
 class ControlObjectFetch final : public ControlObjectSource {
  public:
   // Told the bytes and duration of each object received.
   using Observer = std::function<void(uint64_t bytes, std::chrono::steady_clock::duration)>;
 
-  ControlObjectFetch(dannan::Context& context, LocalStore& control, std::chrono::milliseconds per_peer = std::chrono::seconds(30));
+  ControlObjectFetch(dannan::Context& context, LocalStore& control, std::chrono::milliseconds per_peer = std::chrono::seconds(30),
+                     dannan::net::CallWatch watch = {});
 
   bool ensure_control_local(const ObjectId& id) override { return pull(id, {}); }
   bool pull(const ObjectId& id, const Observer& observe);
@@ -48,6 +50,7 @@ class ControlObjectFetch final : public ControlObjectSource {
   dannan::Context& _context;
   LocalStore& _control;
   const std::chrono::milliseconds _per_peer;
+  const dannan::net::CallWatch _watch;
   const dannan::status::ScopedLogger _logger;
 };
 

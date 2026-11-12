@@ -155,13 +155,15 @@ Bytes Exchange::addressed(Bytes payload) const {
 
 // ---- Calls ------------------------------------------------------------------
 
-Exchange::PendingCall Exchange::start_call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame, std::chrono::milliseconds deadline) {
+Exchange::PendingCall Exchange::start_call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame, std::chrono::milliseconds deadline,
+                                           dannan::net::CallWatch watch) {
   if (_stopping.load(std::memory_order_acquire)) throw std::runtime_error("node is stopping; outbound calls are unavailable");
   PendingCall pending;
   pending.outcome = std::make_shared<std::promise<CallOutcome>>();
   pending.future = pending.outcome->get_future();
-  pending.handle = _context.routes().call(owner, type, std::move(payload), frame, deadline, _context.time().executor(),
-                                          [outcome = pending.outcome](CallOutcome result) { outcome->set_value(std::move(result)); });
+  pending.handle = _context.routes().call(
+      owner, type, std::move(payload), frame, deadline, _context.time().executor(),
+      [outcome = pending.outcome](CallOutcome result) { outcome->set_value(std::move(result)); }, watch);
   return pending;
 }
 
@@ -176,7 +178,8 @@ CallOutcome Exchange::wait_call(PendingCall& pending) {
 }
 
 CallOutcome Exchange::call(const Peer& owner, message::MessageType type, Bytes payload, FrameType frame) {
-  auto pending = start_call(owner, type, std::move(payload), frame, _options.call_deadline);
+  // Waited on here, as Macha's port waits on a synchronous call: its window too.
+  auto pending = start_call(owner, type, std::move(payload), frame, _options.call_deadline, dannan::net::CallWatch{_options.call_no_progress, std::nullopt});
   return wait_call(pending);
 }
 
