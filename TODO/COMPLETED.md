@@ -3,6 +3,20 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-12: the trie diff's pins on the node's time (`feature/trie-pin-clock`), and live-b's journal
+
+At the maintainer's word (2026-11-12). The server aged the pins on `std::chrono::steady_clock`, as Macha does (98b816d
+`availability_service.cpp:335`), against Dagda's rule that time is injected; stepped time could not reach the two-minute drop. The
+pins now read `_context.time().source()` (`storage_server.cpp:129`). `StoreRepair.ATrieDiffPinIsDroppedAfterTwoMinutesUnused`, disabled
+since `ff77156`, is enabled and failed first (the pin still answered after 121 s unused). A difference from Macha: on the live nodes the
+time source is the real clock, so nothing changes there.
+
+live-b's journal was volatile (Raspberry Pi OS's `40-rpi-volatile-storage.conf`), which is why its 2026-11-11 outage left no cause.
+`/etc/systemd/journald.conf.d/50-persistent.conf` now sets `Storage=persistent`, `SystemMaxUse=1G`; journald restarted, the journal is
+in `/var/log/journal`, and Macha kept logging. Nothing was built or run there (the Macha session's request, until the maintainer says otherwise).
+
+Gate: `dagda_tests` 1031 passing, 6 disabled, one whole run at the final code.
+
 ## 2026-11-11: arm64 on live-b, root skips and GCC's warnings (`feature/gcc-and-root`)
 
 At the maintainer's word (2026-11-11, as recommended). The arm64 run on live-b (Pi 5, GCC 14.2, Debian's Boost 1.83 found by Dannan 0.5.3's
