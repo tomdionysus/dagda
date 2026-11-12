@@ -126,7 +126,7 @@ std::optional<Handled> StorageServer::scope_refusal(const dannan::membership::No
 
 Handled StorageServer::answer_trie(const Message& request) {
   const auto question = ledger::decode_trie_question(request.payload);
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = _context.time().source().now();
   if (question.kind == ledger::TrieQuestionKind::root) {
     auto view = _data.held_view();
     if (!view.identity.complete || !view.trie) return Handled::failed(503, "holdings_seeding", "this node is still listing what it holds");

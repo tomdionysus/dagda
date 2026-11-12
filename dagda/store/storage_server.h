@@ -158,11 +158,12 @@ class StorageServer {
   std::atomic<size_t> _online_backends{0};
   std::atomic_bool _hosts_extents;
 
-  // The held unions pinned for peers' diffs, newest last.
+  // The held unions pinned for peers' diffs, newest last, aged on the node's
+  // time source (Macha reads the real clock here).
   struct Pinned {
     dannan::identity::Hash256 hash{};
     std::shared_ptr<const ledger::TrieUnion> trie;
-    std::chrono::steady_clock::time_point used{};
+    dannan::contract::TimePoint used{};
   };
   static constexpr size_t pinned_max = 4;
   static constexpr std::chrono::minutes pinned_for{2};
