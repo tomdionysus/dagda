@@ -1,7 +1,7 @@
 # Dagda's capability report, for the port (2026-11-10, brought to 2026-11-12)
 
 For the Macha session, which reviews it by reading Dagda's code and builds the port (the maintainer's rulings, relayed 2026-11-06). Written
-from the tag `0.1.0`. Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
+from the tag `0.1.0`, brought to `0.1.1` (your purpose deadlines on the store's calls, and the migration rehearsal). Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
 the last tag. Every claim names a case (`Suite.Case`, `file:line` under `dagda/test/`) or a commit; lines are at `0.1.0`.
 
 ## The answer
@@ -16,8 +16,11 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as the
 
 ## Head and gates
 
-- **Tag `0.1.0`**, annotated, on `main`, the tag the port freezes Dagda on. The remote has `develop` through `55761b2` and `main` at
-  `93c2b89`; everything after, and the tag, is local until the maintainer says push.
+- **Tag `0.1.1`**, annotated, on `main`, the tag the port freezes Dagda on: `0.1.0` with the store's peer calls naming the maintainer's
+  purpose deadlines (below, "What the port must do"). Repin the port to it. `0.1.0` is on the remote; `0.1.1` is local until
+  The maintainer says push.
+- **macOS at `0.1.1`, plain: 1038 passing, 6 disabled** (`0.1.0`'s 1031 and the seven deadline cases), one whole run, Macha's
+  fixtures present. The arm64 and sanitizer runs below are at `0.1.0`; the change since is the deadlines alone.
 - Dannan pinned at **0.5.3** (`CMakeLists.txt:28`, `find_package(dannan 0.5.3 CONFIG REQUIRED)`; tag on main `899faea`), the tag the
   port freezes on: 0.5.2's library, its installed config asking for Boost 1.83, so the Pis build with Debian's Boost. Built into
   `build/deps/prefix-0.5.3`.
@@ -311,8 +314,22 @@ Each item read against Dagda's code; corrections marked.
   naming `dagda-migrate --heads --state <state>` (`e74071c`). The later stage runs `--heads` before the first start with heads on.
 - **Add: the publication budget.** Macha's publication passes `WriteOptions::no_progress_budget = 30s` (its
   `fuse.publication_no_progress_deadline`) and its shared counter as `WriteOptions::progress` (`6635618`). Other writes leave it 0.
-- **Add: `DistributedStoreOptions::call_no_progress` stays 300 s** (`distributed_store.h:250`): a peer call that moves no byte for
-  that long fails. Macha's is unbounded; Dagda's rule forbids that. Named difference.
+- **Add: the store's calls name your purpose deadlines (0.1.1).** After the cutover the store's peer calls are Dagda's, so
+  `call_deadline.hpp` no longer reaches them, and the bridge turns Dannan's node-wide watches off. Dagda names the maintainer's set
+  (2026-11-11) itself, as `DistributedStoreOptions` (`distributed_store.h`): `object_transfer_call` 30 min on a put, a get and
+  a repair push; `presence_call` 2 min on `have_objects` and `have_valid_objects`; `delete_call` 2 min on `delete_object`;
+  `metadata_call` 5 min on `put_control_object` and `get_control_object`. The two you wait on synchronously (a CONTROL fetch, a
+  delete) also end after `control_no_progress`, 30 s idle, as your `control_no_progress_deadline` does. Claims, `has_on`'s
+  `have_object` and `have_control_objects` keep `control_call` 30 s, your `bounded_control_call`. The trie question
+  (`AvailabilityOptions::call` 2 min, `call_no_progress` 30 s) and the exchange (`ExchangeOptions::call_deadline` 5 min;
+  `call_no_progress` 30 s on its synchronous calls; commit calls keep `write_stall`) follow. Cases that failed first:
+  `StoreRepair.APutToAPeerEndsAtTheObjectTransferDeadline`, `...AReadFromAPeerEndsAtTheObjectTransferDeadline`,
+  `...APresenceBatchToASilentPeerEndsAtThePresenceDeadline`, `...ADeleteAskedOfASilentPeerEndsAtTheNoProgressWindow`,
+  `...AControlFetchFromASilentPeerEndsAtTheNoProgressWindow`, `...ATrieQuestionToASilentPeerEndsAtTheNoProgressWindow`,
+  `HeadsExchange.AProbeToASilentPeerEndsAtTheNoProgressWindow`. Set nothing: the defaults are your values.
+- **`DistributedStoreOptions::call_no_progress` stays 300 s** on transfers: one that moves no byte for that long fails before
+  its 30 minutes. Your port has no idle bound on a transfer (`data_no_progress_deadline` 0); Dagda's rule forbids a wait
+  with none. Named difference: a transfer silent for 5 to 30 minutes ends in Dagda and goes on in your port.
 - **Add: maintenance.** While Macha's loop runs (until 8c), `MaintenanceOptions::automatic = false` (`node.h:101`) and Macha drives
   the node's steps and local stages (`begin_local_stages` and the step calls; `StepsBed.EveryStepRunsInMachasOrder`,
   `maintenance_steps_test.cpp:893`). Pass Macha's configured values, not Dagda's defaults: live-b runs
@@ -347,13 +364,27 @@ Shown by cases:
 - A dry run over live-a's state (scratch copy, 0.92.4, 2026-11-05): exit 0, nothing refused, 3,809 loose and 314,390 pack records
   open under v18 (`COMPLETED.md:499-514`). DATA was a sample.
 
-Not shown before the nodes, and needed before the first live conversion (the maintainer, 2026-11-10: the rehearsal comes then, not before the
-port is built):
-1. A real run on live-a's state copy `/root/macha-state-20261105T145340Z` (read there only).
-2. The comparison clean against it, before and after.
-3. `--reverse` on that state, compared back.
-4. `--resume` from a real partial of that state through the command line.
-5. Time and space at 4 TB on the USB disks: nothing measured.
+**The rehearsal, 2026-11-12** (the maintainer: now, on build-host, the copy and the cluster key streamed there and deleted after):
+live-a's state copy `/root/macha-state-20261105T145340Z` (0.92.4, 3.3 GB: the whole state, the cache's seed, a DATA sample of
+48 loose objects and one pack), worked on a copy of itself, with `dagda-migrate` at `0.1.0` (plain arm64 build), fresh custody
+holding live-a's node id. Logs in `build/scratch/rehearsal202/`. Every step exit 0 and every comparison `RESULT: PASS`:
+1. Before manifest, 29 s.
+2. A second manifest pass SIGKILLed with a 253,927-byte partial, resumed by `--resume` through the command line, compared with
+   the before manifest (18 and 18): PASS.
+3. Forward, stage one: the first run SIGKILLed after 3 s with the marker at `dagda-state-layout-going-forward`, finished by a
+   second run (32 s). 3,809 loose and 314,390 pack records migrated, 1,883,019 touches and tombstones, 9 ledgers re-sealed,
+   3 markers. Compared: PASS, every category sized and SAME (held 317,544 control and 1,248,384 data records, claims 316,469
+   and 1,243,017, reference counts 1,227,311 and 12,658, the control store's 2,196,802 pack records).
+4. `--heads`: 154 history frames and 4 files moved, the seed renamed to the space's. Compared: PASS, the metadata categories
+   (author, certificates, checkpoint, heads, history 154, markers, seed) SAME.
+5. `--reverse` (29 s), compared with the before manifest (18 and 18): PASS. `metadata/` and `current.meta` back.
+
+Still not shown: the bytes of today's 0.94.0 disks (the copy is 0.92.4; the port's Dannan files were not in it, and read as
+"other files" byte for byte), and time and space at 4 TB on the USB disks. A real DATA disk is a sample here.
+
+Found by the rehearsal, a gap, not fixed: nothing stops two manifest passes writing the same `<manifest>.partial` at once (my
+first script did that by killing a wrapper and not the pass). The result is a manifest that fails its own checksum and a
+rename that fails, so it is caught, not silent. A pass could hold an exclusive lock on the partial.
 
 Rollback: Macha's binary comes back only after `--reverse` has finished (your list's "Rollback" stands).
 

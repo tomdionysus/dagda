@@ -3,6 +3,24 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-12: 0.1.1, Macha's purpose deadlines (feature/call-deadlines), and the migration rehearsal
+
+Macha's port is on Dannan 0.5.3, Dagda's pin, so nothing to realign. Its transport cutover (0.94.0, live) names a deadline
+per call by purpose (the maintainer, 2026-11-11: control 2 min, metadata 5 min, object transfer 30 min, presence probe 2 min) and turns
+Dannan's node-wide watches off. The maintainer asked whether that was Dannan's: Dannan enforces only what each caller names, so after the
+store cutover Dagda's calls must name them. The maintainer: adopt, tag 0.1.1. A put, a get and a repair push end at 30 min under the 300 s
+watch kept; presence batches at 2 min; a delete at 2 min and a CONTROL fetch at 5, each also ending after 30 s idle; a CONTROL
+put at 5; the trie question at 2 with a 30 s watch; the exchange at 5, its synchronous calls with a 30 s watch. Claims and
+single probes keep Macha's bounded 30 s. Seven cases, each failing first (the exchange's case was rewritten once: `stall` holds
+every probe, so it watches the first one end, not the pass). Gate, macOS plain: **1038 passed, 6 disabled**, one run.
+
+The rehearsal (the maintainer: now, on build-host, the key copied there and deleted after), on live-a's 0.92.4 state copy with
+`dagda-migrate` 0.1.0: before manifest; a manifest pass SIGKILLed and `--resume`d, PASS against it; forward killed after 3 s and
+finished; `--heads`; `--reverse`; each compared PASS (the report's migration section has the counts). The first attempt's
+failures were the script's (it killed a wrapper shell and left the pass running beside its own resume), and they showed that
+nothing stops two passes writing one `.partial`: caught by the checksum, not fixed. Copy, custody and key deleted from
+build-host; logs in `build/scratch/rehearsal202/`.
+
 ## 2026-11-12: arm64 at 0.1.0 on build-host
 
 The maintainer (2026-11-12): "No more builds on live-b. There's an identical Pi you can use at 192.0.2.1." build-host, Pi 5, Debian 13,
