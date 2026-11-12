@@ -1639,6 +1639,192 @@ TEST(StoreRepair, AReadWithNoDeadlineEndsWhenItsOnlyPeerIsSilentForTheWindow) {
   EXPECT_EQ(answer.answer, FetchAnswer::try_later);
 }
 
+// Macha's port (`call_deadline.hpp`, Tom 2026-11-11): each call names the latest it may
+// end by its purpose, an object transfer 30 minutes, whatever its no-progress window.
+// A put still held then ends there, and the copy is owed to prompt replication.
+TEST(StoreRepair, APutToAPeerEndsAtTheObjectTransferDeadline) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto writer = options(2, 2, 8ULL * 1024 * 1024);
+  writer.time = &time;
+  writer.store.call_no_progress = 1h;
+  auto& a = cluster.add("a", writer);
+  auto& b = cluster.add("b", options(2, 2, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(a, b.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::put_object, gate));
+  const auto bytes = pattern(64 * 1024, 63);
+  const auto id = object_id(bytes);
+  WriteOptions durable;
+  durable.level = Durability::durable;
+  auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(1801s);
+  ASSERT_EQ(write.wait_for(30s), std::future_status::ready);
+  const auto evidence = write.get();
+  ASSERT_NE(evidence.on(b.id()), nullptr);
+  EXPECT_EQ(evidence.on(b.id())->state, ReplicaState::pending);
+  EXPECT_TRUE(a.data().has(id));
+}
+
+// The same for a read: its only peer held past 30 minutes, it ends and says to try later.
+TEST(StoreRepair, AReadFromAPeerEndsAtTheObjectTransferDeadline) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto reader = waits_on_credit();
+  reader.time = &time;
+  reader.store.call_no_progress = 1h;
+  auto& a = cluster.add("a", reader);
+  auto& b = cluster.add("b", waits_on_credit());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 64);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::get_object, gate));
+  ReadOptions read;
+  read.frame = FrameType::foreground;
+  auto result = std::async(std::launch::async, [&] { return a.store().read(id, read); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(1801s);
+  ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
+  const auto answer = result.get();
+  EXPECT_FALSE(answer.object);
+  EXPECT_EQ(answer.answer, FetchAnswer::try_later);
+}
+
+// A presence batch is a presence probe there, two minutes, with no window of its own
+// (Macha's port sends it asynchronously): a silent peer is waited for that long.
+TEST(StoreRepair, APresenceBatchToASilentPeerEndsAtThePresenceDeadline) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto asker = options(2, 1, 8ULL * 1024 * 1024);
+  asker.time = &time;
+  auto& a = cluster.add("a", asker);
+  auto& b = cluster.add("b", options(2, 1, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 65);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  const auto peer = record_of(a, b.id());
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::have_valid_objects, gate));
+  auto asked = std::async(std::launch::async, [&] { return a.store().valid_on(peer, {id}); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(31s);
+  EXPECT_EQ(asked.wait_for(2s), std::future_status::timeout);
+  time.advance(90s);
+  ASSERT_EQ(asked.wait_for(30s), std::future_status::ready);
+  EXPECT_TRUE(asked.get().empty());
+}
+
+// A delete asked of a peer is a control call, two minutes, and Macha's port waits on it
+// synchronously, so its no-progress window ends a silent one first: not the 30 s it
+// was, but the window.
+TEST(StoreRepair, ADeleteAskedOfASilentPeerEndsAtTheNoProgressWindow) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto asker = options(2, 1, 8ULL * 1024 * 1024);
+  asker.time = &time;
+  asker.store.control_no_progress = 60s;
+  auto& a = cluster.add("a", asker);
+  auto& b = cluster.add("b", options(2, 1, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 66);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.data().put(id, bytes));
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::delete_object, gate));
+  auto erased = std::async(std::launch::async, [&] { a.store().erase_all(id); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(31s);
+  EXPECT_EQ(erased.wait_for(2s), std::future_status::timeout);
+  time.advance(30s);
+  EXPECT_EQ(erased.wait_for(30s), std::future_status::ready);
+}
+
+// A CONTROL object fetched from a peer is metadata there, five minutes, waited on
+// synchronously: the no-progress window ends a silent peer, not the 30 s it was.
+TEST(StoreRepair, AControlFetchFromASilentPeerEndsAtTheNoProgressWindow) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto asker = options(2, 1, 8ULL * 1024 * 1024);
+  asker.time = &time;
+  asker.store.control_no_progress = 60s;
+  auto& a = cluster.add("a", asker);
+  auto& b = cluster.add("b", options(2, 1, 8ULL * 1024 * 1024));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(4 * 1024, 67);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(b.control().put(id, bytes));
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::get_control_object, gate));
+  auto fetched = std::async(std::launch::async, [&] { return a.store().ensure_control_local(id); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(31s);
+  EXPECT_EQ(fetched.wait_for(2s), std::future_status::timeout);
+  time.advance(30s);
+  ASSERT_EQ(fetched.wait_for(30s), std::future_status::ready);
+  EXPECT_FALSE(fetched.get());
+}
+
+// A trie question is a presence probe there, two minutes, waited on synchronously: the
+// no-progress window ends a silent peer, and the survey counts it failed.
+TEST(StoreRepair, ATrieQuestionToASilentPeerEndsAtTheNoProgressWindow) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate gate;
+  Cluster cluster(std::chrono::hours(24));
+  auto asker = options(2, 2);
+  asker.time = &time;
+  asker.availability = {};
+  asker.availability.call_no_progress = 60s;
+  auto& a = cluster.add("a", asker);
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 68);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(a.data().put(id, bytes));
+  ASSERT_TRUE(b.data().put(id, bytes));
+  auto provider = referring_to({id});
+  a.publish_inventory(provider);
+  dannan::test::GateOpener opener(gate);
+  b.interpose(hold(message::trie_diff, gate));
+  auto surveyed = std::async(std::launch::async, [&] { return a.availability().refresh(); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  time.advance(31s);
+  EXPECT_EQ(surveyed.wait_for(2s), std::future_status::timeout);
+  time.advance(30s);
+  ASSERT_EQ(surveyed.wait_for(30s), std::future_status::ready);
+  (void)surveyed.get();
+  const auto snapshot = a.availability().snapshot();
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(snapshot->survey.peers_failed, 1u);
+}
+
 // src/cluster/distributed_store.cpp at Macha 9a08846, prompt_replication_loop (:1306):
 // the read for a prompt copy takes no DATA credit, so a node whose credit is taken
 // still sends its copy. The local write fits what is left; the extent a lease

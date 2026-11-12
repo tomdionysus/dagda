@@ -28,8 +28,11 @@ namespace dagda::store {
 
 // What the survey runs with: Macha's figures (availability_service.hpp).
 struct AvailabilityOptions {
-  // Each question to a peer's trie.
-  std::chrono::milliseconds call{30000};
+  // Each question to a peer's trie: a presence probe in Macha's port (its
+  // call_deadline.hpp, Tom 2026-11-11), waited on synchronously, so it ends sooner
+  // when it moves no byte for call_no_progress (control_no_progress_deadline).
+  std::chrono::milliseconds call{std::chrono::minutes(2)};
+  std::chrono::milliseconds call_no_progress{30000};
   // A survey reads the whole referenced set, so the next waits this many
   // times the last one's cost: a twentieth of the node's time.
   unsigned share = 20;

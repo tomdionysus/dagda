@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -745,6 +746,46 @@ TEST(HeadsExchange, RepairStalledOnASilentPeerDoesNotBlockLocalWrites) {
   } catch (const std::exception&) {
   }
   EXPECT_TRUE(converged);
+}
+
+// Macha's port (`call_deadline.hpp`, Tom 2026-11-11): a metadata call names five minutes,
+// and one waited on synchronously ends sooner when it makes no progress for the window.
+// Repair's probe to a silent peer ends at the window, not at the 30 s it was.
+TEST(HeadsExchange, AProbeToASilentPeerEndsAtTheNoProgressWindow) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate silent;
+  Cluster cluster(std::chrono::hours(24));
+  dannan::test::GateOpener open_on_exit(silent);
+  auto stepped = joined(1);
+  stepped.time = &time;
+  stepped.exchange.call_no_progress = 60s;
+  auto& a = cluster.add("a", stepped);
+  auto& b = cluster.add("b", joined(1));
+  cluster.start_all();
+  ASSERT_TRUE(wait_until([&] { return a.context().nodes().active().size() >= 2 && b.context().nodes().active().size() >= 2; }));
+  ASSERT_TRUE(writes(a, "warm"));
+  ASSERT_TRUE(exchange_on(a).wait_replicated(10s));
+
+  stall(b, a.options().exchange.numbers.has_history_entry, silent);
+  auto repaired = std::async(std::launch::async, [&] {
+    try {
+      exchange_on(a).repair_once();
+    } catch (const std::exception&) {
+      // A pass abandoned on the silent peer is fine; it retries.
+    }
+  });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(silent);
+  ASSERT_TRUE(silent.wait_for_entries(1, 15s));
+  // Each probe the pass sends the peer is held, so the first one ending shows as the
+  // pass going on to the next, or ending.
+  const auto first_ended = [&](std::chrono::seconds within) {
+    return silent.wait_for_entries(2, within) || repaired.wait_for(0s) == std::future_status::ready;
+  };
+  time.advance(31s);
+  EXPECT_FALSE(first_ended(2s));
+  time.advance(30s);
+  EXPECT_TRUE(first_ended(30s));
 }
 
 // Macha's test_a_commit_is_claimed_here_when_the_peer_never_answers_the_claim (RPC:5660). A
