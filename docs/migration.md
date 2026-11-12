@@ -185,7 +185,10 @@ spinning disk, and the node is stopped throughout. What makes that bearable:
   every 256 records or 1 GiB, so a stopped pass reads again at most that much (a Pi's
   power or an operator's ^C costs nothing else). A state that has changed since (a
   loose file or pack of another size or time, moved accounting) refuses the resume:
-  a manifest built on what is no longer so would lie.
+  a manifest built on what is no longer so would lie. A pass holds its partial with an
+  exclusive `flock` from start to end, so a `--resume` while another pass still writes
+  it is refused before it reads a byte: stop that pass first (the rehearsal of
+  2026-11-12 wrote one partial from two passes, and the manifest failed its checksum).
 - **Progress with an end:** the total is known from listing the stores, so every 4096
   records a line gives records, MiB of the total, the rate and the minutes left. The
   listing itself is a stat of each file; measure it on the day.
