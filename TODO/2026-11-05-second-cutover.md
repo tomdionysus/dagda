@@ -600,7 +600,7 @@ record at a time, each opened once under v18 (the ruling keeps this, so rot is l
 16-byte tag derived and overwritten; pack records 48 bytes; ledgers re-sealed file by file;
 markers last; every refusal before the first write; a crash finished by running it again.
 Not proven: no run on a real Macha state, none at scale, and a dry run reads every byte
-(`TODO/COMPLETED.md:96-97`). `TODO/ACTIVE.md` records about one fsync per loose object, not
+(`TODO/COMPLETED.md:685-686`). `TODO/ACTIVE.md` records about one fsync per loose object, not
 measured at scale: about 1 million on macnessa.
 
 ### Order
@@ -696,7 +696,7 @@ do not know. See question 6.
    ledger phase, run again, and check the listing.
 8. `--reverse` on the copy, once. The reverse gates nothing; the run is recorded so that its
    state is known, not because anything waits on it. Macha 0.92.3 opening a reversed disk has
-   never been done (`TODO/COMPLETED.md:96`), and this is the cheap place to try.
+   never been done (`TODO/COMPLETED.md:685-686`), and this is the cheap place to try.
 9. Cold start on the migrated copy: time to ready and peak RSS, against the baseline when
    evaluation section 6 item 4 has measured one.
 

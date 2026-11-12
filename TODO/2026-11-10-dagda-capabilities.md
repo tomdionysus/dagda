@@ -116,21 +116,21 @@ Each a difference from Macha, or a defect, found since S7 (`2ba4666`):
 Each is Macha's at `98b816d`, recorded in `TODO/ACTIVE.md`, and not Dagda's to change before the port:
 
 - **The transient 409** when a DATA and a CONTROL id coincide: a delete marks the id alone, so a claim of the other class is refused
-  until it ends. One `RetentionStore` and one `ClaimLocks` per node, keyed by id (`ACTIVE.md:121-124`).
+  until it ends. One `RetentionStore` and one `ClaimLocks` per node, keyed by id (`COMPLETED.md:2090-2093`).
 - **The quiet-window sweep starvation:** a node whose storage, metadata, topology or claims events come faster than the window
-  never sweeps until they stop (`ACTIVE.md:119-120`; `COMPLETED.md:216-222`).
+  never sweeps until they stop (`COMPLETED.md:2088-2089`; `COMPLETED.md:263-266`).
 - **The pool's `get` stopping at the first holding backend's empty answer** (`storage_pool.cpp:591-610` in Macha), still open
-  (`ACTIVE.md:115`, `:118-119`). With the append gap closed, the case that made it visible no longer arises.
+  (`COMPLETED.md:2084`, `:2087-2088`). With the append gap closed, the case that made it visible no longer arises.
 - **The local writer's DATA admission carries no cancellation:** a store stopped while a write waits for credit is held until a
-  release or the no-progress window (120 s on the live nodes), as Macha's flag without a notify is (`ACTIVE.md:131-133`).
+  release or the no-progress window (120 s on the live nodes), as Macha's flag without a notify is (`COMPLETED.md:2100-2102`).
 - **W1:** a peer may sweep an old unreferenced object just as another node re-references it, before it hears of the commit; it
-  costs one replica until repair. The fix is Tom's, recommended after the port (`ACTIVE.md:105-106`).
-- **A full control store** behaves and recovers as Macha's (`ACTIVE.md:102-104`); Macha's silent status and unbounded retry stay
+  costs one replica until repair. The fix is Tom's, recommended after the port (`COMPLETED.md:2074-2075`).
+- **A full control store** behaves and recovers as Macha's (`COMPLETED.md:2071-2073`); Macha's silent status and unbounded retry stay
   Macha's defects for after the freeze.
 
 ## Lost wakeups (your found-issues 14)
 
-Every notify in Dagda's tree was checked on 2026-11-08 (`ACTIVE.md:125-133`): none has the lost-wakeup shape. Where Dagda differs,
+Every notify in Dagda's tree was checked on 2026-11-08 (`COMPLETED.md:2094-2102`): none has the lost-wakeup shape. Where Dagda differs,
 it is already closed: the local writer's and the durability worker's waits take the stop token (`distributed_store.cpp` local
 writer, `durability_domain.cpp`), so `request_stop` wakes them through `condition_variable_any`'s own lock; prompt replication waits
 timed while a retry is queued; the scan's completion and failure are set under the mutex their waiters read; the exchange's
@@ -362,7 +362,7 @@ Shown by cases:
 - Refusals before any write: `MigrateState.AWrongKeyAndAnUnrecognisedDiskAreRefusedBeforeAnyWrite` (`migrate_migrate_test.cpp:572`),
   `...ABackendOfAnotherNodeIdIsRefusedBeforeAnyWrite` (`migrate_migrate_test.cpp:370`), `MigrateHeads.RefusesBeforeTheFirstWrite` (`migrate_heads_test.cpp:621`).
 - A dry run over macnessa's state (scratch copy, 0.92.4, 2026-11-05): exit 0, nothing refused, 3,809 loose and 314,390 pack records
-  open under v18 (`COMPLETED.md:499-514`). DATA was a sample.
+  open under v18 (`COMPLETED.md:546-556`). DATA was a sample.
 
 **The rehearsal, 2026-11-12** (Tom: now, on corvus-develop, the copy and the cluster key streamed there and deleted after):
 macnessa's state copy `/root/macha-state-20261105T145340Z` (0.92.4, 3.3 GB: the whole state, the cache's seed, a DATA sample of
@@ -392,7 +392,7 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
 
 - **The heap aborts.** Two Release-only silent SIGABRTs in the delete stress case with in-process restarts, and one more with
   restarts and the instant delete both off (one in 14 runs, `HeldLedger::held_with_prefix` from `verify_step`). ASan, UBSan and the
-  malloc checkers found nothing in 14 runs; no writer found, no mechanism, no fix (`COMPLETED.md:196-204`, `ACTIVE.md:107-112`). The
+  malloc checkers found nothing in 14 runs; no writer found, no mechanism, no fix (`COMPLETED.md:245-251`, `COMPLETED.md:2076-2081`). The
   stacks share only reading an `ObjectTrie` and freeing its copies. They do not explain macnessa's heap corruption, nor clear the
   moved code; macnessa's one store frame is `ObjectTrie` under `StoragePool::held_view`. No stress run since Tom's word.
 - **The `mutex lock failed` abort** in one 2026-11-05 macOS TSan run: not answered; not seen in the 2026-11-10 TSan run either.
@@ -402,7 +402,7 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
   unknown, because the journal was volatile. It is persistent now (2026-11-12), so another outage will leave its cause. Its twin
   corvus-develop under-volted once under the same kind of build: the Pis' supplies are worth a look before the port loads them.
 - **The pool's first-empty-answer `get`** (kept, above).
-- **The stress case's end check** compares two views taken at different moments: its race, not the store's (`COMPLETED.md:223-224`).
+- **The stress case's end check** compares two views taken at different moments: its race, not the store's (`COMPLETED.md:270-271`).
 - **The store's journal lines against the goldens** (`ACTIVE.md` item 8) are not mapped; the goldens are to be re-cut on 0.93.4.
 
 ## What I could not show without a running port
@@ -410,7 +410,7 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
 1. **Macha's merge hash for hash** beyond the one fixture: `HeadsWireFixture.TheFoldMintsMachasOwnMergeFromItsTwoHeads`
    (`heads_messages_test.cpp:682`).
 2. **Replay of delta frames through Macha's codec:** Dagda replays the chain of opaque bytes; applying Macha's deltas is the port
-   branch's (`COMPLETED.md:189`).
+   branch's (`COMPLETED.md:430-431`).
 3. **Everything end to end:** Status bytes and the widened goldens, client contracts, Macha's own suite on Dagda.
 4. **Performance against the baselines** (`../macha/TODO/2026-11-06-pi-baselines.md`): no Dagda figure through the mount or the API;
    the comparison rule is set on the port's first figures (Tom). Dagda's own: loopback and scale cases only.
