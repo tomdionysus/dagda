@@ -16,8 +16,15 @@
 // path. Each message is an append, then an ack per edge a tick later, then a retire.
 //
 //   dagda-bench log-replica  --key FILE --state DIR --port N [--bootstrap HOST:PORT]
+//                            [--files shared|per-log]
 //   dagda-bench log-appender --key FILE --state DIR --port N --bootstrap HOST:PORT
 //                            [--rate N] [--tick-ms N] [--edges N] [--bytes N] [--seconds N]
+//                            [--logs N] [--group log|node]
+//
+// --logs spreads the messages by hash over that many logs (Lir's 256 shards). --group log
+// sends one call per log per tick, --group node one per replica node per tick carrying
+// every log's entries (the Lir session's proposal). --files per-log gives each log its
+// own segment, synced one by one; shared puts every log in one segment, one sync a group.
 //
 // A replica runs until SIGTERM or SIGINT and then prints its figures as one JSON line;
 // the appender prints its own and stops after --seconds.
@@ -67,6 +74,9 @@ struct Options {
   uint32_t edges = 2;
   uint32_t bytes = 1024;
   uint32_t seconds = 60;
+  uint32_t logs = 1;
+  std::string group = "node";
+  std::string files = "shared";
 };
 
 [[noreturn]] void usage(const std::string& why) {
@@ -106,6 +116,14 @@ Options parse(int argc, char** argv) {
       out.bytes = static_cast<uint32_t>(std::stoul(value));
     } else if (option == "--seconds") {
       out.seconds = static_cast<uint32_t>(std::stoul(value));
+    } else if (option == "--logs") {
+      out.logs = std::max<uint32_t>(1, static_cast<uint32_t>(std::stoul(value)));
+    } else if (option == "--group") {
+      if (value != "log" && value != "node") usage("--group is log or node");
+      out.group = value;
+    } else if (option == "--files") {
+      if (value != "shared" && value != "per-log") usage("--files is shared or per-log");
+      out.files = value;
     } else {
       usage("unknown option " + option);
     }
@@ -121,6 +139,7 @@ enum class Kind : uint8_t { append = 0, ack = 1, retire = 2 };
 
 struct Entry {
   Kind kind = Kind::append;
+  uint32_t log = 0;
   uint64_t origin = 0;
   uint64_t seq = 0;
   uint8_t stage = 0;
@@ -140,6 +159,7 @@ std::vector<uint8_t> encode(const std::vector<Entry>& entries) {
   put_u32(out, static_cast<uint32_t>(entries.size()));
   for (const auto& e : entries) {
     out.push_back(static_cast<uint8_t>(e.kind));
+    put_u32(out, e.log);
     put_u64(out, e.origin);
     put_u64(out, e.seq);
     out.push_back(e.stage);
@@ -252,7 +272,7 @@ struct Running {
 
 class Replica {
  public:
-  explicit Replica(std::filesystem::path dir) : _dir(std::move(dir)) {
+  Replica(std::filesystem::path dir, bool per_log) : _dir(std::move(dir)), _per_log(per_log) {
     std::filesystem::create_directories(_dir);
     open_segment();
     _committer = std::thread([this] { commit_loop(); });
@@ -265,6 +285,7 @@ class Replica {
     _wake.notify_all();
     _committer.join();
     if (_fd >= 0) ::close(_fd);
+    for (auto& [log, fd] : _log_fds) ::close(fd);
   }
 
   // Waits for the group holding these entries to be synced: the handler's answer.
@@ -284,7 +305,7 @@ class Replica {
     return "{\"event\":\"replica\",\"groups\":" + std::to_string(_groups) + ",\"calls\":" + std::to_string(_calls) +
            ",\"entries\":" + std::to_string(_entries) + ",\"bytes\":" + std::to_string(_bytes) + ",\"live\":" + std::to_string(_live.size()) +
            ",\"segments_deleted\":" + std::to_string(_deleted) + ",\"sync\":" + _sync_ms.json("ms") + ",\"calls_per_group\":" + _group_calls.json("calls") +
-           "}";
+           ",\"logs_per_group\":" + _logs_per_group.json("logs") + "}";
   }
 
  private:
@@ -297,6 +318,61 @@ class Replica {
     uint64_t offset = 0;
     uint32_t acks = 0;
   };
+
+  static void write_all(int fd, const std::vector<uint8_t>& out) {
+    size_t done = 0;
+    while (done < out.size()) {
+      const auto n = ::write(fd, out.data() + done, out.size() - done);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) throw std::runtime_error("segment write failed");
+      done += static_cast<size_t>(n);
+    }
+  }
+  static void sync(int fd) {
+    int rc;
+    do {
+      rc = ::fsync(fd);
+    } while (rc != 0 && errno == EINTR);
+    if (rc != 0) throw std::runtime_error("segment sync failed");
+  }
+
+  // Each entry to its own log's segment, then every touched segment synced in turn: the
+  // time of all the syncs.
+  double write_per_log(const std::vector<Pending>& group) {
+    std::map<uint32_t, std::vector<uint8_t>> by_log;
+    for (const auto& p : group) {
+      Reader in(p.payload);
+      const auto count = in.u32();
+      for (uint32_t i = 0; i < count; ++i) {
+        const auto begin = in.skip(0);
+        (void)in.u8();
+        const auto log = in.u32();
+        (void)in.u64();
+        (void)in.u64();
+        (void)in.u8();
+        in.skip(in.u32());
+        in.skip(in.u32());
+        const auto after = in.skip(0);
+        auto& out = by_log[log];
+        out.insert(out.end(), p.payload.begin() + static_cast<std::ptrdiff_t>(begin), p.payload.begin() + static_cast<std::ptrdiff_t>(after));
+      }
+    }
+    for (const auto& [log, bytes] : by_log) {
+      auto found = _log_fds.find(log);
+      if (found == _log_fds.end()) {
+        const auto path = _dir / ("log-" + std::to_string(log));
+        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0600);
+        if (fd < 0) throw std::runtime_error("cannot open " + path.string());
+        found = _log_fds.emplace(log, fd).first;
+      }
+      write_all(found->second, bytes);
+    }
+    const auto before = Clock::now();
+    for (const auto& [log, bytes] : by_log) sync(_log_fds.at(log));
+    std::lock_guard lock(_figures_mutex);
+    _logs_per_group.add(static_cast<double>(by_log.size()));
+    return ms_since(before);
+  }
 
   void open_segment() {
     ++_segment;
@@ -317,20 +393,15 @@ class Replica {
       }
       std::vector<uint8_t> out;
       for (const auto& p : group) out.insert(out.end(), p.payload.begin(), p.payload.end());
-      size_t done = 0;
-      while (done < out.size()) {
-        const auto n = ::write(_fd, out.data() + done, out.size() - done);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) throw std::runtime_error("segment write failed");
-        done += static_cast<size_t>(n);
+      double sync_ms = 0;
+      if (_per_log) {
+        sync_ms = write_per_log(group);
+      } else {
+        write_all(_fd, out);
+        const auto before = Clock::now();
+        sync(_fd);
+        sync_ms = ms_since(before);
       }
-      const auto before = Clock::now();
-      int rc;
-      do {
-        rc = ::fsync(_fd);
-      } while (rc != 0 && errno == EINTR);
-      if (rc != 0) throw std::runtime_error("segment sync failed");
-      const auto sync_ms = ms_since(before);
       const auto base = _written;
       _written += out.size();
       index(group, base);
@@ -354,6 +425,7 @@ class Replica {
       const auto count = in.u32();
       for (uint32_t i = 0; i < count; ++i) {
         const auto kind = static_cast<Kind>(in.u8());
+        (void)in.u32();
         const auto dot = std::make_pair(in.u64(), in.u64());
         (void)in.u8();
         in.skip(in.u32());
@@ -381,6 +453,8 @@ class Replica {
   }
 
   const std::filesystem::path _dir;
+  const bool _per_log;
+  std::map<uint32_t, int> _log_fds;
   std::mutex _mutex;
   std::condition_variable _wake;
   std::vector<Pending> _pending;
@@ -396,11 +470,12 @@ class Replica {
   uint64_t _groups = 0, _calls = 0, _entries = 0, _bytes = 0, _deleted = 0;
   Samples _sync_ms;
   Samples _group_calls;
+  Samples _logs_per_group;
 };
 
 int run_replica(const Options& options) {
   Running running(options, "replica-" + std::to_string(options.port));
-  Replica replica(options.state / "log");
+  Replica replica(options.state / "log", options.files == "per-log");
   running.node->context().routes().add(log_append, {"bench_log_append", dannan::net::Lanes::control, dannan::net::Frames::any, false},
                                        [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request) {
                                          replica.append(request.payload);
@@ -458,6 +533,7 @@ int run_appender(const Options& options) {
   const double per_ms = options.rate / 1000.0;
   std::vector<uint8_t> body(options.bytes, 0x5a);
   uint64_t seq = 0;
+  const auto log_of = [&](uint64_t s) { return static_cast<uint32_t>((s * 0x9E3779B97F4A7C15ULL >> 32) % options.logs); };
   std::deque<std::vector<uint64_t>> to_ack;     // the previous tick's messages, acked this tick
   std::deque<std::vector<uint64_t>> to_retire;  // the tick before's, retired this tick
 
@@ -513,24 +589,33 @@ int run_appender(const Options& options) {
       this_tick.push_back(s);
       const auto arrived = now - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(spacing * static_cast<double>(count - i)));
       if (unbatched) {
-        send({Entry{Kind::append, origin, s, 0, "topic/" + std::to_string(s % 64), body}}, {Message{s, Clock::now()}});
+        send({Entry{Kind::append, log_of(s), origin, s, 0, "topic/" + std::to_string(s % 64), body}}, {Message{s, Clock::now()}});
       } else {
-        entries.push_back(Entry{Kind::append, origin, s, 0, "topic/" + std::to_string(s % 64), body});
+        entries.push_back(Entry{Kind::append, log_of(s), origin, s, 0, "topic/" + std::to_string(s % 64), body});
         messages.push_back(Message{s, arrived});
       }
     }
     if (!to_ack.empty()) {
       for (const auto s : to_ack.front())
-        for (uint32_t edge = 0; edge < options.edges; ++edge) entries.push_back(Entry{Kind::ack, origin, s, 1, "", std::vector<uint8_t>(16, 0x01)});
+        for (uint32_t edge = 0; edge < options.edges; ++edge) entries.push_back(Entry{Kind::ack, log_of(s), origin, s, 1, "", std::vector<uint8_t>(16, 0x01)});
       to_ack.pop_front();
     }
     if (!to_retire.empty()) {
-      for (const auto s : to_retire.front()) entries.push_back(Entry{Kind::retire, origin, s, 2, "", {}});
+      for (const auto s : to_retire.front()) entries.push_back(Entry{Kind::retire, log_of(s), origin, s, 2, "", {}});
       to_retire.pop_front();
     }
     to_ack.push_back(this_tick);
     to_retire.push_back(std::move(this_tick));
-    if (!entries.empty()) send(std::move(entries), std::move(messages));
+    if (entries.empty()) {
+    } else if (options.group == "node" || options.logs == 1) {
+      send(std::move(entries), std::move(messages));
+    } else {
+      // One call per log with entries this tick, each carrying that log's messages.
+      std::map<uint32_t, std::pair<std::vector<Entry>, std::vector<Message>>> by_log;
+      for (auto& e : entries) by_log[e.log].first.push_back(std::move(e));
+      for (auto& m : messages) by_log[log_of(m.seq)].second.push_back(m);
+      for (auto& [log, part] : by_log) send(std::move(part.first), std::move(part.second));
+    }
     next += unbatched ? 1ms : tick;
     std::this_thread::sleep_until(next);
   }
@@ -540,9 +625,9 @@ int run_appender(const Options& options) {
   running.shutdown();
   std::lock_guard lock(figures_mutex);
   std::printf(
-      "{\"event\":\"appender\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_per_s\":%.0f,"
+      "{\"event\":\"appender\",\"logs\":%u,\"group\":\"%s\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_per_s\":%.0f,"
       "\"failed\":%llu,\"puback\":%s,\"call\":%s}\n",
-      options.rate, options.tick_ms, options.edges, options.bytes, elapsed_s, static_cast<unsigned long long>(seq),
+      options.logs, options.group.c_str(), options.rate, options.tick_ms, options.edges, options.bytes, elapsed_s, static_cast<unsigned long long>(seq),
       static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str());
   std::fflush(stdout);
   return failures == 0 ? 0 : 1;
