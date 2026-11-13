@@ -784,7 +784,9 @@ TEST(HeadsExchange, AProbeToASilentPeerEndsAtTheNoProgressWindow) {
   };
   time.advance(31s);
   EXPECT_FALSE(first_ended(2s));
-  time.advance(30s);
+  // Past the window however late the call noted its request sent, and inside the
+  // five-minute deadline.
+  time.advance(61s);
   EXPECT_TRUE(first_ended(30s));
 }
 

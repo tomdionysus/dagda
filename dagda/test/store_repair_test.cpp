@@ -1787,7 +1787,9 @@ TEST(StoreRepair, ADeleteAskedOfASilentPeerEndsAtTheNoProgressWindow) {
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(31s);
   EXPECT_EQ(erased.wait_for(2s), std::future_status::timeout);
-  time.advance(30s);
+  // Past the window however late the call noted its request sent (a slow host can
+  // note it after the first step), and inside the purpose deadline.
+  time.advance(61s);
   EXPECT_EQ(erased.wait_for(30s), std::future_status::ready);
 }
 
@@ -1815,7 +1817,9 @@ TEST(StoreRepair, AControlFetchFromASilentPeerEndsAtTheNoProgressWindow) {
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(31s);
   EXPECT_EQ(fetched.wait_for(2s), std::future_status::timeout);
-  time.advance(30s);
+  // Past the window however late the call noted its request sent (a slow host can
+  // note it after the first step), and inside the purpose deadline.
+  time.advance(61s);
   ASSERT_EQ(fetched.wait_for(30s), std::future_status::ready);
   EXPECT_FALSE(fetched.get());
 }
@@ -1848,7 +1852,9 @@ TEST(StoreRepair, ATrieQuestionToASilentPeerEndsAtTheNoProgressWindow) {
   ASSERT_TRUE(gate.wait_for_entries(1));
   time.advance(31s);
   EXPECT_EQ(surveyed.wait_for(2s), std::future_status::timeout);
-  time.advance(30s);
+  // Past the window however late the call noted its request sent (a slow host can
+  // note it after the first step), and inside the purpose deadline.
+  time.advance(61s);
   ASSERT_EQ(surveyed.wait_for(30s), std::future_status::ready);
   (void)surveyed.get();
   const auto snapshot = a.availability().snapshot();
