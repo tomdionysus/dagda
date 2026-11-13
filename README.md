@@ -122,6 +122,10 @@ Add your Boost and OpenSSL prefixes to `CMAKE_PREFIX_PATH` where they are not on
 default path. Warnings are errors in that configuration, and the lock annotations are
 checked, not decorative.
 
+`cmake --install build` installs the library, its headers, its CMake package and
+`dagda-migrate` under `CMAKE_INSTALL_PREFIX`; [docs/packaging.md](docs/packaging.md) says
+what goes where and how a consumer finds it.
+
 ### Link it
 
 A hosted system links `dagda::dagda`, opens a `dagda::Node` on its Dannan node before
@@ -129,7 +133,7 @@ that node starts (the node registers its message types and declares its readines
 planes itself), and holds the node's `dagda::Context`:
 
 ```cmake
-find_package(dagda 0.1 CONFIG REQUIRED)
+find_package(dagda 0.1.4 CONFIG REQUIRED)  # the exact version; Dannan comes with it
 target_link_libraries(my_system PRIVATE dagda::dagda)
 ```
 

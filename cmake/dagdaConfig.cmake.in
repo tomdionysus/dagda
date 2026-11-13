@@ -1,0 +1,16 @@
+#
+# Dagda - The Store
+#
+# Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+# Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+#
+
+@PACKAGE_INIT@
+
+# The network layer at the version Dagda was built against, and through its
+# config Boost, OpenSSL and Threads.
+include(CMakeFindDependencyMacro)
+find_dependency(dannan @DAGDA_DANNAN_MINIMUM@ CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/dagdaTargets.cmake")
+check_required_components(dagda)
