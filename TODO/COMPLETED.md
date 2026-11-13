@@ -3,6 +3,27 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-13: 0.1.3: forked children on their own sanitizer reports, TSan on arm64
+
+The Macha session asked for the forked-child TSan failures to be fixed; Tom: "Do it, no supressions", on corvus-develop.
+- `dagda::test::child_exit` (`test/fixtures/child_exit.h`): a `pthread_atfork` child handler zeroes a count that
+  `__sanitizer_report_error_summary` raises, and a child with none of its own ends by the raw exit call, past TSan's `_exit`
+  that answers the inherited count with 66. Every forked child's `_exit` in the migration and durability tests uses it.
+- The two simulated crashes join the store's start-up threads first (`LocalStore::join_background_threads`), so TSan sees no
+  finished thread left unjoined.
+- From the Pi's plain run: GCC's `-Wshadow` on `storage_pool.cpp`'s inner catch (renamed), and a timing race in four window
+  cases whose second step now clears the window however late the call notes its request sent.
+- Tom chose clang 19 on the Pi, then 4K pages for the run (clang 19's TSan refuses the 16K kernel's 47-bit address space):
+  `kernel=kernel8.img` for the run, `config.txt` restored from its copy and rebooted after; back on `6.18.50+rpt-rpi-2712`,
+  rpiledconfig and redis active, the RPi LED Config session told.
+- TSan's deadlock detector tracks 64 held locks per thread; two cases hold all 64 claim stripes and `_deleting_mutex`, and TSan
+  hung in its own check (gdb: `CheckFailed` unwinding into `realloc` under TSan's slot lock). Tom: detector on, off per case.
+  Those two passed alone with `detect_deadlocks=0`; everything else ran with it on.
+
+Gate, arm64 (corvus-develop, GCC 14.2), plain: **1038 passed, 0 failed, 3 skipped (root), 6 disabled, 0 warnings**, one run.
+Gate, arm64 TSan (clang 19.1.7): **1038 passed, 0 failed, 3 skipped, no ThreadSanitizer report**, in four parts (668, 15, 353,
+and the two alone). The Mac was not rerun at 0.1.3.
+
 ## 2026-11-13: 0.1.2: the manifest's partial held, the journal in Macha's words, TSan
 
 Tom (2026-11-12): cleanup, testing, hardening and improvement in scope while the port waits: all four offered.

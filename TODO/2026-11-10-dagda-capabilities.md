@@ -1,7 +1,7 @@
 # Dagda's capability report, for the port (2026-11-10, brought to 2026-11-13)
 
 For the Macha session, which reviews it by reading Dagda's code and builds the port (Tom's rulings, relayed 2026-11-06). Written
-from the tag `0.1.0`, brought to `0.1.2`: `0.1.1` named your purpose deadlines on the store's calls; `0.1.2` holds a manifest's partial for its pass and writes the store's journal lines in Macha's words. The migration rehearsal ran on `0.1.0`'s tool. Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
+from the tag `0.1.0`, brought to `0.1.3`: `0.1.1` named your purpose deadlines on the store's calls; `0.1.2` holds a manifest's partial for its pass and writes the store's journal lines in Macha's words; `0.1.3` ends forked test children on their own sanitizer reports (tests only, with one renamed variable and four test steps) and adds TSan on arm64. The migration rehearsal ran on `0.1.0`'s tool. Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
 the last tag. Every claim names a case (`Suite.Case`, `file:line` under `dagda/test/`) or a commit; lines are at `0.1.0`.
 
 ## The answer
@@ -16,17 +16,31 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as Tom
 
 ## Head and gates
 
-- **Tag `0.1.2`**, annotated, on `main`, the tag the port freezes Dagda on. Since `0.1.0`: the store's peer calls name Tom's
+- **Tag `0.1.3`**, annotated, on `main`, the tag the port freezes Dagda on. Since `0.1.0`: the store's peer calls name Tom's
   purpose deadlines (`0.1.1`, below, "What the port must do"); a manifest pass holds its partial, so a resume beside it is
   refused (the rehearsal's gap); every store journal line in Macha's text and level (`TODO/2026-11-12-journal-mapping.md`).
-  Build the cutover on it. `0.1.0` is on the remote; `0.1.1` and `0.1.2` are local until Tom says push.
+  `0.1.3` changes no store behaviour: forked test children end through `dagda::test::child_exit`
+  (`test/fixtures/child_exit.h`), which counts only the child's own sanitizer reports; a simulated crash joins the store's
+  start-up threads first (`LocalStore::join_background_threads`); `storage_pool.cpp`'s inner catch names its error apart
+  (GCC `-Wshadow`); four window cases step past their window however late a call notes its request sent (a Pi timing race).
+  Build the cutover on it. `0.1.0` is on the remote; `0.1.1` to `0.1.3` are local until Tom says push.
+- **arm64 at `0.1.3`, on corvus-develop** (as below; Macha's fixtures without `state-macnessa`), 2026-11-13:
+  - Plain (GCC 14.2): build with **0 warnings**; **1038 passed, 0 failed, 3 skipped** (the root cases), 6 disabled.
+  - TSan (Debian's clang 19.1.7, Dannan 0.5.3 built with TSan, the kernel on 4K pages for the run since clang 19's TSan does
+    not support the 16K kernel's 47-bit address space): **1038 passed, 0 failed, 3 skipped, no ThreadSanitizer report**, and no
+    forked-child failure. Deadlock detection was on for all but two cases:
+    `DistributedStore.AControlGraphLargerThanTheConnectionBudgetStillPublishes` and
+    `StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime`. Each holds all 64 claim stripes and then
+    `_deleting_mutex` (`store/object_lock.h:108-171`), past the 64 held locks TSan's detector can track
+    (`sanitizer_deadlock_detector.h:67`); TSan then hangs in its own check. Each passed alone, race detection on, with
+    `detect_deadlocks=0`. The stripes are taken in ascending order by design. No suppressions.
 - **macOS at `0.1.2`, plain: 1041 passing, 6 disabled** (`0.1.0`'s 1031, seven deadline cases, one manifest case, two journal
   cases; journal assertions added to seven more), one whole run, Macha's fixtures present, nothing skipped.
 - **TSan, macOS, at `0.1.2` on Dannan 0.5.3 built with TSan:** 1024 passed, 17 failed, and no report in Dagda's code. The two
   reports are Boost's kqueue reactor race, as in every macOS run. The 17 are forked children expecting exit 0 and getting
   TSan's 66: 15 migration crash cases inherited the parent's report count across the fork, and pass alone in a fresh process;
   2 durability cases' children `_exit` on purpose (a simulated crash) with a finished thread unjoined, which TSan counts as a
-  leak. No `mutex lock failed`. The arm64 runs below are at `0.1.0`.
+  leak. No `mutex lock failed`. Both causes are fixed in `0.1.3` and shown on arm64 above; the Mac's TSan run was not repeated.
 - Dannan pinned at **0.5.3** (`CMakeLists.txt:28`, `find_package(dannan 0.5.3 CONFIG REQUIRED)`; tag on main `899faea`), the tag the
   port freezes on: 0.5.2's library, its installed config asking for Boost 1.83, so the Pis build with Debian's Boost. Built into
   `build/deps/prefix-0.5.3`.
@@ -55,11 +69,13 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as Tom
 - **inverbeg** went down from about 01:30 to 18:34 on 2026-11-11, during an ASan build beside the fixture run. Its journal was
   volatile, so the cause is unknown; it is persistent now. corvus-develop logged one "Undervoltage detected!" during the plain build
   (normalised in 2 s, `throttled=0x50000`), so under-voltage under C++ build load is the likely cause on these Pis. No more builds
-  on inverbeg (Tom, 2026-11-12).
+  on inverbeg (Tom, 2026-11-12). corvus-develop's `/boot/firmware/config.txt` already says so of itself: "Held to 1.8 GHz: the
+  supply browned out at 2.4 GHz under the gateway build (2026-11-08)".
 - **TSan, macOS, at `ff77156` on Dannan 0.5.2:** 1028 passed. There were 5 reports. 2 are Boost's kqueue reactor race, with no
   Dagda frame, as on 2026-11-05. 3 were test-only: a `dannan::test::Gate` was destroyed before the Cluster whose threads used it.
   Those are fixed (`c5a86a2`). It also showed a raced wait in the prompt replication cases, fixed in `e8bf934`. No
-  `mutex lock failed` abort. Not rerun after the fixes. TSan on arm64 is not possible with GCC 14 (Dannan's report, 7).
+  `mutex lock failed` abort. Not rerun after the fixes. TSan on arm64 is not possible with GCC 14 (Dannan's report, 7); clang 19
+  does it, at `0.1.3` above.
 - **Not rerun on the final tree:** Linux x86. The last Linux run was macnessa at 422 cases (2026-11-05).
 
 ## What changed since the last thing you read
