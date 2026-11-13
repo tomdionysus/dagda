@@ -76,7 +76,10 @@ StorageServer::~StorageServer() {
 }
 
 void StorageServer::refresh() {
+  const auto started = std::chrono::steady_clock::now();
   _data.refresh();
+  const auto refresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+  if (refresh_ms >= 100) _logger.trace("DIAG node-stage stage=storage-refresh elapsed_ms=" + std::to_string(refresh_ms));
   advertise();
   // A disk come back changes what this node holds, with nothing written.
   const auto online = _data.online_backends();
@@ -297,12 +300,18 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
         // true, but the objects may be on disk. With ids, answer from disk
         // with fresh tickets (discipline 1: re-derive, do not assert);
         // without, refuse.
-        if (barrier.probe.empty()) return Handled::failed(409, "epoch_changed", "storage durability epoch changed");
+        const auto expected = dannan::identity::to_string(barrier.ticket.epoch).substr(0, 8);
+        const auto current = dannan::identity::to_string(epoch).substr(0, 8);
+        if (barrier.probe.empty()) {
+          _logger.debug("object durability barrier refused: epoch changed expected=" + expected + " current=" + current +
+                        " domain=" + std::to_string(barrier.ticket.domain) + " generation=" + std::to_string(barrier.ticket.generation));
+          return Handled::failed(409, "epoch_changed", "storage durability epoch changed");
+        }
         message::BarrierProbeAnswer answer{epoch, {}};
         for (const auto& id : barrier.probe)
           if (auto ticket = _data.reassert_durable(id)) answer.present.emplace_back(id, *ticket);
         _logger.info("object durability re-derived after epoch change present=" + std::to_string(answer.present.size()) + "/" +
-                     std::to_string(barrier.probe.size()));
+                     std::to_string(barrier.probe.size()) + " expected=" + expected + " current=" + current);
         advertise();
         return reply(dannan::net::message::ok, message::encode_probe_answer(answer));
       }

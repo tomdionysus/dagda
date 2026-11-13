@@ -254,7 +254,8 @@ void RetentionStore::create_locked() {
   _data.trie->replace_all({});
   _control.trie->replace_all({});
   dannan::identity::durable_replace_file(_root / "ledger", "1\n");
-  _logger.info("retention claims ledger created");
+  // Macha's line (retention.cpp:398 at 98b816d), whose checkpoint here is always empty.
+  _logger.info("retention claims moved into the ledger data=0 control=0");
 }
 
 void RetentionStore::load_journal_locked() {

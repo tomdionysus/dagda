@@ -92,7 +92,8 @@ void Node::refusing(const std::function<void()>& part) {
     part();
   } catch (const std::exception& error) {
     const std::string why = error.what();
-    _logger.error("node refused: " + why);
+    // Macha's words for the part that failed (local_state.cpp:127, :183 at 98b816d).
+    _logger.error(std::string(_opening_data ? "node data storage recovery failed: " : "node local state recovery failed: ") + why);
     _context.readiness().fail("dagda: " + why);
     stop();
     if (dynamic_cast<const NodeRefused*>(&error)) throw;
@@ -103,7 +104,8 @@ void Node::refusing(const std::function<void()>& part) {
 Node::~Node() { stop(); }
 
 void Node::step(std::string_view what) {
-  _logger.info(std::string(what));
+  // Dagda's own steps: below Macha's lines, which say what an operator reads.
+  _logger.debug(std::string(what));
   if (_options.trace) _options.trace(what);
 }
 
@@ -155,8 +157,11 @@ void Node::open() {
     }
   };
   lock(_options.state);
+  // A DATA disk refused is the DATA storage failing, in Macha's words.
+  _opening_data = true;
   for (const auto& backend : _options.pool.backends)
     if (const auto why = store::backend_refusal_v18(_options.state, backend.path)) throw NodeRefused(*why);
+  _opening_data = false;
   try {
     store::open_state_layout(_options.state, scheme);
   } catch (const std::exception& error) {
@@ -178,7 +183,9 @@ void Node::open() {
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   };
+  _opening_data = true;
   for (const auto& backend : _options.pool.backends) lock_reloadable(backend.path);
+  _opening_data = false;
   lock(store::control_store_path(_options.state, _options.control));
   if (!_options.cache.path.empty()) lock_reloadable(_options.cache.path);
 
@@ -205,6 +212,7 @@ void Node::open() {
   _activity = std::make_unique<dannan::status::ActivityClocks>(&pass_time());
 
   step("open storage-pool");
+  _opening_data = true;
   auto pool = _options.pool;
   pool.sealing = scheme;
   pool.role = _options.domain.role;
@@ -215,7 +223,20 @@ void Node::open() {
   // A pool whose every backend is offline holds nothing it should: ready, but
   // degraded, and it says so (Tom, 2026-11-05), so a node whose only disk is
   // offline does not crash-loop on its startup timeout.
-  if (_data->degraded()) _logger.warn("data storage degraded: every configured backend is offline");
+  if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
+    const auto& gate = _options.admission->device_pressure;
+    _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
+                 "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
+                 " outlier_percent=" + std::to_string(gate.outlier_percent) +
+                 " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+  }
+  // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
+  // empty pool, and says so, or capacity=0 reads like a missing disk.
+  _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
+               (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
+  if (_data->degraded())
+    _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) + "; running without one until it returns");
+  _opening_data = false;
   ready(plane_data);
 
   if (_options.admission) {
@@ -360,8 +381,8 @@ void Node::open() {
   arm_status();
   if (_options.maintenance.automatic)
     _maintenance = std::jthread([this](std::stop_token stop) { _context.threads().loop("dagda.maintenance", stop, [this, stop] { maintenance_loop(stop); }); });
-  _logger.info("node open: domain " + _options.domain.name + " (" + domain::to_string(_options.domain.id) + "), " + std::to_string(_data->online_backends()) +
-               " backends online, used " + std::to_string(_data->used()) + " of " + std::to_string(_data->limit()));
+  _logger.debug("node open: domain " + _options.domain.name + " (" + domain::to_string(_options.domain.id) + "), " + std::to_string(_data->online_backends()) +
+                " backends online, used " + std::to_string(_data->used()) + " of " + std::to_string(_data->limit()));
 }
 
 void Node::stop() {
@@ -456,9 +477,10 @@ void Node::ensure_collector_locked(contract::ReachabilityProvider& provider) {
   ledger::CollectorOptions options;
   static_cast<ledger::CollectorBudgets&>(options) = _options.maintenance.collector;
   options.garbage_grace = _options.garbage_grace;
-  _collector = std::make_unique<ledger::Collector>(*_ledger, provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
-                                                   ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), pass_time(), pass_wall()},
-                                                   _cache.get(), _options.maintenance.trace);
+  _collector = std::make_unique<ledger::Collector>(
+      *_ledger, provider, *_data, *_control, *_data_sightings, *_control_sightings, options,
+      ledger::CollectorServices{_context.logger("dagda.gc"), _context.observations(), pass_time(), pass_wall(), _context.identity().id()}, _cache.get(),
+      _options.maintenance.trace);
   _collector_provider = &provider;
 }
 
@@ -606,7 +628,7 @@ void Node::persist_scrub_due() {
     std::filesystem::create_directories(dir);
     dannan::identity::durable_replace_file(dir / "scrub.next", std::to_string(_scrub_due_unix_ms) + "\n");
   } catch (const std::exception& error) {
-    _logger.debug(std::string("scrub schedule not kept: ") + error.what());
+    _logger.debug(std::string("maintenance: scrub schedule persistence unavailable: ") + error.what());
   }
 }
 
@@ -672,9 +694,13 @@ void Node::local_rebalance_locked(LocalTurn& turn) {
     figures.rebalance_objects += out.rebalance.objects;
     figures.rebalance_bytes += out.rebalance.bytes;
   });
-  if (!out.rebalance.yielded && out.rebalance.complete && !out.rebalance.bytes) {
+  // Macha's lines (maintenance.cpp:1116-1122 at 98b816d).
+  if (out.rebalance.yielded) {
+    _logger.trace("maintenance: local rebalance yielded to foreground I/O");
+  } else if (out.rebalance.complete && !out.rebalance.bytes) {
     _local_credit = 0.0;
     _local_quiescent_events = turn.events;
+    _logger.trace("maintenance: local rebalance quiescent; waiting for an event");
   }
   throw_if_stopped(turn);
 }
@@ -778,10 +804,13 @@ void Node::local_scrub_locked(LocalTurn& turn) {
   store::log_slow_stage(_logger, "scrub", started, "bytes=" + std::to_string(out.scrub.bytes) + " objects=" + std::to_string(out.scrub.objects));
   if (out.scrub.bytes) _scrub_credit = std::max(0.0, _scrub_credit - static_cast<double>(out.scrub.bytes));
   const bool finished = !out.scrub.yielded && out.scrub.complete;
+  // Macha's lines (maintenance.cpp:1176-1195 at 98b816d).
+  if (out.scrub.yielded) _logger.trace("maintenance: scrub yielded to foreground I/O");
   if (finished) {
     _scrub_credit = 0.0;
     _scrub_due_unix_ms = turn.wall_ms + static_cast<uint64_t>(std::max<int64_t>(1, _options.maintenance.scrub_interval.count()));
     persist_scrub_due();
+    _logger.trace("maintenance: scrub pass complete; next campaign scheduled");
   }
   note_local([&, due = _scrub_due_unix_ms](LocalFigures& figures) {
     figures.scrub_objects += out.scrub.objects;

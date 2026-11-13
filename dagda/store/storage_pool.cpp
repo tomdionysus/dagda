@@ -749,7 +749,10 @@ std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
       _services.logger.warn("discarding corrupt local object " + to_string(id) + " on " + path.string() + ": " + error.what());
       try {
         (void)store->remove(id);
+      } catch (const std::exception& error) {
+        _services.logger.debug("removing corrupt local object: " + std::string(error.what()));
       } catch (...) {
+        _services.logger.debug("removing corrupt local object: unknown error");
       }
     } catch (const std::exception& error) {
       note_read_failure(id, path, error);
@@ -864,7 +867,10 @@ bool StoragePool::remove(const ObjectId& id) {
     if (!store) continue;
     try {
       removed = store->remove(id) || removed;
+    } catch (const std::exception& error) {
+      _services.logger.debug("removing local object: " + std::string(error.what()));
     } catch (...) {
+      _services.logger.debug("removing local object: unknown error");
     }
   }
   return removed;
@@ -883,7 +889,10 @@ std::vector<ObjectId> StoragePool::list() const {
     try {
       const auto ids = store->list();
       unique.insert(ids.begin(), ids.end());
+    } catch (const std::exception& error) {
+      _services.logger.debug("listing local objects: " + std::string(error.what()));
     } catch (...) {
+      _services.logger.debug("listing local objects: unknown error");
     }
   }
   return {unique.begin(), unique.end()};
@@ -1048,7 +1057,10 @@ StoragePool::MaintenanceResult StoragePool::rebalance_step(uint64_t budget_bytes
             holders.push_back({preferred, preferred_store});
             preferred_has = true;
           }
+        } catch (const std::exception& error) {
+          _services.logger.debug("rebalancing to preferred backend: " + std::string(error.what()));
         } catch (...) {
+          _services.logger.debug("rebalancing to preferred backend: unknown error");
         }
       }
     }
@@ -1058,7 +1070,10 @@ StoragePool::MaintenanceResult StoragePool::rebalance_step(uint64_t budget_bytes
         if (holder.backend == preferred) continue;
         try {
           (void)holder.store->remove(id);
+        } catch (const std::exception& error) {
+          _services.logger.debug("removing rebalanced duplicate: " + std::string(error.what()));
         } catch (...) {
+          _services.logger.debug("removing rebalanced duplicate: unknown error");
         }
       }
     }
@@ -1098,7 +1113,10 @@ StoragePool::MaintenanceResult StoragePool::scrub_step(uint64_t budget_bytes, si
       _services.logger.warn("removing corrupt local object " + to_string(item->id) + " on " + item->path.string() + ": " + error.what());
       try {
         (void)item->store->remove(item->id);
+      } catch (const std::exception& error) {
+        _services.logger.debug("removing corrupt local object: " + std::string(error.what()));
       } catch (...) {
+        _services.logger.debug("removing corrupt local object: unknown error");
       }
     } catch (const std::exception& error) {
       note_read_failure(item->id, item->path, error);

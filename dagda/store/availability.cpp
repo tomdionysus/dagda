@@ -61,6 +61,7 @@ class RemoteTrie final : public ledger::TrieSource {
   }
   uint64_t questions() const noexcept { return _questions; }
   uint64_t reply_bytes() const noexcept { return _bytes; }
+  std::chrono::milliseconds waited() const noexcept { return _waited; }
 
  private:
   TrieQuestion question(TrieQuestionKind kind, std::span<const ObjectTrie::Prefix> p) const {
@@ -71,8 +72,10 @@ class RemoteTrie final : public ledger::TrieSource {
     return out;
   }
   Bytes ask(const TrieQuestion& question) {
+    const auto started = std::chrono::steady_clock::now();
     auto outcome =
         _routes.call_and_wait(_peer, message::trie_diff, ledger::encode_trie_question(question), dannan::sched::FrameType::speculative, _deadline, _watch);
+    _waited += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     ++_questions;
     if (!outcome.reply) throw std::runtime_error("peer did not answer trie_diff: " + (outcome.failure.empty() ? std::string("no reply") : outcome.failure));
     if (outcome.reply->type != message::trie_diff_reply) {
@@ -91,6 +94,7 @@ class RemoteTrie final : public ledger::TrieSource {
   dannan::identity::Hash256 _at{};
   uint64_t _questions = 0;
   uint64_t _bytes = 0;
+  std::chrono::milliseconds _waited{0};
 };
 
 }  // namespace
@@ -185,10 +189,14 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     ledger::PeerLacks lacks;
     lacks.generation = inventory->generation();
     lacks.complete = true;
+    // Macha's lines (ledger/availability.cpp:101, service/availability_service.cpp:473-479
+    // at 98b816d): each peer that could not finish, then each diff.
+    for (size_t i = 0; i < hosts.size(); ++i)
+      if (!diffs[i].answered) _logger.debug("availability: a peer could not finish a trie diff: " + diffs[i].why);
     for (size_t i = 0; i < hosts.size(); ++i) {
       _logger.debug("availability diff " + std::string(diffs[i].answered ? "done" : "failed") +
                     " peer=" + dannan::identity::to_string(hosts[i].id).substr(0, 12) + " questions=" + std::to_string(tries[i].questions()) +
-                    " reply_bytes=" + std::to_string(tries[i].reply_bytes()) + (diffs[i].answered ? std::string() : " why=" + diffs[i].why));
+                    " reply_bytes=" + std::to_string(tries[i].reply_bytes()) + " waited_ms=" + std::to_string(tries[i].waited().count()));
       if (!diffs[i].answered) {
         lacks.complete = false;
         retry_needed = true;
@@ -212,11 +220,13 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     kept(next.survey.unknown);
   }
   if (ask || changed) _surveyed_cost = Clock::now() - refresh_started;
-  _logger.debug("availability surveyed generation=" + std::to_string(next.generation) +
-                " referenced=" + std::to_string(inventory->size(contract::RetentionClass::data)) + " missing_here=" + std::to_string(missing_here->size()) +
+  // Macha's line but its path table's word (table=), which stays in Macha's.
+  const auto referenced = inventory->size(contract::RetentionClass::data);
+  _logger.debug("availability surveyed generation=" + std::to_string(next.generation) + " referenced=" + std::to_string(referenced) +
+                " local=" + std::to_string(referenced - std::min<size_t>(referenced, missing_here->size())) +
                 " unavailable=" + std::to_string(next.survey.unavailable.size()) + " unknown=" + std::to_string(next.survey.unknown.size()) +
-                " peers=" + std::to_string(next.survey.peers_asked) + " peers_failed=" + std::to_string(next.survey.peers_failed) +
-                " rounds=" + std::to_string(next.survey.rounds) + " method=" + (ask ? "diff" : "gained"));
+                " peers=" + std::to_string(next.survey.peers_asked) + " peers_failed=" + std::to_string(next.survey.peers_failed) + " rounds=" +
+                std::to_string(next.survey.rounds) + " prefixes_asked=" + std::to_string(next.survey.nodes_asked) + " method=" + (ask ? "diff" : "gained"));
   _snapshot.publish(std::move(next));
   if (!ask) return false;
   if (retry_needed) {

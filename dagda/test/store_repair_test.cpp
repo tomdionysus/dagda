@@ -408,6 +408,34 @@ TEST(StoreRepair, APushSendsOnlyWhatTheListNames) {
   EXPECT_EQ(writer.store().repair_diagnostics().local_unreadable, 0u);
 }
 
+// Macha's distributed_store.cpp:2382-2397 at 98b816d: an object the store lists that
+// will not read back is counted, and said at WARN with the total, once a minute.
+TEST(StoreRepair, APushOfALocalObjectThatWillNotReadIsWarnedWithItsTotal) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(writer, 1, 64 * 1024, 91);
+  const auto id = live.front();
+  // Its sealed bytes damaged on the disk, where the store still lists it.
+  std::filesystem::path file;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(writer.backend()))
+    if (entry.is_regular_file() && entry.path().filename().string().find(to_string(id)) != std::string::npos) file = entry.path();
+  ASSERT_FALSE(file.empty());
+  {
+    std::fstream damage(file, std::ios::in | std::ios::out | std::ios::binary);
+    damage.seekp(static_cast<std::streamoff>(std::filesystem::file_size(file) / 2));
+    damage.write("damage", 6);
+  }
+  ASSERT_TRUE(writer.data().has(id));
+  for (int step = 0; step < 8 && writer.store().repair_diagnostics().local_unreadable == 0; ++step)
+    (void)writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), {id}}}), {}}, 64ULL * 1024 * 1024, 16);
+  EXPECT_EQ(writer.store().repair_diagnostics().local_unreadable, 1u);
+  EXPECT_TRUE(writer.log().saw(dannan::status::LogLevel::warn, "repair found a local object it cannot read back object=" + to_string(id) +
+                                                                   " local_unreadable_total=1; the store listed it but the read failed"));
+}
+
 // test_repair_probes_without_credit_and_transfers_only_with_it: credit pays
 // only for a transfer's bytes. A push waits for credit of its object's size;
 // a pull passes held objects by index, waits for an extent of credit, and
@@ -953,6 +981,9 @@ TEST(StoreRepair, RepairPassesUnavailableAndCountsUnsourceable) {
   const auto repeated = node.store().repair_diagnostics();
   EXPECT_EQ(repeated.unsourceable_sample.size(), 1u);
   EXPECT_GE(repeated.pull_unsourceable, after.pull_unsourceable);
+  // Macha's warning, once a minute (distributed_store.cpp:2377 at 98b816d).
+  EXPECT_TRUE(node.log().saw(dannan::status::LogLevel::warn, "repair cannot source an object this node should own object=" + to_string(missing) +
+                                                                 " unsourceable_total=1; the live namespace references it and no peer would supply it"));
 }
 
 // test_a_busy_peer_still_says_what_it_does_not_hold: a peer whose DATA

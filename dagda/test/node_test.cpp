@@ -85,6 +85,16 @@ TEST(Node, OpensAndStopsInOrderOnAFreshStateAndAReopenedOne) {
   auto& a = cluster.add("a", options);
   a.start();
   EXPECT_EQ(stages.take(), opens);
+  // Macha's journal at a start (local_state.cpp:102-119, retention.cpp:398 at 98b816d);
+  // Dagda's own steps below it, at debug.
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(a.log().saw(
+      LogLevel::info, "data io pressure gate enabled expected_ms=25+120/MiB slowdown_percent=300 release_percent=150 outlier_percent=1000 min_background=1"));
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "node data storage ready used=0 capacity="));
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "retention claims moved into the ledger data=0 control=0"));
+  EXPECT_FALSE(a.log().saw(LogLevel::info, "open storage-pool"));
+  EXPECT_TRUE(a.log().saw(LogLevel::debug, "open storage-pool"));
+  EXPECT_FALSE(a.log().saw(LogLevel::info, "node open: "));
   const auto data = test::numbered(7);
   const auto id = store::object_id(data);
   store::WriteOptions write;
@@ -111,6 +121,8 @@ TEST(Node, AV18DiskIsRefusedNamingTheMigrationAndNothingChanges) {
   auto why = refusal_of(a);
   EXPECT_NE(why.find("dagda-migrate --state " + a.state().string()), std::string::npos) << why;
   EXPECT_FALSE(a.running());
+  // Its v18 DATA disk is refused first: Macha's data storage line (local_state.cpp:127).
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::error, "node data storage recovery failed: "));
   EXPECT_EQ(test::legacy::tree_digest(a.state()), state_before);
   EXPECT_EQ(test::legacy::tree_digest(a.backend()), backend_before);
 
@@ -122,6 +134,8 @@ TEST(Node, AV18DiskIsRefusedNamingTheMigrationAndNothingChanges) {
   const auto b_before = test::legacy::tree_digest(b.state());
   why = refusal_of(b);
   EXPECT_NE(why.find("backend " + b.backend().string()), std::string::npos) << why;
+  // Refused as the DATA pool opens: Macha's data storage line (local_state.cpp:127).
+  EXPECT_TRUE(b.log().saw(dannan::status::LogLevel::error, "node data storage recovery failed: "));
   EXPECT_NE(why.find("dagda-migrate"), std::string::npos) << why;
   EXPECT_EQ(test::legacy::tree_digest(b.state()), b_before);
 }
@@ -172,6 +186,8 @@ TEST(Node, ANodeWithoutCustodyIsRefused) {
   const auto why = refusal_of(a);
   EXPECT_NE(why.find("no key custody"), std::string::npos) << why;
   EXPECT_FALSE(a.running());
+  // Refused before any disk: Macha's local state line (local_state.cpp:183 at 98b816d).
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::error, "node local state recovery failed: "));
 }
 
 // The storage lock on the state and every root: a second node on the same
@@ -338,6 +354,8 @@ TEST(Node, NoBackendOnlineIsReadyButDegraded) {
   };
   EXPECT_TRUE(a.data().degraded());
   EXPECT_TRUE(degraded());
+  // Macha's words (local_state.cpp:121 at 98b816d).
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "node data storage degraded: no disk online of 1; running without one until it returns"));
   EXPECT_TRUE(a.context().readiness().complete());
   auto backends = node.options().pool.backends;
   backends[0].path = cluster.dir() / "good";

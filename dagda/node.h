@@ -550,6 +550,8 @@ class Node {
   void persist_scrub_due() DANNAN_REQUIRES(_maintenance_mutex);
 
   dannan::Context& _context;
+  // The DATA pool is opening: a refusal now is Macha's data storage recovery failing.
+  bool _opening_data = false;
   NodeOptions _options;
   const dannan::status::ScopedLogger _logger;
   dannan::supervise::StartupProgress _progress;

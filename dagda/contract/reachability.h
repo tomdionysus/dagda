@@ -40,6 +40,11 @@ struct Reachability {
   bool complete = false;
   // The inventory's stamp: the generation answered for.
   uint64_t generation = 0;
+  // Inventory only, for the journal: what the owner's state held, as Macha's
+  // maintenance-inventory line says it (entries in its namespace, extents named).
+  // Zero when the owner keeps no such counts.
+  uint64_t entries = 0;
+  uint64_t extents = 0;
   // The release's stamp: the head answered for, and the clock of the claim
   // writes it has observed.
   Hash256 head{};

@@ -1346,6 +1346,23 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
   const auto pause = [&stop] {
     if (stop.stop_requested()) throw MaintenanceStopping{};
   };
+  // A failed run: retried after a backoff, and repair goes on beside it unless the
+  // replica cannot yet be a source. `why` empty is Macha's line without a reason.
+  const auto deferred = [&](const std::string& validation, const std::string& why) {
+    note_validation(false, validation);
+    _failed = true;
+    turn.ran = true;
+    turn.failed = true;
+    turn.why = why.empty() ? validation : why;
+    _retry_due = _time.now() + _retry_backoff;
+    _retry_backoff = std::min(_options.retry_backoff_most, std::max(_retry_backoff * 2, _options.retry_backoff));
+    // Failing to reconcile every active head must not stall non-destructive repair: a
+    // locally committed branch is still a valid reachability source.
+    if (replica.recovery_required() || replica.committed_generation() <= 1)
+      turn.hold_pass = true;
+    else
+      _logger.debug("metadata repair deferred; continuing non-destructive maintenance" + (why.empty() ? std::string() : ": " + why));
+  };
   try {
     enter_stage("metadata-repair-begin");
     repair_once(dannan::sched::WorkContext(FrameType::speculative, {}, nullptr, "heads::metadata-repair"), pause);
@@ -1357,20 +1374,10 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
   } catch (const MaintenanceStopping&) {
     throw;
   } catch (const std::exception& error) {
-    note_validation(false, error.what());
-    _failed = true;
-    turn.ran = true;
-    turn.failed = true;
-    turn.why = error.what();
-    _retry_due = _time.now() + _retry_backoff;
-    _retry_backoff = std::min(_options.retry_backoff_most, std::max(_retry_backoff * 2, _options.retry_backoff));
-    // Failing to reconcile every active head must not stall non-destructive repair: a
-    // locally committed branch is still a valid reachability source.
-    if (replica.recovery_required() || replica.committed_generation() <= 1) {
-      turn.hold_pass = true;
-    } else {
-      _logger.debug("metadata repair deferred; continuing non-destructive maintenance: " + turn.why);
-    }
+    deferred(error.what(), error.what());
+  } catch (...) {
+    // Macha's catch of anything else (maintenance.cpp:517-531 at 98b816d): no reason to give.
+    deferred("metadata validation failed", {});
   }
   return turn;
 }

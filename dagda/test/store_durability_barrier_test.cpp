@@ -25,6 +25,7 @@
 #include <atomic>
 #include <boost/asio/io_context.hpp>
 #include <chrono>
+#include <filesystem>
 #include <future>
 #include <map>
 #include <vector>
@@ -150,6 +151,10 @@ TEST(StoreDurabilityBarrier, AStaleProcessEpochIsRefused) {
   ASSERT_TRUE(refusal);
   EXPECT_EQ(refusal->status, 409);
   EXPECT_EQ(refusal->code, "epoch_changed");
+  // Macha's line (storage_server.cpp:310 at 98b816d).
+  EXPECT_TRUE(server.log().saw(dannan::status::LogLevel::debug,
+                               "object durability barrier refused: epoch changed expected=" + dannan::identity::to_string(stale.epoch).substr(0, 8) +
+                                   " current=" + dannan::identity::to_string(ticket.epoch).substr(0, 8) + " domain="));
 
   EXPECT_TRUE(answered_ok(wire.barrier(ticket)));
 }
@@ -369,6 +374,7 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
   };
   std::vector<WriteEvidence> before;
   for (uint8_t i = 0; i < 6; ++i) before.push_back(write(static_cast<uint8_t>(200 + i)));
+  const auto old_epoch = b.context().identity().durability_epoch();
   b.restart();
   ASSERT_TRUE(cluster.converged());
   AskedBarriers asked;
@@ -412,6 +418,38 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
   }
   EXPECT_EQ(plain, 2u);
   EXPECT_EQ(probes, 1u);
+
+  // Macha's lines on both sides (storage_server.cpp:331, distributed_store.cpp:725 and
+  // :761 at 98b816d): the peer answers from disk, this node says what it re-derived,
+  // and the copy the peer lost leaves its write short.
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(b.log().saw(LogLevel::info,
+                          "object durability re-derived after epoch change present=5/6 expected=" + dannan::identity::to_string(old_epoch).substr(0, 8) +
+                              " current=" + dannan::identity::to_string(epoch).substr(0, 8)));
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=5 absent=1 peers=1"));
+  EXPECT_TRUE(a.log().saw(LogLevel::debug, "object durability quorum unavailable id=" + to_string(before.back().id) + " required=2 durable=1 transient=no"));
+}
+
+// Macha's distributed_store.cpp:580 at 98b816d: a local barrier that fails is warned
+// of, and the copy stays owed.
+TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
+  Cluster cluster;
+  // Nothing flushed by itself before the backend goes.
+  auto one = options(1);
+  one.durability_window = 2s;
+  auto& a = cluster.add("a", one);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(32 * 1024, 77);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_NE(written.on(a.id()), nullptr);
+  ASSERT_TRUE(written.on(a.id())->durability);
+  // The device's file and the filesystem's representative gone: no barrier can pass.
+  std::filesystem::remove_all(a.backend());
+  const auto evidence = a.store().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_FALSE(evidence->met);
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "local storage durability barrier failed: "));
 }
 
 // The asynchronous form posts its evidence, never inline, in the order asked;
