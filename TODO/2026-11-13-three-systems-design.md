@@ -229,6 +229,11 @@ Mac and on build-host:
 3. Lugh's shape (Lugh's review, 5): one space of 50,000 keys (values under 4 KiB) taking 50 commits a second for a
    minute from several nodes, and the time from a commit on node A to `watch()` and `changed()` on node B: the
    "disabled on A, refused on B" latency.
+   And Lugh's leases (the maintainer, 2026-11-13: TOTP replay protection takes a per-user lease, so leases are on the sign-in
+   path): acquire and release at 50 a second cluster-wide over 10,000 user keys, each held under a second, timed at
+   p50 and p99, since the acquire adds to a person's sign-in. One lease space with a key per user, not a scope per
+   user (10,000 spaces). An acquire is a commit on the lease space that must reach its replicas before it is granted,
+   so this times that commit, not a local one.
 4. Dannan's small-message rate between two real machines (Lir's N1; Dannan's to run, Dagda's figure depends on it).
 
 If (1) carries Lir's session and retained rates, heads stay heads for those; the log is still the noun for inflight
