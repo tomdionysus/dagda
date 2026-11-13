@@ -172,6 +172,11 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
   _presence_thread = std::jthread([this](std::stop_token stop) { _threads.once("local-store-presence", [this, stop] { warm_presence_index(stop); }); });
 }
 
+void LocalStore::join_background_threads() {
+  if (_scan_thread.joinable()) _scan_thread.join();
+  if (_presence_thread.joinable()) _presence_thread.join();
+}
+
 void LocalStore::mark_scan_failed() {
   {
     // As the scan's completion: under the mutex the waiters check it under.
