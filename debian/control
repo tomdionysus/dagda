@@ -1,0 +1,62 @@
+Source: dagda
+Section: libs
+Priority: optional
+Maintainer: tomdionysus <tomdionysus@users.noreply.github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake,
+ libdannan-dev (>= 0.5.6),
+ libboost-dev (>= 1.83),
+ libssl-dev,
+ libgtest-dev <!nocheck>,
+ libgmock-dev <!nocheck>,
+Standards-Version: 4.7.0
+Homepage: https://github.com/tomdionysus/dagda
+Vcs-Git: https://github.com/tomdionysus/dagda.git
+Vcs-Browser: https://github.com/tomdionysus/dagda
+Rules-Requires-Root: no
+
+Package: libdagda0.1.4
+Architecture: any
+Multi-Arch: same
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: distributed object store for a cluster of trusted machines
+ Dagda is the store: content-addressed objects held on several nodes with
+ evidence of where each copy is, claims and collection, leases, domains with
+ their own keys, and the heads that name what a system has written. It is a
+ hosted system on Dannan, the network layer.
+ .
+ This package holds the shared library. Each release is its own package,
+ since no release promises another's ABI yet.
+
+Package: libdagda-dev
+Architecture: any
+Multi-Arch: same
+Section: libdevel
+Depends:
+ libdagda0.1.4 (= ${binary:Version}),
+ libdannan-dev (>= 0.5.6),
+ ${misc:Depends},
+Description: distributed object store for a cluster of trusted machines (development files)
+ Dagda is the store: content-addressed objects held on several nodes with
+ evidence of where each copy is, claims and collection, leases, domains with
+ their own keys, and the heads that name what a system has written.
+ .
+ This package holds the headers and the CMake package configuration:
+ find_package(dagda CONFIG), then link dagda::dagda, which brings Dannan.
+
+Package: dagda-tools
+Architecture: any
+Section: admin
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: distributed object store for a cluster of trusted machines (operator tools)
+ Dagda is the store: content-addressed objects held on several nodes with
+ evidence of where each copy is, claims and collection, leases, domains with
+ their own keys, and the heads that name what a system has written.
+ .
+ This package holds dagda-migrate, which moves a Macha node's layout v18
+ state and disks to Dagda's layout v19 in place, and proves the data survived.
