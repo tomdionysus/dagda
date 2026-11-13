@@ -1,22 +1,27 @@
 # Packaging
 
-Dagda installs as Dannan does:
+Dagda is packaged for Debian trixie, on x86-64 and arm64, as Dannan is:
 
-- the shared library, whose SONAME is the whole version (`libdagda.so.0.1.4`),
-  because no release promises another's ABI yet, so a host built against one
-  refuses to load another;
-- the headers under `include/dagda/`, in their tree, so `"dagda/<subsystem>/x.h"`
-  includes the same installed as in the repository; the tests and their
-  fixtures are not installed;
-- the CMake package configuration under `lib/cmake/dagda/`:
-  `find_package(dagda <version> CONFIG)` accepts only that exact version, and
-  finds Dannan, at the version Dagda pins, through it; then link `dagda::dagda`;
-- `dagda-migrate` and its manual page, which move a Macha node's layout v18
-  store to v19 in place and prove the data survived (`docs/migration.md`).
+- `libdagda<version>` (for example `libdagda0.1.4`): the shared library. Its
+  SONAME is the whole version, `libdagda.so.0.1.4`, because no release
+  promises another's ABI yet; each release is its own package, so two can be
+  installed side by side and a host built against one refuses to load another.
+- `libdagda-dev`: the headers, the `libdagda.so` link and the CMake package
+  configuration. It depends on exactly its own release's library and on
+  `libdannan-dev`; `find_package(dagda <version> CONFIG)` accepts only that
+  exact version, and finds Dannan through it.
+- `dagda-tools`: `dagda-migrate`, which moves a Macha node's layout v18 store
+  to v19 in place and proves the data survived (`docs/migration.md`).
+- Debug symbols for each, as `-dbgsym` packages.
 
-## Into a prefix
+The packages are built with debhelper from `debian/`, driving the CMake build;
+the CMake install rules decide where every file goes, and `debian/rules` splits
+them between the packages.
 
-How the Macha port consumes Dagda beside Dannan:
+## Without packages
+
+The same install rules serve a prefix, which is how the Macha port consumes
+Dagda beside Dannan:
 
 ```sh
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
@@ -27,3 +32,29 @@ cmake --build build/release -j8 && cmake --install build/release
 `test/package` is a consumer of that install: configure it with
 `-DDAGDA_EXPECTED_VERSION=<version>` and both prefixes on `CMAKE_PREFIX_PATH`,
 build it and run `consumer <version>`; it exits 0 when it linked that version.
+
+## Building
+
+On Debian trixie, natively for the machine's architecture, from a git
+checkout, with Dannan's `libdannan-dev` installed:
+
+```sh
+sudo apt install dpkg-dev
+sudo apt build-dep ./
+tools/build-deb.sh
+```
+
+The packages are written to `build-deb/`. The tests run inside the build;
+`DEB_BUILD_OPTIONS=nocheck` skips them.
+
+## Versions
+
+The version comes from `git describe`. The tag `0.1.4` gives `0.1.4`; a build
+three commits later gives `0.1.4+git3.gabc1234`, which sorts after `0.1.4` and
+before `0.1.5`. Release tags sit on `main`, so a build on `develop`, where
+none is reachable, gives the tree's version and the commit,
+`0.1.4+git.gabc1234`. Uncommitted changes add `.dirty`. A build of a tag must
+match `project(dagda VERSION ...)` in `CMakeLists.txt`, and the library's
+package named in `debian/control` must be `libdagda` and that version, or the
+script refuses it. A release's version commit changes all three. Only builds of
+a tag are released.
