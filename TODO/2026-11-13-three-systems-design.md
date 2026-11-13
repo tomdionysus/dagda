@@ -108,9 +108,10 @@ and the wrong cost model at 30 a second per shard. So a log, whose semantics are
   node_local), k, a domain, a tick, bounds (count, age, bytes; and count per stream), what a bound does (drop the
   oldest, or refuse the append), and the tombstone window.
 - `Logs::append(log, entries, level, deadline, executor, done)`: entries are (dot, stream key, bytes up to the inline
-  limit, expiry). Appends arriving within a tick are one group commit: one write to the log's segment, one sync, one
-  message to each replica carrying all of them. A tick of zero commits each append at once, for an owner that batches
-  already (R7). `replicated` returns when k replicas have synced the group; the evidence names them.
+  limit, expiry). Appends arriving within a tick, to any of the node's logs, are one group commit: one write to the
+  node's shared segment, one sync, one message to each replica node carrying all of them. The tick is 10 or 20 ms, as
+  the Pi run favours; Lir hands each message to `append` and the tick groups them (its zero tick, R7, withdrawn
+  2026-11-13). `replicated` returns when k replicas have synced the group; the evidence names them.
 - `Logs::ack(log, dot, stage, bytes)`: an ack is an entry naming another by dot, carrying a stage and a few owner bytes
   (at most 256), so a per-message state machine (QoS 2: PUBLISH sent with its packet id, PUBREC, PUBREL, PUBCOMP) lives
   in its acks (R3). Dagda never knows what an ack means or which acks an entry needs (R1).
@@ -233,7 +234,7 @@ Mac and on build-host:
 1. Today's head commit at 1, 16 and 256 spaces on one node and on three, with a small register-map state and with a
    tree: commits a second, p50 and p99, where the time goes (dot, tree nodes, claim barrier, sync).
 2. A prototype log with Lir's real pattern (Lir's review, order): batched appends, per-edge acks with stage bytes, a
-   final retire, ticks of 0 and 10-20 ms, k = 2 over three nodes: appends a second and the latency from append to
+   final retire, ticks of 10 and 20 ms, k = 2 over three nodes: appends a second and the latency from append to
    `replicated`; and the same at 256 and 1,280 logs and spaces on a node, for memory, file handles and channels.
 3. Lugh's shape (Lugh's review, 5): one space of 50,000 keys (values under 4 KiB) taking 50 commits a second for a
    minute from several nodes, and the time from a commit on node A to `watch()` and `changed()` on node B: the
@@ -248,7 +249,7 @@ Mac and on build-host:
 If (1) carries Lir's session and retained rates, heads stay heads for those; the log is still the noun for inflight
 and queues. The pass mark for (2) is the maintainer's PUBACK target (2026-11-13, relayed by the Lir session): p99 under 50 ms at QoS 1
 with k = 2, for the whole path (Lir's tick, the append, the group commit synced on k replicas), at about 8,000
-appends a second over three nodes, reported at p50 and p99 for ticks of 0 and 10-20 ms, on the Mac and then the Pis.
+appends a second over three nodes, reported at p50 and p99 for ticks of 10 and 20 ms, on the Mac and then the Pis.
 The appends come from a node outside the replica set, as Lir's publishing node usually is, and the run includes a
 lease change that moves a third of the shards, timing each new holder's scan. On the Mac, three node processes on
 loopback; on the Pis, three processes on build-host, taking turns with Macha (the maintainer, 2026-11-13). The prototype is
