@@ -293,10 +293,10 @@ no fixture of their own (rule 3).
   it waits (`dannan/net/scheduler.h:101-103`). On the Mac at 8,000 single-message calls a second a replica grouped at
   most 2 calls, and Dannan refused 309,385 of 479,993; batched per tick, nothing was refused. Dagda's log (slice 4)
   needs a reply handle callable once from any thread, so thousands of calls can wait on a sync while holding no
-  worker. Tom ruled (2026-11-13, to the Dannan session): first in Dannan 0.6.0, after 0.5.7. A handler returns
+  worker. Tom ruled (2026-11-13, to the Dannan session): first in Dannan 0.7.0, after the ABI promise (0.6.0). A handler returns
   `Handled::deferred()` and keeps the session's `net::Reply`; deferred answers count against a per-class bound and
-  end at the caller's deadline. Slice 4 builds on 0.6.0, and its acceptance is dagda-bench's: one call per message at
-  8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. 0.6.0 keeps the synchronous
+  end at the caller's deadline. Slice 4 builds on 0.7.0, and its acceptance is dagda-bench's: one call per message at
+  8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. 0.7.0 keeps the synchronous
   handler as an overload wrapping into the new one (the Dannan session, 2026-11-13), so Dagda's and Macha's handlers
   change only where they defer: the move is a relink and the new calls.
 - Not needed from Dannan: a larger advert cap (Dagda aggregates, and puts fast generations on channels), fan-out
@@ -361,7 +361,8 @@ comes first, as Tom ruled.
    catalogue as v3.
 4. The built-in register-map and counter-map merges, retained as a register-map space; the advert aggregate in Dagda,
    generations on channels, Dannan's cap unchanged.
-5. Later the same day: 0.1.5 builds on Dannan 0.5.7, the ABI-promise release (SONAME `libdannan.so.0.5`,
-   SameMinorVersion), not 0.5.6; it is tagged after the x86-64 Docker build (debs, tests, lintian) and the arm64 build
+5. Later the same day: 0.1.5 builds on Dannan 0.6.0, the ABI-promise release (SONAME `libdannan.so.0.6`,
+   SameMinorVersion; first named 0.5.7, renumbered by Tom because 0.5.4 had already changed `libdannan.so.0.5`
+   under Macha 0.94.x), not 0.5.6; it is tagged after the x86-64 Docker build (debs, tests, lintian) and the arm64 build
    on corvus-develop (GCC Release with warnings as errors, tests, debs) both pass. Slice 0's measurement starts on the
    Mac meanwhile. Alpine is not now, for Dagda as for Dannan.
