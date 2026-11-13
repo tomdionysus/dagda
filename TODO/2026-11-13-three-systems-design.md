@@ -283,7 +283,11 @@ no fixture of their own (rule 3).
   it waits (`dannan/net/scheduler.h:101-103`). On the Mac at 8,000 single-message calls a second a replica grouped at
   most 2 calls, and Dannan refused 309,385 of 479,993; batched per tick, nothing was refused. Dagda's log (slice 4)
   needs a reply handle callable once from any thread, so thousands of calls can wait on a sync while holding no
-  worker. Raised with the Dannan session; its place in Dannan's order is Tom's.
+  worker. Tom ruled (2026-11-13, to the Dannan session): first in Dannan 0.6.0, after 0.5.7. A handler returns
+  `Handled::deferred()` and keeps the session's `net::Reply`; deferred answers count against a per-class bound and
+  end at the caller's deadline. Slice 4 builds on 0.6.0, and its acceptance is dagda-bench's: one call per message at
+  8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. RequestHandler's signature changes in
+  0.6.0, so Dagda's move to it is a source change in every handler, and Macha's port sees the same.
 - Not needed from Dannan: a larger advert cap (Dagda aggregates, and puts fast generations on channels), fan-out
   (Lir's own, on Dannan's channels).
 - The write floor already asks Dannan: every replica storing a write, a claim, a delete or a head commit calls
