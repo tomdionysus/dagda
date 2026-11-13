@@ -13,3 +13,4 @@ target_link_libraries(dagda-migrate PRIVATE dagda dagda_warnings)
 
 # Installed: Macha's install carries it to the nodes for the flag day.
 install(TARGETS dagda-migrate RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES "${PROJECT_SOURCE_DIR}/docs/man/dagda-migrate.1" DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)

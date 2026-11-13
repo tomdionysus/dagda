@@ -1,0 +1,141 @@
+.\" Dagda - The Store
+.\" Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+.\" Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+.TH DAGDA-MIGRATE 1 2026-11-13 Dagda "Dagda tools"
+.SH NAME
+dagda-migrate \- move a Macha node's store from layout v18 to v19 in place
+.SH SYNOPSIS
+.B dagda-migrate
+.B \-\-state
+.I DIR
+.B \-\-node-state
+.I DIR
+.B \-\-cluster-key
+.I FILE
+.I KEY
+.RB [ \-\-backend
+.IR DIR ]...
+.RB [ \-\-control
+.IR DIR ]
+.RB [ \-\-cache
+.IR DIR ]
+.RB [ \-\-heads ]
+.RB [ \-\-space
+.IR NAME ]
+.RB [ \-\-dry-run ]
+.RB [ \-\-reverse ]
+.br
+.B dagda-migrate
+.B \-\-state
+.I DIR
+.B \-\-node-state
+.I DIR
+.B \-\-cluster-key
+.I FILE
+.I KEY
+.RB [ \-\-backend
+.IR DIR ]...
+.RB [ \-\-control
+.IR DIR ]
+.RB [ \-\-cache
+.IR DIR ]
+.RB [ \-\-space
+.IR NAME ]
+.B \-\-write-manifest
+.I FILE
+.RB [ \-\-resume ]
+.br
+.B dagda-migrate
+.B \-\-compare-before
+.I FILE
+.B \-\-compare-after
+.I FILE
+.RB [ \-\-expect-before
+.IR 18 ]
+.RB [ \-\-expect-after
+.IR 19 ]
+.br
+.B dagda-migrate
+.B \-\-version
+.SH DESCRIPTION
+.B dagda-migrate
+moves a node's layout v18 state and disks, Macha's, to Dagda's layout v19 in
+place, with the node stopped. It is the only way a v18 disk becomes v19: the
+store refuses one at open. It does not need twice the storage, and an
+interrupted run is finished by running it again.
+.PP
+The manifest form reads the whole state and writes nothing under it: run it
+once before the migration and once after, then compare the two. The compare
+form reports every difference by name.
+.SH OPTIONS
+.TP
+.BI \-\-state " DIR"
+Dagda's state directory: the storage-layout marker, the ledgers and the
+control store.
+.TP
+.BI \-\-node-state " DIR"
+Dannan's state directory, where the node's key custody lives.
+.TP
+.BI \-\-cluster-key " FILE"
+The cluster key file.
+.TP
+.I KEY
+Opens the node's custody:
+.BI \-\-passphrase-env " VAR"
+for the passphrase in that environment variable, or
+.BI \-\-credential " NAME"
+with an optional
+.BI \-\-credentials-dir " DIR" \fR,
+as the node takes it.
+.TP
+.BI \-\-backend " DIR"
+Each DATA backend's path as the node's configuration names it; repeated.
+.TP
+.BI \-\-control " DIR"
+The control store's path, when it is not
+.IR STATE /metadata-objects.
+.TP
+.BI \-\-cache " DIR"
+The persistent cache's path, if the node has one.
+.TP
+.B \-\-heads
+Also moves Macha's metadata and the cache seed to the heads' layout. On a
+state already at v19 it runs that pass alone.
+.TP
+.BI \-\-space " NAME"
+The head space;
+.B macha/namespace
+unless given.
+.TP
+.B \-\-dry-run
+Classifies and reports, and writes nothing.
+.TP
+.B \-\-reverse
+Goes back from v19 to v18, the metadata included, so the node can return to
+Macha 0.93.
+.TP
+.BI \-\-write-manifest " FILE"
+Writes the state's manifest to
+.IR FILE .
+.TP
+.B \-\-resume
+Continues a manifest pass from its partial. It is refused while another pass
+is writing that partial.
+.TP
+.BI \-\-compare-before " FILE" "\fR, \fP\-\-compare-after " FILE
+The two manifests to compare.
+.TP
+.BI \-\-expect-before " N" "\fR, \fP\-\-expect-after " N
+The layouts the two manifests must record; 18 and 19 unless given.
+.TP
+.B \-\-version
+Prints the version.
+.SH EXIT STATUS
+Migrating: 0 when the state is v19, migrated now or already; 1 when refused or
+failed, the reason on standard error; 2 for a usage error.
+.PP
+Writing a manifest: 0 when the manifest is whole, which says nothing of what is
+in it.
+.PP
+Comparing: 0 only when nothing differs and everything was checked; 1 for any
+difference, anything not checked, or a manifest that is not whole.
