@@ -749,8 +749,8 @@ std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
       _services.logger.warn("discarding corrupt local object " + to_string(id) + " on " + path.string() + ": " + error.what());
       try {
         (void)store->remove(id);
-      } catch (const std::exception& error) {
-        _services.logger.debug("removing corrupt local object: " + std::string(error.what()));
+      } catch (const std::exception& removal) {
+        _services.logger.debug("removing corrupt local object: " + std::string(removal.what()));
       } catch (...) {
         _services.logger.debug("removing corrupt local object: unknown error");
       }
@@ -1113,8 +1113,8 @@ StoragePool::MaintenanceResult StoragePool::scrub_step(uint64_t budget_bytes, si
       _services.logger.warn("removing corrupt local object " + to_string(item->id) + " on " + item->path.string() + ": " + error.what());
       try {
         (void)item->store->remove(item->id);
-      } catch (const std::exception& error) {
-        _services.logger.debug("removing corrupt local object: " + std::string(error.what()));
+      } catch (const std::exception& removal) {
+        _services.logger.debug("removing corrupt local object: " + std::string(removal.what()));
       } catch (...) {
         _services.logger.debug("removing corrupt local object: unknown error");
       }
