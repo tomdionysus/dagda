@@ -121,6 +121,20 @@ and the wrong cost model at 30 a second per shard. So a log, whose semantics are
   in seq order, after a merge too (R4); `scan(log, after, budget)` pages every live entry of the log, for a new lease
   holder resuming what is owed (R5); `live(log, stream)` counts a stream, and a per-stream count bound applies at
   append (R6). `watch` as for spaces.
+- The dot is the owner's, taken as given (Lir's question 4): it is the owner's dedup key on its own wire. Dagda orders
+  by it and treats a second append of a dot it holds as the same entry. A replica refuses an entry whose dot's origin
+  is not the appending node, as it refuses a write the scope check refuses. That check is on appends only: an ack or a
+  retire may name any entry's dot, whoever wrote it (Lir's lease holder retires a dead publisher's entries, and every
+  target node acks entries others appended), and passes subject only to the scope check. An ack is identified by its
+  writer, the dot it names and its stage, so the writer of the ack is always the node sending it. Dagda does not tie
+  retires to a lease: the log knows nothing of leases, and the owner's own rule decides who retires.
+- Any node may append, not only a replica (Lir's question 1). The appender sends the entries to the log's k replicas at
+  once, as an object write goes to its replicas; each replica group-commits them with the other appends of its tick,
+  and the evidence names each replica that synced. There is no relay through a holder, so the PUBACK path is one round
+  to the replicas plus their sync.
+- Each replica keeps an index of its live entries in memory (dot to segment offset), so `scan` reads only live
+  entries, not whole segments (Lir's question 2). A lease change moves about 3/N of a cluster's shards at once, and
+  each new holder scans its shard; that burst is in the measurement.
 - Merge is fixed, not the owner's: entries are the union by dot less the tombstones, and an entry's acks the union of
   its acks. That is Lir's split rule (union of entries; per entry, what is still owed is what its acks do not cover),
   and it needs no lease to stay correct; the lease keeps the steady state to one writer.
@@ -150,7 +164,9 @@ Owners still bring their own codec and merge. Dagda also offers two it would oth
   tombstones dropped after a window the owner names, and an expiry per key after which the key reads as absent and
   is dropped with no commit (MQTT 5's message expiry on a retained value; Lir R9). Lir's retained (G3) and Lugh's
   JWKS (G9) are each a space of this; "retained" is then not a separate noun.
-  A node that does not hold a space can still follow which keys change: `Heads::watch_keys(space)` subscribes to the
+  A node that does not hold a space can still follow which keys change: `Heads::watch_keys(space or name prefix)`
+  subscribes, one subscription for a family (`lir/retained/` covers all 256; Dannan's channels subscribe by prefix;
+  Lir's question 3), to the
   space's notify channel, on which each commit publishes its changed keys (not values). Lir keeps its index of retained
   topics on every node from that, and a wildcard SUBSCRIBE reads values from the holders with a forwarded paged
   `entries` (Lir R10). Both are served; the notice is the one Lir prefers. Its cost (changed keys times subscribing
@@ -216,7 +232,14 @@ Mac and on build-host:
 4. Dannan's small-message rate between two real machines (Lir's N1; Dannan's to run, Dagda's figure depends on it).
 
 If (1) carries Lir's session and retained rates, heads stay heads for those; the log is still the noun for inflight
-and queues. If (2) does not reach 8,000 a second at k = 2, the log's design changes before anything is built on it.
+and queues. The pass mark for (2) is the maintainer's PUBACK target (2026-11-13, relayed by the Lir session): p99 under 50 ms at QoS 1
+with k = 2, for the whole path (Lir's tick, the append, the group commit synced on k replicas), at about 8,000
+appends a second over three nodes, reported at p50 and p99 for ticks of 0 and 10-20 ms, on the Mac and then the Pis.
+The appends come from a node outside the replica set, as Lir's publishing node usually is, and the run includes a
+lease change that moves a third of the shards, timing each new holder's scan. On the Mac, three node processes on
+loopback; on the Pis, three processes on build-host, taking turns with Macha (the maintainer, 2026-11-13). The prototype is
+throwaway, inside `dagda-bench`; slice 4's log is written test-first from this design.
+If (2) misses it, the log's design changes before anything is built on it.
 
 ### The contract
 
@@ -298,7 +321,7 @@ were. Sessions, not dates: one session is about a day of this project's work as 
 | 3 | Register map and counter map merges (D6, D7), head-backed leases (D5) | Lir's retained and leases; Lugh's JWKS, back-off, key rotation | 3 |
 | 4 | Logs (D9) at the measured rate (D8); contract v2 frozen | Lir's inflight, session queues and history; Lugh's audit chain; Lir pins | 5 |
 | 5 | The domain catalogue and blind holders (D10), as contract v3 beside v2 | Lugh's genesis and capability-following keys | 4 |
-| - | Alpine (D14): a build and test run on musl and GCC 15, at slice 1's tag | Raven | 1 |
+| - | Alpine (D14): not now (the maintainer, 2026-11-13, as for Dannan's Alpine CI); with Dannan's Alpine work, since Dagda builds on Dannan | Raven | - |
 
 Slices 1 to 3 run beside Macha's port (Macha builds on `0.1.4` now, and on `0.1.5`). A defect the port finds still
 comes first, as the maintainer ruled.
@@ -312,3 +335,7 @@ comes first, as the maintainer ruled.
    catalogue as v3.
 4. The built-in register-map and counter-map merges, retained as a register-map space; the advert aggregate in Dagda,
    generations on channels, Dannan's cap unchanged.
+5. Later the same day: 0.1.5 builds on Dannan 0.5.7, the ABI-promise release (SONAME `libdannan.so.0.5`,
+   SameMinorVersion), not 0.5.6; it is tagged after the x86-64 Docker build (debs, tests, lintian) and the arm64 build
+   on build-host (GCC Release with warnings as errors, tests, debs) both pass. Slice 0's measurement starts on the
+   Mac meanwhile. Alpine is not now, for Dagda as for Dannan.
