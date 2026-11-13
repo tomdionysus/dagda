@@ -55,8 +55,10 @@ session's reading, and mine.)
 
 The question: does Macha move onto Dagda with no change in data, functionality, reliability and performance? The only
 answer that counts is Yes, with nothing attached. A bounded claim, an exception list or a tolerance is a No. Macha stays
-frozen at `9a08846`. There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
-needs them. Tell the Macha session when the answer is Yes.
+frozen at `9a08846`. ~~There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
+needs them.~~ **Superseded (the maintainer, 2026-11-13): "It needs to support Macha, Lir, and Lugh and not as afterthoughts."**
+Next: a design serving all three as first-class, with the Lir and Lugh sessions, to the maintainer before anything changes; then
+`0.1.5` (Dannan 0.5.6 and the Debian packages, on `feature/dannan-056`). Tell the Macha session when the answer is Yes.
 
 **How it ends (the maintainer, relayed, 2026-11-06):**
 - This plan ends with a capabilities report to the Macha session, with the evidence for each, naming what the port needs from Dagda,
