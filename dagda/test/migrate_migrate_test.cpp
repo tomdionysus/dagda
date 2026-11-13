@@ -811,7 +811,7 @@ TEST(MigrateTool, DagdaMigrateRunsTheMigration) {
   {
     const auto [code, output] = run({"--version"}, "version.log");
     EXPECT_EQ(code, std::optional<int>(0));
-    EXPECT_EQ(output.substr(0, 6), "0.1.2 ");
+    EXPECT_EQ(output.substr(0, 6), "0.1.3 ");
   }
   {
     const auto [code, output] = run({}, "usage.log");
