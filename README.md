@@ -104,14 +104,14 @@ state through Dagda, and learn who someone is from Lugh.
 ### Build
 
 A C++20 compiler, CMake 3.24 or later, Boost 1.83 or newer (Asio), OpenSSL 3 and
-GoogleTest, and an installed Dannan of the pinned minor version. Build the pinned Dannan
+GoogleTest, and an installed Dannan of exactly the pinned version. Build the pinned Dannan
 tag from the sibling checkout into the build tree once, then configure against it:
 
 ```bash
-git clone --branch 0.5.3 --depth 1 file://$PWD/../dannan build/deps/dannan-0.5.3
-cmake -S build/deps/dannan-0.5.3 -B build/deps/dannan-0.5.3-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.5.6 --depth 1 file://$PWD/../dannan build/deps/dannan-0.5.6
+cmake -S build/deps/dannan-0.5.6 -B build/deps/dannan-0.5.6-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.5.3-build -j8 && cmake --install build/deps/dannan-0.5.3-build
+cmake --build build/deps/dannan-0.5.6-build -j8 && cmake --install build/deps/dannan-0.5.6-build
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
   -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
