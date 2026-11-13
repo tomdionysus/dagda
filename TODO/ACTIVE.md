@@ -1,6 +1,6 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-12. `COMPLETED.md` is the record; the plan this file held until today (the ordered work of
+Last updated: 2026-11-13. `COMPLETED.md` is the record; the plan this file held until today (the ordered work of
 2026-11-06, the earlier table, Dannan as found, the approved plan of 2026-11-04, the port respec and what step 4
 waited on) is at the end of `COMPLETED.md`, "Archived from ACTIVE.md, 2026-11-12", word for word.
 
@@ -30,7 +30,8 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 ## While the port waits (the maintainer, 2026-11-12)
 
 Cleanup, testing, hardening and improvement in scope, and nothing else: the manifest's partial held by its pass
-(`0.1.2`), TSan on the Mac at the tag, the journal mapping, and this file. No change after the tag the Macha session
+(`0.1.2`), TSan on the Mac at the tag, the journal mapping, and this file; then, at the Macha session's ask, forked test
+children ending on their own sanitizer reports, with TSan on arm64 (`0.1.3`). No change after the tag the Macha session
 reviews unless the port or the maintainer asks for it.
 
 ## The goal (the maintainer, 2026-11-06, relayed by the Macha session)
