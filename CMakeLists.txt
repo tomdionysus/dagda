@@ -25,7 +25,10 @@ option(DAGDA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer where the compiler has it)" OFF)
 
 # The network layer, pinned by minor version (0.x: a minor is a new API), at least the patch that fixed what Dagda relies on.
-find_package(dannan 0.5.3 CONFIG REQUIRED)
+# One number for the build and the installed package's config, which a consumer meets (test/package).
+set(DAGDA_DANNAN_MINIMUM 0.5.3)
+find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
+# Where an install puts things; before any target names its install paths.
 include(GNUInstallDirs)
 
 add_library(dagda_warnings INTERFACE)

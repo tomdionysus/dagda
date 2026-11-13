@@ -10,3 +10,6 @@
 # repository version, as the tag and the CMake project version state it.
 add_executable(dagda-migrate dagda_migrate.cpp)
 target_link_libraries(dagda-migrate PRIVATE dagda dagda_warnings)
+
+# Installed: Macha's install carries it to the nodes for the flag day.
+install(TARGETS dagda-migrate RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
