@@ -16,14 +16,16 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as Tom
 
 ## Head and gates
 
-- **Tag `0.1.3`**, annotated, on `main`, the tag the port freezes Dagda on. Since `0.1.0`: the store's peer calls name Tom's
+- **Tag `0.1.4`**, annotated, on `main`, the tag the port builds on. Since `0.1.0`: the store's peer calls name Tom's
   purpose deadlines (`0.1.1`, below, "What the port must do"); a manifest pass holds its partial, so a resume beside it is
   refused (the rehearsal's gap); every store journal line in Macha's text and level (`TODO/2026-11-12-journal-mapping.md`).
   `0.1.3` changes no store behaviour: forked test children end through `dagda::test::child_exit`
   (`test/fixtures/child_exit.h`), which counts only the child's own sanitizer reports; a simulated crash joins the store's
   start-up threads first (`LocalStore::join_background_threads`); `storage_pool.cpp`'s inner catch names its error apart
   (GCC `-Wshadow`); four window cases step past their window however late a call notes its request sent (a Pi timing race).
-  Build the cutover on it. `0.1.0` is on the remote; `0.1.1` to `0.1.3` are local until Tom says push.
+  `0.1.4` installs it as Dannan does: `find_package(dagda 0.1.4 CONFIG)`, exact, bringing Dannan 0.5.3; `dagda::dagda`;
+  SONAME `libdagda.so.0.1.4`; `dagda-migrate` installed (`docs/packaging.md`). macOS plain at `0.1.4`: 1041 passed, 6 disabled.
+  Next, `0.1.5`: Dannan 0.5.6 and the Debian packages (Tom, 2026-11-13).
 - **arm64 at `0.1.3`, on corvus-develop** (as below; Macha's fixtures without `state-macnessa`), 2026-11-13:
   - Plain (GCC 14.2): build with **0 warnings**; **1038 passed, 0 failed, 3 skipped** (the root cases), 6 disabled.
   - TSan (Debian's clang 19.1.7, Dannan 0.5.3 built with TSan, the kernel on 4K pages for the run since clang 19's TSan does

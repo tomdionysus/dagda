@@ -3,6 +3,22 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-13: 0.1.4: installable, as Dannan is
+
+Tom gave the word; the Macha session reviewed 0.1.3 and builds stage one (S, then 8a and 8b) on Dagda. Its blocker: no
+install rules, so no `find_package(dagda)`. Done as Dannan 0.5.6 does it, no behaviour change:
+- `install(TARGETS dagda EXPORT dagdaTargets)`, the headers in their tree under `include/dagda/` (tests and fixtures not),
+  the generated `version.h`; `dagdaConfig.cmake` finding `dannan` at `DAGDA_DANNAN_MINIMUM` (0.5.3, one number for the
+  build and the config) and `dagdaConfigVersion.cmake` at ExactVersion, exporting `dagda::dagda`; SONAME the whole
+  version, `libdagda.so.0.1.4` (was major.minor).
+- `dagda-migrate` installed, with a manual page (`docs/man/dagda-migrate.1`); `docs/packaging.md`.
+- `test/package`, a consumer of the install: on the Mac, from the prefix alone, it linked `libdagda.0.1.4` and Dannan 0.5.3
+  and ran; asking for 0.1.3 is refused at configure. All 82 installed headers compile alone against the prefix.
+- Debian packages (Tom: yes): written, but Dannan's packages exist only for 0.5.6, whose config is ExactVersion, so
+  they cannot build on Dagda's 0.5.3 pin (nor can Macha's own deb). Tom: Dagda moves to Dannan 0.5.6 in 0.1.5, with the debs.
+
+Gate, macOS plain: **1041 passed, 6 disabled, 0 warnings**, one run.
+
 ## 2026-11-13: 0.1.3: forked children on their own sanitizer reports, TSan on arm64
 
 The Macha session asked for the forked-child TSan failures to be fixed; Tom: "Do it, no supressions", on corvus-develop.
