@@ -43,9 +43,10 @@ using ledger::ObjectTrie;
 class RecordingSink final : public dannan::status::LogSink {
  public:
   bool enabled(dannan::status::LogLevel) const noexcept override { return true; }
-  void write(dannan::status::LogLevel, std::string_view scope, std::string_view message) override {
+  void write(dannan::status::LogLevel level, std::string_view scope, std::string_view message) override {
     dannan::contract::Lock lock(_mutex);
     _lines.push_back(std::string(scope) + ": " + std::string(message));
+    _levels.push_back(level);
   }
   std::vector<std::string> lines() {
     dannan::contract::Lock lock(_mutex);
@@ -55,10 +56,18 @@ class RecordingSink final : public dannan::status::LogSink {
     const auto all = lines();
     return std::any_of(all.begin(), all.end(), [&](const std::string& line) { return line.find(text) != std::string::npos; });
   }
+  // A line holding `text`, written at `level`.
+  bool saw(dannan::status::LogLevel level, std::string_view text) {
+    dannan::contract::Lock lock(_mutex);
+    for (size_t i = 0; i < _lines.size(); ++i)
+      if (_levels[i] == level && _lines[i].find(text) != std::string::npos) return true;
+    return false;
+  }
 
  private:
   dannan::contract::Mutex _mutex;
   std::vector<std::string> _lines DANNAN_GUARDED_BY(_mutex);
+  std::vector<dannan::status::LogLevel> _levels DANNAN_GUARDED_BY(_mutex);
 };
 
 inline dannan::status::ScopedLogger logger_into(std::shared_ptr<RecordingSink> sink) { return dannan::status::ScopedLogger(std::move(sink), "ledger"); }
