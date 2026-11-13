@@ -5,7 +5,8 @@ Maintainer: tomdionysus <tomdionysus@users.noreply.github.com>
 Build-Depends:
  debhelper-compat (= 13),
  cmake,
- libdannan-dev (>= 0.5.6),
+ libdannan-dev (>= 0.6.0),
+ libdannan-dev (<< 0.7~),
  libboost-dev (>= 1.83),
  libssl-dev,
  libgtest-dev <!nocheck>,
@@ -37,7 +38,8 @@ Multi-Arch: same
 Section: libdevel
 Depends:
  libdagda0.1.4 (= ${binary:Version}),
- libdannan-dev (>= 0.5.6),
+ libdannan-dev (>= 0.6.0),
+ libdannan-dev (<< 0.7~),
  ${misc:Depends},
 Description: distributed object store for a cluster of trusted machines (development files)
  Dagda is the store: content-addressed objects held on several nodes with

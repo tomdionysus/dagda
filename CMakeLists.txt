@@ -24,9 +24,10 @@ option(DAGDA_BUILD_TESTING "Build dagda_tests (GoogleTest)" OFF)
 option(DAGDA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer where the compiler has it)" OFF)
 
-# The network layer at exactly one release: from 0.5.6 Dannan's package accepts only its own version, as its SONAME does.
+# The network layer by minor, at least the patch Dagda was built and tested on: from 0.6.0 Dannan keeps its ABI across a
+# minor's patches (SONAME libdannan.so.0.6, SameMinorVersion), and only a new minor changes it.
 # One number for the build and the installed package's config, which a consumer meets (test/package).
-set(DAGDA_DANNAN_MINIMUM 0.5.6)
+set(DAGDA_DANNAN_MINIMUM 0.6.0)
 find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
 # Where an install puts things; before any target names its install paths.
 include(GNUInstallDirs)
