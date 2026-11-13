@@ -24,6 +24,11 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 - The trie pins aged on the node's time source where Macha reads the real clock (the same on live nodes).
 - live-b's outage of 2026-11-11 and the Pis' under-voltage: their supplies are the maintainer's to look at.
 - The store's journal lines: mapped and restored to Macha's (0.1.2); what still differs is in `2026-11-12-journal-mapping.md`, section 8.
+- Lir (2026-11-13, via the maintainer): Dagda is written for Macha and does not do replicas. Objects are replicated (the four
+  levels, with evidence); head spaces held on N nodes (L2), a per-space k (L3), node-local spaces (L5) and Lir's scale (L6)
+  are not built. L2 can be added beside the every-node path without changing Macha (the policy is chosen at open and is not
+  on the wire or in the records; the wire already addresses a space other than the first; only the exchange's active-set
+  sends branch). Told to Lir; its place in the order is the maintainer's.
 - Everything only the port can show: Macha's merge hash for hash, delta replay through Macha's codec, end to end,
   performance against the baselines, a real state started, reliability over time, live-a's heap corruption.
 
