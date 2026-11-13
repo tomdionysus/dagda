@@ -1,7 +1,7 @@
-# Dagda's capability report, for the port (2026-11-10, brought to 2026-11-12)
+# Dagda's capability report, for the port (2026-11-10, brought to 2026-11-13)
 
 For the Macha session, which reviews it by reading Dagda's code and builds the port (the maintainer's rulings, relayed 2026-11-06). Written
-from the tag `0.1.0`, brought to `0.1.1` (your purpose deadlines on the store's calls, and the migration rehearsal). Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
+from the tag `0.1.0`, brought to `0.1.2`: `0.1.1` named your purpose deadlines on the store's calls; `0.1.2` holds a manifest's partial for its pass and writes the store's journal lines in Macha's words. The migration rehearsal ran on `0.1.0`'s tool. Macha's baseline: `98b816d` (0.93.5), with 0.93.6 `a931fe5` for the yielded wake; 0.93.4 `9a08846` is
 the last tag. Every claim names a case (`Suite.Case`, `file:line` under `dagda/test/`) or a commit; lines are at `0.1.0`.
 
 ## The answer
@@ -16,11 +16,17 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as the
 
 ## Head and gates
 
-- **Tag `0.1.1`**, annotated, on `main`, the tag the port freezes Dagda on: `0.1.0` with the store's peer calls naming the maintainer's
-  purpose deadlines (below, "What the port must do"). Repin the port to it. `0.1.0` is on the remote; `0.1.1` is local until
-  The maintainer says push.
-- **macOS at `0.1.1`, plain: 1038 passing, 6 disabled** (`0.1.0`'s 1031 and the seven deadline cases), one whole run, Macha's
-  fixtures present. The arm64 and sanitizer runs below are at `0.1.0`; the change since is the deadlines alone.
+- **Tag `0.1.2`**, annotated, on `main`, the tag the port freezes Dagda on. Since `0.1.0`: the store's peer calls name the maintainer's
+  purpose deadlines (`0.1.1`, below, "What the port must do"); a manifest pass holds its partial, so a resume beside it is
+  refused (the rehearsal's gap); every store journal line in Macha's text and level (`TODO/2026-11-12-journal-mapping.md`).
+  Build the cutover on it. `0.1.0` is on the remote; `0.1.1` and `0.1.2` are local until the maintainer says push.
+- **macOS at `0.1.2`, plain: 1041 passing, 6 disabled** (`0.1.0`'s 1031, seven deadline cases, one manifest case, two journal
+  cases; journal assertions added to seven more), one whole run, Macha's fixtures present, nothing skipped.
+- **TSan, macOS, at `0.1.2` on Dannan 0.5.3 built with TSan:** 1024 passed, 17 failed, and no report in Dagda's code. The two
+  reports are Boost's kqueue reactor race, as in every macOS run. The 17 are forked children expecting exit 0 and getting
+  TSan's 66: 15 migration crash cases inherited the parent's report count across the fork, and pass alone in a fresh process;
+  2 durability cases' children `_exit` on purpose (a simulated crash) with a finished thread unjoined, which TSan counts as a
+  leak. No `mutex lock failed`. The arm64 runs below are at `0.1.0`.
 - Dannan pinned at **0.5.3** (`CMakeLists.txt:28`, `find_package(dannan 0.5.3 CONFIG REQUIRED)`; tag on main `899faea`), the tag the
   port freezes on: 0.5.2's library, its installed config asking for Boost 1.83, so the Pis build with Debian's Boost. Built into
   `build/deps/prefix-0.5.3`.

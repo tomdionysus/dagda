@@ -3,6 +3,25 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-13: 0.1.2: the manifest's partial held, the journal in Macha's words, TSan
+
+The maintainer (2026-11-12): cleanup, testing, hardening and improvement in scope while the port waits: all four offered.
+- The manifest's partial (`feature/manifest-lock`): a pass takes an exclusive flock on its `.partial` before it reads or
+  writes it, so a `--resume` beside a running pass is refused before it reads a byte. The rehearsal's gap.
+  `MigrateComparePass.AResumeOfAPartialAnotherPassIsWritingIsRefused`, failing first.
+- `ACTIVE.md` rewritten to where things stand; its old plan archived word for word at the end of this file. Citations into
+  either file corrected by their text; some had been stale since before the rewrite.
+- The journal (`feature/journal-lines`): every store line Macha writes mapped against Dagda's by an agent and spot-checked
+  (`TODO/2026-11-12-journal-mapping.md`): 65 the same, 23 reworded, 39 missing, 18 not Dagda's. The maintainer: "Restore everything".
+  Done but where Dagda has no such event (its section 8). The warn, error and info lines are pinned in ten cases, each
+  failing first on the old code. Behaviour changed only where Macha's line needs it: a failed leader schedule ends the fetch
+  empty (Macha's catch), a non-standard exception in a heads run is caught as Macha's is, a backend refusal is classed as
+  data storage, a local barrier whose placement changed is warned of. The Macha session drops the `dagda.` scope in its sink
+  at the cutover, so the lines read as Macha's.
+- TSan on the final tree: no report in Dagda's code (see the report's gates for the 17 forked-child failures).
+
+Gate, macOS plain: **1041 passed, 6 disabled**, one run, nothing skipped.
+
 ## 2026-11-12: 0.1.1, Macha's purpose deadlines (feature/call-deadlines), and the migration rehearsal
 
 Macha's port is on Dannan 0.5.3, Dagda's pin, so nothing to realign. Its transport cutover (0.94.0, live) names a deadline
