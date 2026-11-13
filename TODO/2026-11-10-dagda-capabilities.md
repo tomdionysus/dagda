@@ -403,7 +403,11 @@ Rollback: Macha's binary comes back only after `--reverse` has finished (your li
   corvus-develop under-volted once under the same kind of build: the Pis' supplies are worth a look before the port loads them.
 - **The pool's first-empty-answer `get`** (kept, above).
 - **The stress case's end check** compares two views taken at different moments: its race, not the store's (`COMPLETED.md:270-271`).
-- **The store's journal lines against the goldens** (`ACTIVE.md` item 8) are not mapped; the goldens are to be re-cut on 0.93.4.
+- **The store's journal lines: mapped and restored (0.1.2).** Every store line Macha writes was mapped against Dagda's
+  (`TODO/2026-11-12-journal-mapping.md`): 65 the same, 23 reworded, 39 missing, 18 not Dagda's. Tom: restore everything. Each now
+  has Macha's text and level but those its section 8 names, each with its reason (the survey line's `table=`, Macha's path
+  table's; `reason=retained_memory`, a gate Dagda has not). Your sink drops the `dagda.` scope at the cutover, so they read
+  as Macha's. The golden sample holds no store warning or error, so it confirms none of the trouble lines either way.
 
 ## What I could not show without a running port
 
