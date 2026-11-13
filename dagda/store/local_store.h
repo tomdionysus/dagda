@@ -326,6 +326,12 @@ class LocalStore final : public contract::ObjectStore {
   bool scan_complete() const noexcept { return _scan_complete.load(std::memory_order_acquire); }
   LocalStoreDiagnostics diagnostics() const noexcept;
 
+  // For a process that ends without this store's teardown (a forked child's
+  // simulated crash): waits for the start-up scan and the presence walk to end
+  // on their own, and joins them, so no finished thread is left unjoined. Asks
+  // nothing to stop and writes nothing. Single owner; not with the destructor.
+  void join_background_threads();
+
  private:
   struct PackEntry {
     std::filesystem::path file;
