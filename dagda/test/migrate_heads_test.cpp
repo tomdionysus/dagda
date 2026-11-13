@@ -44,6 +44,7 @@
 #include "dagda/migrate/manifest.h"
 #include "dagda/migrate/migrate.h"
 #include "dagda/store/state_layout.h"
+#include "dagda/test/fixtures/child_exit.h"
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/macha_opaque.h"
 #include "dagda/test/fixtures/migrate.h"
@@ -428,15 +429,15 @@ struct CrashHeads {
         auto options = bed.options(!going_back);
         size_t seen = 0;
         options.after_step = [&seen, step](const MigrationReport&) {
-          if (++seen == step) ::_exit(0);
+          if (++seen == step) test::child_exit(0);
         };
         if (going_back)
           (void)bed.back(options);
         else
           (void)bed.forward(options);
-        ::_exit(21);
+        test::child_exit(21);
       } catch (...) {
-        ::_exit(22);
+        test::child_exit(22);
       }
     }
     const auto code = test::exit_code(child);

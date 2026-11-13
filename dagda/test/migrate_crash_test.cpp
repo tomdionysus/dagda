@@ -29,6 +29,7 @@
 #include "dagda/migrate/manifest.h"
 #include "dagda/migrate/migrate.h"
 #include "dagda/migrate/retag.h"
+#include "dagda/test/fixtures/child_exit.h"
 #include "dagda/test/fixtures/legacy_v18.h"
 #include "dagda/test/fixtures/migrate.h"
 #include "dagda/test/fixtures/store.h"
@@ -337,15 +338,15 @@ struct CrashBed {
         auto options = run_options();
         size_t seen = 0;
         options.after_step = [&seen, step](const MigrationReport&) {
-          if (++seen == step) ::_exit(0);
+          if (++seen == step) test::child_exit(0);
         };
         if (going_back)
           (void)migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
         else
           (void)migrate_state(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
-        ::_exit(21);
+        test::child_exit(21);
       } catch (...) {
-        ::_exit(22);
+        test::child_exit(22);
       }
     }
     const auto code = test::exit_code(child);
@@ -465,11 +466,11 @@ TEST(MigrateCrashPhases, ASecondRunWhoseFirstDiedBeforeAnyWriteDoesEverything) {
   if (child == 0) {
     try {
       auto options = crash.run_options();
-      options.say = [](std::string_view) { ::_exit(0); };
+      options.say = [](std::string_view) { test::child_exit(0); };
       (void)migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
-      ::_exit(21);
+      test::child_exit(21);
     } catch (...) {
-      ::_exit(22);
+      test::child_exit(22);
     }
   }
   ASSERT_EQ(test::exit_code(child), std::optional<int>(0));

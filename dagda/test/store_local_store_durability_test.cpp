@@ -44,6 +44,7 @@
 
 #include "dagda/store/durability_domain.h"
 #include "dagda/store/local_store.h"
+#include "dagda/test/fixtures/child_exit.h"
 #include "dagda/test/fixtures/store.h"
 
 namespace dagda::store {
@@ -181,15 +182,17 @@ TEST(StoreLocalStoreDurability, ACleanAccountingCheckpointIsTrustedWithPacks) {
       // own key and never touches the parent's, not even to free it.
       auto domain = bed.domain(root, 500ms);
       auto store = std::make_unique<LocalStore>(root, packed, test::known_answer_key(), bed.services(), LocalStoreMode::authoritative, domain);
-      if (!store->scan_complete()) ::_exit(20);
+      if (!store->scan_complete()) test::child_exit(20);
       const auto generation = store->put_deferred(object_id(b), b);
-      if (!generation.has_value()) ::_exit(21);
+      if (!generation.has_value()) test::child_exit(21);
       // Macha's child waited out the window; the window is not what this case
       // is about, and nothing in a child steps its time.
       store->durability_barrier(*generation, DurabilityUrgency::immediate);
-      ::_exit(0);
+      // Its threads joined, its teardown skipped: the crash is the teardown's absence.
+      store->join_background_threads();
+      test::child_exit(0);
     } catch (...) {
-      ::_exit(22);
+      test::child_exit(22);
     }
   }
   ASSERT_EQ(exit_code(child), std::optional<int>(0));
@@ -229,13 +232,15 @@ TEST(StoreLocalStoreDurability, UncleanAccountingRecoveryEstablishesADurableBase
       // Secure memory is not inherited across a fork: the child derives its
       // own key and never touches the parent's, not even to free it.
       auto store = std::make_unique<LocalStore>(root, loose_only, test::known_answer_key(), bed.services());
-      if (!store->scan_complete()) ::_exit(20);
+      if (!store->scan_complete()) test::child_exit(20);
       const auto generation = store->put_deferred(object_id(b), b);
-      if (!generation.has_value()) ::_exit(21);
-      // Skip the store's teardown: an unclean process exit, the OS still up.
-      ::_exit(0);
+      if (!generation.has_value()) test::child_exit(21);
+      // Skip the store's teardown: an unclean process exit, the OS still up. Its
+      // threads are joined first, so none is left unjoined.
+      store->join_background_threads();
+      test::child_exit(0);
     } catch (...) {
-      ::_exit(22);
+      test::child_exit(22);
     }
   }
   ASSERT_EQ(exit_code(child), std::optional<int>(0));

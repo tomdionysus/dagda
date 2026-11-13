@@ -52,6 +52,7 @@
 #include "dagda/store/sealing.h"
 #include "dagda/store/state_layout.h"
 #include "dagda/store/storage_pool.h"
+#include "dagda/test/fixtures/child_exit.h"
 #include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/legacy_v18.h"
 #include "dagda/test/fixtures/migrate.h"
@@ -676,12 +677,12 @@ TEST(MigrateState, ACrashMidWayLeavesADiskASecondRunFinishes) {
       MigrationOptions options;
       options.cache = v18.cache;
       options.after_step = [](const MigrationReport& so_far) {
-        if (so_far.loose_migrated + so_far.pack_records_migrated >= 3) ::_exit(0);
+        if (so_far.loose_migrated + so_far.pack_records_migrated >= 3) test::child_exit(0);
       };
       (void)migrate_state(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
-      ::_exit(21);
+      test::child_exit(21);
     } catch (...) {
-      ::_exit(22);
+      test::child_exit(22);
     }
   }
   ASSERT_EQ(test::exit_code(child), std::optional<int>(0));
@@ -734,12 +735,12 @@ TEST(MigrateState, ACrashBetweenLedgersIsResumed) {
       MigrationOptions options;
       options.cache = v18.cache;
       options.after_step = [](const MigrationReport& so_far) {
-        if (so_far.ledgers_migrated >= 3) ::_exit(0);
+        if (so_far.ledgers_migrated >= 3) test::child_exit(0);
       };
       (void)migrate_state(v18.state, {v18.backend}, v18.cluster(), v18.custody(), options);
-      ::_exit(21);
+      test::child_exit(21);
     } catch (...) {
-      ::_exit(22);
+      test::child_exit(22);
     }
   }
   ASSERT_EQ(test::exit_code(child), std::optional<int>(0));

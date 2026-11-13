@@ -98,6 +98,8 @@ add_executable(dagda_tests
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
 # The count of calls for stable storage interposes on libdagda's: dyld takes an
 # interposing table only from a library, ELF from the executable first.
+# A forked child's exit, counting only its own sanitizer reports.
+target_sources(dagda_tests PRIVATE fixtures/child_exit.cpp)
 if(APPLE)
   add_library(dagda_test_sync_count SHARED fixtures/sync_count.cpp)
   target_include_directories(dagda_test_sync_count PRIVATE ${PROJECT_SOURCE_DIR})
