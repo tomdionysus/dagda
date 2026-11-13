@@ -41,9 +41,14 @@ class NodeHorizonBuilder {
   // incomplete build, which is never published.
   static constexpr dannan::sched::Waits release_waits = contract::ReachabilityProvider::answer_waits;
   contract::ReleaseBuild release(const contract::Hash256& head);
+  // What the last inventory's answer counted (Reachability::entries, extents).
+  uint64_t last_entries() const noexcept { return _entries; }
+  uint64_t last_extents() const noexcept { return _extents; }
 
  private:
   contract::ReachabilityProvider& _provider;
+  uint64_t _entries = 0;
+  uint64_t _extents = 0;
   const dannan::status::ScopedLogger _logger;
 };
 

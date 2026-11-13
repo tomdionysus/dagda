@@ -30,12 +30,15 @@ bool ControlObjectFetch::pull(const ObjectId& id, const Observer& observe) {
     const auto outcome =
         _context.routes().call_and_wait(target, message::get_control_object, payload, dannan::sched::FrameType::speculative, _per_peer, _watch);
     if (!outcome.reply) {
+      // Macha's transport threw here, and its catch said so (control_objects.cpp:56).
+      _logger.debug("control object read " + target.host + ": " + outcome.failure);
       last_failure = target.host + ": " + outcome.failure;
       continue;
     }
     if (outcome.reply->type != message::control_object_reply) {
+      // Macha names the reply's type: a refusal is its "error" (control_objects.cpp:37).
       const auto refusal = dannan::net::refusal_of(*outcome.reply);
-      last_failure = target.host + ": " + (refusal ? refusal->code : "reply type " + std::to_string(static_cast<uint16_t>(outcome.reply->type)));
+      last_failure = target.host + ": " + (refusal ? std::string("error") : "reply type " + std::to_string(static_cast<uint16_t>(outcome.reply->type)));
       continue;
     }
     try {

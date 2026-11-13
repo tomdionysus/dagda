@@ -32,7 +32,10 @@ NodeHorizonBuilder::NodeHorizonBuilder(contract::ReachabilityProvider& provider,
     : _provider(provider), _logger(std::move(logger)) {}
 
 std::shared_ptr<const contract::InventoryHorizon> NodeHorizonBuilder::inventory(const std::function<void()>& pause) {
-  return build_inventory(_provider.inventory(pause));
+  auto answer = _provider.inventory(pause);
+  _entries = answer.entries;
+  _extents = answer.extents;
+  return build_inventory(std::move(answer));
 }
 
 contract::ReleaseBuild NodeHorizonBuilder::release(const contract::Hash256& head) {

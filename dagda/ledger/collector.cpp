@@ -126,6 +126,13 @@ InventoryStep Collector::inventory_step(const std::function<void()>& pause, bool
   _ledger.publish(_builder.inventory(pause));
   out.inventory = _ledger.inventory();
   out.rebuilt = true;
+  // Macha's line (maintenance.cpp:654-663 at 98b816d).
+  if (_services.logger.enabled(dannan::status::LogLevel::all))
+    _services.logger.trace(
+        "DIAG maintenance-inventory generation=" + std::to_string(out.inventory->generation()) + " entries=" + std::to_string(_builder.last_entries()) +
+        " extents=" + std::to_string(_builder.last_extents()) + " live=" + std::to_string(out.inventory->size(RetentionClass::data)) +
+        " garbage=" + std::to_string(out.inventory->garbage().size()) + " stale_garbage=" + std::to_string(out.inventory->stale_garbage().size()) +
+        " elapsed_ms=" + std::to_string(store::stage_elapsed_us(started) / 1000));
   _services.observations.record("maintenance.inventory.build_us", store::stage_elapsed_us(started));
   trace("inventory",
         "generation=" + std::to_string(out.inventory->generation()) + " live=" + std::to_string(out.inventory->size(RetentionClass::data)) +
@@ -134,6 +141,8 @@ InventoryStep Collector::inventory_step(const std::function<void()>& pause, bool
   _services.observations.add("maintenance.inventory.live_objects", out.inventory->size(RetentionClass::data));
   return out;
 }
+
+std::string Collector::node_short() const { return dannan::identity::to_string(_services.node).substr(0, 6); }
 
 TombstoneStep Collector::tombstone_step(const PassDue& due, const InventoryStep& inventory) {
   TombstoneStep out;
@@ -191,7 +200,7 @@ ControlStep Collector::control_step(const PassDue& due, const InventoryStep& inv
   out.pruned = _ledger.prune_unclaimed(RetentionClass::control, _options.prune_budget);
   _services.observations.add("retention.pruned.control", out.pruned);
   if (out.pruned) trace("prune.control", std::to_string(out.pruned));
-  if (out.removed) _services.logger.debug("control GC removed=" + std::to_string(out.removed));
+  if (out.removed) _services.logger.debug("catalogue control GC removed=" + std::to_string(out.removed));
   return out;
 }
 
@@ -208,7 +217,8 @@ DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory
   trace_gate("gate.data", out.gate);
   if (out.gate.reason != _last_skip_reason) {
     _last_skip_reason = out.gate.reason;
-    _services.logger.debug(std::string("garbage collection sweep") + (_last_skip_reason.empty() ? " enabled" : " skipped: " + _last_skip_reason));
+    _services.logger.debug("garbage collection sweep node=" + node_short() +
+                           (_last_skip_reason.empty() ? std::string(" enabled") : " skipped: " + _last_skip_reason));
   }
   // A retirement carries its own deadline. Unretired bytes may be the data
   // half of a publication with no reference yet, so they wait one retry
@@ -220,6 +230,7 @@ DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory
     out.released = _ledger.release_unreferenced(RetentionClass::data, *release.release, _options.release_budget);
     _services.observations.add("retention.released.data", out.released);
     if (out.released) trace("release.data", std::to_string(out.released));
+    if (out.released) _services.logger.debug("retention released DATA claims node=" + node_short() + " count=" + std::to_string(out.released));
   } else if (!_release_incomplete_logged) {
     _release_incomplete_logged = true;
     _services.logger.debug("retention release skipped: horizon incomplete");
@@ -248,6 +259,13 @@ DataStep Collector::data_step(const PassDue& due, const InventoryStep& inventory
   if (out.swept.objects) _services.observations.record("maintenance.gc.per_object_ns", step_us * 1000 / out.swept.objects);
   store::log_slow_stage(_services.logger, "garbage-collect", started,
                         "reclaimed_bytes=" + std::to_string(out.swept.bytes) + " objects=" + std::to_string(out.swept.objects));
+  // Macha's lines (maintenance.cpp:1062-1078 at 98b816d).
+  if (out.swept.deferred || out.swept.objects || out.swept.yielded)
+    _services.logger.debug("garbage collection sweep node=" + node_short() + " objects=" + std::to_string(out.swept.objects) +
+                           " bytes=" + std::to_string(out.swept.bytes) + " deferred=" + std::to_string(out.swept.deferred ? 1 : 0) +
+                           " yielded=" + std::to_string(out.swept.yielded ? 1 : 0) + " complete=" + std::to_string(out.swept.complete ? 1 : 0) +
+                           " live=" + std::to_string(live.size(RetentionClass::data)) + " protected=" + std::to_string(protected_ids.size()));
+  if (out.swept.bytes) _services.logger.debug("garbage collection reclaimed " + std::to_string(out.swept.bytes) + " local bytes");
   out.pruned = _ledger.prune_unclaimed(RetentionClass::data, _options.prune_budget);
   _services.observations.add("retention.pruned.data", out.pruned);
   if (out.pruned) trace("prune.data", std::to_string(out.pruned));

@@ -64,6 +64,8 @@ struct CollectorServices {
   const dannan::contract::TimeSource& time = dannan::contract::steady_time_source();
   // This node's own clock: sightings and retirement ages.
   const dannan::contract::WallClock& wall = dannan::contract::system_wall_clock();
+  // This node, as Macha's collection lines name it (node=, six hex digits).
+  dannan::identity::NodeId node{};
 };
 
 // What the caller's pass knows of the node's activity.
@@ -225,6 +227,7 @@ class Collector {
  private:
   contract::PassFacts facts(const PassDue& due, const InventoryStep& inventory) const;
   void trace(std::string_view kind, const std::string& detail) const;
+  std::string node_short() const;
   void trace_gate(std::string_view gate, const contract::GateVerdict& verdict) const;
   void save_sightings(UnreferencedSince&, dannan::contract::TimePoint& saved, bool complete);
   void collect_tombstones(const contract::InventoryHorizon&);

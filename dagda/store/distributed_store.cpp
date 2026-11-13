@@ -203,6 +203,9 @@ struct ReplicaRecord {
   bool running = false;
 };
 
+// A local copy left undone on purpose, already logged.
+struct Skipped {};
+
 struct Waiter {
   boost::asio::any_io_executor executor;
   DistributedStore::WriteDone done;
@@ -329,6 +332,10 @@ struct DistributedStore::WriteRun {
     bool spilled = false;
     std::string why;
     std::optional<DurabilityTicket> durability;
+    // When it was placed, and how long it took to answer (Macha's local and
+    // remote times on the write's quorum line).
+    std::chrono::steady_clock::time_point started{};
+    std::chrono::milliseconds took{0};
   };
 
   dannan::contract::Mutex mutex;
@@ -364,6 +371,7 @@ struct DistributedStore::WriteRun {
       call.refused = definitive;
       call.why = why;
       call.durability = durability;
+      call.took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - call.started);
       landed = ticket;
       node = call.node.id;
     }
@@ -466,6 +474,7 @@ struct DistributedStore::RepairState {
   mutable dannan::contract::Mutex sample_mutex;
   std::deque<ObjectId> unsourceable_sample DANNAN_GUARDED_BY(sample_mutex);
   std::chrono::steady_clock::time_point unsourceable_logged DANNAN_GUARDED_BY(sample_mutex){};
+  std::chrono::steady_clock::time_point unreadable_logged DANNAN_GUARDED_BY(sample_mutex){};
 
   static constexpr std::chrono::milliseconds retry_first{1000};
   static constexpr std::chrono::milliseconds retry_cap{600000};
@@ -722,6 +731,7 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
 
 WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into) {
   _activity.note(options.frame, data.size());
+  const auto write_started = std::chrono::steady_clock::now();
   // A deadline of the caller's runs from here. With none, no clock runs on the
   // write at all, as Macha's (replicate): its local copy waits under the arbiter's
   // window and each peer's put under call_no_progress, and it ends when each has
@@ -783,6 +793,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       Lock lock(run->mutex);
       run->calls.push_back({});
       run->calls.back().node = node;
+      run->calls.back().started = std::chrono::steady_clock::now();
       index = run->calls.size() - 1;
     }
     if (node.id == _self) {
@@ -830,6 +841,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         call.refused = !ok && !busy;
         call.why = why;
         call.durability = durability;
+        call.took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - call.started);
       }
       return;
     }
@@ -894,7 +906,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
             call.spilled = true;
             call.counted = true;
             ++replacement_needed;
-            _logger.debug("object write stalled; spilling id=" + to_string(id) + " peer=" + dannan::identity::to_string(call.node.id).substr(0, 12));
+            _logger.debug("object write stalled; spilling id=" + to_string(id) + " peer=" + dannan::identity::to_string(call.node.id).substr(0, 12) +
+                          " no_progress_ms=" + std::to_string(idle.count()));
           } else {
             wake = std::min(wake, now + (_options.write_stall - idle));
           }
@@ -1014,6 +1027,27 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   }
 
   if (success > 0 && success < target) queue_prompt_replication(id);
+  // Macha's slow-write line (distributed_store.cpp:279-289 at 98b816d): a write of
+  // half a second or more says where its time went.
+  const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - write_started);
+  if (total >= std::chrono::milliseconds(500) && _logger.enabled(dannan::status::LogLevel::debug)) {
+    std::chrono::milliseconds local{0};
+    std::chrono::milliseconds remote_max{0};
+    {
+      Lock lock(run->mutex);
+      for (const auto& call : run->calls) {
+        if (!call.done) continue;
+        if (call.node.id == _self)
+          local = call.took;
+        else
+          remote_max = std::max(remote_max, call.took);
+      }
+    }
+    _logger.debug("object write quorum id=" + to_string(id) + " bytes=" + std::to_string(data.size()) + " replicas=" + std::to_string(target) +
+                  " required=" + std::to_string(floor) + " minimum=" + std::to_string(floor) + " success=" + std::to_string(success) +
+                  " local_ms=" + std::to_string(local.count()) + " remote_max_ms=" + std::to_string(remote_max.count()) +
+                  " total_ms=" + std::to_string(total.count()) + " result=" + std::to_string(success >= floor && success > 0 ? 1 : 0));
+  }
   std::vector<std::shared_ptr<Waiter>> told;
   WriteEvidence evidence;
   {
@@ -1086,12 +1120,16 @@ void DistributedStore::write(const ObjectId& id, Bytes data, WriteOptions option
 }
 
 ObjectId DistributedStore::put(std::span<const uint8_t> data, WriteOptions options) {
+  const auto started = std::chrono::steady_clock::now();
   const auto id = object_id(data);
   const auto evidence = write(id, data, options);
   if (!evidence.holders() && options.level != Durability::ephemeral) {
     if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) throw std::runtime_error("object replication cancelled");
     throw StorageUnavailable("object replication quorum unavailable");
   }
+  if (_logger.enabled(dannan::status::LogLevel::all))
+    _logger.trace("DIAG object-put id=" + to_string(id) + " bytes=" + std::to_string(data.size()) +
+                  " ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()));
   return id;
 }
 
@@ -1222,7 +1260,11 @@ std::vector<WriteEvidence> DistributedStore::wait(const std::vector<Ticket>& tic
   auto future = promise->get_future();
   wait(tickets, deadline, _executor, [promise](std::vector<WriteEvidence> evidence) { promise->set_value(std::move(evidence)); });
   // The deadline answers first; the margin only covers the executor.
-  if (future.wait_for(deadline + std::chrono::seconds(5)) == std::future_status::ready) return future.get();
+  if (future.wait_for(deadline + std::chrono::seconds(5)) == std::future_status::ready) {
+    auto evidence = future.get();
+    for (const auto& one : evidence) note_unmet_barrier(one);
+    return evidence;
+  }
   std::vector<WriteEvidence> out;
   for (const auto& ticket : tickets) {
     auto evidence = status(ticket);
@@ -1288,7 +1330,26 @@ std::optional<WriteEvidence> DistributedStore::wait(Ticket ticket, std::chrono::
   if (future.wait_for(deadline + std::chrono::seconds(5)) != std::future_status::ready) return status(ticket);
   auto evidence = future.get();
   if (!evidence.ticket.valid()) return std::nullopt;
+  note_unmet_barrier(evidence);
   return evidence;
+}
+
+// Macha's line when a barrier leaves a write short of its durability
+// (distributed_store.cpp:753-764 at 98b816d): each copy, its place and why.
+void DistributedStore::note_unmet_barrier(const WriteEvidence& evidence) const {
+  if (!evidence.deferred || evidence.met || !evidence.ticket.valid() || !_logger.enabled(dannan::status::LogLevel::debug)) return;
+  bool transient = false;
+  std::string detail;
+  for (const auto& replica : evidence.replicas) {
+    if (replica.state == ReplicaState::pending) transient = true;
+    detail += " replica=" + dannan::identity::to_string(replica.node).substr(0, 12);
+    if (replica.durability)
+      detail += " epoch=" + dannan::identity::to_string(replica.durability->epoch).substr(0, 8) + " gen=" + std::to_string(replica.durability->generation);
+    const auto outcome = replica.state == ReplicaState::acknowledged ? std::string("durable") : replica.why.empty() ? std::string("unexamined") : replica.why;
+    detail += " outcome=\"" + outcome + "\"";
+  }
+  _logger.debug("object durability quorum unavailable id=" + to_string(evidence.id) + " required=" + std::to_string(evidence.sought) +
+                " durable=" + std::to_string(evidence.acknowledged()) + (transient ? " transient=yes" : " transient=no") + detail);
 }
 
 std::optional<WriteEvidence> DistributedStore::wait_complete(Ticket ticket, std::chrono::milliseconds deadline) {
@@ -1375,7 +1436,20 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                return;
                              }
                              // One probe with every id that named this place, as many as a
-                             // request may carry.
+                             // request may carry; once every part has answered, Macha's line
+                             // (distributed_store.cpp:725 at 98b816d) for this peer.
+                             struct Rederived {
+                               std::atomic<size_t> reasserted{0};
+                               std::atomic<size_t> absent{0};
+                               std::atomic<size_t> left{0};
+                             };
+                             auto rederived = std::make_shared<Rederived>();
+                             rederived->left = (asked->records.size() + message::max_barrier_probe - 1) / message::max_barrier_probe;
+                             const auto part_done = [this, rederived] {
+                               if (rederived->left.fetch_sub(1) != 1) return;
+                               _logger.info("object durability re-derived after incarnation change reasserted=" + std::to_string(rederived->reasserted.load()) +
+                                            " absent=" + std::to_string(rederived->absent.load()) + " peers=1");
+                             };
                              for (size_t start = 0; start < asked->records.size(); start += message::max_barrier_probe) {
                                const auto count = std::min<size_t>(message::max_barrier_probe, asked->records.size() - start);
                                std::vector<std::shared_ptr<TicketRecord>> part(asked->records.begin() + static_cast<std::ptrdiff_t>(start),
@@ -1383,10 +1457,11 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                message::BarrierRequest probe{asked->ticket, {}};
                                for (const auto& record : part) probe.probe.push_back(record->id);
                                _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), FrameType::loader, deadline,
-                                                      _executor, [part, node = asked->node, transient, refuse, each](CallOutcome answer) {
+                                                      _executor, [part, node = asked->node, transient, refuse, each, rederived, part_done](CallOutcome answer) {
                                                         if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
                                                           const auto why = outcome_text(answer);
                                                           each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
+                                                          part_done();
                                                           return;
                                                         }
                                                         try {
@@ -1395,6 +1470,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                                           for (const auto& record : part) {
                                                             const auto held = present.find(record->id);
                                                             // Definitive when absent: the peer no longer holds it. Put it again.
+                                                            (held != present.end() ? rederived->reasserted : rederived->absent).fetch_add(1);
                                                             update(record, node, [&](ReplicaRecord& replica) {
                                                               if (held != present.end())
                                                                 acknowledge(replica, held->second);
@@ -1406,6 +1482,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                                           const std::string why = error.what();
                                                           each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
                                                         }
+                                                        part_done();
                                                       });
                              }
                            });
@@ -1415,9 +1492,11 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     try {
       _data.durability_barrier(place->ticket, DurabilityUrgency::batchable);
       each(place->records, place->node, [](ReplicaRecord& replica) { acknowledge(replica); });
-    } catch (const StaleDurabilityTicket&) {
-      // This node's backend reopened under the ticket: the same answer from
-      // disk, no call.
+    } catch (const StaleDurabilityTicket& error) {
+      // A ticket of this process whose placement changed is a barrier that failed, as
+      // Macha says (distributed_store.cpp:569-580 at 98b816d warns of all but another
+      // process's ticket). Either way the same answer comes from disk, no call.
+      if (place->ticket.epoch == _context.identity().durability_epoch()) _logger.warn("local storage durability barrier failed: " + std::string(error.what()));
       for (const auto& record : place->records) {
         const auto fresh = _data.reassert_durable(record->id);
         update(record, place->node, [&](ReplicaRecord& replica) {
@@ -1429,6 +1508,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
       }
     } catch (const std::exception& error) {
       const std::string why = error.what();
+      _logger.warn("local storage durability barrier failed: " + why);
       each(place->records, place->node, [&](ReplicaRecord& replica) { transient(replica, why); });
     }
   }
@@ -1650,6 +1730,20 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   // Foreground demand is recorded before any storage access, so the first
   // read already holds back lower classes.
   if (foreground) _activity.note(options.frame, 0);
+  // Macha's read lines (distributed_store.cpp:1731-1811 at 98b816d): a slow
+  // foreground read by source, and every read at trace.
+  const auto started = std::chrono::steady_clock::now();
+  const auto said = [&](std::string_view source, size_t bytes, bool ok) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+    if (foreground && elapsed >= std::chrono::milliseconds(250))
+      _logger.debug("playback object read source=" + std::string(source) + " stripe=" + std::to_string(options.stripe) + " id=" + to_string(id) +
+                    " result=" + std::to_string(ok ? 1 : 0) + " bytes=" + std::to_string(bytes) + " elapsed_ms=" + std::to_string(elapsed.count()));
+    if (_logger.enabled(dannan::status::LogLevel::all)) {
+      std::string line = "DIAG object-get id=" + to_string(id) + " source=" + std::string(source);
+      if (source == "remote") line += " result=" + std::to_string(ok ? 1 : 0);
+      _logger.trace(line + " bytes=" + std::to_string(bytes) + " ms=" + std::to_string(elapsed.count()));
+    }
+  };
   // A caller's deadline is one time across the local, cache and remote stages,
   // as Macha's is: a stage reached past it goes no further.
   const bool own_deadline = options.deadline.count() > 0;
@@ -1665,6 +1759,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   if (_options.read_trace) _options.read_trace("local");
   if (local) {
     if (interactive) _activity.note(options.frame, local->size());
+    said("owned", local->size(), true);
     return {buffer_of(std::move(*local)), ReadSource::local, _self, FetchAnswer::ok};
   }
   if (past_deadline()) return {};
@@ -1678,11 +1773,13 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   if (cached) {
     if (interactive) _activity.note(options.frame, cached->size());
     if (should_own(id)) enqueue_local_copy(id, *cached, true);
+    said("cache", cached->size(), true);
     return {buffer_of(std::move(*cached)), ReadSource::cache, _self, FetchAnswer::ok};
   }
   if (past_deadline() || (options.cancelled && options.cancelled->load(std::memory_order_relaxed))) return {};
   auto result = get_remote(id, options, interactive, own_deadline ? std::optional(until) : std::nullopt);
   if (result.object && options.frame == FrameType::read_ahead) _activity.note(options.frame, result.object->bytes.size());
+  said("remote", result.object ? result.object->bytes.size() : 0, static_cast<bool>(result.object));
   return result;
 }
 
@@ -1734,15 +1831,31 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
   }
   if (promote && (options.frame == FrameType::foreground || options.frame == FrameType::read_ahead)) promote->promote(options.frame);
   if (leader) {
-    auto owners = ranked(id);
-    if (owners.size() > _options.replication) owners.resize(_options.replication);
-    {
-      Lock lock(fetch->mutex);
-      for (const auto& node : owners) fetch->preferred.insert(node.id);
-      for (auto& node : owners)
-        if (node.id != _self) fetch->candidates.push_back(std::move(node));
+    // A fetch that cannot be scheduled finds nothing, as Macha's
+    // (distributed_store.cpp:1694-1700 at 98b816d).
+    const auto unscheduled = [&](const std::string& why) {
+      _logger.debug("remote object scheduling " + to_string(id) + ": " + why);
+      {
+        Lock lock(fetch->mutex);
+        fetch->done = true;
+      }
+      fetch->changed.notify_all();
+    };
+    try {
+      auto owners = ranked(id);
+      if (owners.size() > _options.replication) owners.resize(_options.replication);
+      {
+        Lock lock(fetch->mutex);
+        for (const auto& node : owners) fetch->preferred.insert(node.id);
+        for (auto& node : owners)
+          if (node.id != _self) fetch->candidates.push_back(std::move(node));
+      }
+      fetch_next(fetch);
+    } catch (const std::exception& error) {
+      unscheduled(error.what());
+    } catch (...) {
+      unscheduled("unknown error");
     }
-    fetch_next(fetch);
   }
 
   ReadResult out;
@@ -1842,10 +1955,11 @@ void DistributedStore::fetched(const std::shared_ptr<SharedFetch>& fetch, const 
     try {
       data = take_object_reply(std::move(*outcome.reply), fetch->id);
     } catch (const std::exception& error) {
-      _logger.debug("object read " + target.host + ": " + error.what());
+      _logger.debug("object read: " + std::string(error.what()));
     }
   } else {
     absent = refused_with(outcome, 404);
+    if (!outcome.reply) _logger.debug("object read: " + outcome_text(outcome));
   }
   {
     Lock lock(fetch->mutex);
@@ -1898,7 +2012,7 @@ void DistributedStore::enqueue_local_copy(const ObjectId& id, std::span<const ui
   {
     Lock lock(_local_copy_mutex);
     if (data.size() > _options.local_copy_bytes || _local_copy_bytes + data.size() > _options.local_copy_bytes) {
-      _logger.debug("opportunistic persistence skipped object=" + to_string(id) + " reason=queue_full");
+      _logger.debug("opportunistic persistence skipped object=" + to_string(id) + " reason=queue_full queued_bytes=" + std::to_string(_local_copy_bytes));
       return;
     }
     _local_copy_bytes += data.size();
@@ -1926,7 +2040,10 @@ void DistributedStore::local_writer_loop(std::stop_token stop) {
     }
     try {
       const auto admitted = admit_data(FrameType::speculative, job.data.size(), no_caller_deadline);
-      if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
+      if (!admitted) {
+        if (!stop.stop_requested()) _logger.debug("opportunistic persistence skipped object=" + to_string(job.id) + " reason=data_credit");
+        throw Skipped{};
+      }
       const bool cache = _cache.enabled();
       bool cached = false;
       if (cache) {
@@ -1937,6 +2054,7 @@ void DistributedStore::local_writer_loop(std::stop_token stop) {
       // promotion is left to idle maintenance. If the cache write fails (or
       // there is no cache), promote here rather than fetch again.
       if (job.promote && (!cache || !cached)) (void)_data.put(job.id, job.data);
+    } catch (const Skipped&) {
     } catch (const std::exception& error) {
       _logger.debug("opportunistic persistence failed object=" + to_string(job.id) + ": " + error.what());
     }
@@ -1993,12 +2111,15 @@ std::map<NodeId, std::map<ObjectId, bool>> DistributedStore::batched_have_object
     const auto& [node, ids] = chunks[i];
     std::vector<bool> present(ids.size(), false);
     const auto& outcome = outcomes[i];
+    const auto host = node_info.contains(node) ? node_info.at(node).host : std::string();
     if (outcome.reply && outcome.reply->type == message::have_objects_reply) {
       try {
         present = message::decode_presence(outcome.reply->payload, ids.size());
       } catch (const std::exception& error) {
-        _logger.debug(std::string("retention presence batch: ") + error.what());
+        _logger.debug("retention presence batch peer=" + host + " error=" + error.what());
       }
+    } else if (!outcome.reply) {
+      _logger.debug("retention presence batch peer=" + host + " error=" + outcome_text(outcome));
     }
     auto& out = results[node];
     for (size_t j = 0; j < ids.size(); ++j) out[ids[j]] = present[j];
@@ -2092,9 +2213,12 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
   // Claims sought per object. A holder that is away is not claimed on: its
   // own head and the deletion grace protect its copy until it returns.
   const size_t floor = std::max<size_t>(1, _options.write_copies);
+  const auto started = std::chrono::steady_clock::now();
+  const auto since_ms = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(); };
   std::map<ObjectId, std::vector<NodeRecord>> candidates_by_object;
   for (const auto& id : ids) candidates_by_object.emplace(id, ranked(id));
   auto selected_by_object = select_present_batched(candidates_by_object, floor);
+  const auto scan_ms = since_ms();
 
   // An object found on no node present has nothing to copy from and nobody
   // to claim on: it is unheld, and nothing more is asked about it. One found
@@ -2135,20 +2259,31 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
     if (retain_on(node_info.at(node), contract::RetentionClass::data, batch, dot, writer))
       for (const auto& id : batch) claimed[id].insert(node);
 
+  // Where a slow claim spends its time, as Macha's says (distributed_store.cpp:878-895
+  // at 98b816d): the presence scan, objects placed again, per-object fallbacks.
+  size_t fallback_claims = 0;
+  size_t under_claimed = 0;
   for (const auto& id : ids) {
     auto& successful = claimed[id];
     if (successful.size() >= floor) continue;
     if (absent.contains(id)) {
+      ++under_claimed;
       unheld.push_back(id);
       continue;
     }
     for (const auto& candidate : candidates_by_object[id]) {
       if (successful.size() >= floor) break;
       if (successful.contains(candidate.id)) continue;
+      ++fallback_claims;
       if (has_on(candidate, id) && retain_on(candidate, contract::RetentionClass::data, {id}, dot, writer)) successful.insert(candidate.id);
     }
+    if (successful.size() < floor) ++under_claimed;
     if (successful.empty()) unheld.push_back(id);
   }
+  if (const auto total = since_ms(); total >= 250)
+    _logger.debug("DATA retention barrier ids=" + std::to_string(ids.size()) + " nodes=" + std::to_string(batches.size()) +
+                  " total_ms=" + std::to_string(total) + " scan_ms=" + std::to_string(scan_ms) + " short=" + std::to_string(short_ids.size()) +
+                  " fallback_claims=" + std::to_string(fallback_claims) + " under_claimed=" + std::to_string(under_claimed));
   return unheld;
 }
 
@@ -2176,6 +2311,8 @@ bool DistributedStore::offer_control_on(const NodeRecord& target, const std::vec
       break;
     }
   }
+  if (missing.size() != ids.size())
+    _logger.debug("CONTROL graph peer=" + target.host + " referenced=" + std::to_string(ids.size()) + " missing=" + std::to_string(missing.size()));
   if (missing.empty()) return true;
   // Puts to a peer are pipelined within a quarter of what one connection
   // holds, since the graph shares the lane with health and commits.
@@ -2215,7 +2352,11 @@ ControlOffer DistributedStore::offer_control(const std::vector<ObjectId>& input)
       ++out.held_by;
       continue;
     }
-    if (ids.empty() || offer_control_on(target, ids, FrameType::speculative, out)) ++out.held_by;
+    try {
+      if (ids.empty() || offer_control_on(target, ids, FrameType::speculative, out)) ++out.held_by;
+    } catch (const std::exception& error) {
+      _logger.debug("CONTROL offer peer=" + target.host + " error=" + error.what());
+    }
   }
   return out;
 }
@@ -2229,6 +2370,7 @@ bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const 
   const size_t sought = scope == ClaimScope::here         ? 1
                         : scope == ClaimScope::every_node ? std::numeric_limits<size_t>::max()
                                                           : std::max<size_t>(1, _options.metadata_write_copies);
+  const auto started = std::chrono::steady_clock::now();
   auto active = _context.nodes().active();
   if (scope == ClaimScope::here) std::erase_if(active, [&](const NodeRecord& node) { return node.id != _self; });
   // Local first, then the nearest measured peer: this runs inside a writer's
@@ -2259,8 +2401,10 @@ bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const 
   // control repair fans out later. The local claim is the one that must
   // hold.
   size_t retained = 0;
+  size_t tried = 0;
   bool local_retained = false;
   for (const auto& candidate : active) {
+    ++tried;
     if (!put_graph_on(candidate)) continue;
     if (retain_on(candidate, contract::RetentionClass::control, ids, dot, writer)) {
       ++retained;
@@ -2268,6 +2412,9 @@ bool DistributedStore::retain_control(const std::vector<ObjectId>& input, const 
     }
     if (retained >= sought) break;
   }
+  if (const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(); total >= 250)
+    _logger.debug("CONTROL retention claim objects=" + std::to_string(ids.size()) + " sought=" + std::to_string(sought) + " tried=" + std::to_string(tried) +
+                  " retained=" + std::to_string(retained) + " total_ms=" + std::to_string(total));
   return local_retained;
 }
 
@@ -2473,13 +2620,14 @@ std::map<ObjectId, bool> DistributedStore::valid_on(const NodeRecord& target, co
   const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), chunks.size(), _options.presence_call);
   for (size_t i = 0; i < chunks.size(); ++i) {
     const auto& outcome = outcomes[i];
+    if (!outcome.reply) _logger.debug("repair presence batch peer=" + target.host + " error=" + outcome_text(outcome));
     if (!outcome.reply || outcome.reply->type != message::have_valid_objects_reply) continue;
     try {
       const auto answers = message::decode_validity(outcome.reply->payload, chunks[i].size());
       for (size_t j = 0; j < answers.size(); ++j)
         if (answers[j] != message::Validity::cannot_say) out[chunks[i][j]] = answers[j] == message::Validity::intact;
     } catch (const std::exception& error) {
-      _logger.debug(std::string("validated presence peer=") + target.host + " error=" + error.what());
+      _logger.debug("repair presence batch peer=" + target.host + " error=" + error.what());
     }
   }
   return out;
@@ -2566,7 +2714,24 @@ void DistributedStore::note_unsourceable(const ObjectId& id) {
   }
   if (warn)
     _logger.warn("repair cannot source an object this node should own object=" + to_string(id) + " unsourceable_total=" + std::to_string(total) +
-                 "; what is referenced names it and no peer would supply it");
+                 "; the live namespace references it and no peer would supply it");
+}
+
+void DistributedStore::note_local_unreadable(const ObjectId& id) {
+  const auto total = _repair->local_unreadable.fetch_add(1, std::memory_order_relaxed) + 1;
+  bool warn = false;
+  {
+    Lock lock(_repair->sample_mutex);
+    // At most one warning a minute, as for an object no peer would supply.
+    const auto now = std::chrono::steady_clock::now();
+    if (_repair->unreadable_logged == std::chrono::steady_clock::time_point{} || now - _repair->unreadable_logged >= std::chrono::minutes(1)) {
+      _repair->unreadable_logged = now;
+      warn = true;
+    }
+  }
+  if (warn)
+    _logger.warn("repair found a local object it cannot read back object=" + to_string(id) + " local_unreadable_total=" + std::to_string(total) +
+                 "; the store listed it but the read failed");
 }
 
 RepairDiagnostics DistributedStore::repair_diagnostics() const {
@@ -2800,8 +2965,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               read = _data.get(plan.id);
             }
             if (!read) {
-              state.local_unreadable.fetch_add(1, std::memory_order_relaxed);
-              _logger.debug("repair found a local object it cannot read back object=" + to_string(plan.id));
+              note_local_unreadable(plan.id);
               plan.unreadable = true;
               break;
             }
