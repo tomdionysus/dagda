@@ -41,10 +41,14 @@ using test::value_of;
 std::vector<TrieDifference> diff_of(ObjectTrie& left, ObjectTrie& right, TrieDiffCost* cost = nullptr) {
   SnapshotSource a(left.snapshot());
   SnapshotSource b(right.snapshot());
-  std::vector<TrieDifference> out;
-  const auto spent = diff_tries(a, b, [&](const TrieDifference& d) { out.push_back(d); });
+  // In id order through a multimap rather than std::sort: a duplicate still shows, and
+  // g++ 14 at -O3 misreads sort's swap of an optional<Bytes> as reading it uninitialised.
+  std::multimap<ObjectId, TrieDifference> by_id;
+  const auto spent = diff_tries(a, b, [&](const TrieDifference& d) { by_id.emplace(d.id, d); });
   if (cost) *cost = spent;
-  std::sort(out.begin(), out.end(), [](const TrieDifference& x, const TrieDifference& y) { return x.id < y.id; });
+  std::vector<TrieDifference> out;
+  out.reserve(by_id.size());
+  for (auto& [id, d] : by_id) out.push_back(std::move(d));
   return out;
 }
 
