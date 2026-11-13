@@ -58,6 +58,26 @@ using dannan::identity::Hash256;
 using dannan::identity::NodeId;
 using dannan::identity::sha256;
 
+// Bytes in std::less<std::vector<uint8_t>>'s order: the common prefix, then the shorter
+// first. g++ 14 at -O3 misreads libstdc++'s own comparison, inlined into a map's
+// inserts, as a memcmp of more than any object; this is the one place it is said
+// nowhere, and everywhere else it stays an error, as Dannan's writer does (58404e8).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
+#endif
+struct BytesOrder {
+  bool operator()(const Bytes& a, const Bytes& b) const noexcept {
+    const size_t common = std::min(a.size(), b.size());
+    if (common > 0)
+      if (const int order = std::memcmp(a.data(), b.data(), common); order != 0) return order < 0;
+    return a.size() < b.size();
+  }
+};
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
 // The order keys. Sections are compared by merging on these, so the writer
 // emits them strictly increasing; a store's label comes between separators that
 // sort before any character of a path.
@@ -974,7 +994,7 @@ MarkerValue marker_value(const std::string& text, const domain::StorageKey& key,
 void Pass::read_markers(ManifestFile& file) {
   file.begin("2", "markers", SectionKind::markers);
   std::set<std::string> tokens;
-  std::map<Bytes, Bytes> items;
+  std::map<Bytes, Bytes, BytesOrder> items;
   const auto layout_text = trimmed(read_text_or_empty(_state / "storage-layout"));
   MarkerValue layout;
   layout.layout = static_cast<uint8_t>(_layout);
