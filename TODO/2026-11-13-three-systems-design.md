@@ -278,6 +278,12 @@ no fixture of their own (rule 3).
   proposal).
 - A small-message mode for `dannan-bench` (64 B to 1 KiB, calls and notify, p50 and p99), which answers Lir's N1;
   Dagda's measurement (above) reuses its harness.
+- A handler that answers later (found by slice 0's log prototype, 2026-11-13): a replica's group commit answers each
+  append after its sync, but `RequestHandler` answers synchronously and holds one of its class's bounded workers while
+  it waits (`dannan/net/scheduler.h:101-103`). On the Mac at 8,000 single-message calls a second a replica grouped at
+  most 2 calls, and Dannan refused 309,385 of 479,993; batched per tick, nothing was refused. Dagda's log (slice 4)
+  needs a reply handle callable once from any thread, so thousands of calls can wait on a sync while holding no
+  worker. Raised with the Dannan session; its place in Dannan's order is the maintainer's.
 - Not needed from Dannan: a larger advert cap (Dagda aggregates, and puts fast generations on channels), fan-out
   (Lir's own, on Dannan's channels).
 - The write floor already asks Dannan: every replica storing a write, a claim, a delete or a head commit calls
