@@ -23,7 +23,7 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 - The pool's `get` stopping at the first backend's empty answer: Macha's, kept.
 - The trie pins aged on the node's time source where Macha reads the real clock (the same on live nodes).
 - live-b's outage of 2026-11-11 and the Pis' under-voltage: their supplies are the maintainer's to look at.
-- The store's journal lines against the goldens (being mapped, 2026-11-12).
+- The store's journal lines: mapped and restored to Macha's (0.1.2); what still differs is in `2026-11-12-journal-mapping.md`, section 8.
 - Everything only the port can show: Macha's merge hash for hash, delta replay through Macha's codec, end to end,
   performance against the baselines, a real state started, reliability over time, live-a's heap corruption.
 
