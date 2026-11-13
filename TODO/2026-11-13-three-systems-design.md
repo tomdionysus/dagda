@@ -143,8 +143,17 @@ and the wrong cost model at 30 a second per shard. So a log, whose semantics are
   keeps every entry, and takes appends again after an export is retired.
 - A node-local log has the no-rollback of a node-local space: a restored older segment is refused by the generation
   kept beside the node's custody. Case: a segment copied back from before is refused at open.
-- On disk: append-only segments per log, sealed per entry under the domain like an object, rotated and deleted whole
-  when everything in them is retired or expired; nothing is a CONTROL object and the collector is not involved.
+- On disk: one append-only segment stream per node, shared by every log the node holds, each entry sealed under its
+  log's domain like an object and indexed per log; one sync covers a group across all logs. Measured (slice 0, Mac,
+  2026-11-13, 256 logs at 8,000 messages a second): a segment per log failed whether calls went per log (400,064 of
+  479,920 refused, p99 326 ms) or per node (each group synced 135-240 files, 17 ms at p50; p99 5 s); one shared
+  segment with a call per replica node per tick passed, p99 24 ms at a 10 ms tick and 21 ms at 20 ms, nothing
+  refused. A segment is deleted whole once nothing in it is live in any log; a segment mostly retired but holding a
+  long-lived log's entries (Lugh's audit chain, Lir's history) has its live entries copied forward and is then
+  deleted, at a budget, as the pack compaction does. Nothing is a CONTROL object and the collector is not involved.
+- Appends are grouped per destination node, not per log (the Lir session's proposal, 2026-11-13): an appender sends
+  one call per replica node per tick, carrying entries for every log that node holds, so the call count is nodes
+  times ticks whatever the number of logs.
 - A payload over the inline limit stays an object with claims, claimed by the owner and deleted at once by
   `Objects::remove` on the final ack (R8); the entry carries its id.
 - Lir: one log per shard for inflight (stream key: the topic), one per shard for session queues (stream key: the
