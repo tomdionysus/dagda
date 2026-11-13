@@ -262,23 +262,26 @@ class Comparison {
       if (_report.not_checked.size() < _options.keep) _report.not_checked.push_back(category.name + ": " + why);
     }
     const auto kind = begin.kind;
-    while ((before && before->item()) || (after && after->item())) {
+    // Each branch tests the cursor it advances, so the compiler sees it too.
+    for (;;) {
       const Record* a = before ? before->item() : nullptr;
       const Record* b = after ? after->item() : nullptr;
-      if (b == nullptr || (a != nullptr && a->key < b->key)) {
+      if (before != nullptr && a != nullptr && (b == nullptr || a->key < b->key)) {
         ++category.before;
         lost(category, kind, *a);
         before->next_item();
-      } else if (a == nullptr || b->key < a->key) {
+      } else if (after != nullptr && b != nullptr && (a == nullptr || b->key < a->key)) {
         ++category.after;
         extra(category, kind, *b);
         after->next_item();
-      } else {
+      } else if (before != nullptr && after != nullptr && a != nullptr && b != nullptr) {
         ++category.before;
         ++category.after;
         compare_item(category, kind, *a, *b);
         before->next_item();
         after->next_item();
+      } else {
+        break;
       }
     }
     finish(category);
