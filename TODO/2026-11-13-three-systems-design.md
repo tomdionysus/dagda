@@ -296,8 +296,9 @@ no fixture of their own (rule 3).
   worker. Tom ruled (2026-11-13, to the Dannan session): first in Dannan 0.6.0, after 0.5.7. A handler returns
   `Handled::deferred()` and keeps the session's `net::Reply`; deferred answers count against a per-class bound and
   end at the caller's deadline. Slice 4 builds on 0.6.0, and its acceptance is dagda-bench's: one call per message at
-  8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. RequestHandler's signature changes in
-  0.6.0, so Dagda's move to it is a source change in every handler, and Macha's port sees the same.
+  8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. 0.6.0 keeps the synchronous
+  handler as an overload wrapping into the new one (the Dannan session, 2026-11-13), so Dagda's and Macha's handlers
+  change only where they defer: the move is a relink and the new calls.
 - Not needed from Dannan: a larger advert cap (Dagda aggregates, and puts fast generations on channels), fan-out
   (Lir's own, on Dannan's channels).
 - The write floor already asks Dannan: every replica storing a write, a claim, a delete or a head commit calls
