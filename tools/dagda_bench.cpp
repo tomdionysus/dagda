@@ -19,7 +19,10 @@
 //                            [--files shared|per-log] [--deferred yes|no]
 //   dagda-bench log-appender --key FILE --state DIR --port N --bootstrap HOST:PORT
 //                            [--rate N] [--tick-ms N] [--edges N] [--bytes N] [--seconds N]
-//                            [--logs N] [--group log|node]
+//                            [--logs N] [--group log|node] [--hold-ticks N]
+//
+// --hold-ticks keeps each message live that many ticks before its acks (and its retire a
+// tick after), so the scan at the end finds a backlog, as a dead publisher leaves one.
 //
 // --logs spreads the messages by hash over that many logs (Lir's 256 shards). --group log
 // sends one call per log per tick, --group node one per replica node per tick carrying
@@ -34,6 +37,7 @@
 
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -62,6 +66,9 @@ using Clock = std::chrono::steady_clock;
 namespace asio = boost::asio;
 
 constexpr dannan::net::MessageType log_append{4000};
+// The lease-change scan: a replica reads back every live entry of a third of the logs
+// from its shared segment, as a new lease holder resumes what a dead node owed.
+constexpr dannan::net::MessageType log_scan{4001};
 constexpr uint64_t segment_bytes = 64ULL * 1024 * 1024;
 
 std::atomic<bool> stopping{false};
@@ -78,6 +85,7 @@ struct Options {
   uint32_t bytes = 1024;
   uint32_t seconds = 60;
   uint32_t logs = 1;
+  uint32_t hold_ticks = 1;
   std::string group = "node";
   std::string files = "shared";
   bool deferred = false;
@@ -120,6 +128,8 @@ Options parse(int argc, char** argv) {
       out.bytes = static_cast<uint32_t>(std::stoul(value));
     } else if (option == "--seconds") {
       out.seconds = static_cast<uint32_t>(std::stoul(value));
+    } else if (option == "--hold-ticks") {
+      out.hold_ticks = std::max<uint32_t>(1, static_cast<uint32_t>(std::stoul(value)));
     } else if (option == "--logs") {
       out.logs = std::max<uint32_t>(1, static_cast<uint32_t>(std::stoul(value)));
     } else if (option == "--group") {
@@ -233,6 +243,24 @@ struct Samples {
   }
 };
 
+// The process's peak resident memory (getrusage gives bytes on macOS, KiB on Linux) and
+// its open descriptors.
+uint64_t max_rss_kib() {
+  rusage usage{};
+  ::getrusage(RUSAGE_SELF, &usage);
+#if defined(__APPLE__)
+  return static_cast<uint64_t>(usage.ru_maxrss) / 1024;
+#else
+  return static_cast<uint64_t>(usage.ru_maxrss);
+#endif
+}
+size_t open_files() {
+  size_t n = 0;
+  std::error_code ec;
+  for (auto it = std::filesystem::directory_iterator("/dev/fd", ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) ++n;
+  return n;
+}
+
 double ms_since(Clock::time_point start, Clock::time_point end = Clock::now()) { return std::chrono::duration<double, std::milli>(end - start).count(); }
 
 // ---- The node. ---------------------------------------------------------------------
@@ -323,12 +351,42 @@ class Replica {
   }
 #endif
 
+  // Every live entry of the logs with log % 3 == 0, read back from the shared segment
+  // by its offset: the entries, their bytes and the time, as JSON.
+  std::string scan() {
+    std::vector<Live> wanted;
+    {
+      std::lock_guard index_lock(_index_mutex);
+      for (const auto& [dot, live] : _live)
+        if (live.log % 3 == 0) wanted.push_back(live);
+    }
+    const auto start = Clock::now();
+    std::map<uint32_t, int> fds;
+    uint64_t bytes = 0;
+    std::vector<uint8_t> buffer;
+    for (const auto& live : wanted) {
+      auto found = fds.find(live.segment);
+      if (found == fds.end()) {
+        const int fd = ::open((_dir / ("segment-" + std::to_string(live.segment))).c_str(), O_RDONLY);
+        if (fd < 0) continue;
+        found = fds.emplace(live.segment, fd).first;
+      }
+      buffer.resize(live.length);
+      if (::pread(found->second, buffer.data(), live.length, static_cast<off_t>(live.offset)) == static_cast<ssize_t>(live.length)) bytes += live.length;
+    }
+    for (auto& [segment, fd] : fds) ::close(fd);
+    char out[200];
+    std::snprintf(out, sizeof(out), "{\"entries\":%zu,\"bytes\":%llu,\"ms\":%.3f}", wanted.size(), static_cast<unsigned long long>(bytes), ms_since(start));
+    return out;
+  }
+
   std::string figures() {
     std::lock_guard lock(_figures_mutex);
     return "{\"event\":\"replica\",\"groups\":" + std::to_string(_groups) + ",\"calls\":" + std::to_string(_calls) +
            ",\"entries\":" + std::to_string(_entries) + ",\"bytes\":" + std::to_string(_bytes) + ",\"live\":" + std::to_string(_live.size()) +
            ",\"segments_deleted\":" + std::to_string(_deleted) + ",\"sync\":" + _sync_ms.json("ms") + ",\"calls_per_group\":" + _group_calls.json("calls") +
-           ",\"logs_per_group\":" + _logs_per_group.json("logs") + "}";
+           ",\"logs_per_group\":" + _logs_per_group.json("logs") + ",\"max_rss_kib\":" + std::to_string(max_rss_kib()) +
+           ",\"open_files\":" + std::to_string(open_files()) + "}";
   }
 
  private:
@@ -342,6 +400,8 @@ class Replica {
   struct Live {
     uint32_t segment = 0;
     uint64_t offset = 0;
+    uint32_t length = 0;
+    uint32_t log = 0;
     uint32_t acks = 0;
   };
 
@@ -453,19 +513,22 @@ class Replica {
   // The live index the design keeps: dot to segment and offset, acks counted, a
   // retire erasing the entry; a segment with nothing live left is deleted whole.
   void index(const std::vector<Pending>& group, uint64_t base) {
+    std::lock_guard index_lock(_index_mutex);
     uint64_t offset = base;
     for (const auto& p : group) {
       Reader in(p.payload);
       const auto count = in.u32();
       for (uint32_t i = 0; i < count; ++i) {
+        const auto begin = in.skip(0);
         const auto kind = static_cast<Kind>(in.u8());
-        (void)in.u32();
+        const auto log = in.u32();
         const auto dot = std::make_pair(in.u64(), in.u64());
         (void)in.u8();
         in.skip(in.u32());
         in.skip(in.u32());
+        const auto end = in.skip(0);
         if (kind == Kind::append) {
-          _live[dot] = Live{_segment, offset, 0};
+          _live[dot] = Live{_segment, offset + begin, static_cast<uint32_t>(end - begin), log, 0};
           ++_segment_live[_segment];
         } else if (auto found = _live.find(dot); found != _live.end()) {
           if (kind == Kind::ack) {
@@ -497,6 +560,7 @@ class Replica {
   int _fd = -1;
   uint32_t _segment = 0;
   uint64_t _written = 0;
+  std::mutex _index_mutex;
   std::map<std::pair<uint64_t, uint64_t>, Live> _live;
   std::map<uint32_t, uint64_t> _segment_live;
 
@@ -512,6 +576,11 @@ int run_replica(const Options& options) {
   Replica replica(options.state / "log", options.files == "per-log");
   auto& routes = running.node->context().routes();
   routes.add(log_append, {"bench_log_append", dannan::net::Lanes::control, dannan::net::Frames::any, false});
+  routes.add(log_scan, {"bench_log_scan", dannan::net::Lanes::control, dannan::net::Frames::any, false},
+             [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message&) {
+               const auto result = replica.scan();
+               return dannan::net::Handled::processed({dannan::net::message::ok, dannan::net::Bytes(result.begin(), result.end()), {}});
+             });
   if (options.deferred) {
 #if defined(DAGDA_BENCH_DEFERRED)
     routes.bind_deferred(log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request,
@@ -648,12 +717,12 @@ int run_appender(const Options& options) {
         messages.push_back(Message{s, arrived});
       }
     }
-    if (!to_ack.empty()) {
+    if (to_ack.size() >= options.hold_ticks) {
       for (const auto s : to_ack.front())
         for (uint32_t edge = 0; edge < options.edges; ++edge) entries.push_back(Entry{Kind::ack, log_of(s), origin, s, 1, "", std::vector<uint8_t>(16, 0x01)});
       to_ack.pop_front();
     }
-    if (!to_retire.empty()) {
+    if (to_retire.size() > options.hold_ticks) {
       for (const auto s : to_retire.front()) entries.push_back(Entry{Kind::retire, log_of(s), origin, s, 2, "", {}});
       to_retire.pop_front();
     }
@@ -675,13 +744,19 @@ int run_appender(const Options& options) {
   const auto drained_by = Clock::now() + 10s;
   while (in_flight > 0 && Clock::now() < drained_by) std::this_thread::sleep_for(10ms);
   const auto elapsed_s = ms_since(start) / 1000.0;
+  // The lease-change scan, asked of the first replica with what is live as the run ends.
+  std::string scan = "null";
+  {
+    const auto outcome = context.routes().call_and_wait(replicas.front(), log_scan, {}, dannan::sched::FrameType::control, 30000ms);
+    if (outcome.reply && outcome.reply->type == dannan::net::message::ok) scan.assign(outcome.reply->payload.begin(), outcome.reply->payload.end());
+  }
   running.shutdown();
   std::lock_guard lock(figures_mutex);
   std::printf(
       "{\"event\":\"appender\",\"logs\":%u,\"group\":\"%s\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_per_s\":%.0f,"
-      "\"failed\":%llu,\"puback\":%s,\"call\":%s,\"reasons\":%s}\n",
+      "\"failed\":%llu,\"puback\":%s,\"call\":%s,\"scan\":%s,\"reasons\":%s}\n",
       options.logs, options.group.c_str(), options.rate, options.tick_ms, options.edges, options.bytes, elapsed_s, static_cast<unsigned long long>(seq),
-      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str(), [&] {
+      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str(), scan.c_str(), [&] {
         std::string out = "{";
         for (const auto& [why, n] : reasons) {
           std::string clean;
