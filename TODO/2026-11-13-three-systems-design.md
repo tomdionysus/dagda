@@ -390,7 +390,7 @@ were. Sessions, not dates: one session is about a day of this project's work as 
 |---|---|---|---|
 | 0 | `0.1.5` first (Dannan 0.5.6, Debian packages; on the port's critical path), then the measurement (above, 1 to 3, with Lir's log prototype and the 1,280 count) | Macha's flag day; formats; Lir N4 | 3 |
 | 1 | Node-local spaces (D3), the change notice (D4), the fixture installed (D13); the tag records v1 as frozen at `0.1.4` | Lugh P8 starts (grants, TOTP, indexes); Lir's seq counter | 3 |
-| 2 | capable(capability) and replicas(N, scheme, capability), a space under a configured-member domain, per-space k (D1, D2), the advert aggregate (D11) | Lugh's lugh/secrets on every Lugh node, unreadable elsewhere; Lir's per-shard spaces | 4 |
+| 2 | capable(capability) and replicas(N, scheme, capability), a space under a configured-member domain, per-space k (D1, D2), the advert aggregate (D11), group commit for heads (ruled 7) | Lugh's lugh/secrets on every Lugh node, unreadable elsewhere; Lir's per-shard spaces | 4 |
 | 3 | Register map and counter map merges (D6, D7), head-backed leases (D5) | Lir's retained and leases; Lugh's JWKS, back-off, key rotation | 3 |
 | 4 | Logs (D9) at the measured rate (D8); contract v2 frozen | Lir's inflight, session queues and history; Lugh's audit chain; Lir pins | 5 |
 | 5 | The domain catalogue and blind holders (D10), as contract v3 beside v2 | Lugh's genesis and capability-following keys | 4 |
@@ -415,4 +415,10 @@ comes first, as the maintainer ruled.
    Mac meanwhile. Alpine is not now, for Dagda as for Dannan.
 6. 2026-11-14: the x86-64 gate is suspended ("Suspend the x64-64 gate and use only the cluster"): a release's Linux
    gate is arm64 on the Pi cluster (GCC Release with warnings as errors, tests, the Debian packages with lintian,
-   installed and consumed), with the Mac's run. 0.1.5 is tagged on those.
+   installed and consumed), with the Mac's run. 0.1.5 is tagged on those. Later the same day: no builds, tests or
+   benches on the Mac at all, for any session; the Pis only ("STOP all builds on the Mac now. Use the RPi cluster
+   only.").
+7. 2026-11-14: group commit for heads, in slice 2 beside the per-space k: concurrent head commits on a node batched
+   into one device write (their tree nodes, their claims and one durability barrier), as the log's appends are, with
+   Macha's gate and a baseline on the nodes proving its every-node path unchanged. Lugh keeps its own cuts too.
+   After slice 0's Pi figures, slice 1 next.
