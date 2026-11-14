@@ -2412,6 +2412,12 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
     if (successful.size() < floor) ++under_claimed;
     if (successful.empty()) unheld.push_back(id);
   }
+  // Macha's figures for every barrier (ds:881-887 at f0597a4).
+  auto& observations = _context.observations();
+  observations.record("claim.data_barrier_us",
+                      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()));
+  observations.add("claim.data_barrier.ids", ids.size());
+  observations.add("claim.data_barrier.under_claimed", under_claimed);
   if (const auto total = since_ms(); total >= 250)
     _logger.debug("DATA retention barrier ids=" + std::to_string(ids.size()) + " nodes=" + std::to_string(batches.size()) +
                   " total_ms=" + std::to_string(total) + " scan_ms=" + std::to_string(scan_ms) + " short=" + std::to_string(short_ids.size()) +

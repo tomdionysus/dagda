@@ -449,6 +449,30 @@ TEST(DistributedStore, ClaimsGoToEveryHolderAtOnce) {
   EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
 }
 
+// Macha measures each DATA claim barrier (distributed_store.cpp:881-887 at f0597a4):
+// its time, the ids it claimed and those it left under-claimed (the store map,
+// retention gap 2).
+TEST(DistributedStore, ADataClaimBarrierIsMeasured) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 27);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(a.store().write(id, data, write).met);
+  const auto absent = object_id(pattern(64 * 1024, 28));
+  auto& observations = a.context().observations();
+  const auto ids_before = observations.counter("claim.data_barrier.ids").load();
+  const auto short_before = observations.counter("claim.data_barrier.under_claimed").load();
+  EXPECT_EQ(a.store().retain_data({id, absent}, {a.id(), 1}), std::vector<ObjectId>{absent});
+  EXPECT_EQ(observations.counter("claim.data_barrier.ids").load(), ids_before + 2);
+  EXPECT_EQ(observations.counter("claim.data_barrier.under_claimed").load(), short_before + 1);
+  EXPECT_GE(observations.histogram("claim.data_barrier_us").snapshot().count, 1u);
+}
+
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
 // objects no node present holds costs the one batched presence scan and
 // nothing per object: they are reported unheld. An object the peer does
