@@ -1445,6 +1445,8 @@ TEST(StoreDistributedStore, TheReachabilityEpochMovesWithMembershipAndDisks) {
   EXPECT_TRUE(wait_until([&] { return node.store().reachability_epoch() != first; }, 30s));
   const auto second = node.store().reachability_epoch();
   auto backends = node.dagda_node().options().pool.backends;
+  // A disk mounted there: a path that is not a directory stays offline.
+  std::filesystem::create_directories(cluster.dir() / "another");
   backends.push_back({cluster.dir() / "another", 64ULL * 1024 * 1024, 0});
   node.dagda_node().reconfigure({backends, {}});
   EXPECT_NE(node.store().reachability_epoch(), second);

@@ -97,6 +97,9 @@ struct ClusterNodeOptions {
   // More DATA backends beside the node's first, by path; a case adds one to
   // what a restart opens.
   std::vector<std::filesystem::path> more_backends;
+  // Each backend's directory made before the node opens, as an operator mounts its
+  // disks; off for a case about a disk not mounted.
+  bool create_backends = true;
   std::chrono::milliseconds durability_window{20};
   std::string failure_domain;
   store::CacheOptions cache;
@@ -463,6 +466,12 @@ inline void ClusterNode::start() {
 
 inline void ClusterNode::open() {
   if (_node) return;
+  // Its disks are there before it starts, as an operator mounts them: a node never
+  // makes a backend's directory (a missing one is a disk not mounted).
+  if (_options.create_backends) {
+    if (_options.hosts_extents || _options.keeps_backend) std::filesystem::create_directories(backend());
+    for (const auto& more : _options.more_backends) std::filesystem::create_directories(more);
+  }
   dannan::NodeConfig config;
   config.state_path = _dir / "node";
   config.key = _cluster.key();

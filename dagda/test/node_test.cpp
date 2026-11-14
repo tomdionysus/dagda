@@ -358,10 +358,64 @@ TEST(Node, NoBackendOnlineIsReadyButDegraded) {
   EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "node data storage degraded: no disk online of 1; running without one until it returns"));
   EXPECT_TRUE(a.context().readiness().complete());
   auto backends = node.options().pool.backends;
+  // A disk mounted there: a path that is not a directory stays offline (Macha's
+  // activate, storage_pool.cpp:175-178 at f0597a4).
+  std::filesystem::create_directories(cluster.dir() / "good");
   backends[0].path = cluster.dir() / "good";
   node.reconfigure({backends, {}});
   EXPECT_FALSE(degraded());
   EXPECT_TRUE(a.context().readiness().complete());
+  a.stop();
+}
+
+// A backend path that does not exist is a disk not mounted: it stays offline and
+// nothing is made there, so no write lands on the filesystem beneath the mount point
+// (Macha's activate, storage_pool.cpp:175-178 at f0597a4). Before, the node's lock on
+// the root made the directory and the pool adopted it as an empty disk (the store map,
+// pool and local store, gap 2).
+TEST(Node, AMissingBackendPathStaysOfflineAndIsNotCreated) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "unmounted";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  EXPECT_TRUE(a.data().degraded());
+  EXPECT_FALSE(std::filesystem::exists(cluster.dir() / "unmounted"));
+  a.data().refresh();
+  EXPECT_FALSE(std::filesystem::exists(cluster.dir() / "unmounted"));
+  a.stop();
+}
+
+// Mounted later, the disk comes online at the next refresh, and this node holds its
+// lock from then on: another process is refused it.
+TEST(Node, ABackendThatAppearsLaterComesOnlineHeldByThisNode) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "later";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  ASSERT_TRUE(a.data().degraded());
+  std::filesystem::create_directories(cluster.dir() / "later");
+  a.data().refresh();
+  EXPECT_FALSE(a.data().degraded());
+  EXPECT_THROW(store::StorageLock held(cluster.dir() / "later"), std::runtime_error);
+  a.stop();
+}
+
+// A path that cannot be made (beneath a file) is a disk not there either: the node
+// runs, degraded, rather than being refused (the store map, pool and local store, gap 2).
+TEST(Node, ABackendPathThatCannotBeCreatedLeavesTheNodeDegradedNotRefused) {
+  Cluster cluster;
+  std::ofstream(cluster.dir() / "a-file") << "not a directory\n";
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "a-file" / "data";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  EXPECT_TRUE(a.running());
+  EXPECT_TRUE(a.data().degraded());
   a.stop();
 }
 
