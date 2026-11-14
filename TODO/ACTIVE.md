@@ -27,12 +27,24 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   bounded by `ServerLimits::max_deferred`), P2's partition view, Macha's fixes, the cancel and timing fixes. The bench's
   0.7 build (`build/bench070/`) was written against `feature/deferred-reply`; check its calls against the tagged names
   when slice 4 moves to 0.7. Dagda stays on 0.6 until then (0.1.5 is Macha's port base). Dannan's 0.8.0 has started
-  (`feature/owner-test-seam`). CPU pacing moves into Dannan's class-aware pool (its P4).
+  (`feature/owner-test-seam`). CPU pacing moves into Dannan's class-aware pool (its P4, design
+  `../dannan/TODO/2026-11-14-p4-worker-pool.md`, for 0.8.0; reviewed by Dagda 2026-11-14: tasks block only within
+  their declared waits, with a worker reserve so blocked background tasks never take every worker; the rest measured
+  in thread CPU time; the contended reading never blocks). Dagda deletes `store/cpu_pacing.h` at the slice that first
+  links Dannan 0.8. Its maintenance loop stays on its own thread through Macha's port; after it, repair and scrub
+  batches move onto the node pool, and slice 2 puts the head exchange's per-space loops there so spaces stop costing
+  threads.
 
 ## Running
 
-Nothing. Dagda holds no Pi (jupiter released 02:03Z to the Lugh session as the shared TSan Pi; the 0.1.5 .debs wait in
-`/root/dagda-arm64/dagda-tag/build-deb/` there for the Macha session to copy).
+On corvus-jupiter (claimed 03:02Z until 04:17Z): `/root/dagda-arm64/jupiter-lag.sh` (status `status-lag.txt`, ends
+"donelag"): develop at `5070e61` built Release with `-g -fno-omit-frame-pointer` into `lag-build`, then one run of
+`BenchHeads.DISABLED_LughsShape` under `perf record -F 199 -g` (`lag.perf.data`, output `lag-run.txt`). It is also the
+build gate for `13fdda1`. When it ends: `perf report` by thread and symbol, to prove or refute O(state) per imported
+delta; release the claim.
+
+Tom ruled (2026-11-14, relayed by the Lugh session): Lugh's P8.5 does not land until a follower keeps up with Lugh's
+rates on a Pi and a disable is seen on another node within about a second.
 
 ## Next
 
