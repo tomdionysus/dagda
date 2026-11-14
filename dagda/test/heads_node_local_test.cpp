@@ -172,6 +172,7 @@ TEST(HeadsNodeLocal, AnotherNodesSpaceDoesNotOpenHere) {
   const auto id = a.api().heads().id_of("lugh/grants");
   ASSERT_TRUE(put(a, id, "grant/a", 1).finished);
   b.stop();
+  std::filesystem::create_directories(space_directory(b.state(), id).parent_path());
   std::filesystem::copy(space_directory(a.state(), id), space_directory(b.state(), id), std::filesystem::copy_options::recursive);
   b.start();
   const auto result = b.api().heads().open(node_local_spec("lugh/grants"), 10s);
