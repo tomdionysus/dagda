@@ -196,7 +196,17 @@ void Node::open() {
     if (std::error_code ec; std::filesystem::is_directory(backend.path, ec)) lock_reloadable(backend.path);
   _opening_data = false;
   lock(store::control_store_path(_options.state, _options.control));
-  if (!_options.cache.path.empty()) lock_reloadable(_options.cache.path);
+  // A cache that cannot be had is a cache turned off, not a node refused (Macha's
+  // "persistent cache disabled: ", persistent_cache.cpp:73-84 at f0597a4).
+  bool cache_disabled = false;
+  if (!_options.cache.path.empty()) {
+    try {
+      hold_root(_options.cache.path);
+    } catch (const std::exception& error) {
+      _logger.warn("persistent cache disabled: " + std::string(error.what()));
+      cache_disabled = true;
+    }
+  }
 
   step("open node-local-key");
   try {
@@ -273,6 +283,7 @@ void Node::open() {
   step("open cache");
   auto cache = _options.cache;
   cache.sealing = scheme;
+  if (cache_disabled) cache.path.clear();
   _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
   ready(plane_cache);
 
@@ -625,6 +636,7 @@ void Node::reconfigure(const NodeReload& reload) {
   // Every new root locked before anything changes; a backend's only if its directory
   // is there (a missing one is a disk not mounted, and the lock would make it).
   std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> added;
+  bool cache_refused = false;
   for (const auto& root : wanted) {
     {
       dannan::contract::Lock roots(_root_locks_mutex);
@@ -635,6 +647,12 @@ void Node::reconfigure(const NodeReload& reload) {
     try {
       added.emplace(root, std::make_unique<store::StorageLock>(root));
     } catch (const std::exception& error) {
+      // The cache is turned off, as at open; a disk held elsewhere refuses the reload.
+      if (root == reload.cache.path) {
+        _logger.warn("persistent cache disabled: " + std::string(error.what()));
+        cache_refused = true;
+        continue;
+      }
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   }
@@ -649,6 +667,7 @@ void Node::reconfigure(const NodeReload& reload) {
   _data->refresh();
   auto cache = reload.cache;
   cache.sealing = store::SealingScheme::v19(_options.domain.id);
+  if (cache_refused) cache.path.clear();
   _cache->reconfigure(cache);
   // What has been let go, its lock with it.
   {
