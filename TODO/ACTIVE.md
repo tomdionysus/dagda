@@ -21,9 +21,13 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   slice 0 has measured". The verdict: the log passes the maintainer's PUBACK target on the Pi (p99 12.5 ms at a 10 ms tick, 23.5
   ms at 20 ms); heads fall short twice, a node's 85-95 commits a second (group commit) and a follower that falls
   behind in Lugh's shape on the Pi (seen 10-22 s later, growing).
-- **Dannan**: 0.6.0 tagged (the ABI promise; SameMinorVersion; SONAME `libdannan.so.0.6`); 0.7.0 on its
-  `feature/deferred-reply` carries the deferred reply the log needs (slice 4 builds on it), accepted by dagda-bench with
-  the per-connection call path found (Dannan's P5). CPU pacing moves into Dannan's class-aware pool (its P4).
+- **Dannan**: 0.6.0 tagged (the ABI promise; SameMinorVersion; SONAME `libdannan.so.0.6`). **0.7.0 tagged and
+  pushed** (2026-11-14, main `6ce0349`, CI green; SONAME `libdannan.so.0.7`, package `libdannan0.7`, .debs awaiting
+  The maintainer's publish): the deferred reply slice 4 builds on (`Routes::bind_deferred`, an `Answer` given from any thread,
+  bounded by `ServerLimits::max_deferred`), P2's partition view, Macha's fixes, the cancel and timing fixes. The bench's
+  0.7 build (`build/bench070/`) was written against `feature/deferred-reply`; check its calls against the tagged names
+  when slice 4 moves to 0.7. Dagda stays on 0.6 until then (0.1.5 is Macha's port base). Dannan's 0.8.0 has started
+  (`feature/owner-test-seam`). CPU pacing moves into Dannan's class-aware pool (its P4).
 
 ## Running
 
