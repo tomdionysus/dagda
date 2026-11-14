@@ -706,6 +706,7 @@ std::optional<std::string> DistributedStore::scope_refusal(const message::WriteP
 std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(const ObjectId& id, Durability level, bool deferred) {
   // Each forgotten ticket's waiters, told its own evidence.
   std::vector<std::pair<std::shared_ptr<Waiter>, WriteEvidence>> forgotten;
+  size_t over_ceiling = 0;
   std::shared_ptr<TicketRecord> record;
   {
     Lock lock(_shared->mutex);
@@ -734,7 +735,25 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
       }
       _shared->ticket_walk_at = _shared->tickets.size() > bound ? _shared->tickets.size() * 2 : bound;
     }
+    // The ceiling on tickets still waiting: the oldest goes, its waiters told.
+    const auto ceiling = std::max(bound, _options.max_waiting_tickets);
+    while (_shared->tickets.size() > ceiling) {
+      auto oldest = _shared->tickets.begin();
+      {
+        Lock ticket_lock(oldest->second->mutex);
+        auto waiters = std::exchange(oldest->second->waiters, {});
+        if (!waiters.empty()) {
+          const auto evidence = oldest->second->evidence_locked();
+          for (auto& waiter : waiters) forgotten.emplace_back(std::move(waiter), evidence);
+        }
+      }
+      _shared->tickets.erase(oldest);
+      ++over_ceiling;
+    }
   }
+  if (over_ceiling)
+    _logger.warn("deferred write tickets over their ceiling: " + std::to_string(over_ceiling) +
+                 " still waiting forgotten, oldest first; a deferred write nobody waits on holds its ticket until then");
   for (const auto& [waiter, evidence] : forgotten) tell(waiter, evidence);
   return record;
 }

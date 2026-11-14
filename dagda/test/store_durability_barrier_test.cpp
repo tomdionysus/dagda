@@ -297,6 +297,28 @@ TEST(StoreDurabilityBarrier, APublicationLargerThanTheTicketTableStillBarriersEv
   }
 }
 
+// A deferred write nobody waits on cannot hold memory for ever: past the ceiling on
+// tickets still waiting, the oldest is forgotten and the store says so.
+TEST(StoreDurabilityBarrier, TicketsStillWaitingAreBoundedByTheirCeiling) {
+  Cluster cluster;
+  auto tight = options(2, 2);
+  tight.store.max_tickets = 2;
+  tight.store.max_waiting_tickets = 4;
+  auto& a = cluster.add("a", tight);
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 6; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(70 + i));
+    tickets.push_back(a.store().write(object_id(bytes), bytes, deferred_replicated()).ticket);
+  }
+  EXPECT_FALSE(a.store().status(tickets[0]).has_value());
+  EXPECT_FALSE(a.store().status(tickets[1]).has_value());
+  for (size_t i = 2; i < tickets.size(); ++i) EXPECT_TRUE(a.store().status(tickets[i]).has_value()) << i;
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "deferred write tickets over their ceiling"));
+}
+
 // Many deferred writes, one peer: one barrier call, at the highest generation
 // the tickets name, and every ticket met by it. A second wait asks nothing. The
 // same tickets waited on one at a time cost a call each.

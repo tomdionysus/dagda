@@ -276,9 +276,13 @@ struct DistributedStoreOptions {
   // Bytes the ephemeral queue holds before it refuses.
   size_t ephemeral_queue_bytes = 64 * 1024 * 1024;
   // Settled tickets kept for a later status(), the oldest forgotten first past this
-  // bound. A ticket still waiting is never forgotten, however many there are: Macha's
-  // batch, the caller's, kept every extent a publication handed it.
+  // bound. A ticket still waiting is kept, as Macha's batch, the caller's, kept every
+  // extent a publication handed it, up to `max_waiting_tickets` (4 TiB of publication
+  // at Macha's 4 MiB extents): past that the oldest waiting ticket is forgotten, with a
+  // warning, so a deferred write nobody waits on cannot hold memory for ever. A batch
+  // the caller owns, through the Context, is the proper end of that (the store map).
   size_t max_tickets = 4096;
+  size_t max_waiting_tickets = 1024 * 1024;
   // Prompt replication's first retry, doubling (Macha's 30 s).
   std::chrono::milliseconds prompt_retry{30000};
   // Whether a prompt copy's read of the local object is admitted as speculative
