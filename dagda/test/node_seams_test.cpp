@@ -80,6 +80,8 @@ TEST(NodeSeams, ANodeWithoutACertificateOpensAndAdvertisesNoWrapKey) {
   NodeOptions options;
   options.state = dir.path() / "state";
   options.key = test::known_answer_key();
+  // A disk mounted there: a node never makes a backend's directory.
+  std::filesystem::create_directories(dir.path() / "data");
   options.pool.backends.push_back({dir.path() / "data", 64ULL * 1024 * 1024, 0});
   options.maintenance.automatic = false;
   Node node(host.context(), options);
@@ -467,6 +469,8 @@ struct HandBuiltNode {
     NodeOptions options;
     options.state = state();
     options.key = test::known_answer_key();
+    // A disk mounted there: a node never makes a backend's directory.
+    std::filesystem::create_directories(data());
     options.pool.backends.push_back({data(), 64ULL * 1024 * 1024, 0});
     options.maintenance.automatic = false;
     if (configure) configure(options);
@@ -573,6 +577,7 @@ TEST(NodeSeams, AStopBetweenBackendsComesThroughAndTheNextRunFinishes) {
   std::stop_source stop;
   HandBuiltNode built([&](NodeOptions& options) {
     pack_options(options);
+    std::filesystem::create_directories(options.state.parent_path() / "second");
     options.pool.backends.push_back({options.state.parent_path() / "second", 64ULL * 1024 * 1024, 0});
   });
   const auto second = built.dir.path() / "second";
