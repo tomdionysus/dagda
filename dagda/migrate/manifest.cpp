@@ -664,7 +664,7 @@ void Pass::list(Store& store) {
     }
     if (ec) throw std::runtime_error("cannot walk " + objects.string() + ": " + ec.message());
   }
-  std::sort(store.loose.begin(), store.loose.end(), [](const Store::Loose& a, const Store::Loose& b) { return a.key < b.key; });
+  std::sort(store.loose.begin(), store.loose.end(), [](const Store::Loose& a, const Store::Loose& b) { return BytesOrder{}(a.key, b.key); });
   for (const auto& loose : store.loose) _total_bytes += loose.stat.size;
   const auto packs = store.root / "packs";
   if (std::filesystem::is_directory(packs, ec)) {
