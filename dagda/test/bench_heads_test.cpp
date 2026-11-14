@@ -199,6 +199,48 @@ TEST(BenchHeads, DISABLED_CommitsAcrossSpaces) {
   }
 }
 
+// Lugh's storm on one node (the Lugh session, 2026-11-14: a TOTP sign-in is about three
+// commits over two spaces, and a storm can land on one node): commits a second from 1, 4
+// and 8 writers on one node, to one space and spread over two. A space's mutation lock
+// serialises its own commits across the device write; this shows what that costs.
+TEST(BenchHeads, DISABLED_ConcurrentWritersOnOneNode) {
+  constexpr auto run_for = 5s;
+  for (const int spaces : {1, 2}) {
+    for (const int writers : {1, 4, 8}) {
+      Cluster cluster;
+      ClusterNodeOptions options;
+      for (int i = 0; i < spaces; ++i) options.spaces.push_back(founded_spec("storm/" + std::to_string(i)));
+      auto& a = cluster.add("a", options);
+      cluster.start_all();
+      ASSERT_TRUE(cluster.converged());
+      std::vector<heads::SpaceId> ids;
+      for (int i = 0; i < spaces; ++i) ids.push_back(a.api().heads().id_of("storm/" + std::to_string(i)));
+      Figures commit;
+      std::atomic<uint64_t> next{0};
+      std::atomic<uint64_t> refused{0};
+      const auto start = Clock::now();
+      std::vector<std::thread> threads;
+      for (int w = 0; w < writers; ++w) {
+        threads.emplace_back([&] {
+          while (Clock::now() - start < run_for) {
+            const auto n = next++;
+            const auto before = Clock::now();
+            const auto result = a.api().heads().mutate_delta(ids[n % ids.size()], edit(true, n), 10s);
+            if (!result.finished) {
+              ++refused;
+              continue;
+            }
+            commit.add(ms_between(before, Clock::now()));
+          }
+        });
+      }
+      for (auto& thread : threads) thread.join();
+      bench("storm.commit", "spaces=" + std::to_string(spaces) + " writers=" + std::to_string(writers) + " refused=" + std::to_string(refused.load()), commit,
+            std::chrono::duration<double>(Clock::now() - start).count());
+    }
+  }
+}
+
 // 3. Lugh's shape: one space of 50,000 keys taking 50 commits a second for a minute, and
 // when another node sees each: Lugh's "disabled on A, refused on B", and the round a
 // head-backed lease's acquire would add to a TOTP sign-in. The commits come from node a
