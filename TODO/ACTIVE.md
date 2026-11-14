@@ -49,7 +49,9 @@ rates on a Pi and a disable is seen on another node within about a second.
 1. **The follower's lag** (Lugh's P8.5 waits on it, the maintainer 2026-11-14): profiled on the Pi. Not compute and not the
    follower: the leader's replicator, blocked mostly in per-commit claim rounds to the peers and the entry-by-entry
    history push (the design, "What slice 0 has measured (the Pi)"). Not yet closed: time the replicator's rounds from
-   inside, then batch them. Slice 2's first step unless the maintainer pulls it ahead of slice 1 (asked, 2026-11-14).
+   inside, then batch them. Slice 2's first step unless the maintainer pulls it ahead of slice 1 (asked, 2026-11-14). Lugh agrees
+   with the order (per-round claims, a push told what the peer holds, an early accept) and waits on slice 2's first
+   Pi figure against its bound of about a second: tell the Lugh session when there is one.
 2. Slice 0's last two figures, when their slices exist: the channel cost per space (Lir wants it: its retained-topic
    index listens on the keys-changed notice), Lugh's leases as such (after slice 3). Tell Lir if the log's default
    tick is ever set past 40 ms (p99 is the tick plus about 2.5 ms).
