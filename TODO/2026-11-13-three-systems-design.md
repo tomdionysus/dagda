@@ -292,8 +292,12 @@ fall short, and Lir's per-shard spaces meet the same node-wide cost. Two ways:
 2. **Owners batch**: each owner folds its writes into fewer commits. Dagda unchanged; each owner carries the cost and
    the rate stays bounded near 90 a second a node.
 
-First, find where the node-wide time goes (the dot, the control store, the sync), since group commit's form depends on
-it; that is slice 0 work before the Pi run.
+Where the time goes (a 4 s sample of the eight-writer run, the Mac): inside a commit's path, about half is storing
+the tree's nodes as CONTROL objects (`ControlTreeNodeStore::put`, `LocalStore::put`, the durability domain's barrier)
+and half the claim barrier retaining them (`StoreClaimBarrier::retain_control_here`, `RetentionStore::retain_batch`);
+both under the space's mutation lock, both through the node's one CONTROL store and durability domain. The writers'
+remaining time is the wait for that lock. Group commit for heads is then: the commits waiting on a node write their
+tree nodes and claims as one batch under one durability barrier, each commit's record still its own.
 
 ### The contract
 
