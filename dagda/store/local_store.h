@@ -152,6 +152,8 @@ struct LocalStoreDiagnostics {
   // pack and its directory); an object's durability is the domain's barrier,
   // never one of these.
   uint64_t own_syncs = 0;
+  // Objects sealed for a put: none for a put refused for room.
+  uint64_t seals = 0;
 };
 
 // Objects in one directory tree on one device (requirements S1 to S9, S16 to
@@ -523,6 +525,8 @@ class LocalStore final : public contract::ObjectStore {
   std::atomic<uint64_t> _pack_recovery_truncated_tails{0};
   std::atomic<uint64_t> _pack_recovery_skipped_regions{0};
   std::atomic<uint64_t> _pack_recovery_skipped_bytes{0};
+  // seal() is const: its count is bookkeeping, not state.
+  mutable std::atomic<uint64_t> _seals{0};
   std::atomic<uint64_t> _own_syncs{0};
   std::atomic_bool _scan_complete{false};
   std::atomic_bool _scan_failed{false};

@@ -598,6 +598,7 @@ Bytes LocalStore::open_loose(const ObjectId& id, std::span<const uint8_t> file) 
 LocalStore::SealedObject LocalStore::seal(const ObjectId& id, std::span<const uint8_t> data) const {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot seal");
   auto sealed = seal_object(*_key, _sealing, id, data);
+  _seals.fetch_add(1, std::memory_order_relaxed);
   SealedObject out;
   out.plain_size = data.size();
   out.nonce = sealed.nonce;
@@ -999,6 +1000,10 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
     pack = _pack_threshold && data.size() <= _pack_threshold;
   }
 
+  // Room first, as Macha's put (local_store.cpp:1099-1113 at f0597a4): a put refused
+  // for room seals nothing, so a pool at capacity does not encrypt every write once a
+  // backend it spills through. The ciphertext is the plaintext's size.
+  if (!physical_space_available_locked((pack ? pack_header_size : loose_header_size) + data.size())) return false;
   // Sealed under the object's lock with the index free, as the install is.
   SealedObject sealed;
   {
@@ -1970,6 +1975,7 @@ LocalStoreDiagnostics LocalStore::diagnostics() const noexcept {
   out.pack_recovery_skipped_regions = _pack_recovery_skipped_regions.load(std::memory_order_relaxed);
   out.pack_recovery_skipped_bytes = _pack_recovery_skipped_bytes.load(std::memory_order_relaxed);
   out.own_syncs = _own_syncs.load(std::memory_order_relaxed);
+  out.seals = _seals.load(std::memory_order_relaxed);
   return out;
 }
 
