@@ -35,6 +35,19 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   batches move onto the node pool, and slice 2 puts the head exchange's per-space loops there so spaces stop costing
   threads.
 
+## The maintainer, 2026-11-14 (evening, to this session directly): Macha first
+
+Macha's store cutover (step 1a, aliasing its store types to Dagda's) found five differing (ObjectTrie,
+UnreferencedSince, DiskServiceMonitor and its timer, TrieUnion) and `Node::open_store`'s refusal without key custody.
+The maintainer: "Port through dagda::Node and Context is correct, but you must make ABSOLUTELY SURE that Macha can perform exactly
+as well as it did before with Dagda as its storage backend. It is not enough for the concepts and primitives to be
+'sorta' like Macha." Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
+proven; **0.2.0 stays tagged locally and unpushed** until the maintainer says. The proof (proposed to the maintainer): a call-by-call map from
+Macha's develop code to `dagda::Node` and `Context`, exact in semantics, with every gap fixed in Dagda; Macha's own
+suites as the gate on Dagda; performance against Macha's live baselines at the same load; data through the in-place
+migration on copies of real state; reliability under crash, restart and partition. Open for the maintainer: key custody on Macha's
+nodes, or the node-local key from another source.
+
 ## Running
 
 Nothing; node-b released 03:5xZ. The profile's data stay there (`/root/dagda-arm64/lag.perf.data`,
