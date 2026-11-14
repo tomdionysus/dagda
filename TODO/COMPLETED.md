@@ -19,9 +19,10 @@ On node-b (arm64, NVMe, never throttled), claimed 01:25Z to 02:03Z and released.
   slice 2 bounding it.
 - 0.1.5's Debian packages from the tag with Macha's fixtures (without `state-live-a`): `dagda_tests` 1,041 ran,
   1,038 passed, 3 skipped (the opt-in NodeSeams pair and StoreRepair's root question), 0 failed, 6 disabled; the
-  fixture cases 83 (HeadsReplicaFixture 15, MigrateHeadsReal 20, HeadsReplicaDamagedCopy 48), none skipped; lintian
-  clean. The packages are at `/root/dagda-arm64/dagda-tag/build-deb/` on node-b; told to the Macha session, which
-  expected 68 fixture cases and is asked to check the difference.
+  three parameterised fixture suites alone ran 83 cases (HeadsReplicaFixture 15, MigrateHeadsReal 20,
+  HeadsReplicaDamagedCopy 48), and no fixture-gated case skipped (the 3 skips are not fixture cases); lintian clean.
+  The Macha session copied the packages off node-b (sha256 matched). Its expected 68 was the whole fixture-gated set
+  at `ddba991`, not these three suites; the set has grown since.
 - `feature/bench` merged to develop (`d424572`) with one fix: the bench's refusal reasons are kept to printable ASCII
   (`13fdda1`, which also carries clang-format's reflow of the file). That last commit is not yet built: the next Pi
   build of develop is its gate.
