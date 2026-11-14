@@ -1508,18 +1508,18 @@ TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
   b.interpose(hold(message::put_object, gate));
   const auto bytes = pattern(64 * 1024, 62);
   const auto id = object_id(bytes);
-  std::atomic_uint64_t progress{0};
+  auto progress = std::make_shared<std::atomic_uint64_t>(0);
   WriteOptions publication;
   publication.level = Durability::durable;
   publication.no_progress_budget = 30s;
-  publication.progress = &progress;
+  publication.progress = progress;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
   for (int step = 0; step < 4; ++step) {
     time.advance(20s);
-    progress.fetch_add(1);
+    progress->fetch_add(1);
   }
   // 80 s on, past two budgets, but the counter moved within each.
   EXPECT_EQ(write.wait_for(2s), std::future_status::timeout);

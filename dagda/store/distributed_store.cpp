@@ -849,7 +849,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
         const auto admitted =
             refusal ? std::nullopt
                     : admit_data(options.frame, data.size(), own_deadline ? std::optional(std::max(left, std::chrono::milliseconds(1))) : no_caller_deadline,
-                                 options.cancelled);
+                                 options.cancelled.get());
         if (refusal) {
           why = *refusal;
         } else if (!admitted) {
@@ -1798,7 +1798,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   const auto wait = [&] { return own_deadline ? std::optional(std::chrono::ceil<std::chrono::milliseconds>(until - _time.now())) : no_caller_deadline; };
   std::optional<Bytes> local;
   {
-    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled);
+    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
     if (!admitted) return {};
     local = _data.get(id);
   }
@@ -1811,7 +1811,7 @@ ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& op
   if (past_deadline()) return {};
   std::optional<Bytes> cached;
   {
-    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled);
+    const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
     if (!admitted) return {};
     cached = _cache.get(id);
   }
