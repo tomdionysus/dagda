@@ -46,6 +46,9 @@ rates on a Pi and a disable is seen on another node within about a second.
 
 ## Next
 
+0. **Tom, 2026-11-14 (asked in this session):** slice 1 is released as `0.2.0`, tagged and pushed (main, develop and the
+   tag); the no-rollback defence is both layers in Dannan (the design, node_local); the lag's fix is slice 2's first
+   step.
 1. **The follower's lag** (Lugh's P8.5 waits on it, Tom 2026-11-14): profiled on the Pi. Not compute and not the
    follower: the leader's replicator, blocked mostly in per-commit claim rounds to the peers and the entry-by-entry
    history push (the design, "What slice 0 has measured (the Pi)"). Not yet closed: time the replicator's rounds from
@@ -59,7 +62,14 @@ rates on a Pi and a disable is seen on another node within about a second.
    `COMPLETED.md` has the gate), and develop now builds on Dannan 0.7.0, the minor Lugh and Lir run, with Macha's
    fixtures passing there. To tag it: the Debian packages with lintian, the capability report and the release notes
    recording v1 frozen at `0.1.4`; the number is Tom's (recommended `0.2.0`: contract v2, new API, Dannan 0.7, while
-   Macha stays on `0.1.5`). Lugh and Lir start on the tag. What it holds:
+   Macha stays on `0.1.5`). Lugh and Lir start on the tag. Prepared: `release/0.2.0` (local), develop plus the version
+   commit (`CMakeLists.txt`, `debian/control`, the migrate tool's version case, `README.md` with its status,
+   `docs/packaging.md`, `tools/build-deb.sh`). On Tom's word: merge it to `main`, tag `0.2.0` annotated with the message
+   below, build the Debian packages from the tag on a Pi with Dannan 0.7.0's packages (installing them there replaces
+   the Pi's Dannan 0.6 dev package: agree a Pi first), lintian, install and consume, update the capability report, push
+   `main`, `develop` and the tag, and tell Lugh and Lir the number. The tag's message:
+   "0.2.0: slice 1 on Dannan 0.7: node-local head spaces, the change notice, the installed cluster fixture; contract
+   version 2 served beside version 1, frozen at 0.1.4". What it holds:
    - D13, the fixture installed (`90f2411`): seven fixture headers under `dagda/test/fixtures/`, `dagda::test_fixtures`,
      and `test/package/fixture_consumer.cpp`.
    - D4, the change notice (`3678a06`): `Space::watch`/`unwatch`/`notice_if_moved`/`changed`, the Context's
