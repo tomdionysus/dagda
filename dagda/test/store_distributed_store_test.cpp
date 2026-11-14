@@ -197,6 +197,38 @@ TEST(DistributedStore, APutReplacesAReplicaThatFailsAtOnce) {
   EXPECT_EQ(standby->calls_of(message::put_object), 1u);
 }
 
+// Repair's pacing learns the link from the store's own traffic, as Macha's does: a write
+// that lands a copy on a peer and a read fetched from one each teach the network
+// estimate (distributed_store.cpp:435, :1428 at f0597a4; the store map's review). Before,
+// only replication and repair's batches did, so pacing stayed at its first guess.
+TEST(DistributedStore, WritesAndReadsTeachTheNetworkEstimate) {
+  Cluster cluster;
+  auto small_extents = [] {
+    auto out = options(2, 2);
+    out.store.extent_size = 64 * 1024;
+    return out;
+  };
+  auto& writer = cluster.add("writer", small_extents());
+  cluster.add("peer", small_extents());
+  auto& reader = cluster.add("reader", [&] {
+    auto out = small_extents();
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_EQ(writer.store().estimated_network_bps(), 0.0);
+  const auto data = pattern(64 * 1024, 21);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(object_id(data), data, write).met);
+  EXPECT_GT(writer.store().estimated_network_bps(), 0.0);
+
+  ASSERT_EQ(reader.store().estimated_network_bps(), 0.0);
+  ASSERT_TRUE(reader.store().get(object_id(data), ReadOptions{}));
+  EXPECT_GT(reader.store().estimated_network_bps(), 0.0);
+}
+
 // Macha's put: a cancel seen while the write still waits on a copy fails the write,
 // whatever already landed (distributed_store.cpp:147-151, 378-383 at f0597a4): the
 // id-taking form answers false and the content-addressed form throws "object
