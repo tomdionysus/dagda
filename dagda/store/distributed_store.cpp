@@ -1442,8 +1442,9 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     replica.evidence.why = "awaiting barrier: " + why;
     replica.running = false;
   };
-  const auto refuse = [](ReplicaRecord& replica, const std::string& why) {
+  const auto refuse = [](ReplicaRecord& replica, BarrierLoss loss, const std::string& why) {
     replica.evidence.state = ReplicaState::refused;
+    replica.evidence.loss = loss;
     replica.evidence.why = why;
     replica.awaiting = Awaiting::none;
     replica.running = false;
@@ -1459,7 +1460,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     if (place->node == _self) continue;
     const auto found = peers.find(place->node);
     if (found == peers.end()) {
-      each(place->records, place->node, [&](ReplicaRecord& replica) { refuse(replica, "unknown node"); });
+      each(place->records, place->node, [&](ReplicaRecord& replica) { refuse(replica, BarrierLoss::unknown_node, "unknown node"); });
       continue;
     }
     const auto peer = found->second;
@@ -1522,7 +1523,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                                               if (held != present.end())
                                                                 acknowledge(replica, held->second);
                                                               else
-                                                                refuse(replica, "absent on the peer after its restart");
+                                                                refuse(replica, BarrierLoss::absent_on_peer, "absent on the peer after its restart");
                                                             });
                                                           }
                                                         } catch (const std::exception& error) {
@@ -1553,7 +1554,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
           if (fresh)
             acknowledge(replica, fresh);
           else
-            refuse(replica, "absent here: not re-derived from disk");
+            refuse(replica, BarrierLoss::absent_here, "absent here: not re-derived from disk");
         });
       }
     }
