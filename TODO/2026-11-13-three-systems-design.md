@@ -305,16 +305,27 @@ loopback, the same runs as the Mac; outputs in `/root/dagda-arm64/bench-log-runs
   case was p50 103 ms, p99 347 ms. "Disabled on A, refused on B" would be 10-20 s on a Pi today (Lugh needs about a
   second). Where b's time goes is not yet measured; it is the first thing slice 2 must explain, beside group commit,
   and the Lugh session waits on it for its sign-in (its P8.5).
-  The suspected mechanism, from the code and not yet proven: a follower materializes every delta it imports, each at
-  O(state). `Replica::import_history` (`heads/replica.cpp:1547`) applies the delta to a copy of the parent's whole
-  state (`apply_delta`), re-encodes the whole record (`encode_after_counted`) and hashes the whole payload
-  (`valid_record_counted`). The replicator batches its rounds (`Exchange::replication_loop`, newest head only), but
-  `push_history_to_peer` still sends every entry in the run and the follower materializes each. Above about 25 ms an
-  entry at 50,000 keys on a Pi core, the follower cannot keep up at 39 a second and the lag grows without bound; the
-  Mac's cores stay under it. This is Macha's open "O(state) per delta". The proof: the replica's cost counters
-  (`record_bytes_hashed`, syncs) and a profile of node b in `BenchHeads.DISABLED_LughsShape` on a Pi. The fixes to
-  weigh then (Tom's call): a follower that applies a run of deltas and materializes only its newest, or a state whose
-  delta application and hash are O(change).
+  **Profiled on jupiter (2026-11-14, develop `5070e61` with frame pointers; the lag reproduced both times, seen at p50
+  11.1 and 11.4 s, p99 26.8 and 25.6 s):**
+  - Not compute, and not the follower. A CPU profile (`perf record -F 199 -g`) found the whole process using about 0.4
+    of the Pi's four cores. On node b, importing an entry (`Replica::import_history`) and accepting a head blocked
+    under a second each over the whole run. The O(state)-per-delta suspicion, written here earlier, is refuted as the
+    cause: b's per-entry cost is real but small.
+  - The wait is the leader's replicator. An off-CPU profile (`sched:sched_switch` with call chains, no events lost)
+    of node a's one replicator thread for the space (`Exchange::replication_loop`): 14.5 s blocked in claim retention
+    on the peers, one synchronous round per owed commit, in order (`StoreClaimBarrier::retain_on_peers` to
+    `DistributedStore::retain_control` to `call_all`, `exchange.cpp:1097-1107`); 7.8 s in the history push
+    (`push_history_to_peer`, `wait_call`), which walks back from the newest head with one synchronous
+    `has_history_entry` call per missing entry before its windowed puts; under 1 s idle. b's head moves only when
+    that round reaches its `accept_commit_on` (`exchange.cpp:686`).
+  - Not closed: that thread's blocked time (23 s) and CPU (about 2 s) account for only about a third of the 77 s run,
+    so the breakdown is right in proportion but the full timeline is not. Closing it needs the replicator's rounds
+    timed from inside (per-round counters: commits taken, claim rounds, history calls, time to accept on each peer),
+    which slice 2 adds as the first step, not another blind run.
+  - What slice 2 then weighs (Tom's call, with Lugh's bound of about a second): claims retained per round, not per
+    commit (one batched call per peer for every owed commit's claims, as group commit batches them locally); the
+    history push told what the peer already holds instead of asking entry by entry; and the accept sent to a peer as
+    soon as its history lands, not after every peer's claims.
 - The bench prints one refusal reason with raw bytes in it (`reply type 127 ...request queue full...overloaded`): the
   bench's formatting of an error reply, not the library's; fixed with the bench.
 
