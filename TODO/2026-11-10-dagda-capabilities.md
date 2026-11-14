@@ -16,7 +16,7 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as the
 
 ## Head and gates
 
-- **Tag `0.1.4`**, annotated, on `main`, the tag the port builds on. Since `0.1.0`: the store's peer calls name the maintainer's
+- **Tag `0.1.5`**, annotated, on `main`, the tag the port builds on. Since `0.1.0`: the store's peer calls name the maintainer's
   purpose deadlines (`0.1.1`, below, "What the port must do"); a manifest pass holds its partial, so a resume beside it is
   refused (the rehearsal's gap); every store journal line in Macha's text and level (`TODO/2026-11-12-journal-mapping.md`).
   `0.1.3` changes no store behaviour: forked test children end through `dagda::test::child_exit`
@@ -25,7 +25,15 @@ a wake the test's copy of your loop lacked. Expect the port to find more; as the
   (GCC `-Wshadow`); four window cases step past their window however late a call notes its request sent (a Pi timing race).
   `0.1.4` installs it as Dannan does: `find_package(dagda 0.1.4 CONFIG)`, exact, bringing Dannan 0.5.3; `dagda::dagda`;
   SONAME `libdagda.so.0.1.4`; `dagda-migrate` installed (`docs/packaging.md`). macOS plain at `0.1.4`: 1041 passed, 6 disabled.
-  Next, `0.1.5`: Dannan 0.5.6 and the Debian packages (the maintainer, 2026-11-13).
+  `0.1.5`: on Dannan 0.6 (`find_package(dannan 0.6.0 CONFIG)`, the minor whose patches keep their ABI, SONAME
+  `libdannan.so.0.6`), packaged for Debian as Dannan is (`libdagda0.1.5`, `libdagda-dev`, `dagda-tools`; `debian/`,
+  `tools/build-deb.sh`, `docs/packaging.md`); GCC 14's Release build with warnings as errors made clean (three false
+  positives answered in the code, none silenced in the build: `migrate/compare.cpp`'s cursors, `migrate/manifest.cpp`'s
+  byte order, a test's sort). No store behaviour changed. Gates: macOS plain **1041 passed, 6 disabled, 0 warnings**;
+  arm64 on node-b (GCC 14.2, Dannan 0.6.0's own packages from its tag): the Debian packages built with their
+  tests (**970 passed, 71 skipped**: 68 need Macha's fixtures, absent there, 3 skip as root; 0 failed), lintian clean,
+  installed and consumed; GCC Release with warnings as errors **0 warnings**, its tests 970 passed, 71 skipped, 0
+  failed. The x86-64 gate is suspended (the maintainer, 2026-11-14); Linux gates run on the Pi cluster.
 - **arm64 at `0.1.3`, on build-host** (as below; Macha's fixtures without `state-live-a`), 2026-11-13:
   - Plain (GCC 14.2): build with **0 warnings**; **1038 passed, 0 failed, 3 skipped** (the root cases), 6 disabled.
   - TSan (Debian's clang 19.1.7, Dannan 0.5.3 built with TSan, the kernel on 4K pages for the run since clang 19's TSan does
