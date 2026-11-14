@@ -56,9 +56,10 @@ rates on a Pi and a disable is seen on another node within about a second.
    index listens on the keys-changed notice), Lugh's leases as such (after slice 3). Tell Lir if the log's default
    tick is ever set past 40 ms (p99 is the tick plus about 2.5 ms).
 3. **Slice 1** (the maintainer, 2026-11-14): built and proven on the Pi and merged to develop (`1065b18`, not pushed, not tagged;
-   `COMPLETED.md` has the gate). To tag it: a run with Macha's fixtures, the Debian packages with lintian, the capability
-   report and the release notes recording v1 frozen at `0.1.4`; the number is the maintainer's (recommended `0.2.0`: contract v2
-   and new API, while Macha stays on `0.1.5`). What it holds:
+   `COMPLETED.md` has the gate), and develop now builds on Dannan 0.7.0, the minor Lugh and Lir run, with Macha's
+   fixtures passing there. To tag it: the Debian packages with lintian, the capability report and the release notes
+   recording v1 frozen at `0.1.4`; the number is the maintainer's (recommended `0.2.0`: contract v2, new API, Dannan 0.7, while
+   Macha stays on `0.1.5`). Lugh and Lir start on the tag. What it holds:
    - D13, the fixture installed (`90f2411`): seven fixture headers under `dagda/test/fixtures/`, `dagda::test_fixtures`,
      and `test/package/fixture_consumer.cpp`.
    - D4, the change notice (`3678a06`): `Space::watch`/`unwatch`/`notice_if_moved`/`changed`, the Context's
