@@ -36,6 +36,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/retention_ledger.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/maintenance_gates.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/cpu_pacing.h"
@@ -519,10 +520,11 @@ class Node {
   void arm_status();
   void maintenance_loop(std::stop_token stop);
   void stop_maintenance();
-  // One GC pass on the provider registered now. `forced`: due whatever the
-  // node's activity. Whether the collector is settled: its sweep complete
+  // One GC pass on the provider registered now. `forced`: due whatever the node's
+  // activity and quiet window; `metadata_dirty` holds garbage marking either way
+  // (Macha's !metadata_dirty). Whether the collector is settled: its sweep complete
   // with nothing deferred, or nothing to run.
-  bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
+  bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}, bool metadata_dirty = false) DANNAN_REQUIRES(_maintenance_mutex);
   contract::ReachabilityProvider* registered_provider() const;
   // The collector over `provider`, made when there is none or it is over another.
   void ensure_collector_locked(contract::ReachabilityProvider& provider) DANNAN_REQUIRES(_maintenance_mutex);
@@ -610,6 +612,9 @@ class Node {
   // registered.
   std::unique_ptr<ledger::Collector> _collector DANNAN_GUARDED_BY(_maintenance_mutex);
   contract::ReachabilityProvider* _collector_provider DANNAN_GUARDED_BY(_maintenance_mutex) = nullptr;
+  // The loop's destructive gates (maintenance_gates.h), made at open with the repair's
+  // foreground quiet.
+  std::unique_ptr<MaintenanceGates> _gates DANNAN_GUARDED_BY(_maintenance_mutex);
 
   mutable dannan::contract::Mutex _gc_figures_mutex;
   GcFigures _gc_figures DANNAN_GUARDED_BY(_gc_figures_mutex);

@@ -65,6 +65,7 @@ add_executable(dagda_tests
   migrate_migrate_test.cpp
   migrate_retag_test.cpp
   node_local_maintenance_test.cpp
+  maintenance_gates_test.cpp
   maintenance_steps_test.cpp
   node_maintenance_test.cpp
   node_seams_test.cpp
