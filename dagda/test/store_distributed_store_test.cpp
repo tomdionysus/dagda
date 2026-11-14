@@ -183,17 +183,17 @@ TEST(DistributedStore, APutReplacesAReplicaThatFailsAtOnce) {
     return std::nullopt;
   });
   // Bounds a put that never replaces the refused replica.
-  std::atomic_bool cancelled{false};
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
   std::jthread watchdog([&](std::stop_token stop) {
     const auto until = std::chrono::steady_clock::now() + 2s;
     while (!stop.stop_requested() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(5ms);
-    if (!stop.stop_requested()) cancelled = true;
+    if (!stop.stop_requested()) *cancelled = true;
   });
   WriteOptions write;
-  write.cancelled = &cancelled;
+  write.cancelled = cancelled;
   EXPECT_TRUE(writer.store().put(object_id(data), data, write));
   watchdog.request_stop();
-  EXPECT_FALSE(cancelled.load());
+  EXPECT_FALSE(cancelled->load());
   EXPECT_EQ(standby->calls_of(message::put_object), 1u);
 }
 
@@ -250,11 +250,11 @@ TEST(DistributedStore, ACancelledPutFailsEvenWhenACopyLanded) {
   };
 
   const auto data = pattern(64 * 1024, 9);
-  std::atomic_bool cancelled{false};
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
   WriteOptions write;
-  write.cancelled = &cancelled;
+  write.cancelled = cancelled;
   {
-    auto canceller = cancel_soon(cancelled);
+    auto canceller = cancel_soon(*cancelled);
     EXPECT_FALSE(writer.store().put(object_id(data), data, write));
   }
   // The local copy landed before the cancel: it is the write, not the answer.
@@ -263,9 +263,9 @@ TEST(DistributedStore, ACancelledPutFailsEvenWhenACopyLanded) {
   EXPECT_TRUE(evidence.cancelled);
 
   const auto other = pattern(64 * 1024, 10);
-  cancelled = false;
+  *cancelled = false;
   {
-    auto canceller = cancel_soon(cancelled);
+    auto canceller = cancel_soon(*cancelled);
     try {
       (void)writer.store().put(other, write);
       ADD_FAILURE() << "a cancelled put returned an id";
@@ -276,6 +276,57 @@ TEST(DistributedStore, ACancelledPutFailsEvenWhenACopyLanded) {
     }
   }
   gate.open();
+}
+
+// Read and write requirement 5 (the Macha session's, 2026-11-14): a caller may cancel
+// and go away while its fetch is in flight, as an abandoned FUSE read does. The store
+// co-owns the cancellation, so nothing it runs reads the caller's memory after the
+// caller let it go; the cancel is honoured at the fetch, and the store lets the flag
+// go once its work is done.
+TEST(DistributedStore, ACallerMayCancelAndGoWhileItsFetchIsInFlight) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  auto& reader = cluster.add("reader", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 23);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(id, data, write).met);
+
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  writer.interpose(hold(message::get_object, gate));
+  peer.interpose(hold(message::get_object, gate));
+  boost::asio::io_context caller;
+  std::optional<ReadResult> read;
+  std::weak_ptr<std::atomic_bool> held;
+  {
+    ReadOptions options;
+    options.cancelled = std::make_shared<std::atomic_bool>(false);
+    held = options.cancelled;
+    auto cancel = options.cancelled;
+    reader.store().read(id, std::move(options), caller.get_executor(), [&](ReadResult result) { read = std::move(result); });
+    ASSERT_TRUE(gate.wait_for_entries(1));
+    *cancel = true;
+  }
+  // The caller holds nothing now; the store still does.
+  EXPECT_FALSE(held.expired());
+  ASSERT_TRUE(wait_until([&] {
+    caller.restart();
+    caller.poll();
+    return read.has_value();
+  }));
+  EXPECT_EQ(read->object, nullptr);
+  EXPECT_NE(read->answer, FetchAnswer::ok);
+  gate.open();
+  EXPECT_TRUE(wait_until([&] { return held.expired(); }));
 }
 
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming

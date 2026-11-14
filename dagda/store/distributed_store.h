@@ -155,7 +155,9 @@ struct WriteOptions {
   // can land has landed.
   std::chrono::milliseconds deadline{0};
   dannan::sched::FrameType frame = dannan::sched::FrameType::loader;
-  std::atomic_bool* cancelled = nullptr;
+  // Set to cancel. Co-owned: the store keeps it for as long as any work for the
+  // write runs, so a caller may go away first (read and write requirement 5).
+  std::shared_ptr<std::atomic_bool> cancelled{};
   // A window over the whole write, not a call (Macha's publication budget,
   // fuse.publication_no_progress_deadline, 30 s): re-armed by a copy landing, a
   // fallback starting, any pending call that moved within it, or `progress`
@@ -164,8 +166,8 @@ struct WriteOptions {
   // replication. Zero: none, as every Macha write but publication.
   std::chrono::milliseconds no_progress_budget{0};
   // Progress elsewhere in the caller's pipeline, shared by its workers; read only
-  // with a budget.
-  const std::atomic_uint64_t* progress = nullptr;
+  // with a budget. Co-owned as `cancelled` is.
+  std::shared_ptr<const std::atomic_uint64_t> progress{};
   // The scope the write is checked under (WriteScope): a replica that
   // refuses it stores nothing and says why in the evidence.
   std::optional<dannan::contract::Principal> principal;
@@ -194,7 +196,8 @@ struct ReadOptions {
   std::chrono::milliseconds deadline{0};
   // Rotates equal-scored replicas, so a file's stripes spread over them.
   size_t stripe = 0;
-  std::atomic_bool* cancelled = nullptr;
+  // Set to cancel; co-owned, as WriteOptions::cancelled.
+  std::shared_ptr<std::atomic_bool> cancelled{};
 };
 
 struct ReadResult {
