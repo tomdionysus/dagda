@@ -261,6 +261,13 @@ struct NodeOptions {
   // node. An open stage is told before its work, and the node waits for the
   // call: Macha's StartupStageHook, which may hold a stage to stall a startup.
   std::function<void(std::string_view)> trace;
+  // Macha's StartupStageHook in Macha's stage names: "data-storage" on the thread
+  // recovering the DATA pool, and "control-storage", "cache", "retention" and,
+  // with heads, "metadata" on the thread opening the node, the two recovering side
+  // by side (Macha's local_state.cpp:57-79 at f0597a4). Each is told before its
+  // plane's work and the node waits for the call, so a stage may be held. Called
+  // from both threads at once: it must be thread-safe.
+  std::function<void(std::string_view)> startup_stage;
   // Ticked by each unit of recovery as the stores open: an owner's, outliving
   // the node, for its stall gate over the construction (Macha's
   // service_startup_no_progress). Nothing: only the node sees them.
@@ -520,6 +527,8 @@ class Node {
   void open();
   void step(std::string_view what);
   void ready(const std::string& plane);
+  // NodeOptions::startup_stage, when given.
+  void startup_stage(std::string_view stage);
   void arm_status();
   void maintenance_loop(std::stop_token stop);
   void stop_maintenance();
