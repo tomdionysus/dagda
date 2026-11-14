@@ -77,6 +77,13 @@ rates on a Pi and a disable is seen on another node within about a second.
 0. **Tom, 2026-11-14 (asked in this session):** slice 1 is released as `0.2.0`, tagged and pushed (main, develop and the
    tag); the no-rollback defence is both layers in Dannan (the design, node_local); the lag's fix is slice 2's first
    step.
+   Dannan's half, 2026-11-14 (the Dannan session): the sealed counters are on Dannan's develop (`b53ac5e`) and ship in
+   0.8.0, on the Context's Identity: `counter(label)`; `advance_counter(label, value)`, durable before it returns;
+   `advance_counters({label: value, ...})`, one durable write, all or none; `note_counter(label, value)`, made durable
+   by the roster loop within a second and at stop. A lower value throws `std::invalid_argument` naming the label; all
+   four throw `std::logic_error` without custody. File `<state>/identity/counters` under HKDF(seal root,
+   "dannan/counter/1"). The peers' witness is 0.9.0. When 0.8.0 is tagged (Dannan tells us), `NodeLocalGenerations`
+   moves onto these counters; slices stay paused until Tom resumes them.
 1. **The follower's lag** (Lugh's P8.5 waits on it, Tom 2026-11-14): measured and closed from inside (the design, "What
    slice 0 has measured (the Pi)", `feature/replicator-rounds`): the leader's replicator is saturated, about 31 ms a
    commit against 25 ms, three fifths in per-commit claim rounds to the peers, most of the rest in the entry-by-entry

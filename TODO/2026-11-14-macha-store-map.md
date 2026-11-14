@@ -66,7 +66,54 @@ against Macha's `std::async` per node, `:924-954`), and the backend lock creatin
 
 ## The callers' side (Macha's)
 
-Written by the Macha session after its heap-corruption investigation (its standing P0).
+Written by the Macha session: `../macha/TODO/store-map-callers/` at Macha `d53ddfe` (README.md the index; six sections:
+filesystem, fuse-and-hydration, catalogue-and-media, metadata-and-control, ingest-and-torrent, http-status-and-root;
+222 rows, verdicts against `Context`, GAP where only a `Node` part serves). Against Macha `f0597a4` and this branch at
+about `0d9a4ff`. To be reviewed here against code, row by row.
+
+Verified by Macha, and checked here:
+- The state lock: Macha's Service flocks `<state>/.macha.lock` and the node's storage lock flocks the same root, so in
+  one process the node is refused "in use". Macha's side: its root rewrite drops its own lock (one lock, one owner).
+  One state directory is ruled (Macha's `TODO/2026-11-13-store-cutover.md:14-16`: "one state directory (Macha's
+  `state_path`, so `--node-state` is `--state`)"); `NodeOptions::state`'s comment and `docs/migration.md` now say so.
+  Gap: no case yet opens a node whose Dagda state is Dannan's state directory; one is written with the Context work.
+- Read and write requirement 5 (data safety): `WriteOptions::cancelled` and `ReadOptions::cancelled` are raw
+  `std::atomic_bool*` (`distributed_store.h:158`, `:197`), read by store workers after an async caller may have
+  returned (`distributed_store.cpp:971-974`, `:1826`, `:1912`). Every async form `Context` offers takes a cancellation
+  the store co-owns.
+- API traffic is viewer activity (Macha's law 2, `docs/principles-and-laws.md:92-99`, ruled 2026-10-07): Macha's HTTP
+  server notes every served request and draining body into the store's own clock (`service.cpp:81-82` at f0597a4),
+  which repair pacing and DATA admission read through `idle_for`. Dagda's store clock takes only object work, and
+  `StoreDistributedStore.ActivityIsObjectWorkInMachasMeaning` (`store_distributed_store_test.cpp:1556-1576`) pins that.
+  Its half about Dannan's inbound counting stands (a peer's RPC is not a viewer); its claim that Macha's activity is
+  only object bytes does not. Fix with `Context`'s Activity noun: an owner's note of presence by class reaches the
+  clock the store, repair and the arbiter read (cache section row 27); the case is amended, not deleted.
+
+Dagda's review of the callers' side (2026-11-14, every row against code; `build/callers-map-review.md`): 280 claims
+confirmed, 27 wrong, 14 not reached (rows with no store call). No verdict was wrong; the errors are in claims and
+citations around them. Checked here in code before recording:
+- Requirement 5 reaches the blocking forms too: `await` (`context.cpp:36-43`) throws `deadline + completion_margin`
+  after it began and returns, while the store's job still holds the caller's raw `cancelled` (`distributed_store.cpp:1153`).
+  The co-owned cancellation is for every `Context` form, blocking or not.
+- The barrier's re-put set (filesystem row 17): Macha takes as definitive "object absent", `peer-unknown` and any
+  `local-barrier-failed`, re-deriving a local failure from disk first (Macha `distributed_store.cpp:606-646`,
+  `:734-737` at f0597a4); Dagda refuses an unknown node in English ("unknown node", `distributed_store.cpp:1462`) and
+  leaves a local failure other than a stale ticket transient (`:1556-1559`), so the wait runs to its deadline. A typed
+  loss in `ReplicaEvidence` must carry each of these. Whether a local failure re-derives from disk is the Macha-side-first
+  item above (Macha's call), and Dagda matches what Macha settles.
+Corrected: `Context` does have CONTROL work, in `Claims::retain(RetentionClass::control)` (`context.cpp:177-211`, through
+`retain_control`, `distributed_store.cpp:2421-2476`: fetch to local, local put, offer, claim); missing are the bare forms
+(a fetch with no claim, a local get and has, a strict local put, a claimless offer, `offer_control` at `:2400-2419`).
+"Four workers in one FIFO" holds for Objects, Claims and barrier jobs, not Heads (the spaces thread), Leases, or an
+ephemeral write (inline). No extra SHA-256 on the content-addressed path (both hash twice); a third comes only from the
+missing known-id write. Foreground remote bytes are noted already (`distributed_store.cpp:1929`).
+
+The readers' remaining findings, now checked (the review's table for each): `Context` has no CONTROL calls
+(fetch to local, local get and has, a strict local put, an offer writing no claim); typed outcomes (a read cancelled,
+timed out or unavailable; a typed per-ticket loss in barrier evidence; a refused commit typed); the hosting advert
+withdrawn by Macha on a failed dial-back is put back by the storage server's refresh; `Context` work runs on four
+workers in one FIFO whatever its class, barriers always at loader, `offer_control_on` holding the whole missing graph in
+memory; a DATA admission for Macha's own disk I/O and the device service monitor through `Context`.
 
 ## Gaps and their fixes
 
