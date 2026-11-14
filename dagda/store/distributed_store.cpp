@@ -993,6 +993,11 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       run->changed.wait_for(lock.native(), std::min<std::chrono::nanoseconds>(wake - now, look_at_the_clock));
     }
 
+    // Each remote copy that landed teaches the network estimate, timed by its own call,
+    // as Macha's write does (ds:435 at f0597a4).
+    for (const auto& call : run->calls)
+      if (call.done && call.ok && call.node.id != _self) note_network(data.size(), call.took);
+
     // The evidence, built under the run's lock: a call answering from here on
     // lands in the ticket instead.
     auto record = into ? std::move(into) : new_ticket(id, options.level, deferred);
@@ -1987,6 +1992,8 @@ void DistributedStore::fetched(const std::shared_ptr<SharedFetch>& fetch, const 
   if (outcome.reply && outcome.reply->type == message::object_reply) {
     try {
       data = take_object_reply(std::move(*outcome.reply), fetch->id);
+      // A fetch teaches the network estimate, as Macha's (ds:1427-1428 at f0597a4).
+      if (data) note_network(data->bytes.size(), Clock::now() - started);
     } catch (const std::exception& error) {
       _logger.debug("object read: " + std::string(error.what()));
     }
@@ -2320,7 +2327,10 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
   return unheld;
 }
 
-bool DistributedStore::ensure_control_local(const ObjectId& id) { return _control_fetch.ensure_control_local(id); }
+// The pull's transfers teach the network estimate, as Macha's (ds:2292-2295 at f0597a4).
+bool DistributedStore::ensure_control_local(const ObjectId& id) {
+  return _control_fetch.pull(id, [this](uint64_t bytes, std::chrono::steady_clock::duration elapsed) { note_network(bytes, elapsed); });
+}
 
 bool DistributedStore::offer_control_on(const NodeRecord& target, const std::vector<ObjectId>& ids, FrameType frame, ControlOffer& out) {
   // Ask the peer what it lacks before sending anything, so the cost scales
@@ -2359,17 +2369,22 @@ bool DistributedStore::offer_control_on(const NodeRecord& target, const std::vec
     sizes.push_back(bytes->size());
     requests.push_back({target, message::put_control_object, message::encode_object(id, *bytes), frame});
   }
+  const auto put_started = Clock::now();
   const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), window, _options.metadata_call);
   bool ok = true;
+  uint64_t bytes_sent = 0;
   for (size_t i = 0; i < outcomes.size(); ++i) {
     if (outcomes[i].reply && outcomes[i].reply->type == dannan::net::message::ok) {
-      out.bytes_sent += sizes[i];
+      bytes_sent += sizes[i];
       ++out.objects_sent;
     } else {
       _logger.debug("CONTROL object store peer=" + target.host + " error=" + outcome_text(outcomes[i]));
       ok = false;
     }
   }
+  out.bytes_sent += bytes_sent;
+  // One sample for the offer: its sends shared the link (Macha's ds:2197-2200).
+  if (bytes_sent) note_network(bytes_sent, Clock::now() - put_started);
   return ok;
 }
 
