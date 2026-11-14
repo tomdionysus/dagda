@@ -3,6 +3,22 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-14 (05:25Z): develop on Dannan 0.7.0 (`feature/dannan-070`, merged)
+
+Lir and Lugh run Dannan 0.7.0 and can link only one Dannan, so slice 1's tag must be on 0.7 for them to link Dagda
+(the Lir session, 2026-11-14). Macha stays on `0.1.5` (Dannan 0.6); a defect its port finds is fixed on a `0.1.x`
+branch from that tag. The move: `DAGDA_DANNAN_MINIMUM` 0.7.0, `libdannan-dev (>= 0.7.0), (<< 0.8~)`,
+`Version.BuiltAgainstTheDannanItLinks` at minor 7, the build notes; the library needed nothing, and three test doubles
+took 0.7's new pure virtuals (`Routes::bind_deferred`; `Nodes::partition`, `watch_partition`, `unwatch_partition`,
+`members`, `retire`), found by diffing Dannan's `context.h` between the tags.
+
+Gate, corvus-jupiter, Dannan 0.7.0 built from its tag into a prefix, Dagda GCC 14.2 Release with warnings as errors:
+**0 errors, 0 warnings**; `dagda_tests` with Macha's fixtures (without `state-macnessa`): **1065 ran, 1062 passed, 3
+skipped** (the opt-in NodeSeams pair and StoreRepair's root question), **0 failed**: slice 1's Macha-fixture run.
+Installed to the prefix and consumed: `fixture_consumer` passes; `consumer` passes once the prefix is on the loader
+path (it links only libdagda, whose install carries no run path to a private prefix's Dannan; installed as packages
+there is no such prefix).
+
 ## 2026-11-14 (04:45Z): slice 1 built and proven on the Pi, merged to develop (`1065b18`, not tagged)
 
 Written test-first from the three-systems design on `feature/slice1`, merged to develop:
