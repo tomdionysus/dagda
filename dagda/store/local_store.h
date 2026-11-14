@@ -468,6 +468,41 @@ class LocalStore final : public contract::ObjectStore {
   // under it.
   mutable dannan::contract::IoMutex _pack_io_mutex DANNAN_ACQUIRED_BEFORE(_mutex);
   uint64_t _reserved_write_bytes DANNAN_GUARDED_BY(_mutex) = 0;
+  // What pack compaction must keep for replay. A put no longer live, superseded or
+  // removed, stays in its pack until that pack is compacted away; while it does, the
+  // remove record that keeps its object removed must outlive any compaction of the
+  // remove's own pack. So: the packs (by sequence) holding a dead put of each id, and
+  // the one remove record (its pack and size) that keeps each such id removed. Such a
+  // remove is live bytes, not dead, so its pack is not compacted for it alone. Likewise
+  // the newest touch of a live object whose put lies in another pack: it carries the
+  // object's age until compaction rewrites the put with that age.
+  struct NeededRecord {
+    uint64_t pack = 0;
+    uint64_t bytes = 0;
+  };
+  std::map<ObjectId, std::vector<uint64_t>> _dead_put_packs DANNAN_GUARDED_BY(_mutex);
+  std::map<uint64_t, std::vector<ObjectId>> _dead_puts_in_pack DANNAN_GUARDED_BY(_mutex);
+  std::map<ObjectId, NeededRecord> _needed_removes DANNAN_GUARDED_BY(_mutex);
+  std::map<ObjectId, NeededRecord> _needed_touches DANNAN_GUARDED_BY(_mutex);
+  // The live put of the id, in `pack`, is superseded or removed: its touch is dead.
+  void note_dead_put_locked(const ObjectId& id, const std::filesystem::path& pack) DANNAN_REQUIRES(_mutex);
+  // A touch record of `bytes` in `pack` for the live id: needed, an earlier one dead.
+  void note_touch_locked(const ObjectId& id, const std::filesystem::path& pack, uint64_t bytes) DANNAN_REQUIRES(_mutex);
+  // A touch record at `touched_ms` appended or replayed: the live entry takes its
+  // age, and the record is needed or dead as above.
+  void note_touch_record_locked(const ObjectId& id, uint64_t touched_ms, const std::filesystem::path& pack, uint64_t bytes) DANNAN_REQUIRES(_mutex);
+  // The id's needed touch, if any, is dead from here.
+  void drop_touch_locked(const ObjectId& id) DANNAN_REQUIRES(_mutex);
+  // A remove record of `bytes` in `pack`: needed while a dead put of the id remains,
+  // else dead at once.
+  void note_remove_locked(const ObjectId& id, const std::filesystem::path& pack, uint64_t bytes) DANNAN_REQUIRES(_mutex);
+  // A put of the id: no earlier remove is needed any more.
+  void note_put_locked(const ObjectId& id) DANNAN_REQUIRES(_mutex);
+  // A pack compacted away: its dead puts are gone, and a remove kept only for them
+  // becomes dead.
+  void forget_pack_locked(uint64_t sequence) DANNAN_REQUIRES(_mutex);
+  // Live bytes the needed removes and touches keep in each pack, by pack path.
+  std::map<std::filesystem::path, uint64_t> needed_record_bytes_locked() const DANNAN_REQUIRES(_mutex);
   static constexpr size_t verified_loose_limit = 4096;
   mutable std::map<ObjectId, VerifiedLoose> _verified_loose DANNAN_GUARDED_BY(_mutex);
   // Loose objects present: published when a put installs the file, filled
