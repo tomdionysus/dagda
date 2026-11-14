@@ -570,6 +570,8 @@ class Node {
   // under a reload's _maintenance_mutex.
   mutable dannan::contract::Mutex _root_locks_mutex;
   std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks DANNAN_GUARDED_BY(_root_locks_mutex);
+  // The roots configured now: hold_root takes no other.
+  std::set<std::filesystem::path> _wanted_roots DANNAN_GUARDED_BY(_root_locks_mutex);
   std::shared_ptr<const domain::StorageKey> _node_local;
   std::optional<domain::WrapKey> _wrap;
   std::unique_ptr<store::StoragePool> _data;

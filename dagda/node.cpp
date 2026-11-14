@@ -183,6 +183,12 @@ void Node::open() {
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   };
+  {
+    dannan::contract::Lock roots(_root_locks_mutex);
+    _wanted_roots.clear();
+    for (const auto& backend : _options.pool.backends) _wanted_roots.insert(backend.path);
+    if (!_options.cache.path.empty()) _wanted_roots.insert(_options.cache.path);
+  }
   _opening_data = true;
   // A backend whose directory is not there is a disk not mounted: nothing is made in
   // its place (the lock would make it), and the pool leaves it offline until it is.
@@ -447,6 +453,8 @@ void Node::stop() {
 void Node::hold_root(const std::filesystem::path& root) {
   dannan::contract::Lock lock(_root_locks_mutex);
   if (_reloadable_locks.contains(root)) return;
+  // A refresh racing a reload that let this root go does not take it back.
+  if (!_wanted_roots.contains(root)) throw std::runtime_error(root.string() + " is no longer configured");
   _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
 }
 
@@ -631,8 +639,11 @@ void Node::reconfigure(const NodeReload& reload) {
     }
   }
   {
+    // From here the new roots are the configured ones: a refresh still activating a
+    // root let go cannot take its lock back.
     dannan::contract::Lock roots(_root_locks_mutex);
     _reloadable_locks.merge(added);
+    _wanted_roots = wanted;
   }
   _data->reconfigure(reload.backends);
   _data->refresh();
