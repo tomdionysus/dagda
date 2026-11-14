@@ -419,6 +419,36 @@ TEST(Node, ABackendPathThatCannotBeCreatedLeavesTheNodeDegradedNotRefused) {
   a.stop();
 }
 
+// A cache that cannot be had (its path beneath a file, or another holding it) is a cache
+// turned off, not a node refused: Macha's cache warns "persistent cache disabled: " and
+// the node runs without it (persistent_cache.cpp:73-84 at f0597a4; the store map's
+// review, the cache root).
+TEST(Node, ACacheThatCannotBeHadIsDisabledAndTheNodeRuns) {
+  Cluster cluster;
+  std::ofstream(cluster.dir() / "a-file") << "not a directory\n";
+  ClusterNodeOptions beneath_a_file;
+  beneath_a_file.cache.path = cluster.dir() / "a-file" / "cache";
+  beneath_a_file.cache.max_blocks = 64;
+  auto& a = cluster.add("a", beneath_a_file);
+  a.start();
+  EXPECT_TRUE(a.running());
+  EXPECT_FALSE(a.cache().enabled());
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "persistent cache disabled: "));
+  a.stop();
+
+  const auto held_path = cluster.dir() / "held-cache";
+  std::filesystem::create_directories(held_path);
+  store::StorageLock held(held_path);
+  ClusterNodeOptions held_elsewhere;
+  held_elsewhere.cache.path = held_path;
+  held_elsewhere.cache.max_blocks = 64;
+  auto& b = cluster.add("b", held_elsewhere);
+  b.start();
+  EXPECT_TRUE(b.running());
+  EXPECT_FALSE(b.cache().enabled());
+  b.stop();
+}
+
 // Macha's node answers while its store recovers: the Dannan node starts first, so
 // Status and its roster work and the store's planes read as not ready, then the
 // store opens with the node already running.
