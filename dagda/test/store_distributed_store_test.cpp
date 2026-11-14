@@ -197,6 +197,55 @@ TEST(DistributedStore, APutReplacesAReplicaThatFailsAtOnce) {
   EXPECT_EQ(standby->calls_of(message::put_object), 1u);
 }
 
+// Macha's put: a cancel seen while the write still waits on a copy fails the write,
+// whatever already landed (distributed_store.cpp:147-151, 378-383 at f0597a4): the
+// id-taking form answers false and the content-addressed form throws "object
+// replication cancelled". Macha's callers turn that into EINTR or a torrent's abort. The
+// evidence says it was cancelled (the store map, DistributedStore, gap 5).
+TEST(DistributedStore, ACancelledPutFailsEvenWhenACopyLanded) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  dannan::test::Gate gate;
+  peer.interpose(hold(message::put_object, gate));
+  const auto cancel_soon = [](std::atomic_bool& flag) {
+    return std::jthread([&flag] {
+      std::this_thread::sleep_for(300ms);
+      flag = true;
+    });
+  };
+
+  const auto data = pattern(64 * 1024, 9);
+  std::atomic_bool cancelled{false};
+  WriteOptions write;
+  write.cancelled = &cancelled;
+  {
+    auto canceller = cancel_soon(cancelled);
+    EXPECT_FALSE(writer.store().put(object_id(data), data, write));
+  }
+  // The local copy landed before the cancel: it is the write, not the answer.
+  EXPECT_TRUE(writer.data().has(object_id(data)));
+  const auto evidence = writer.store().write(object_id(data), data, write);
+  EXPECT_TRUE(evidence.cancelled);
+
+  const auto other = pattern(64 * 1024, 10);
+  cancelled = false;
+  {
+    auto canceller = cancel_soon(cancelled);
+    try {
+      (void)writer.store().put(other, write);
+      ADD_FAILURE() << "a cancelled put returned an id";
+    } catch (const StorageUnavailable&) {
+      ADD_FAILURE() << "a cancelled put was refused as unavailable";
+    } catch (const std::runtime_error& error) {
+      EXPECT_STREQ(error.what(), "object replication cancelled");
+    }
+  }
+  gate.open();
+}
+
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
 // objects no node present holds costs the one batched presence scan and
 // nothing per object: they are reported unheld. An object the peer does

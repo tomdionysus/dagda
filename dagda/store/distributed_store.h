@@ -125,6 +125,9 @@ struct WriteEvidence {
   // be incomplete; it reports again when the last pending member's copy
   // lands, for as long as it is kept.
   bool complete = false;
+  // The caller's cancel was seen while the write still waited on a copy: the write
+  // failed whatever landed (Macha's put), and what landed is reported as it stands.
+  bool cancelled = false;
   std::vector<ReplicaEvidence> replicas;
   Ticket ticket;
 
