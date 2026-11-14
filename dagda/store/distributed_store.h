@@ -79,6 +79,20 @@ const char* durability_name(Durability) noexcept;
 enum class ReplicaState : uint8_t { acknowledged, pending, refused };
 const char* replica_state_name(ReplicaState) noexcept;
 
+// Why a deferred copy's barrier refused it for good: each one says put the object
+// again (Macha's re-put set, distributed_store.cpp:734-737 at f0597a4). Typed, so a
+// caller never matches the English in `why`.
+enum class BarrierLoss : uint8_t {
+  none,
+  // The peer restarted and, asked from its disk, does not hold it.
+  absent_on_peer,
+  // This node's barrier failed or its ticket died, and the copy could not be
+  // re-derived from disk (StoragePool::reassert_durable).
+  absent_here,
+  // The node the copy went to is no longer on the roster.
+  unknown_node,
+};
+
 // One node of a write, by Dannan node id.
 struct ReplicaEvidence {
   dannan::identity::NodeId node;
@@ -92,6 +106,8 @@ struct ReplicaEvidence {
   std::string why;
   // A deferred write's place on that node, for its barrier.
   std::optional<DurabilityTicket> durability;
+  // Refused by its barrier for good, and why; none otherwise.
+  BarrierLoss loss = BarrierLoss::none;
   // Acknowledged after the write returned, by repair, prompt replication or
   // a returning member's catch-up: what the ticket reported again.
   bool repaired = false;

@@ -455,7 +455,9 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
   }
   EXPECT_FALSE(evidence[before.size() - 1].met);
   EXPECT_EQ(evidence[before.size() - 1].on(b.id())->state, ReplicaState::refused);
+  EXPECT_EQ(evidence[before.size() - 1].on(b.id())->loss, BarrierLoss::absent_on_peer);
   EXPECT_EQ(evidence[before.size() - 1].on(a.id())->state, ReplicaState::acknowledged);
+  EXPECT_EQ(evidence[before.size() - 1].on(a.id())->loss, BarrierLoss::none);
   EXPECT_TRUE(evidence.back().met);
 
   size_t plain = 0;
@@ -503,6 +505,10 @@ TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   ASSERT_TRUE(evidence);
   EXPECT_FALSE(evidence->met);
   EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "local storage durability barrier failed: "));
+  // Definitive, and typed: put it again.
+  ASSERT_NE(evidence->on(a.id()), nullptr);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::refused);
+  EXPECT_EQ(evidence->on(a.id())->loss, BarrierLoss::absent_here);
 }
 
 // The asynchronous form posts its evidence, never inline, in the order asked;
