@@ -20,7 +20,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "dagda/heads/space.h"
