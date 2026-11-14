@@ -218,7 +218,8 @@ struct MaintenanceReport {
 // the node-local key, and the one ledger cache is divided as Macha divides it.
 struct NodeOptions {
   // Dagda's state: the layout marker, the ledgers and, by default, the
-  // control store. A directory of its own, never Dannan's state path.
+  // control store. For Macha the one state directory, Dannan's too (Macha's
+  // operator ruling, 2026-11-13: one state directory, Macha's state_path).
   std::filesystem::path state;
   // The domain this node's store holds and its key; until the catalogue
   // (step 4) a node holds one domain, v1 (Macha's), whose key is
