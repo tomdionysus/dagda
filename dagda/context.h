@@ -7,10 +7,12 @@
 
 #pragma once
 
+#include <atomic>
 #include <boost/asio/any_io_executor.hpp>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -23,7 +25,9 @@
 #include "dagda/heads/spaces.h"
 #include "dagda/lease/keeper.h"
 #include "dagda/lease/lease.h"
+#include "dagda/store/data_work.h"
 #include "dagda/store/distributed_store.h"
+#include "dagda/store/io_pressure.h"
 #include "dagda/store/object_id.h"
 #include "dannan/sched/walk.h"
 #include "dannan/sched/work.h"
@@ -33,10 +37,17 @@
 // Dannan's Context. Written as a specification: every operation states what
 // it waits on and its thread safety; every asynchronous operation takes a
 // deadline and the caller's executor and posts its completion there, never
-// inline, at the latest when the deadline passes; every blocking form is a
-// wait on that completion, never another code path, and must not be called
-// from one of the io context's threads; nothing that happened on more than
-// one node is a bare boolean. Every noun is thread-safe.
+// inline, at the latest when the deadline passes; every blocking form of
+// version 1 is a wait on that completion, never another code path, and must not
+// be called from one of the io context's threads; nothing that happened on more
+// than one node is a bare boolean. Every noun is thread-safe.
+//
+// Version 2's blocking forms for Macha (Tom, 2026-11-14, the route: the Context
+// serves every store call Macha makes, with Macha's semantics) run on the
+// caller's own thread with no worker hop, as Macha's store calls did, and take
+// any deadline from their options, zero being none of its own. A cancellation
+// or progress counter a caller hands in is co-owned by the store for as long as
+// its work runs (read and write requirement 5).
 //
 // Version 1 is frozen at 0.1.4 (Tom, 2026-11-13): Domains, Objects (with the
 // instant delete), Claims, Leases, Tickets and, on one node, Heads; it is what
@@ -466,6 +477,31 @@ class Context {
     Node& _node;
   };
 
+  // This node's DATA devices, for an owner's own disk I/O (Macha's torrent reads
+  // and writes): the same credit and device reserve the store's work takes, and
+  // the pool's service monitor. Contract version 2.
+  class Devices {
+   public:
+    static constexpr dannan::sched::Waits admit_waits = dannan::sched::Waits::locks;
+    // DATA credit, then a device slot, for `bytes` of `frame` work, held by the
+    // returned admission across one device operation, never across a peer's
+    // answer. `wait`: none runs under the arbiter's no-progress window; zero tries
+    // once. Nothing when refused, cancelled or stopping. Throws
+    // std::invalid_argument for the control frame (law 1).
+    std::optional<store::DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
+                                                   std::shared_ptr<std::atomic_bool> cancelled = {});
+    // One completed DATA read or write of the owner's on these devices: feeds
+    // the pressure signal deferrable work stands aside for. Waits on nothing.
+    void note_io(std::chrono::nanoseconds elapsed, uint64_t bytes) noexcept;
+    bool pressured() const noexcept;
+    store::DiskServiceSample sample() const noexcept;
+
+   private:
+    friend class Context;
+    explicit Devices(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
   // When work of each class was last present here, on the one clock the store,
   // repair, the local stages and DATA admission read (contract version 2). The
   // store notes its own object work; a hosted system notes what only it sees, as
@@ -511,6 +547,7 @@ class Context {
   Tickets& tickets() noexcept { return _tickets; }
   Activity& activity() noexcept { return _activity; }
   Control& control() noexcept { return _control; }
+  Devices& devices() noexcept { return _devices; }
 
  private:
   Domains _domains;
@@ -521,6 +558,7 @@ class Context {
   Tickets _tickets;
   Activity _activity;
   Control _control;
+  Devices _devices;
 };
 
 }  // namespace dagda

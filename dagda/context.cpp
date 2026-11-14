@@ -82,7 +82,8 @@ std::optional<WriteEvidence> known(WriteEvidence evidence) {
 
 // ---- Version ----------------------------------------------------------------
 
-Context::Context(Node& node) : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node), _control(node) {}
+Context::Context(Node& node)
+    : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node), _control(node), _devices(node) {}
 
 uint32_t Context::version() const noexcept { return context_version; }
 
@@ -509,5 +510,19 @@ bool Context::Control::put(const ObjectId& id, std::span<const uint8_t> data) { 
 bool Context::Control::ensure_local(const ObjectId& id) { return _node.store().ensure_control_local(id); }
 
 store::ControlOffer Context::Control::offer(const std::vector<ObjectId>& ids) { return _node.store().offer_control(ids); }
+
+// ---- Devices ----------------------------------------------------------------
+
+std::optional<store::DataAdmission> Context::Devices::admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
+                                                                 std::shared_ptr<std::atomic_bool> cancelled) {
+  // Held here for the whole wait, so the flag outlives it whatever the caller does.
+  return store::admit_data(_node.credit(), _node.io(), frame, bytes, wait, cancelled.get());
+}
+
+void Context::Devices::note_io(std::chrono::nanoseconds elapsed, uint64_t bytes) noexcept { _node.data().service_monitor().note(elapsed, bytes); }
+
+bool Context::Devices::pressured() const noexcept { return _node.data().service_monitor().pressured(); }
+
+store::DiskServiceSample Context::Devices::sample() const noexcept { return _node.data().service_monitor().sample(); }
 
 }  // namespace dagda

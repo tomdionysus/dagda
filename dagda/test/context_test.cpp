@@ -294,6 +294,26 @@ TEST(Context, VersionTwoServesMachasFilesystemForms) {
   EXPECT_EQ(objects.reachability_epoch(), a.dagda_node().store().reachability_epoch());
 }
 
+// Contract version 2's device forms, for Macha's own disk I/O (a torrent's reads and
+// writes): DATA admission on the same credit and device reserve the store's own work
+// takes, and the pool's service monitor fed and read, as Macha's MachaDiskIo did on
+// NodeResources (the callers' map, ingest and torrent).
+TEST(Context, VersionTwoAdmitsTheOwnersDiskIo) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  cluster.start_all();
+  auto& devices = a.api().devices();
+
+  const auto admitted = devices.admit_data(dannan::sched::FrameType::loader, 1024 * 1024, std::chrono::milliseconds(0));
+  EXPECT_TRUE(admitted.has_value());
+  EXPECT_THROW((void)devices.admit_data(dannan::sched::FrameType::control, 1, std::chrono::milliseconds(0)), std::invalid_argument);
+
+  const auto before = devices.sample().operations;
+  devices.note_io(std::chrono::milliseconds(3), 4096);
+  EXPECT_EQ(devices.sample().operations, before + 1);
+  EXPECT_EQ(devices.pressured(), a.dagda_node().data().service_monitor().pressured());
+}
+
 // Contract version 2's bare CONTROL forms, Macha's catalogue and metadata calls (the
 // callers' map, Macha d53ddfe): held here and read back; a strict local put, durable,
 // that offers and claims nothing; a fetch to local from a peer, verified, that claims
