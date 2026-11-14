@@ -152,10 +152,41 @@ test-first; its case and commit go here when it lands.
   (`57993eb`), `Node.ACacheThatCannotBeHadIsDisabledAndTheNodeRuns`; the network estimate learns from writes, fetches
   and CONTROL offers and pulls as Macha's does (`a7e2e88`), `DistributedStore.WritesAndReadsTeachTheNetworkEstimate`.
 
-**Waiting on Macha first (the rule: a defect in both is fixed in Macha, and Dagda matches):** pack compaction drops the
-victim's remove and touch records (both stores; the Macha session's review, verified in both by code). Also from that
-review, Macha-side first: prompt replication's wait with no timeout, the local barrier re-deriving on any failure, the
-repair-share wake's rounding.
+**Fixed after that gate, on the same branch (gate below when it is in):**
+- Safety: pack compaction kept what replay needs (Tom: Dagda's to fix; a defect in Macha's store too). A compacted
+  pack's live puts are rewritten with their current age; a remove is carried while a put of its object survives in
+  another pack; the newest touch of an object put elsewhere is carried; such records count as live (`7f14515`,
+  `d49103d`, `3ce0e10`). `StoreLocalStore.ARemovedObjectStaysRemovedAcrossCompactionAndRestart`,
+  `.AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart`, `.AReaffirmationOutlivesTheCompactionOfItsOwnPack`.
+  The first gate on `d49103d` proved both halves (the removed object stayed removed; the ages agreed to the
+  millisecond, not an hour apart); the age cases then compared nanoseconds a fresh conversion does not keep.
+- Safety: a failed local barrier heals from disk (Tom, "healing is better"), with Macha's guards: a copy is read back,
+  not trusted on presence, and a failed sync is kept under the state directory so a ticket issued past it is never
+  re-derived after a reopen or a restart (`a445585`). `StoreStoragePool.ATornPayloadBehindAnIntactHeaderIsNotReasserted`,
+  `.ALatchedFailureIsNotReassertedAfterAReopenOrARestart`; `StoreDurabilityBarrier.ALocalBarrierThatFailsIsWarnedOf`
+  now pins the copy refused as absent. A blind pool's read-back checks only that the whole record is there.
+- Requirement 5: a read's or write's cancellation and progress counter are co-owned by the store
+  (`std::shared_ptr`), for every form (`84be44b`). `DistributedStore.ACallerMayCancelAndGoWhileItsFetchIsInFlight`.
+- Requirement 2 in part: a read says how it ended, `ReadEnd` served, not_found, cancelled, timed_out or unavailable
+  (`5c35435`). `DistributedStore.AReadSaysHowItEnded`.
+- A barrier's definitive loss is typed, `BarrierLoss` absent_on_peer, absent_here, unknown_node (`1a96aaf`).
+- Activity: `Context::activity()` notes presence on the clock the store, repair, the local stages and admission read,
+  so Macha's API requests are a viewer present (`0729dfc`); `StoreDistributedStore.ActivityIsObjectWorkInMachasMeaning`
+  amended to pin it.
+- The route, in part (contract version 2): `Context::Objects` known-id writes, caller-thread reads and writes with no
+  deadline of their own, `Tickets::wait` over many tickets (`98705a4`); `Context::Control` has, get, put, ensure_local
+  and a claimless offer (`c02be9d`); the filesystem forms put_here, put_deferred_here, locally_available, cache_local,
+  hydration_available, hydrate, ensure_local, reachability_epoch, and `Claims::retain_data_here` (`1ee2740`);
+  `Context::Devices` DATA admission for the owner's disk I/O and the device monitor (`3b57a6b`). `Context.VersionTwo*`.
+
+**Still Macha-side first:** prompt replication's wait with no timeout, the repair-share wake's rounding.
+
+**For Tom (asked with the next batch):** GC gap 8 and the interim loop. The collector's steps, the local stages and
+the retirement codecs are the owner's maintenance surface, on `Node` and in `dagda::heads`; Macha's interim loop
+(`MaintenanceOptions::automatic = false` until 8c) drives them. Recommended: the composition root, which opens and
+owns the node, keeps `Node`'s owner surface (open, stop, reconfigure, the maintenance steps), and the library helpers
+(retirement batch codec, `lease::ClaimedCollection`) are library, not shims; `Context` serves every call Macha's
+callers make. The alternative is a `Context::Maintenance` noun mirroring the steps.
 
 Data safety and correctness:
 1. A missing backend directory is created by the backend lock and can be adopted as a new, empty backend, so writes
