@@ -41,6 +41,8 @@ Depends:
  libdannan-dev (>= 0.6.0),
  libdannan-dev (<< 0.7~),
  ${misc:Depends},
+Suggests:
+ libgtest-dev,
 Description: distributed object store for a cluster of trusted machines (development files)
  Dagda is the store: content-addressed objects held on several nodes with
  evidence of where each copy is, claims and collection, leases, domains with
@@ -48,6 +50,8 @@ Description: distributed object store for a cluster of trusted machines (develop
  .
  This package holds the headers and the CMake package configuration:
  find_package(dagda CONFIG), then link dagda::dagda, which brings Dannan.
+ It also holds the in-process cluster test fixture, dagda::test_fixtures,
+ header-only, for a hosted system's multi-node tests under GoogleTest.
 
 Package: dagda-tools
 Architecture: any

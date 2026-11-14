@@ -96,15 +96,29 @@ target_link_libraries(dagda
 # ABI yet, so a host built against one refuses to load another.
 set_target_properties(dagda PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION} EXPORT_NAME dagda)
 
+# The in-process cluster (Cluster, ClusterNode, stepped time, heads on) and the
+# neutral owner, for Lugh's and Lir's multi-node tests, so they keep no fixture of
+# their own (the three-systems design, "The fixture"; rule 3). Header-only, as
+# Dannan's fixtures are: dagda::test_fixtures brings dagda::dagda, and the consumer
+# links its own GoogleTest and names its DANNAN_TEST_TEMP_ROOT. Macha's fixtures and
+# the cases' own helpers stay in the tree.
+set(DAGDA_INSTALLED_FIXTURES cluster.h heads.h heads_merge.h heads_space.h ledger.h store.h tree.h)
+add_library(dagda_test_fixtures_installed INTERFACE)
+target_link_libraries(dagda_test_fixtures_installed INTERFACE dagda)
+set_target_properties(dagda_test_fixtures_installed PROPERTIES EXPORT_NAME test_fixtures)
+add_library(dagda::test_fixtures ALIAS dagda_test_fixtures_installed)
+
 # Installed for Macha, Lugh and Lir: find_package(dagda 0.1.4 CONFIG), the
 # exact version, then link dagda::dagda, which brings Dannan with it. Headers
 # keep their tree, so "dagda/<subsystem>/x.h" includes the same installed as in
-# the tree; the tests and their fixtures are not installed.
+# the tree; the tests are not installed, and of their fixtures only the set above.
 include(CMakePackageConfigHelpers)
-install(TARGETS dagda EXPORT dagdaTargets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS dagda dagda_test_fixtures_installed EXPORT dagdaTargets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dagda FILES_MATCHING PATTERN "*.h"
         PATTERN "include" EXCLUDE PATTERN "test" EXCLUDE)
+list(TRANSFORM DAGDA_INSTALLED_FIXTURES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/ OUTPUT_VARIABLE DAGDA_INSTALLED_FIXTURE_PATHS)
+install(FILES ${DAGDA_INSTALLED_FIXTURE_PATHS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dagda/test/fixtures)
 install(FILES ${PROJECT_BINARY_DIR}/generated/dagda/version.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dagda)
 install(EXPORT dagdaTargets NAMESPACE dagda:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dagda)
 configure_package_config_file(${PROJECT_SOURCE_DIR}/cmake/dagdaConfig.cmake.in ${PROJECT_BINARY_DIR}/dagdaConfig.cmake
