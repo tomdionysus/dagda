@@ -233,6 +233,7 @@ struct DistributedStore::TicketRecord {
   const bool deferred;
   mutable dannan::contract::Mutex mutex;
   size_t sought DANNAN_GUARDED_BY(mutex) = 0;
+  bool cancelled DANNAN_GUARDED_BY(mutex) = false;
   std::vector<ReplicaRecord> replicas DANNAN_GUARDED_BY(mutex);
   std::vector<std::shared_ptr<Waiter>> waiters DANNAN_GUARDED_BY(mutex);
 
@@ -242,6 +243,7 @@ struct DistributedStore::TicketRecord {
     out.level = level;
     out.deferred = deferred;
     out.sought = sought;
+    out.cancelled = cancelled;
     out.ticket = Ticket{serial};
     bool awaited = false;
     bool all_waited = true;
@@ -865,6 +867,8 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   uint64_t progress_seen = budgeted && options.progress ? options.progress->load(std::memory_order_relaxed) : 0;
   auto window_started = _time.now();
   size_t done_seen = 0;
+  // The caller's cancel, seen while the write still waited (Macha's put fails then).
+  bool cancelled_seen = false;
 
   size_t success = 0;
   {
@@ -933,6 +937,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       if ((options.cancelled && options.cancelled->load(std::memory_order_relaxed)) || _stopping.load()) {
         for (auto& call : run->calls)
           if (!call.done && call.handle) call.handle->cancel();
+        cancelled_seen = options.cancelled && options.cancelled->load(std::memory_order_relaxed);
         break;
       }
       if (own_deadline && now >= deadline) break;
@@ -967,6 +972,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     {
       Lock ticket_lock(record->mutex);
       record->sought = floor;
+      record->cancelled = cancelled_seen;
       record->replicas.clear();
       const auto from_call = [&](ReplicaRecord& replica, const WriteRun::Call& call) {
         if (!call.done) {
@@ -1123,10 +1129,9 @@ ObjectId DistributedStore::put(std::span<const uint8_t> data, WriteOptions optio
   const auto started = std::chrono::steady_clock::now();
   const auto id = object_id(data);
   const auto evidence = write(id, data, options);
-  if (!evidence.holders() && options.level != Durability::ephemeral) {
-    if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) throw std::runtime_error("object replication cancelled");
-    throw StorageUnavailable("object replication quorum unavailable");
-  }
+  // Macha's: a cancel seen while the write waited fails it, whatever landed.
+  if (evidence.cancelled) throw std::runtime_error("object replication cancelled");
+  if (!evidence.holders() && options.level != Durability::ephemeral) throw StorageUnavailable("object replication quorum unavailable");
   if (_logger.enabled(dannan::status::LogLevel::all))
     _logger.trace("DIAG object-put id=" + to_string(id) + " bytes=" + std::to_string(data.size()) +
                   " ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()));
@@ -1135,6 +1140,7 @@ ObjectId DistributedStore::put(std::span<const uint8_t> data, WriteOptions optio
 
 bool DistributedStore::put(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options) {
   const auto evidence = write(id, data, options);
+  if (evidence.cancelled) return false;
   return options.level == Durability::ephemeral ? !evidence.lost : evidence.holders() > 0;
 }
 
