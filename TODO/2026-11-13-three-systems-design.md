@@ -256,6 +256,20 @@ loopback; on the Pis, three processes on corvus-develop, taking turns with Macha
 throwaway, inside `dagda-bench`; slice 4's log is written test-first from this design.
 If (2) misses it, the log's design changes before anything is built on it.
 
+### What slice 0 has measured (the Mac, 2026-11-14)
+
+- The log prototype (`dagda-bench`, three processes on loopback, k = 2, 8,000 messages a second, each an append, two
+  acks and a retire): one log, a call per tick, p99 13.8 ms at a 10 ms tick and 23.3 ms at 20 ms, nothing refused;
+  256 logs, a call per replica node per tick, one shared segment, p99 24.0 and 21.4 ms, nothing refused (a segment per
+  log failed, above). macOS's fsync does not reach the device, so the Pi run decides against the 50 ms target.
+- Today's head commit (`BenchHeads.*`, in-process cluster, real clock, four writers; two runs differed by about two
+  times, so these are the slower): 50-110 commits a second, p50 18-60 ms, p99 110-210 ms; seen on another node at p50
+  12-120 ms, p99 47-370 ms. At 256 spaces a node refuses: "a node advertises at most 64 things" (two adverts a space).
+- Lugh's shape (one space of 50,000 keys, one writer, 50 a second wanted): 37 a second reached, commit p50 18 ms and
+  p99 102 ms; seen on node b at p50 103 ms, p99 347 ms: "disabled on A, refused on B" on today's path. A head-backed
+  lease's acquire would cost about a commit and that round, until slice 2's replicated commit replaces the round.
+- Not yet: the Pi run, the lease-change scan burst, the 1,280-log count, Lugh's leases as such.
+
 ### The contract
 
 `context_version` 1 is frozen at what `0.1.4` serves: what Macha's port builds on. Version 2 adds the nouns above.
