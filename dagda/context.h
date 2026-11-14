@@ -412,6 +412,35 @@ class Context {
     Node& _node;
   };
 
+  // CONTROL objects (a head space's nodes, Macha's catalogue and metadata trees)
+  // on this node's control store, outside DATA credit (law 1). Contract version 2,
+  // Macha's bare forms: none claims anything; a claim is Claims::retain(control).
+  // Each blocks on the caller's own thread.
+  class Control {
+   public:
+    static constexpr dannan::sched::Waits local_waits = dannan::sched::local_waits;
+    static constexpr dannan::sched::Waits fetch_waits = dannan::sched::Waits::state_device | dannan::sched::Waits::network | dannan::sched::Waits::locks;
+    // Held here: the control store only, no peer asked.
+    bool has(const ObjectId& id) const;
+    // Opened and checked against its id; nothing when not held here.
+    std::optional<store::Bytes> get(const ObjectId& id) const;
+    // Durable here before it returns; nothing offered, nothing claimed. Throws
+    // std::runtime_error when the bytes are not the id's. False when this node's
+    // store could not take it.
+    bool put(const ObjectId& id, std::span<const uint8_t> data);
+    // Made local from a peer that holds it, verified by its id; true at once when
+    // held here, false when no peer could supply it.
+    bool ensure_local(const ObjectId& id);
+    // Offered to every active node that lacks them, writing no claim: only when
+    // every one is held here.
+    store::ControlOffer offer(const std::vector<ObjectId>& ids);
+
+   private:
+    friend class Context;
+    explicit Control(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
   // When work of each class was last present here, on the one clock the store,
   // repair, the local stages and DATA admission read (contract version 2). The
   // store notes its own object work; a hosted system notes what only it sees, as
@@ -456,6 +485,7 @@ class Context {
   Heads& heads() noexcept { return _heads; }
   Tickets& tickets() noexcept { return _tickets; }
   Activity& activity() noexcept { return _activity; }
+  Control& control() noexcept { return _control; }
 
  private:
   Domains _domains;
@@ -465,6 +495,7 @@ class Context {
   Heads _heads;
   Tickets _tickets;
   Activity _activity;
+  Control _control;
 };
 
 }  // namespace dagda
