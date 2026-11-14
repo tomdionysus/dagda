@@ -367,6 +367,7 @@ void Node::open() {
     _control_sightings =
         std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _node_local, _context.logger("dagda.gc"));
     _local_cpu.emplace(_options.maintenance.cpu);
+    _gates = std::make_unique<MaintenanceGates>(_options.repair.foreground_quiet);
     // The scrub's next campaign: kept across a restart, and from a date
     // Macha's maintenance left. A schedule that cannot be read starts afresh.
     {
@@ -542,7 +543,7 @@ bool Node::higher_class_active() const {
   return activity.recently_active(dannan::sched::WorkClass::foreground, quiet) || activity.recently_active(dannan::sched::WorkClass::loader, quiet);
 }
 
-bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop) {
+bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop, bool metadata_dirty) {
   auto* provider = registered_provider();
   const auto note = [&](const std::function<void(GcFigures&)>& change) {
     dannan::contract::Lock lock(_gc_figures_mutex);
@@ -561,10 +562,12 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
   }
   ensure_collector_locked(*provider);
   const bool busy = !forced && higher_class_active();
-  ledger::PassDue due;
-  due.garbage_due = !busy;
-  due.gc_due = !busy;
-  due.busy = busy;
+  // The loop's gates (Macha's): garbage waits for metadata to converge, the sweep for
+  // the quiet window. A forced pass is due whatever the activity and the window, but
+  // dirty metadata holds its marking all the same.
+  const auto now = pass_time().now();
+  ledger::PassDue due =
+      forced || !_gates ? MaintenanceGates(std::chrono::milliseconds(0)).due(now, false, metadata_dirty) : _gates->due(now, busy, metadata_dirty);
   if (!forced) due.should_yield = [this] { return higher_class_active(); };
   due.pause = [stop] {
     if (stop.stop_requested()) throw contract::MaintenanceStopping{};
@@ -583,6 +586,8 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
     return false;
   }
   const auto& pass = *report.gc;
+  // Never swept in the pass that built it (Macha's maintenance.cpp:649-652).
+  if (pass.rebuilt_inventory && _gates) _gates->rebuilt_inventory(pass_time().now());
   note([&](GcFigures& figures) {
     ++figures.passes;
     figures.inventories += pass.rebuilt_inventory ? 1 : 0;
@@ -950,12 +955,14 @@ MaintenanceReport Node::run_maintenance_once() {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (!_repair) return report;
   report.metadata = metadata_repair_locked({}, true);
+  bool metadata_dirty = false;
   for (const auto& turn : report.metadata) {
+    metadata_dirty = metadata_dirty || turn.dirty;
     if (!turn.hold_pass) continue;
     report.gc_skipped = "metadata repair failed with no head to stand on: " + turn.why;
     return report;
   }
-  (void)gc_pass_locked(true, report);
+  (void)gc_pass_locked(true, report, {}, metadata_dirty);
   try {
     report.repair = _repair->pass();
   } catch (const std::exception& error) {
@@ -974,24 +981,33 @@ void Node::maintenance_loop(std::stop_token stop) {
   while (!stop.stop_requested()) {
     const auto now = time.now();
     bool hold_pass = false;
+    bool metadata_dirty = false;
     std::optional<dannan::contract::TimePoint> metadata_due;
     {
       dannan::contract::Lock lock(_maintenance_mutex);
       _maintenance_kicked.store(false, std::memory_order_release);
       try {
-        for (const auto& turn : metadata_repair_locked(stop, false)) hold_pass = hold_pass || turn.hold_pass;
+        for (const auto& turn : metadata_repair_locked(stop, false)) {
+          hold_pass = hold_pass || turn.hold_pass;
+          metadata_dirty = metadata_dirty || turn.dirty;
+        }
       } catch (const contract::MaintenanceStopping&) {
         return;
       }
+      uint64_t generations = 0;
       if (_spaces)
-        for (auto* exchange : _spaces->exchanges())
+        for (auto* exchange : _spaces->exchanges()) {
           if (const auto due = exchange->turn_due()) metadata_due = metadata_due ? std::min(*metadata_due, *due) : *due;
+          generations += exchange->space().replica().committed_generation();
+        }
+      // An event or a generation move since the last pass starts the sweep's quiet window.
+      _gates->observe(now, _context.events().total(), generations);
       if (hold_pass) {
         // Recovery required, or no head yet: nothing that depends on the head proceeds.
       } else if (now >= next_gc) {
         MaintenanceReport report;
         try {
-          next_gc = now + (gc_pass_locked(false, report, stop) ? gc_interval : interval);
+          next_gc = now + (gc_pass_locked(false, report, stop, metadata_dirty) ? gc_interval : interval);
         } catch (const contract::MaintenanceStopping&) {
           return;
         }
