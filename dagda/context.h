@@ -194,6 +194,16 @@ class Context {
     // Throws std::invalid_argument for a deadline that is not positive.
     void read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ReadDone done);
     ReadResult read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline);
+
+    // Contract version 2, Macha's forms (Tom, 2026-11-14). A write naming its id,
+    // which is checked against the bytes, hashed once; throws std::runtime_error
+    // when they differ or the bytes are larger than an extent. The blocking forms
+    // run on the caller's own thread, no worker hop, and take their deadline from
+    // the options: zero is none of its own, as Macha's, admission's window and
+    // each peer's no-progress bound ending the wait.
+    void write(const ObjectId& id, store::Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done);
+    WriteEvidence write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options);
+    ReadResult read(const ObjectId& id, ReadOptions options);
     // This node's pool holds it: the local ground truth. Asks no peer.
     static constexpr dannan::sched::Waits has_waits = dannan::sched::local_waits;
     bool has(const ObjectId& id) const;
@@ -388,6 +398,13 @@ class Context {
     std::optional<WriteEvidence> wait(Ticket ticket, std::chrono::milliseconds deadline);
     void wait_complete(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Done done);
     std::optional<WriteEvidence> wait_complete(Ticket ticket, std::chrono::milliseconds deadline);
+    // Contract version 2: one wait over many tickets (a publication's extents),
+    // one barrier a place whichever tickets name it; the evidence in the order
+    // asked, a forgotten ticket's empty. Throws std::invalid_argument for a
+    // deadline that is not positive.
+    using ManyDone = std::function<void(std::vector<WriteEvidence>)>;
+    void wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done);
+    std::vector<WriteEvidence> wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline);
 
    private:
     friend class Context;

@@ -140,6 +140,16 @@ ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options, std::
                            [&](boost::asio::any_io_executor executor, ReadDone done) { read(id, options, deadline, std::move(executor), std::move(done)); });
 }
 
+void Context::Objects::write(const ObjectId& id, store::Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done) {
+  _node.store().write(id, std::move(data), std::move(options), std::move(executor), std::move(done));
+}
+
+WriteEvidence Context::Objects::write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options) {
+  return _node.store().write(id, data, std::move(options));
+}
+
+ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options) { return _node.store().read(id, std::move(options)); }
+
 bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
 
 void Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
@@ -442,6 +452,16 @@ std::optional<WriteEvidence> Context::Tickets::wait_complete(Ticket ticket, std:
   check_deadline(deadline);
   return await<std::optional<WriteEvidence>>(
       _node, deadline, [&](boost::asio::any_io_executor executor, Done done) { wait_complete(ticket, deadline, std::move(executor), std::move(done)); });
+}
+
+void Context::Tickets::wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done) {
+  check_deadline(deadline);
+  _node.store().wait(std::move(tickets), deadline, std::move(executor), std::move(done));
+}
+
+std::vector<WriteEvidence> Context::Tickets::wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return _node.store().wait(tickets, deadline);
 }
 
 // ---- Activity ---------------------------------------------------------------
