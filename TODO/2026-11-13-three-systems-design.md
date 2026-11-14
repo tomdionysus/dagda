@@ -299,6 +299,10 @@ no fixture of their own (rule 3).
   8,000 a second with no refusal and p99 within the tick, and Lir's 256 logs. 0.7.0 keeps the synchronous
   handler as an overload wrapping into the new one (the Dannan session, 2026-11-13), so Dagda's and Macha's handlers
   change only where they defer: the move is a relink and the new calls.
+  Accepted on the Mac (2026-11-14, Dannan's feature/deferred-reply): a replica groups up to 512 calls a sync holding no
+  worker, but one call per message at 8,000 a second still failed (218,642 of 479,992; p99 174 ms), by Dannan's
+  per-peer pending reply limit (512) and outbound queue: one connection carried about 6,000 calls a second. The log is
+  unaffected (one call per replica node per tick passes on 0.5); per-call throughput is Dannan's to measure (its P5).
 - Not needed from Dannan: a larger advert cap (Dagda aggregates, and puts fast generations on channels), fan-out
   (Lir's own, on Dannan's channels).
 - The write floor already asks Dannan: every replica storing a write, a claim, a delete or a head commit calls
