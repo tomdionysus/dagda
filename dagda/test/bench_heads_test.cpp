@@ -72,8 +72,8 @@ struct Figures {
 
 void bench(const std::string& name, const std::string& labels, Figures& f, double seconds) {
   char line[512];
-  std::snprintf(line, sizeof(line), "BENCH name=%s %s n=%zu per_s=%.1f p50_ms=%.2f p90_ms=%.2f p99_ms=%.2f max_ms=%.2f", name.c_str(), labels.c_str(),
-                f.n(), seconds > 0 ? static_cast<double>(f.n()) / seconds : 0.0, f.at(0.5), f.at(0.9), f.at(0.99), f.at(1.0));
+  std::snprintf(line, sizeof(line), "BENCH name=%s %s n=%zu per_s=%.1f p50_ms=%.2f p90_ms=%.2f p99_ms=%.2f max_ms=%.2f", name.c_str(), labels.c_str(), f.n(),
+                seconds > 0 ? static_cast<double>(f.n()) / seconds : 0.0, f.at(0.5), f.at(0.9), f.at(0.99), f.at(1.0));
   std::cout << line << std::endl;
 }
 
@@ -187,8 +187,8 @@ TEST(BenchHeads, DISABLED_CommitsAcrossSpaces) {
         }
         for (auto& t : threads) t.join();
         const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
-        const std::string labels =
-            "nodes=" + std::to_string(nodes) + " spaces=" + std::to_string(spaces) + " change=" + (tree ? "tree" : "note") + " refused=" + std::to_string(refused.load());
+        const std::string labels = "nodes=" + std::to_string(nodes) + " spaces=" + std::to_string(spaces) + " change=" + (tree ? "tree" : "note") +
+                                   " refused=" + std::to_string(refused.load());
         bench("heads.commit", labels, commit, seconds);
         if (seen) {
           seen->drain(10s);
@@ -262,7 +262,8 @@ TEST(BenchHeads, DISABLED_LughsShape) {
   const auto filled_from = Clock::now();
   for (int from = 0; from < keys; from += 1000) {
     const auto filled = a.api().heads().mutate_delta(id, neutral_mutation([from](NeutralEditing& editing) {
-                                                       for (int k = from; k < from + 1000; ++k) editing.delta.upsert_keys["user/" + std::to_string(k)] = make_group(k);
+                                                       for (int k = from; k < from + 1000; ++k)
+                                                         editing.delta.upsert_keys["user/" + std::to_string(k)] = make_group(k);
                                                      }),
                                                      60s);
     ASSERT_TRUE(filled.finished) << filled.why;
@@ -281,8 +282,8 @@ TEST(BenchHeads, DISABLED_LughsShape) {
     due += every;
     const auto key = random() % keys;
     const auto before = Clock::now();
-    const auto result =
-        a.api().heads().mutate_delta(id, neutral_mutation([key, n](NeutralEditing& editing) { editing.delta.upsert_keys["user/" + std::to_string(key)] = make_group(key * 7 + n); }), 10s);
+    const auto result = a.api().heads().mutate_delta(
+        id, neutral_mutation([key, n](NeutralEditing& editing) { editing.delta.upsert_keys["user/" + std::to_string(key)] = make_group(key * 7 + n); }), 10s);
     const auto after = Clock::now();
     ++n;
     if (!result.finished || !result.outcome) {
@@ -297,6 +298,13 @@ TEST(BenchHeads, DISABLED_LughsShape) {
   const std::string labels = "keys=" + std::to_string(keys) + " rate=50 refused=" + std::to_string(refused);
   bench("lugh.commit", labels, commit, seconds);
   bench("lugh.visible_on_b", labels + " unseen=" + std::to_string(seen.unseen()), seen.figures(), 0);
+  // Where node a's replicator spent the run: the follower's lag, accounted from inside.
+  if (auto* exchange = a.dagda_node().spaces()->exchange(id)) {
+    const auto spent = exchange->replicator();
+    std::cout << "BENCH name=lugh.replicator rounds=" << spent.rounds << " generations=" << spent.generations << " claim_sets=" << spent.claim_sets
+              << " claims_ms=" << spent.claims_us / 1000 << " history_asked=" << spent.history_asked << " offers=" << spent.offers
+              << " offers_ms=" << spent.offers_us / 1000 << " round_ms_max=" << spent.round_us_max / 1000 << " seconds=" << seconds << std::endl;
+  }
 }
 
 }  // namespace

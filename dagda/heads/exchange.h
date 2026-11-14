@@ -116,6 +116,22 @@ struct TransferDiagnostics {
   uint64_t peak_in_flight = 0;
 };
 
+// What the replicator has spent since start, for the follower's lag (slice 2's first
+// measurement): its rounds, the generations they covered, the owed commits' claim sets
+// retained on the peers and the time that took, the history entries asked of a peer
+// one by one, and each head offered to a peer (history pushed, then accepted) and the
+// time that took. Microseconds of the node's time source.
+struct ReplicatorDiagnostics {
+  uint64_t rounds = 0;
+  uint64_t generations = 0;
+  uint64_t claim_sets = 0;
+  uint64_t claims_us = 0;
+  uint64_t history_asked = 0;
+  uint64_t offers = 0;
+  uint64_t offers_us = 0;
+  uint64_t round_us_max = 0;
+};
+
 struct ReconcileDiagnostics {
   uint64_t merges = 0;
   uint64_t conflicts_created = 0;
@@ -290,6 +306,10 @@ class Exchange {
     return {_history_transfers.load(std::memory_order_relaxed), _history_entries_submitted.load(std::memory_order_relaxed),
             _history_peak_in_flight.load(std::memory_order_relaxed)};
   }
+  ReplicatorDiagnostics replicator() const noexcept {
+    const auto at = [](const std::atomic_uint64_t& value) { return value.load(std::memory_order_relaxed); };
+    return {at(_rounds), at(_round_generations), at(_claim_sets), at(_claims_us), at(_history_asked), at(_offers), at(_offers_us), at(_round_us_max)};
+  }
   // What the fold has done since start.
   ReconcileDiagnostics reconciliations() const noexcept {
     return {_reconciliations.load(std::memory_order_relaxed), _conflicts_created.load(std::memory_order_relaxed),
@@ -415,6 +435,17 @@ class Exchange {
   std::atomic_uint64_t _history_transfers{0};
   std::atomic_uint64_t _history_entries_submitted{0};
   std::atomic_uint64_t _history_peak_in_flight{0};
+  std::atomic_uint64_t _history_asked{0};
+
+  // ReplicatorDiagnostics; written by the replicator thread alone.
+  std::atomic_uint64_t _rounds{0};
+  std::atomic_uint64_t _round_generations{0};
+  std::atomic_uint64_t _claim_sets{0};
+  std::atomic_uint64_t _claims_us{0};
+  std::atomic_uint64_t _offers{0};
+  std::atomic_uint64_t _offers_us{0};
+  std::atomic_uint64_t _round_us_max{0};
+  uint64_t _last_offered_generation = 0;
 
   std::atomic_uint64_t _status_generation{0};
   std::atomic_uint64_t _status_observed_unix_ms{0};

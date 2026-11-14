@@ -407,6 +407,7 @@ bool Exchange::push_history_to_peer(const Peer& owner, const Hash256& target, Fr
   const auto remote_has = [&](const Hash256& hash) {
     if (const auto found = remote_presence.find(hash); found != remote_presence.end()) return found->second;
     bool present = false;
+    _history_asked.fetch_add(1, std::memory_order_relaxed);
     try {
       const auto reply = reply_of(call(owner, _options.numbers.has_history_entry, addressed(message::encode_hash(hash)), frame));
       present = bool_of(owner, reply);
@@ -1091,12 +1092,16 @@ void Exchange::replication_loop(std::stop_token stop) {
       owed = _space->take_owed();
       _replicating = true;
     }
+    const auto& clock = _context.time().source();
+    const auto round_from = clock.now();
     try {
       // Each commit's claims on the peers, in order, then the newest head once: its history
       // carries the commits before it.
+      const auto claims_from = clock.now();
       for (const auto& claims : owed.claims) {
         if (stop.stop_requested()) break;
         if (!_services.claims) continue;
+        _claim_sets.fetch_add(1, std::memory_order_relaxed);
         try {
           _services.claims->retain_on_peers(claims.dot, claims.claims);
         } catch (const MaintenanceStopping&) {
@@ -1105,12 +1110,19 @@ void Exchange::replication_loop(std::stop_token stop) {
           _logger.debug("metadata claims on peers deferred sequence=" + std::to_string(claims.dot.sequence) + " error=" + error.what());
         }
       }
+      _claims_us.fetch_add(microseconds_since(clock, claims_from), std::memory_order_relaxed);
+      if (owed.head) {
+        if (owed.head->generation > _last_offered_generation)
+          _round_generations.fetch_add(_last_offered_generation ? owed.head->generation - _last_offered_generation : 1, std::memory_order_relaxed);
+        _last_offered_generation = std::max(_last_offered_generation, owed.head->generation);
+      }
       if (owed.head && !stop.stop_requested()) {
         // To every node present, not only the copies a commit seeks: nobody is waiting on
         // this.
         const auto acceptance = _space->replica().acceptance(owed.head->hash);
         for (const auto& owner : _context.nodes().active()) {
           if (!acceptance || owner.id == self() || stop.stop_requested()) continue;
+          const auto offer_from = clock.now();
           try {
             if (!replicate_accepted_head(owner, *owed.head, *acceptance, FrameType::read_ahead, pause))
               _logger.debug("metadata head offer deferred peer=" + owner.host + " generation=" + std::to_string(owed.head->generation));
@@ -1120,6 +1132,8 @@ void Exchange::replication_loop(std::stop_token stop) {
             _logger.debug("metadata head offer deferred peer=" + owner.host + " generation=" + std::to_string(owed.head->generation) +
                           " error=" + error.what());
           }
+          _offers.fetch_add(1, std::memory_order_relaxed);
+          _offers_us.fetch_add(microseconds_since(clock, offer_from), std::memory_order_relaxed);
         }
       }
     } catch (const MaintenanceStopping&) {
@@ -1127,6 +1141,11 @@ void Exchange::replication_loop(std::stop_token stop) {
       _replicating = false;
       _owed_changed.notify_all();
       return;
+    }
+    _rounds.fetch_add(1, std::memory_order_relaxed);
+    const auto round_us = microseconds_since(clock, round_from);
+    auto longest = _round_us_max.load(std::memory_order_relaxed);
+    while (round_us > longest && !_round_us_max.compare_exchange_weak(longest, round_us, std::memory_order_relaxed)) {
     }
     {
       Lock lock(_owed_mutex);
