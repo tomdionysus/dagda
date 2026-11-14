@@ -100,11 +100,18 @@ How slice 1 builds `node_local` (2026-11-14, from the code at `0.1.5`):
 - **No rollback.** A head that is an ancestor of the held one changes nothing, as for every space. A restored older copy
   of the space's directory is refused at open by a generation kept outside it. **For Tom:** the design says "beside the
   node's custody", and Dannan's custody (`<state>/identity/custody`) offers no counter, nor should Dagda write into
-  Dannan's directory. Recommended: Dannan offers a sealed monotonic counter beside its custody, per label (a piece
-  Lugh's node-local state needs as much, so rule 3 puts it in Dannan), and Dagda records each node-local space's
-  generation there. Until it exists, Dagda keeps the generations in one file of its own state root, sealed under the
-  node-local key and outside every space's directory: it refuses one space's directory restored alone, not a whole
-  state directory restored together, and the case says which.
+  Dannan's directory. The Dannan session agrees the counter is Dannan's (Lugh's node-local state needs it too, rule 3)
+  and adds the limit: sealing proves a file unaltered, not latest, so a counter on the same disk as the data refuses one
+  directory restored alone but not a whole state restored together. Recommended, both layers, Dannan's:
+  1. A sealed per-label counter beside custody, `read(label)` and `advance(label, value)` refusing to go back, durable
+     before it returns, sealed under HKDF(seal root, "dannan/counter/1"). Dagda records each node-local space's
+     generation there.
+  2. The rollback defence proper: each node gossips its labels' high-water marks, peers remember the highest they have
+     seen of each node, and at open a node refuses to serve a label below what its peers witnessed. A lone node falls
+     back to the local counter, a stated limit. (A TPM's NV counter would do it on one node; the Pis have none.)
+  Until then Dagda keeps the generations in one file of its own state root, sealed under the node-local key and outside
+  every space's directory: it refuses one space's directory restored alone, not a whole state restored together, and
+  the case says which.
 
 `SpaceSpec` gains `copies` (k) for the Replicated level, at most N. A commit takes a `Durability`:
 `persisted` returns when this node holds it (today's behaviour, and Macha's); `replicated` when k replicas have
