@@ -325,8 +325,93 @@ TEST(DistributedStore, ACallerMayCancelAndGoWhileItsFetchIsInFlight) {
   }));
   EXPECT_EQ(read->object, nullptr);
   EXPECT_NE(read->answer, FetchAnswer::ok);
+  EXPECT_EQ(read->end, ReadEnd::cancelled);
   gate.open();
   EXPECT_TRUE(wait_until([&] { return held.expired(); }));
+}
+
+// Read requirement 2 (the Macha session's, 2026-11-14): a read that brings nothing says
+// how it ended, so a FUSE read answers EINTR, ETIMEDOUT or EIO as Macha's does and
+// never guesses from try_later.
+TEST(DistributedStore, AReadSaysHowItEnded) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  auto& reader = cluster.add("reader", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 24);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(id, data, write).met);
+
+  const auto read = [&](ReadOptions options) {
+    std::promise<ReadResult> told;
+    auto future = told.get_future();
+    boost::asio::io_context caller;
+    reader.store().read(id, std::move(options), caller.get_executor(), [&](ReadResult result) { told.set_value(std::move(result)); });
+    EXPECT_TRUE(wait_until([&] {
+      caller.restart();
+      caller.poll();
+      return future.wait_for(0s) == std::future_status::ready;
+    }));
+    return future.get();
+  };
+
+  // Cancelled before it began: nothing asked.
+  ReadOptions cancelled;
+  cancelled.cancelled = std::make_shared<std::atomic_bool>(true);
+  EXPECT_EQ(read(cancelled).end, ReadEnd::cancelled);
+
+  // Peers that cannot answer now: unavailable, not missing.
+  const auto busy = [](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::get_object) return Handled::failed(503, "storage_busy", "busy");
+    return std::nullopt;
+  };
+  writer.interpose(busy);
+  peer.interpose(busy);
+  const auto unavailable = read({});
+  EXPECT_EQ(unavailable.object, nullptr);
+  EXPECT_EQ(unavailable.end, ReadEnd::unavailable);
+
+  // Peers that hold the answer back past the caller's deadline: timed out.
+  {
+    dannan::test::Gate gate;
+    dannan::test::GateOpener opener(gate);
+    writer.interpose(hold(message::get_object, gate));
+    peer.interpose(hold(message::get_object, gate));
+    ReadOptions bounded;
+    bounded.deadline = 300ms;
+    EXPECT_EQ(read(bounded).end, ReadEnd::timed_out);
+  }
+  writer.interpose({});
+  peer.interpose({});
+
+  // Served, and an object nobody holds.
+  const auto served = read({});
+  ASSERT_NE(served.object, nullptr);
+  EXPECT_EQ(served.end, ReadEnd::served);
+  const auto other = pattern(64 * 1024, 25);
+  ReadResult missing;
+  {
+    std::promise<ReadResult> told;
+    auto future = told.get_future();
+    boost::asio::io_context caller;
+    reader.store().read(object_id(other), {}, caller.get_executor(), [&](ReadResult result) { told.set_value(std::move(result)); });
+    ASSERT_TRUE(wait_until([&] {
+      caller.restart();
+      caller.poll();
+      return future.wait_for(0s) == std::future_status::ready;
+    }));
+    missing = future.get();
+  }
+  EXPECT_EQ(missing.answer, FetchAnswer::not_found);
+  EXPECT_EQ(missing.end, ReadEnd::not_found);
 }
 
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
