@@ -276,11 +276,13 @@ struct DistributedStoreOptions {
   // Bytes the ephemeral queue holds before it refuses.
   size_t ephemeral_queue_bytes = 64 * 1024 * 1024;
   // Settled tickets kept for a later status(), the oldest forgotten first past this
-  // bound. A ticket still waiting is kept, as Macha's batch, the caller's, kept every
-  // extent a publication handed it, up to `max_waiting_tickets` (4 TiB of publication
-  // at Macha's 4 MiB extents): past that the oldest waiting ticket is forgotten, with a
-  // warning, so a deferred write nobody waits on cannot hold memory for ever. A batch
-  // the caller owns, through the Context, is the proper end of that (the store map).
+  // bound. A ticket still waiting is kept, and so is a deferred one no caller has yet
+  // asked after (a wait or a status), settled or not, as Macha's batch, the caller's,
+  // kept every extent a publication handed it until consumed, up to
+  // `max_waiting_tickets` (4 TiB of publication at Macha's 4 MiB extents): past that
+  // the oldest kept is forgotten, with a warning, so a deferred write nobody waits on
+  // cannot hold memory for ever. A batch the caller owns, through the Context, is the
+  // proper end of that (the store map).
   size_t max_tickets = 4096;
   size_t max_waiting_tickets = 1024 * 1024;
   // Prompt replication's first retry, doubling (Macha's 30 s).
