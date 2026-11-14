@@ -132,6 +132,25 @@ int64_t age_ms(std::filesystem::file_time_type time) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::file_clock::to_sys(time).time_since_epoch()).count();
 }
 
+// Macha's put checks room before it seals (local_store.cpp:1099-1113 at f0597a4): a
+// put refused for room encrypts nothing (the store map, pool gap 3).
+TEST(StoreLocalStore, APutRefusedForRoomSealsNothing) {
+  StoreBed bed;
+  const auto root = bed.dir.path() / "store";
+  for (const bool packed : {false, true}) {
+    auto options = packed ? packed_options(64 * 1024, 40 * 1024) : LocalStoreOptions::loose_only(64 * 1024);
+    if (packed) options.pack_threshold = 40 * 1024;
+    auto store = bed.open(root / (packed ? "packed" : "loose"), options);
+    const auto first = pattern(36 * 1024, packed ? 31 : 21);
+    ASSERT_TRUE(store->put(object_id(first), first));
+    const auto seals = store->diagnostics().seals;
+    EXPECT_EQ(seals, 1u);
+    const auto second = pattern(36 * 1024, packed ? 32 : 22);
+    EXPECT_FALSE(store->put(object_id(second), second));
+    EXPECT_EQ(store->diagnostics().seals, seals) << (packed ? "packed" : "loose");
+  }
+}
+
 // Pack compaction keeps what replay needs (the maintainer, 2026-11-14: Dagda's to fix; a defect
 // in Macha's store too, local_store.cpp:1738-1843 at f0597a4). A remove recorded in the
 // pack compacted away, whose put lies in an older pack, is carried forward: the object
