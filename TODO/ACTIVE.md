@@ -41,7 +41,11 @@ Macha's store cutover (step 1a, aliasing its store types to Dagda's) found five 
 UnreferencedSince, DiskServiceMonitor and its timer, TrieUnion) and `Node::open_store`'s refusal without key custody.
 The maintainer: "Port through dagda::Node and Context is correct, but you must make ABSOLUTELY SURE that Macha can perform exactly
 as well as it did before with Dagda as its storage backend. It is not enough for the concepts and primitives to be
-'sorta' like Macha." Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
+'sorta' like Macha." And: "there must be no 'shims' in Macha to make Dagda work for it. Both: parts of Macha may need
+to be rewritten to use native Dagda effectively, and that's the NO LOSS of performance/reliability/etc - AND - Dagda
+MUST be capable of handling DHT storage AT LEAST AS WELL as Macha." Two requirements, both binding: Macha uses Dagda
+natively with no adapter layer, rewritten where needed and losing nothing; and Dagda, measured on its own terms against
+Macha's store on the same workloads, is at least as good a DHT store in every respect. Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
 proven; **0.2.0 stays tagged locally and unpushed** until the maintainer says. The proof (proposed to the maintainer): a call-by-call map from
 Macha's develop code to `dagda::Node` and `Context`, exact in semantics, with every gap fixed in Dagda; Macha's own
 suites as the gate on Dagda; performance against Macha's live baselines at the same load; data through the in-place
