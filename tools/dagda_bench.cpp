@@ -16,7 +16,7 @@
 // path. Each message is an append, then an ack per edge a tick later, then a retire.
 //
 //   dagda-bench log-replica  --key FILE --state DIR --port N [--bootstrap HOST:PORT]
-//                            [--files shared|per-log]
+//                            [--files shared|per-log] [--deferred yes|no]
 //   dagda-bench log-appender --key FILE --state DIR --port N --bootstrap HOST:PORT
 //                            [--rate N] [--tick-ms N] [--edges N] [--bytes N] [--seconds N]
 //                            [--logs N] [--group log|node]
@@ -25,6 +25,9 @@
 // sends one call per log per tick, --group node one per replica node per tick carrying
 // every log's entries (the Lir session's proposal). --files per-log gives each log its
 // own segment, synced one by one; shared puts every log in one segment, one sync a group.
+// --deferred yes (built against Dannan 0.7, DAGDA_BENCH_DEFERRED) answers each append
+// from the committer after its sync, holding no worker while it waits; no, the default,
+// waits for the sync in the handler.
 //
 // A replica runs until SIGTERM or SIGINT and then prints its figures as one JSON line;
 // the appender prints its own and stops after --seconds.
@@ -77,6 +80,7 @@ struct Options {
   uint32_t logs = 1;
   std::string group = "node";
   std::string files = "shared";
+  bool deferred = false;
 };
 
 [[noreturn]] void usage(const std::string& why) {
@@ -121,6 +125,11 @@ Options parse(int argc, char** argv) {
     } else if (option == "--group") {
       if (value != "log" && value != "node") usage("--group is log or node");
       out.group = value;
+    } else if (option == "--deferred") {
+      out.deferred = value == "yes";
+#if !defined(DAGDA_BENCH_DEFERRED)
+      if (out.deferred) usage("--deferred needs a build against Dannan 0.7 (DAGDA_BENCH_DEFERRED)");
+#endif
     } else if (option == "--files") {
       if (value != "shared" && value != "per-log") usage("--files is shared or per-log");
       out.files = value;
@@ -294,11 +303,25 @@ class Replica {
     auto synced = done->get_future();
     {
       std::lock_guard lock(_mutex);
-      _pending.push_back({std::move(payload), done});
+      Pending pending;
+      pending.payload = std::move(payload);
+      pending.done = done;
+      _pending.push_back(std::move(pending));
     }
     _wake.notify_one();
     synced.get();
   }
+
+#if defined(DAGDA_BENCH_DEFERRED)
+  // Queues the entries and returns: the committer answers after the group's sync.
+  void append_deferred(std::vector<uint8_t> payload, dannan::net::Answer answer) {
+    {
+      std::lock_guard lock(_mutex);
+      _pending.push_back({std::move(payload), nullptr, std::move(answer)});
+    }
+    _wake.notify_one();
+  }
+#endif
 
   std::string figures() {
     std::lock_guard lock(_figures_mutex);
@@ -312,6 +335,9 @@ class Replica {
   struct Pending {
     std::vector<uint8_t> payload;
     std::shared_ptr<std::promise<void>> done;
+#if defined(DAGDA_BENCH_DEFERRED)
+    dannan::net::Answer answer;
+#endif
   };
   struct Live {
     uint32_t segment = 0;
@@ -406,7 +432,15 @@ class Replica {
       _written += out.size();
       index(group, base);
       if (_written >= segment_bytes) open_segment();
-      for (auto& p : group) p.done->set_value();
+      for (auto& p : group) {
+#if defined(DAGDA_BENCH_DEFERRED)
+        if (p.answer) {
+          p.answer(dannan::net::Message{dannan::net::message::ok, {}, {}});
+          continue;
+        }
+#endif
+        p.done->set_value();
+      }
       std::lock_guard lock(_figures_mutex);
       ++_groups;
       _calls += group.size();
@@ -476,11 +510,22 @@ class Replica {
 int run_replica(const Options& options) {
   Running running(options, "replica-" + std::to_string(options.port));
   Replica replica(options.state / "log", options.files == "per-log");
-  running.node->context().routes().add(log_append, {"bench_log_append", dannan::net::Lanes::control, dannan::net::Frames::any, false},
-                                       [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request) {
-                                         replica.append(request.payload);
-                                         return dannan::net::Handled::processed();
-                                       });
+  auto& routes = running.node->context().routes();
+  routes.add(log_append, {"bench_log_append", dannan::net::Lanes::control, dannan::net::Frames::any, false});
+  if (options.deferred) {
+#if defined(DAGDA_BENCH_DEFERRED)
+    routes.bind_deferred(log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request,
+                                         dannan::net::Answer& answer) {
+      replica.append_deferred(request.payload, std::move(answer));
+      return dannan::net::Handled::deferred();
+    });
+#endif
+  } else {
+    routes.bind(log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request) {
+      replica.append(request.payload);
+      return dannan::net::Handled::processed();
+    });
+  }
   running.node->start();
   std::printf("{\"event\":\"listening\",\"port\":%u}\n", static_cast<unsigned>(running.node->port()));
   std::fflush(stdout);
