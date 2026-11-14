@@ -46,10 +46,14 @@ rates on a Pi and a disable is seen on another node within about a second.
 
 ## Next
 
-1. **The follower's lag** (Lugh's P8.5 waits on it, the maintainer 2026-11-14): profiled on the Pi. Not compute and not the
-   follower: the leader's replicator, blocked mostly in per-commit claim rounds to the peers and the entry-by-entry
-   history push (the design, "What slice 0 has measured (the Pi)"). Not yet closed: time the replicator's rounds from
-   inside, then batch them. Slice 2's first step unless the maintainer pulls it ahead of slice 1 (asked, 2026-11-14). Lugh agrees
+0. **The maintainer, 2026-11-14 (asked in this session):** slice 1 is released as `0.2.0`, tagged and pushed (main, develop and the
+   tag); the no-rollback defence is both layers in Dannan (the design, node_local); the lag's fix is slice 2's first
+   step.
+1. **The follower's lag** (Lugh's P8.5 waits on it, the maintainer 2026-11-14): measured and closed from inside (the design, "What
+   slice 0 has measured (the Pi)", `feature/replicator-rounds`): the leader's replicator is saturated, about 31 ms a
+   commit against 25 ms, three fifths in per-commit claim rounds to the peers, most of the rest in the entry-by-entry
+   history push. Next: claims batched per round (one call a peer for every owed commit's claims), the push told what
+   the peer holds, the accept as soon as a peer's history lands; then the same bench against Lugh's second. Slice 2's first step unless the maintainer pulls it ahead of slice 1 (asked, 2026-11-14). Lugh agrees
    with the order (per-round claims, a push told what the peer holds, an early accept) and waits on slice 2's first
    Pi figure against its bound of about a second: tell the Lugh session when there is one.
 2. Slice 0's last two figures, when their slices exist: the channel cost per space (Lir wants it: its retained-topic

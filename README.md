@@ -133,7 +133,7 @@ that node starts (the node registers its message types and declares its readines
 planes itself), and holds the node's `dagda::Context`:
 
 ```cmake
-find_package(dagda 0.1.5 CONFIG REQUIRED)  # the exact version; Dannan comes with it
+find_package(dagda 0.2.0 CONFIG REQUIRED)  # the exact version; Dannan comes with it
 target_link_libraries(my_system PRIVATE dagda::dagda)
 ```
 
@@ -188,17 +188,20 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.1.5, on Dannan 0.6.0. Built and tested: the local store and its
+Version 0.2.0, on Dannan 0.7.0. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
 evidence, tickets, availability and repair; an instant delete beside the collector's
 per-domain wait; leases and claimed collections; domains with node-local keys, wrapped
 domain keys, member and blind roles, and the scope check at the write floor;
 `dagda-migrate`, which moves Macha's v18 disks to v19 in place; and `dagda::Node`, which
-opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`. Next,
-once Macha's tree-native format has merged: heads, node-local spaces and retained
-values, which complete and freeze `dagda::Context` version 1; then Macha's port. Every
-step ends green in `dagda_tests`, with sanitizers before a release.
+opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`; head
+spaces, every-node as Macha's are, and node-local, a node's alone, sealed under its
+node-local key; the change notice (`Heads::watch`, `Heads::changed`); and the in-process
+cluster fixture installed as `dagda::test_fixtures`. `dagda::Context` version 1 is frozen
+at 0.1.4 and still served, for Macha's port on 0.1.5; version 2 grows slice by slice
+(`TODO/2026-11-13-three-systems-design.md`) and is frozen at slice 4. Every step ends
+green in `dagda_tests`, with sanitizers before a release.
 
 ## Licence
 
