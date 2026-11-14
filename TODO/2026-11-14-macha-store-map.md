@@ -100,7 +100,21 @@ citations around them. Checked here in code before recording:
   `:734-737` at f0597a4); Dagda refuses an unknown node in English ("unknown node", `distributed_store.cpp:1462`) and
   leaves a local failure other than a stale ticket transient (`:1556-1559`), so the wait runs to its deadline. A typed
   loss in `ReplicaEvidence` must carry each of these. Whether a local failure re-derives from disk is the Macha-side-first
-  item above (Macha's call), and Dagda matches what Macha settles.
+  item above (Macha's call), and Dagda matches what Macha settles. **Settled (the maintainer, relayed by the Macha session,
+  2026-11-14: "healing is better"):** a failed local barrier re-derives and heals, as Macha's does, never "transient
+  until the deadline". A re-derived "durable" must never be false, so `StoragePool::reassert_durable`
+  (`storage_pool.cpp:784-810`, which trusts `has()`) gains two guards, each with its case:
+  1. A sync failure latched in the domain is kept (`durability_domain.cpp:74`, `:89`, `:102`): the reassertion throws,
+     the object is absent and re-put. Holds today.
+  2. After a power cut presence is not proof: pack replay accepts a record whose header decodes without reading its
+     payload, so a header on disk with its payload lost is "present". Re-derive with an authenticated read before the
+     barrier (after a reboot the page cache is empty, so the read is the disk's). Case: a torn payload behind an intact
+     header re-derives as absent.
+  3. A sync failure, then a reopen or restart without a reboot: the failed pages stay cached and clean, so no read in
+     that boot proves anything, and the new incarnation's domain has no latch. Persist the failure per backend (the
+     incarnation and its last good durable generation) so it survives reopen and restart; a ticket of that
+     incarnation past that generation is never re-derived, it is definitive and re-put. Case: a latched domain's
+     failure is not reasserted after a reopen.
 Corrected: `Context` does have CONTROL work, in `Claims::retain(RetentionClass::control)` (`context.cpp:177-211`, through
 `retain_control`, `distributed_store.cpp:2421-2476`: fetch to local, local put, offer, claim); missing are the bare forms
 (a fetch with no claim, a local get and has, a strict local put, a claimless offer, `offer_control` at `:2400-2419`).
