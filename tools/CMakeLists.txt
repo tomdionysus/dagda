@@ -11,6 +11,11 @@
 add_executable(dagda-migrate dagda_migrate.cpp)
 target_link_libraries(dagda-migrate PRIVATE dagda dagda_warnings)
 
+# dagda-bench: figures to compare, recorded and never asserted. Not in the gate, not
+# installed.
+add_executable(dagda-bench dagda_bench.cpp)
+target_link_libraries(dagda-bench PRIVATE dannan::dannan dagda_warnings)
+
 # Installed: Macha's install carries it to the nodes for the flag day.
 install(TARGETS dagda-migrate RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES "${PROJECT_SOURCE_DIR}/docs/man/dagda-migrate.1" DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
