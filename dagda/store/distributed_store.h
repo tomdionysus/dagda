@@ -275,7 +275,9 @@ struct DistributedStoreOptions {
   size_t workers = 4;
   // Bytes the ephemeral queue holds before it refuses.
   size_t ephemeral_queue_bytes = 64 * 1024 * 1024;
-  // Tickets kept, the oldest settled ones forgotten first.
+  // Settled tickets kept for a later status(), the oldest forgotten first past this
+  // bound. A ticket still waiting is never forgotten, however many there are: Macha's
+  // batch, the caller's, kept every extent a publication handed it.
   size_t max_tickets = 4096;
   // Prompt replication's first retry, doubling (Macha's 30 s).
   std::chrono::milliseconds prompt_retry{30000};

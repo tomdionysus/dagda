@@ -267,6 +267,36 @@ WriteOptions deferred_replicated() {
   return out;
 }
 
+// A publication with more extents than the ticket table holds: Macha's batch is the
+// caller's and has no bound, so every deferred write waited on is still barriered and
+// met. The table forgets only settled tickets past its bound, never one still waiting
+// (the store map, DistributedStore, gap 1: at Macha's 4 MiB extents a 16 GiB file is
+// 4,096 of them).
+TEST(StoreDurabilityBarrier, APublicationLargerThanTheTicketTableStillBarriersEveryExtent) {
+  Cluster cluster;
+  auto small_table = options(2, 2);
+  small_table.store.max_tickets = 8;
+  auto& a = cluster.add("a", small_table);
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 20; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(40 + i));
+    const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+    ASSERT_FALSE(written.met);
+    tickets.push_back(written.ticket);
+  }
+  for (const auto& ticket : tickets) EXPECT_TRUE(a.store().status(ticket).has_value());
+  const auto evidence = a.store().wait(tickets, 10s);
+  ASSERT_EQ(evidence.size(), tickets.size());
+  for (size_t i = 0; i < evidence.size(); ++i) {
+    EXPECT_EQ(evidence[i].ticket, tickets[i]);
+    EXPECT_TRUE(evidence[i].met) << "extent " << i;
+  }
+}
+
 // Many deferred writes, one peer: one barrier call, at the highest generation
 // the tickets name, and every ticket met by it. A second wait asks nothing. The
 // same tickets waited on one at a time cost a call each.

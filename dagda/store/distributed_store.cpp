@@ -185,6 +185,8 @@ struct DistributedStore::Shared {
   dannan::contract::Mutex mutex;
   uint64_t next_serial DANNAN_GUARDED_BY(mutex) = 1;
   std::map<uint64_t, std::shared_ptr<TicketRecord>> tickets DANNAN_GUARDED_BY(mutex);
+  // The size at which the next walk for settled tickets runs (new_ticket).
+  size_t ticket_walk_at DANNAN_GUARDED_BY(mutex) = 0;
 };
 
 namespace {
@@ -702,32 +704,38 @@ std::optional<std::string> DistributedStore::scope_refusal(const message::WriteP
 }
 
 std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(const ObjectId& id, Durability level, bool deferred) {
-  std::vector<std::shared_ptr<Waiter>> forgotten;
-  WriteEvidence forgotten_evidence;
+  // Each forgotten ticket's waiters, told its own evidence.
+  std::vector<std::pair<std::shared_ptr<Waiter>, WriteEvidence>> forgotten;
   std::shared_ptr<TicketRecord> record;
   {
     Lock lock(_shared->mutex);
     record = std::make_shared<TicketRecord>(_shared->next_serial++, id, level, deferred);
     _shared->tickets.emplace(record->serial, record);
-    // Past the bound, the oldest settled ticket goes first, else the oldest.
-    while (_shared->tickets.size() > std::max<size_t>(1, _options.max_tickets)) {
-      auto victim = _shared->tickets.begin();
-      for (auto it = _shared->tickets.begin(); it != _shared->tickets.end(); ++it) {
+    // Past the bound, settled tickets go, oldest first; one still waiting never does, as
+    // Macha's batch, the caller's, kept every extent it was handed. One walk frees what
+    // it can; when tickets still waiting keep the table over its bound, the next walk is
+    // put off until it has grown as much again, so a publication of many extents costs
+    // amortized constant time a write, not a walk each.
+    const auto bound = std::max<size_t>(1, _options.max_tickets);
+    if (_shared->tickets.size() > std::max(bound, _shared->ticket_walk_at)) {
+      for (auto it = _shared->tickets.begin(); it != _shared->tickets.end() && _shared->tickets.size() > bound;) {
         Lock ticket_lock(it->second->mutex);
-        if (it->second->evidence_locked().settled) {
-          victim = it;
-          break;
+        if (!it->second->evidence_locked().settled) {
+          ++it;
+          continue;
         }
+        auto waiters = std::exchange(it->second->waiters, {});
+        if (!waiters.empty()) {
+          const auto evidence = it->second->evidence_locked();
+          for (auto& waiter : waiters) forgotten.emplace_back(std::move(waiter), evidence);
+        }
+        ticket_lock.unlock();
+        it = _shared->tickets.erase(it);
       }
-      {
-        Lock ticket_lock(victim->second->mutex);
-        forgotten = std::exchange(victim->second->waiters, {});
-        if (!forgotten.empty()) forgotten_evidence = victim->second->evidence_locked();
-      }
-      _shared->tickets.erase(victim);
+      _shared->ticket_walk_at = _shared->tickets.size() > bound ? _shared->tickets.size() * 2 : bound;
     }
   }
-  for (const auto& waiter : forgotten) tell(waiter, forgotten_evidence);
+  for (const auto& [waiter, evidence] : forgotten) tell(waiter, evidence);
   return record;
 }
 
