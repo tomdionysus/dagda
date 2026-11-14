@@ -262,11 +262,12 @@ TEST(StoreRepair, ALongPushPassDoesNotHoldBackThePull) {
 }
 
 // test_repair_push_sends_nothing_to_a_peer_that_cannot_say: a peer the
-// survey could not settle is neither counted as keeping a copy nor sent one:
-// an incomplete survey pushes nothing at all, and a peer missing from a
-// complete one (here, one that joined since) is left undecided while the
-// peers the survey heard from are pushed to. Once the survey says it lacks
-// the copy, the copy is pushed. Nothing is ever asked of it.
+// survey could not settle is neither counted as keeping a copy nor sent one,
+// and the peers the survey heard from are pushed to, whether the survey is
+// incomplete (a peer could not finish its diff: Tom, 2026-11-14, "push to the
+// peers that answered", where before an incomplete survey pushed nothing) or a
+// peer is missing from a complete one (one that joined since). Once the survey
+// says it lacks the copy, the copy is pushed. Nothing is ever asked of it.
 TEST(StoreRepair, APushSendsNothingToAPeerTheSurveyCouldNotSettle) {
   for (const bool complete : {false, true}) {
     Cluster cluster;
@@ -276,15 +277,16 @@ TEST(StoreRepair, APushSendsNothingToAPeerTheSurveyCouldNotSettle) {
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
     const auto live = local_objects(writer, 4, 8 * 1024, 50);
-    const auto unsettled = complete ? lacks_of({{peer.id(), live}}) : lacks_of({{peer.id(), live}, {late.id(), live}}, false);
+    // As availability publishes them: only the peers whose diff ran to its end.
+    const auto unsettled = lacks_of({{peer.id(), live}}, complete);
     const auto step = writer.store().repair_step({inventory_of(live), {}, unsettled, {}}, 8ULL * 1024 * 1024, 16);
-    EXPECT_EQ(step.push_examined, complete ? live.size() : 0u);
-    EXPECT_EQ(peer.calls_of(message::put_object), complete ? live.size() : 0u);
+    EXPECT_EQ(step.push_examined, live.size());
+    EXPECT_EQ(peer.calls_of(message::put_object), live.size());
     EXPECT_EQ(late.calls_of(message::put_object), 0u);
     EXPECT_EQ(probes(peer) + probes(late), 0u);
     for (const auto& id : live) EXPECT_TRUE(writer.data().has(id));
 
-    const auto said = lacks_of({{peer.id(), complete ? std::vector<ObjectId>{} : live}, {late.id(), live}});
+    const auto said = lacks_of({{peer.id(), {}}, {late.id(), live}});
     EXPECT_TRUE(wait_until(
         [&] {
           (void)writer.store().repair_step({inventory_of(live), {}, said, {}}, 8ULL * 1024 * 1024, 16);
