@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -51,15 +52,19 @@ struct ExternalIdentity {
   uint64_t sequence = 0;
 };
 
-// Where a space's heads are kept. Macha has one every-node space. `replicas: N` is
-// L2's, which waits on holders that do not exist yet, and open() refuses it.
+// Where a space's heads are kept. Macha has one every-node space. `node_local` is
+// this node's alone (slice 1, D3): never advertised, exchanged, offered or repaired,
+// its tree nodes in a pack of its own under the node-local key. `replicas: N` is L2's,
+// which waits on holders that do not exist yet (slice 2), and open() refuses it.
 struct Policy {
-  enum class Kind : uint8_t { every_node, replicas };
+  enum class Kind : uint8_t { every_node, replicas, node_local };
   Kind kind = Kind::every_node;
   uint32_t replicas = 0;
 
   static Policy every_node() { return {}; }
   static Policy replicas_of(uint32_t count) { return {Kind::replicas, count}; }
+  static Policy node_local() { return {Kind::node_local, 0}; }
+  bool is_node_local() const noexcept { return kind == Kind::node_local; }
 };
 
 // Nothing, or why a space may not open under `policy`.
@@ -492,6 +497,18 @@ class Space {
   // After it returns nothing more is posted for the token; a notice already posted still
   // runs. An unknown token is nothing to withdraw.
   void unwatch(uint64_t token) DANNAN_EXCLUDES(_watch_mutex);
+  // A node-local space's upkeep (D3), what the exchange's truncation and the store's
+  // collector do for a shared one. Under the mutation lock, so no commit writes a node
+  // meanwhile: history is re-rooted at the one head once it stands, and then, when
+  // history holds nothing but the heads, `collect` is handed every tree node they reach,
+  // which is all the space still needs. Waits on the state device.
+  struct Upkeep {
+    bool truncated = false;
+    bool collected = false;
+    uint64_t reached = 0;
+  };
+  Upkeep upkeep_node_local(const std::function<void(const std::set<ObjectId>&)>& collect) DANNAN_EXCLUDES(_view_mutex, _owed_mutex);
+
   // Tells the watches if the committed head moved since they were last told. accept()
   // calls it; so does any path that moves the head without it (an imported history that
   // prunes an accepted head). Waits on nothing but the replica's memory.

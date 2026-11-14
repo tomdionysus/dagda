@@ -42,7 +42,7 @@ void raise_to(std::atomic_uint64_t& slot, uint64_t value) {
 }  // namespace
 
 std::optional<std::string> policy_refusal(const Policy& policy) {
-  if (policy.kind == Policy::Kind::every_node) return std::nullopt;
+  if (policy.kind == Policy::Kind::every_node || policy.kind == Policy::Kind::node_local) return std::nullopt;
   return "a head space with replicas: " + std::to_string(policy.replicas) +
          " needs holders placed per head, which is L2's work and is not built; every_node opens";
 }
@@ -582,6 +582,37 @@ void Space::notice_if_moved() {
   for (auto& watch : told) boost::asio::post(watch.executor, [notice = std::move(watch.notice), move] { notice(move); });
 }
 
+Space::Upkeep Space::upkeep_node_local(const std::function<void(const std::set<ObjectId>&)>& collect) {
+  if (!_spec.policy.is_node_local()) throw std::logic_error("heads::Space::upkeep_node_local on a space that is not node-local");
+  Upkeep out;
+  Lock mutation(_mutation_mutex);
+  if (_replica->recovery_required()) return out;
+  const auto before = _replica->diagnostics().history_records;
+  // Nobody else holds this space's history, so nothing waits on its older entries:
+  // re-rooted whenever one head stands.
+  (void)_replica->compact_history_if_safe(1, 0);
+  out.truncated = _replica->diagnostics().history_records < before;
+  const auto heads = _replica->accepted_heads();
+  if (heads.empty() || _replica->diagnostics().history_records > heads.size()) return out;
+  std::set<ObjectId> reached;
+  if (_spec.tree) {
+    const auto reader = _services.read_nodes();
+    for (const auto& head : heads) {
+      const auto held = _replica->materialized(head.hash);
+      if (!held) return out;
+      if (const auto root = _spec.codec->head_fields(held->state).root) {
+        std::vector<ObjectId> nodes;
+        _spec.tree->collect_nodes(*root, *reader, nodes);
+        reached.insert(nodes.begin(), nodes.end());
+      }
+    }
+  }
+  out.reached = reached.size();
+  collect(reached);
+  out.collected = true;
+  return out;
+}
+
 std::optional<ObjectId> Space::root_of(const HeadIdentity& head) const {
   const auto held = _replica->materialized(head.hash);
   if (!held || held->record.generation != head.generation)
@@ -590,6 +621,8 @@ std::optional<ObjectId> Space::root_of(const HeadIdentity& head) const {
 }
 
 void Space::owe(Record head, std::optional<OwedClaims> claims) {
+  // A node-local space owes nobody anything (D3).
+  if (_spec.policy.is_node_local()) return;
   {
     Lock lock(_owed_mutex);
     // Only the newest head is offered: its history carries the others.

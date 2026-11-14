@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
+#include "dagda/domain/domain_id.h"
 #include "dagda/heads/control_node_store.h"
 #include "dagda/store/messages.h"
 
@@ -46,6 +48,14 @@ Spaces::Spaces(Services services)
       _guard(_services.context.logger("dagda.heads")),
       _logger(_services.context.logger("dagda.heads")),
       _thread([this](std::stop_token stop) { _services.context.threads().loop("dagda.heads", stop, [this, stop] { worker(stop); }); }) {
+  if (_services.local_key) {
+    const auto domain = domain::node_local_domain(_services.context.identity().id());
+    Bytes aad;
+    const std::string_view label = "dagda/node-local/generations/1";
+    aad.insert(aad.end(), label.begin(), label.end());
+    aad.insert(aad.end(), domain.bytes.begin(), domain.bytes.end());
+    _generations = std::make_unique<NodeLocalGenerations>(NodeLocalGenerations::file(_services.state), _services.local_key, std::move(aad));
+  }
   bind_routes();
 }
 
@@ -95,6 +105,7 @@ Space& Spaces::open(SpaceSpec spec) {
   const auto id = id_of(spec.name);
   Lock lock(_mutex);
   if (_spaces.contains(id)) throw std::invalid_argument("head space " + spec.name + " is open already");
+  if (spec.policy.is_node_local()) return open_node_local_locked(std::move(spec), id);
 
   auto seed = std::make_unique<CacheSeed>(_services.cache, _services.content_key, _services.domain, spec.seed_magic, _logger);
 
@@ -166,6 +177,92 @@ Space& Spaces::open(SpaceSpec spec) {
   _seeds.emplace(id, std::move(seed));
   _spaces.emplace(id, std::move(space));
   return out;
+}
+
+// D3: this node's alone. No exchange, no seed in the shared cache (sealed under the
+// domain's key), no claim in the shared store; the replica and the tree nodes sealed
+// under the node-local key, with the node-local domain in every AAD.
+Space& Spaces::open_node_local_locked(SpaceSpec spec, const SpaceId& id) {
+  if (spec.unaddressed) throw std::invalid_argument("node-local head space " + spec.name + " answers no peer, so it takes no unaddressed message");
+  if (!_services.local_key || !_generations) throw std::invalid_argument("node-local head space " + spec.name + " needs this node's node-local key");
+  const auto self = _services.context.identity().id();
+  const auto domain = domain::node_local_domain(self);
+  const auto directory = space_directory(_services.state, id);
+  auto pack = std::make_unique<NodePack>(directory / "nodes", _services.local_key, replica_aad(domain, id)(Magic{}), _logger);
+  auto* nodes = pack.get();
+
+  ReplicaOptions replica;
+  replica.directory = directory;
+  replica.content_key = _services.local_key;
+  replica.local_key = _services.local_key;
+  replica.magics = spec.magics;
+  replica.aad = replica_aad(domain, id);
+  replica.codec = spec.codec;
+  replica.accept_pristine_genesis_authority = spec.accept_pristine_genesis_authority;
+  replica.materialization_cache_limit_bytes = spec.materialization_cache_limit_bytes;
+  replica.tree_store = nodes->factory();
+  replica.time = &_services.context.time().source();
+  replica.logger = _logger;
+
+  SpaceServices services;
+  services.self = self;
+  services.commit_nodes = nodes->factory();
+  services.read_nodes = nodes->factory();
+  services.claims = &_node_local_barrier;
+  services.wall = _services.wall;
+  services.guard = &_guard;
+  services.space = id;
+  // No rollback: each accepted head raises the record kept outside the space's directory.
+  auto* generations = _generations.get();
+  services.accepted = [generations, id](const Acceptance&, bool, const Record& committed) { generations->raise(id, committed.generation); };
+
+  auto space = std::make_unique<Space>(std::move(spec), std::move(replica), std::move(services));
+  auto& out = *space;
+  if (const auto recorded = generations->of(id); out.replica().committed().generation < recorded)
+    throw std::runtime_error("node-local head space " + out.name() + " opens at generation " + std::to_string(out.replica().committed().generation) +
+                             " and this node recorded generation " + std::to_string(recorded) + " for it: an older copy restored in place is refused (" +
+                             directory.string() + ")");
+  // The founder is this node, alone: the exchange's forming, with no peer to ask first.
+  if (out.replica().committed().generation <= 1 && out.spec().founding) {
+    const auto base = genesis_record(out.codec()->genesis());
+    const auto writer = nodes->factory()();
+    State state = out.spec().founding(*writer);
+    Record formed;
+    formed.generation = base.generation + 1;
+    formed.previous = base.hash;
+    formed.payload = out.codec()->encode_full(state);
+    formed.hash = record_hash(formed.generation, formed.previous, formed.payload);
+    Acceptance acceptance;
+    acceptance.generation = formed.generation;
+    acceptance.hash = formed.hash;
+    acceptance.required = 1;
+    acceptance.replicas = {self};
+    if (!out.replica().store_commit(formed) || !out.accept(acceptance))
+      throw std::runtime_error("node-local head space " + out.name() + " could not store the head it was founded with");
+  }
+  _packs.emplace(id, std::move(pack));
+  _spaces.emplace(id, std::move(space));
+  return out;
+}
+
+size_t Spaces::upkeep_node_local() {
+  std::vector<std::pair<Space*, NodePack*>> local;
+  {
+    Lock lock(_mutex);
+    for (const auto& [id, pack] : _packs) local.emplace_back(_spaces.at(id).get(), pack.get());
+  }
+  size_t compacted = 0;
+  for (auto [space, pack] : local) {
+    space->upkeep_node_local([&](const std::set<ObjectId>& reached) {
+      // Only when it frees something worth a rewrite: a quarter of the pack, or more.
+      if (pack->nodes() <= reached.size() + reached.size() / 3) return;
+      const auto result = pack->compact(reached);
+      ++compacted;
+      _logger.info("node-local space " + space->name() + " compacted kept=" + std::to_string(result.kept) + " dropped=" + std::to_string(result.dropped) +
+                   " bytes=" + std::to_string(result.bytes_before) + "->" + std::to_string(result.bytes_after));
+    });
+  }
+  return compacted;
 }
 
 Exchange* Spaces::exchange(const SpaceId& space) const {
