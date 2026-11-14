@@ -236,6 +236,9 @@ struct DistributedStore::TicketRecord {
   mutable dannan::contract::Mutex mutex;
   size_t sought DANNAN_GUARDED_BY(mutex) = 0;
   bool cancelled DANNAN_GUARDED_BY(mutex) = false;
+  // The frame the write was made at: its barriers travel at it, as Macha's did at the
+  // work's frame.
+  FrameType frame DANNAN_GUARDED_BY(mutex) = FrameType::loader;
   // A caller has asked after it (a wait armed or a status read): a settled deferred
   // ticket may be forgotten only then, as Macha's batch kept each extent until its
   // publisher consumed it.
@@ -1012,6 +1015,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
       Lock ticket_lock(record->mutex);
       record->sought = floor;
       record->cancelled = cancelled_seen;
+      record->frame = options.frame;
       record->replicas.clear();
       const auto from_call = [&](ReplicaRecord& replica, const WriteRun::Call& call) {
         if (!call.done) {
@@ -1415,6 +1419,8 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
   struct Place {
     NodeId node;
     DurabilityTicket ticket;
+    // The most urgent frame of the writes it makes durable.
+    FrameType frame = FrameType::speculative;
     std::vector<std::shared_ptr<TicketRecord>> records;
   };
   using PlaceKey = std::tuple<NodeId, NodeId, uint64_t, uint64_t>;
@@ -1430,8 +1436,10 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
         place = std::make_shared<Place>();
         place->node = replica.evidence.node;
         place->ticket = ticket;
+        place->frame = record->frame;
       }
       place->ticket.generation = std::max(place->ticket.generation, ticket.generation);
+      if (dannan::sched::frame_priority(record->frame) < dannan::sched::frame_priority(place->frame)) place->frame = record->frame;
       place->records.push_back(record);
     }
   }
@@ -1465,7 +1473,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     }
     const auto peer = found->second;
     message::BarrierRequest request{place->ticket, {}};
-    _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(request), FrameType::loader, deadline, _executor,
+    _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(request), place->frame, deadline, _executor,
                            [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each](CallOutcome outcome) {
                              if (outcome.reply && outcome.reply->type == dannan::net::message::ok) {
                                each(asked->records, asked->node, [](ReplicaRecord& replica) { acknowledge(replica); });
@@ -1504,7 +1512,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                                                                asked->records.begin() + static_cast<std::ptrdiff_t>(start + count));
                                message::BarrierRequest probe{asked->ticket, {}};
                                for (const auto& record : part) probe.probe.push_back(record->id);
-                               _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), FrameType::loader, deadline,
+                               _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), asked->frame, deadline,
                                                       _executor, [part, node = asked->node, transient, refuse, each, rederived, part_done](CallOutcome answer) {
                                                         if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
                                                           const auto why = outcome_text(answer);

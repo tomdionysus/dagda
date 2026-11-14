@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <future>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "dagda/store/distributed_store.h"
@@ -509,6 +510,27 @@ TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   ASSERT_NE(evidence->on(a.id()), nullptr);
   EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::refused);
   EXPECT_EQ(evidence->on(a.id())->loss, BarrierLoss::absent_here);
+}
+
+// A barrier travels at the frame of the work it makes durable, as Macha's does: the
+// artwork's at speculative (catalogue.hpp:520-521 at f0597a4), a publication's at its
+// work frame (filesystem.cpp:1201), so artwork's barriers never compete with a
+// publication's at loader (the store map, distributed store gap 3).
+TEST(StoreDurabilityBarrier, ABarrierTravelsAtTheFrameItsWriteWasMadeAt) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto artwork = deferred_replicated();
+  artwork.frame = FrameType::speculative;
+  const auto bytes = pattern(32 * 1024, 91);
+  const auto written = a.store().write(object_id(bytes), bytes, artwork);
+  ASSERT_EQ(written.holders(), 2u);
+  const auto evidence = a.store().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_TRUE(evidence->met);
+  EXPECT_EQ(b.frames_of(message::object_durability_barrier), std::set<FrameType>{FrameType::speculative});
 }
 
 // The asynchronous form posts its evidence, never inline, in the order asked;
