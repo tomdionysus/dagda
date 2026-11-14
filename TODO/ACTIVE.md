@@ -49,7 +49,12 @@ identical workloads), then on macnessa and inverbeg against Macha's live baselin
 Dagda and the Macha session together, split by subsystem, each reviewing the other's. Key custody, talked through and
 ruled: **Macha's nodes get Dannan key custody**, a one-time step on each node made part of the cutover beside
 `dagda-migrate`; the node-local key stays only on its node, as designed. A node that loses its credential loses its
-ledgers, not its objects, and rebuilds what it holds by rescanning its disks. Two requirements, both binding: Macha uses Dagda
+ledgers, not its objects, and rebuilds what it holds by rescanning its disks. The map's split (agreed with the Macha
+session, against Macha's develop `f0597a4`): Macha writes the callers' side; Dagda writes the store's side (Macha's
+DistributedStore, StoragePool and LocalStore, retention, claims and reference counts, availability and survey, repair and
+maintenance's store stages, GC and the deletion claim path, cache, io pressure and data credit) onto `dagda::Node` and
+`Context`; each reviews the other's against code. Tom: start now, and fix each gap test-first as it is found. The map:
+`TODO/2026-11-14-macha-store-map.md`. Two requirements, both binding: Macha uses Dagda
 natively with no adapter layer, rewritten where needed and losing nothing; and Dagda, measured on its own terms against
 Macha's store on the same workloads, is at least as good a DHT store in every respect. Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
 proven; **0.2.0 stays tagged locally and unpushed** until Tom says. The proof (proposed to Tom): a call-by-call map from
