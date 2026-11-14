@@ -413,3 +413,6 @@ comes first, as Tom ruled.
    under Macha 0.94.x), not 0.5.6; it is tagged after the x86-64 Docker build (debs, tests, lintian) and the arm64 build
    on corvus-develop (GCC Release with warnings as errors, tests, debs) both pass. Slice 0's measurement starts on the
    Mac meanwhile. Alpine is not now, for Dagda as for Dannan.
+6. 2026-11-14: the x86-64 gate is suspended ("Suspend the x64-64 gate and use only the cluster"): a release's Linux
+   gate is arm64 on the Pi cluster (GCC Release with warnings as errors, tests, the Debian packages with lintian,
+   installed and consumed), with the Mac's run. 0.1.5 is tagged on those.
