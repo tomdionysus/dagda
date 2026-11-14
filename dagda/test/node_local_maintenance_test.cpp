@@ -14,6 +14,8 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <future>
+#include <memory>
 #include <thread>
 #include <variant>
 
@@ -22,6 +24,7 @@
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/reachability.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/test/fixtures/gate.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda {
@@ -333,6 +336,34 @@ TEST(NodeReconfigure, BackendsAndCacheFollowALiveReload) {
   EXPECT_EQ(node.data().online_backends(), 1u);
   EXPECT_FALSE(node.cache().enabled());
   EXPECT_NO_THROW(store::StorageLock free_again(second));
+}
+
+// Macha's reload touches only the pool's locks (local_state.cpp:189-193 at f0597a4):
+// a maintenance pass in progress does not hold it back (the store map, pool gap 4).
+TEST(NodeReconfigure, AReloadDoesNotWaitForAMaintenancePassInProgress) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  auto armed = std::make_shared<std::atomic<bool>>(false);
+  auto options = fast_link();
+  options.maintenance.stage = [&gate, armed](std::string_view) {
+    if (armed->exchange(false)) gate.enter_and_wait();
+  };
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  const auto backends = node.dagda_node().options().pool.backends;
+
+  armed->store(true);
+  auto pass = std::async(std::launch::async, [&] { (void)node.run_maintenance_once(); });
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  auto reload = std::async(std::launch::async, [&] { node.dagda_node().reconfigure({backends, {}}); });
+  EXPECT_EQ(reload.wait_for(10s), std::future_status::ready) << "the reload waited for the maintenance pass";
+  gate.open();
+  ASSERT_EQ(pass.wait_for(60s), std::future_status::ready);
+  pass.get();
+  ASSERT_EQ(reload.wait_for(60s), std::future_status::ready);
+  reload.get();
+  EXPECT_EQ(node.data().online_backends(), 1u);
 }
 
 // Macha's test_replication_policy_change_on_restart: replication is taken at a

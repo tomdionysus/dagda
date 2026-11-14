@@ -8,9 +8,9 @@
 #include "dagda/node.h"
 
 #include <algorithm>
+#include <exception>
 #include <filesystem>
 #include <fstream>
-#include <exception>
 #include <functional>
 #include <future>
 #include <set>
@@ -300,6 +300,7 @@ void Node::open() {
     cache.sealing = scheme;
     if (cache_disabled) cache.path.clear();
     _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
+    _cache_max_blocks.store(_options.cache.max_blocks, std::memory_order_relaxed);
     ready(plane_cache);
 
     step("open claims");
@@ -467,6 +468,8 @@ void Node::stop() {
     part.reset();
     step("stop " + std::string(what));
   };
+  // A reload in progress finishes before what it changes goes, and none starts after.
+  dannan::contract::Lock reloading(_reload_mutex);
   _api.reset();
   _keeper.reset();
   _membership.reset();
@@ -660,7 +663,10 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
 }
 
 void Node::reconfigure(const NodeReload& reload) {
-  dannan::contract::Lock lock(_maintenance_mutex);
+  // Reloads one at a time, beside any maintenance pass: Macha's reload touched only
+  // the pool's locks (local_state.cpp:189-193 at f0597a4), and the pool, the cache
+  // and the root locks each guard themselves.
+  dannan::contract::Lock lock(_reload_mutex);
   if (!_data) throw NodeRefused("the node is not running");
   std::set<std::filesystem::path> wanted;
   for (const auto& backend : reload.backends) {
@@ -711,6 +717,7 @@ void Node::reconfigure(const NodeReload& reload) {
   }
   _options.pool.backends = reload.backends;
   _options.cache = reload.cache;
+  _cache_max_blocks.store(reload.cache.max_blocks, std::memory_order_relaxed);
   _context.events().notify(dannan::status::NodeEvents::topology);
   _logger.info("reloaded: " + std::to_string(_data->online_backends()) + " backends online, cache " + (_cache->enabled() ? "on" : "off"));
 }
@@ -1265,7 +1272,7 @@ void Node::publish_status() {
   const auto cache = _cache->stats();
   put("cache.enabled", _cache->enabled());
   put("cache.blocks", u64(_cache->blocks()));
-  put("cache.capacity_bytes", u64(_options.cache.max_blocks * _options.store.extent_size));
+  put("cache.capacity_bytes", u64(_cache_max_blocks.load(std::memory_order_relaxed) * _options.store.extent_size));
   put("cache.used_bytes", u64(_cache->blocks() * _options.store.extent_size));
   put("cache.hits", u64(cache.hits));
   put("cache.misses", u64(cache.misses));
