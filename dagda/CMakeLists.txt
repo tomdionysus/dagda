@@ -23,6 +23,7 @@ add_library(dagda SHARED
   heads/messages.cpp
   heads/record.cpp
   heads/replica.cpp
+  heads/node_pack.cpp
   heads/retirement.cpp
   heads/sealed_file.cpp
   heads/space.cpp
