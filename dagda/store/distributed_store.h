@@ -337,8 +337,9 @@ struct RepairLists {
   std::shared_ptr<const contract::InventoryHorizon> inventory;
   // What is referenced and this node lacks, sorted: what the pull considers.
   std::shared_ptr<const std::vector<ObjectId>> pull;
-  // Per peer, what it lacks of what this node holds: what the push sends,
-  // and only when every hosting peer answered for this inventory.
+  // Per peer that answered for this inventory, what it lacks of what this node
+  // holds: what the push sends, to those peers, even while another could not
+  // answer (the maintainer, 2026-11-14).
   std::shared_ptr<const ledger::PeerLacks> lacks;
   // Held by no reachable node: passed without asking anyone.
   std::function<bool(const ObjectId&)> unavailable;

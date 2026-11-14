@@ -2854,8 +2854,10 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   }
   const auto live = lists.inventory->lookup(contract::RetentionClass::data);
 
-  // The push works from every peer's lacks, and only when every hosting
-  // peer answered for this inventory: diff only, no walk, no probe.
+  // The push works from the lacks of every peer that answered for this inventory,
+  // whether or not every hosting peer did (the maintainer, 2026-11-14: "push to the peers that
+  // answered"): diff only, no walk, no probe. A peer the survey did not settle is
+  // neither a keeper nor sent a copy, and is asked nothing.
   const auto* lacks = lists.lacks.get();
   const auto generation = lists.inventory->generation();
   if (lists.lacks != state.push_source || generation != state.push_generation) {
@@ -2864,7 +2866,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     state.push_generation = generation;
     // A new list has not been walked, whatever became of the last one.
     state.push_complete = false;
-    state.listed = lacks && lacks->complete && lacks->generation == generation;
+    state.listed = lacks && lacks->generation == generation;
     state.push_list.clear();
     state.pushed.clear();
     if (state.listed) {
