@@ -149,6 +149,8 @@ struct ClusterNodeOptions {
   std::filesystem::path data{};
   // The node's open and stop stages, as dagda::Node reports them.
   std::function<void(std::string_view)> trace;
+  // Macha's startup stages, as dagda::Node tells them (NodeOptions::startup_stage).
+  std::function<void(std::string_view)> startup_stage;
   // The owner's startup progress, handed to the node when given.
   dannan::supervise::StartupProgress* startup_progress = nullptr;
   // The control store's, and the node's time (a stepped one, for a case that
@@ -435,6 +437,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   if (_options.wall) out.wall = _options.wall;
   out.status_interval = std::chrono::milliseconds(200);
   out.trace = _options.trace;
+  out.startup_stage = _options.startup_stage;
   out.startup_progress = _options.startup_progress;
   out.control = _options.control;
   out.startup_progress = _options.startup_progress;

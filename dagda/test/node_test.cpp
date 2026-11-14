@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +74,46 @@ std::string refusal_of(ClusterNode& node) {
   }
   ADD_FAILURE() << node.name() << " was not refused";
   return {};
+}
+
+// The DATA pool and the control chain recover side by side, as Macha's do
+// (local_state.cpp:57-79 at f0597a4): a pool held in its stage leaves the control
+// store and the cache to come up and be reported ready, and the open waits for both.
+// Macha's stage names are heard on the thread that does the plane: data-storage on
+// the pool's, control-storage, cache and retention on the open's (the store map,
+// pool gap 1).
+TEST(Node, TheDataPoolAndTheControlChainRecoverSideBySide) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  struct Heard {
+    std::mutex mutex;
+    std::vector<std::string> stages;
+  };
+  auto heard = std::make_shared<Heard>();
+  ClusterNodeOptions options;
+  options.startup_stage = [&gate, heard](std::string_view stage) {
+    {
+      std::lock_guard lock(heard->mutex);
+      heard->stages.emplace_back(stage);
+    }
+    if (stage == "data-storage") gate.enter_and_wait();
+  };
+  auto& a = cluster.add("a", options);
+  auto opening = std::async(std::launch::async, [&] { a.open(); });
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  EXPECT_TRUE(test::wait_until([&] { return a.context().readiness().has("control_storage") && a.context().readiness().has("cache"); }))
+      << "the control chain waited for the pool";
+  EXPECT_FALSE(a.context().readiness().has("data_storage"));
+  EXPECT_EQ(opening.wait_for(0ms), std::future_status::timeout);
+  gate.open();
+  ASSERT_EQ(opening.wait_for(30s), std::future_status::ready);
+  opening.get();
+  EXPECT_TRUE(a.context().readiness().has("data_storage"));
+  EXPECT_TRUE(a.context().readiness().has("retention"));
+  std::lock_guard lock(heard->mutex);
+  for (const auto* stage : {"data-storage", "control-storage", "cache", "retention"})
+    EXPECT_NE(std::find(heard->stages.begin(), heard->stages.end(), stage), heard->stages.end()) << stage;
 }
 
 // It opens in the design's order on a fresh state and again on the state it

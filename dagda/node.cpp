@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include <functional>
+#include <future>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -110,6 +112,10 @@ void Node::step(std::string_view what) {
 }
 
 void Node::ready(const std::string& plane) { _context.readiness().ready(plane); }
+
+void Node::startup_stage(std::string_view stage) {
+  if (_options.startup_stage) _options.startup_stage(stage);
+}
 
 void Node::prepare() {
   if (_context.version() != dannan::context_version)
@@ -230,8 +236,11 @@ void Node::open() {
 
   _activity = std::make_unique<dannan::status::ActivityClocks>(&pass_time());
 
+  // The DATA pool and the control chain recover side by side, as Macha's do
+  // (local_state.cpp:57-79 at f0597a4): a large pool takes a while, and one plane
+  // stalled or failed leaves the other to come up and be reported ready. The
+  // pool's thread touches only the pool; what reads it waits for its join below.
   step("open storage-pool");
-  _opening_data = true;
   auto pool = _options.pool;
   pool.sealing = scheme;
   pool.role = _options.domain.role;
@@ -239,63 +248,88 @@ void Node::open() {
   pool.ledger_cache_bytes = ledger_cache_share(cache_bytes, LedgerShare::data_held);
   pool.lock_root = [this](const std::filesystem::path& root) { hold_root(root); };
   if (_options.admission && _options.admission->device_pressure.slowdown_percent) pool.service_thresholds = _options.admission->device_pressure;
-  _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, services("dagda.pool"));
-  // A pool whose every backend is offline holds nothing it should: ready, but
-  // degraded, and it says so (Tom, 2026-11-05), so a node whose only disk is
-  // offline does not crash-loop on its startup timeout.
-  if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
-    const auto& gate = _options.admission->device_pressure;
-    _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
-                 "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
-                 " outlier_percent=" + std::to_string(gate.outlier_percent) +
-                 " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+  auto pool_services = services("dagda.pool");
+  auto data_recovery = std::async(std::launch::async, [this, &pool, &pool_services, &self] {
+    startup_stage("data-storage");
+    _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, pool_services);
+    // A pool whose every backend is offline holds nothing it should: ready, but
+    // degraded, and it says so (Tom, 2026-11-05), so a node whose only disk is
+    // offline does not crash-loop on its startup timeout.
+    if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
+      const auto& gate = _options.admission->device_pressure;
+      _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
+                   "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
+                   " outlier_percent=" + std::to_string(gate.outlier_percent) +
+                   " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+    }
+    // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
+    // empty pool, and says so, or capacity=0 reads like a missing disk.
+    _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
+                 (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
+    if (_data->degraded())
+      _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) + "; running without one until it returns");
+    ready(plane_data);
+  });
+  // The control chain's failure is the one told when both fail, as Macha's.
+  std::exception_ptr chain_failure;
+  try {
+    if (_options.admission) {
+      step("open admission");
+      const auto& admission = *_options.admission;
+      const auto quiet = _options.repair.foreground_quiet;
+      auto& activity = *_activity;
+      _credit = std::make_unique<store::DataResourceArbiter>(
+          admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
+          [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
+          _context.time().source());
+      // Device-pressure admission (observing the pool once it is open, below).
+      if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
+    }
+
+    step("open control-store");
+    startup_stage("control-storage");
+    auto control = _options.control;
+    control.sealing = scheme;
+    _control = store::open_control_store(_options.state, control, _options.key, _node_local, services("dagda.control"),
+                                         ledger_cache_share(cache_bytes, LedgerShare::control_held));
+    ready(plane_control);
+
+    step("open cache");
+    startup_stage("cache");
+    auto cache = _options.cache;
+    cache.sealing = scheme;
+    if (cache_disabled) cache.path.clear();
+    _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
+    ready(plane_cache);
+
+    step("open claims");
+    startup_stage("retention");
+    _claims = std::make_unique<ledger::RetentionStore>(_options.state, _node_local, _context.logger("dagda.claims"),
+                                                       ledger_cache_share(cache_bytes, LedgerShare::claims));
+
+    step("open reference-counts");
+    _references = std::make_unique<ledger::ReferenceCounts>(_options.state / "ledger" / "referenced", _node_local,
+                                                            ledger_cache_share(cache_bytes, LedgerShare::references), _context.logger("dagda.references"));
+  } catch (...) {
+    chain_failure = std::current_exception();
   }
-  // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
-  // empty pool, and says so, or capacity=0 reads like a missing disk.
-  _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
-               (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
-  if (_data->degraded())
-    _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) + "; running without one until it returns");
-  _opening_data = false;
-  ready(plane_data);
-
-  if (_options.admission) {
-    step("open admission");
-    const auto& admission = *_options.admission;
-    const auto quiet = _options.repair.foreground_quiet;
-    auto& activity = *_activity;
-    _credit = std::make_unique<store::DataResourceArbiter>(
-        admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
-        [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
-        _context.time().source());
-    // Device-pressure admission; a zero target turns it off, as Macha's does.
-    if (admission.device_pressure.slowdown_percent) _credit->observe_device(&_data->service_monitor(), admission.min_background_under_pressure);
-    if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
+  // Both joined before either failure is told, so nothing runs on after the open.
+  try {
+    data_recovery.get();
+  } catch (...) {
+    if (!chain_failure) {
+      _opening_data = true;
+      throw;
+    }
   }
+  if (chain_failure) std::rethrow_exception(chain_failure);
 
-  step("open control-store");
-  auto control = _options.control;
-  control.sealing = scheme;
-  _control = store::open_control_store(_options.state, control, _options.key, _node_local, services("dagda.control"),
-                                       ledger_cache_share(cache_bytes, LedgerShare::control_held));
-  ready(plane_control);
-
-  step("open cache");
-  auto cache = _options.cache;
-  cache.sealing = scheme;
-  if (cache_disabled) cache.path.clear();
-  _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
-  ready(plane_cache);
-
-  step("open claims");
-  _claims = std::make_unique<ledger::RetentionStore>(_options.state, _node_local, _context.logger("dagda.claims"),
-                                                     ledger_cache_share(cache_bytes, LedgerShare::claims));
+  // What reads both.
   _ledger = std::make_unique<ledger::RetentionLedger>(*_claims, *_data, *_control, _context.time().source());
-
-  step("open reference-counts");
-  _references = std::make_unique<ledger::ReferenceCounts>(_options.state / "ledger" / "referenced", _node_local,
-                                                          ledger_cache_share(cache_bytes, LedgerShare::references), _context.logger("dagda.references"));
   ready(plane_retention);
+  // Device-pressure admission; a zero target turns it off, as Macha's does.
+  if (_credit && _options.admission->device_pressure.slowdown_percent)
+    _credit->observe_device(&_data->service_monitor(), _options.admission->min_background_under_pressure);
 
   step("open distributed-store");
   auto store_options = _options.store;
@@ -308,6 +342,7 @@ void Node::open() {
     // A space replays with the owner's codec, so its plane cannot be marked until it
     // has: no peer is asked unless a node of the tree is missing here.
     step("open heads");
+    startup_stage("metadata");
     auto exchange = _options.exchange;
     // Both hear of a stage: the owner's pass and the exchange's own.
     exchange.stage = [this, own = exchange.stage](std::string_view stage) {
