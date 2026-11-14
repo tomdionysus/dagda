@@ -178,13 +178,16 @@ void Node::open() {
   }
   const auto lock_reloadable = [&](const std::filesystem::path& root) {
     try {
-      _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
+      hold_root(root);
     } catch (const std::exception& error) {
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   };
   _opening_data = true;
-  for (const auto& backend : _options.pool.backends) lock_reloadable(backend.path);
+  // A backend whose directory is not there is a disk not mounted: nothing is made in
+  // its place (the lock would make it), and the pool leaves it offline until it is.
+  for (const auto& backend : _options.pool.backends)
+    if (std::error_code ec; std::filesystem::is_directory(backend.path, ec)) lock_reloadable(backend.path);
   _opening_data = false;
   lock(store::control_store_path(_options.state, _options.control));
   if (!_options.cache.path.empty()) lock_reloadable(_options.cache.path);
@@ -218,6 +221,7 @@ void Node::open() {
   pool.role = _options.domain.role;
   pool.ledger_key = _node_local;
   pool.ledger_cache_bytes = ledger_cache_share(cache_bytes, LedgerShare::data_held);
+  pool.lock_root = [this](const std::filesystem::path& root) { hold_root(root); };
   if (_options.admission && _options.admission->device_pressure.slowdown_percent) pool.service_thresholds = _options.admission->device_pressure;
   _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, services("dagda.pool"));
   // A pool whose every backend is offline holds nothing it should: ready, but
@@ -430,10 +434,19 @@ void Node::stop() {
   _node_local.reset();
   close("node-local-key", _wrap);
   if (!_locks.empty()) {
-    _reloadable_locks.clear();
+    {
+      dannan::contract::Lock roots(_root_locks_mutex);
+      _reloadable_locks.clear();
+    }
     _locks.clear();
     step("stop state-layout");
   }
+}
+
+void Node::hold_root(const std::filesystem::path& root) {
+  dannan::contract::Lock lock(_root_locks_mutex);
+  if (_reloadable_locks.contains(root)) return;
+  _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
 }
 
 void Node::arm_status() {
@@ -596,24 +609,36 @@ void Node::reconfigure(const NodeReload& reload) {
     wanted.insert(backend.path);
   }
   if (!reload.cache.path.empty()) wanted.insert(reload.cache.path);
-  // Every new root locked before anything changes.
+  // Every new root locked before anything changes; a backend's only if its directory
+  // is there (a missing one is a disk not mounted, and the lock would make it).
   std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> added;
   for (const auto& root : wanted) {
-    if (_reloadable_locks.contains(root)) continue;
+    {
+      dannan::contract::Lock roots(_root_locks_mutex);
+      if (_reloadable_locks.contains(root)) continue;
+    }
+    std::error_code ec;
+    if (root != reload.cache.path && !std::filesystem::is_directory(root, ec)) continue;
     try {
       added.emplace(root, std::make_unique<store::StorageLock>(root));
     } catch (const std::exception& error) {
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   }
-  _reloadable_locks.merge(added);
+  {
+    dannan::contract::Lock roots(_root_locks_mutex);
+    _reloadable_locks.merge(added);
+  }
   _data->reconfigure(reload.backends);
   _data->refresh();
   auto cache = reload.cache;
   cache.sealing = store::SealingScheme::v19(_options.domain.id);
   _cache->reconfigure(cache);
   // What has been let go, its lock with it.
-  std::erase_if(_reloadable_locks, [&](const auto& entry) { return !wanted.contains(entry.first); });
+  {
+    dannan::contract::Lock roots(_root_locks_mutex);
+    std::erase_if(_reloadable_locks, [&](const auto& entry) { return !wanted.contains(entry.first); });
+  }
   _options.pool.backends = reload.backends;
   _options.cache = reload.cache;
   _context.events().notify(dannan::status::NodeEvents::topology);

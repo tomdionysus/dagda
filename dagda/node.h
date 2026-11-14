@@ -557,10 +557,17 @@ class Node {
   dannan::supervise::StartupProgress _progress;
   std::vector<std::string> _opened;
 
+  // Takes `root`'s StorageLock once and keeps it until stop; throws if another holds
+  // it. Never called for a path that is not a directory: the lock would make it.
+  void hold_root(const std::filesystem::path& root) DANNAN_EXCLUDES(_root_locks_mutex);
+
   std::vector<std::unique_ptr<store::StorageLock>> _locks;
-  // The roots a reload can change, by path: written at open and under
-  // _maintenance_mutex, released with the rest at stop.
-  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks;
+  // The roots a reload can change, by path: the cache's, and each backend's once its
+  // directory is there (the pool takes one through hold_root as a disk comes
+  // online). Released with the rest at stop. A leaf lock: the pool calls hold_root
+  // under a reload's _maintenance_mutex.
+  mutable dannan::contract::Mutex _root_locks_mutex;
+  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks DANNAN_GUARDED_BY(_root_locks_mutex);
   std::shared_ptr<const domain::StorageKey> _node_local;
   std::optional<domain::WrapKey> _wrap;
   std::unique_ptr<store::StoragePool> _data;

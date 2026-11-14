@@ -69,6 +69,13 @@ struct StoragePoolOptions {
   // What the service monitor counts as a slow device, set before any operation it
   // could observe.
   DiskServiceThresholds service_thresholds{};
+  // Called each time a backend's path is found to be a directory, before anything
+  // on it is read or written: the owner locks the root there (a node holds each
+  // root's StorageLock), so a disk mounted after start is held from the moment it
+  // comes online. Throws if another holds it, which leaves the backend offline with
+  // the reason. Never called for a path that is not a directory: a missing one is a
+  // disk not mounted, and nothing is made in its place. None: nothing is locked.
+  std::function<void(const std::filesystem::path&)> lock_root{};
 };
 
 // A backend's marker, `.macha.backend` in its root, mirrored under
@@ -312,6 +319,7 @@ class StoragePool final : public contract::ObjectStore {
   const SealingScheme _sealing;
   const domain::Role _role;
   const std::shared_ptr<const domain::StorageKey> _ledger_key;
+  const std::function<void(const std::filesystem::path&)> _lock_root;
   const LocalStore::Services _services;
   const std::chrono::milliseconds _durability_batch_window;
   const size_t _pack_threshold;

@@ -145,6 +145,7 @@ StoragePool::StoragePool(std::filesystem::path state, NodeId node, NodeId epoch,
       _sealing(options.sealing),
       _role(options.role),
       _ledger_key(options.ledger_key),
+      _lock_root(options.lock_root),
       _services(std::move(services)),
       _durability_batch_window(options.durability_batch_window),
       _pack_threshold(options.pack_threshold),
@@ -264,6 +265,9 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
       deactivate(backend, existing, ec ? ec.message() : "configured path is not a directory", generation);
       return false;
     }
+    // Held before anything on the disk is read or written; another holder throws and
+    // leaves it offline below.
+    if (_lock_root) _lock_root(options.path);
 
     const auto state_id = identity_path(options.path);
     const auto marker = options.path / backend_marker_name;
