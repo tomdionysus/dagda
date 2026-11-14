@@ -11,7 +11,9 @@
 // --gtest_also_run_disabled_tests --gtest_filter='BenchHeads.*'. Each prints BENCH lines.
 //
 // A commit here returns once this node holds it (Macha's persisted); a peer has it when
-// its own replica's generation reaches it, which is timed as "visible". A head-backed
+// its own replica's committed generation reaches it, which is timed as "visible". Spaces
+// stop at 16: each takes two of Dannan's 64 adverts a node, and 256 are refused ("a node
+// advertises at most 64 things"), which slice 2's advert aggregate removes. A head-backed
 // lease's acquire (Lugh's TOTP) would be a commit plus that round to its replicas.
 
 #include <gtest/gtest.h>
@@ -116,7 +118,7 @@ class Visibility {
         std::lock_guard lock(_mutex);
         const auto now = Clock::now();
         std::erase_if(_pending, [&](const Pending& p) {
-          if (space_of(_peer, p.space).current_generation() < p.generation) return false;
+          if (space_of(_peer, p.space).replica().committed_generation() < p.generation) return false;
           _figures.add(ms_between(p.committed, now));
           return true;
         });
@@ -137,13 +139,13 @@ heads::MutationFactory edit(bool tree, uint64_t n) {
   return neutral_mutation([n](NeutralEditing& editing) { editing.set_note("k", std::to_string(n)); });
 }
 
-// 1. Commits a second and their latency at 1, 16 and 256 spaces, on one node and on
+// 1. Commits a second and their latency at 1 and 16 spaces, on one node and on
 // three, with a note-only change and with a tree change; on three, when node b sees them.
 TEST(BenchHeads, DISABLED_CommitsAcrossSpaces) {
   constexpr auto run_for = 5s;
   constexpr int writers = 4;
   for (const int nodes : {1, 3}) {
-    for (const int spaces : {1, 16, 256}) {
+    for (const int spaces : {1, 16}) {
       for (const bool tree : {false, true}) {
         Cluster cluster;
         ClusterNodeOptions options;
