@@ -2318,11 +2318,19 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
       node_info[candidate.id] = candidate;
       batches[candidate.id].push_back(id);
     }
-  // One claim per selected node: claims are independent.
+  // One claim per selected node, all at once: claims are independent, so a claim costs
+  // the slowest holder, not their sum (Macha's std::async a node, distributed_store.cpp
+  // :924-954 at f0597a4). The futures join before anything they read goes.
   std::map<ObjectId, std::set<NodeId>> claimed;
+  std::vector<std::pair<NodeId, std::future<bool>>> running;
+  running.reserve(batches.size());
   for (const auto& [node, batch] : batches)
-    if (retain_on(node_info.at(node), contract::RetentionClass::data, batch, dot, writer))
-      for (const auto& id : batch) claimed[id].insert(node);
+    running.emplace_back(node, std::async(std::launch::async, [this, &target = node_info.at(node), &batch, &dot, &writer] {
+                           return retain_on(target, contract::RetentionClass::data, batch, dot, writer);
+                         }));
+  for (auto& [node, done] : running)
+    if (done.get())
+      for (const auto& id : batches.at(node)) claimed[id].insert(node);
 
   // Where a slow claim spends its time, as Macha's says (distributed_store.cpp:878-895
   // at 98b816d): the presence scan, objects placed again, per-object fallbacks.
