@@ -477,8 +477,8 @@ class Context {
     Node& _node;
   };
 
-  // This node's DATA devices, for an owner's own disk I/O (Macha's torrent reads
-  // and writes): the same credit and device reserve the store's work takes, and
+  // This node's DATA devices, for an owner's own disk I/O (reads and writes of
+  // files it keeps on them): the same credit and device reserve the store's work takes, and
   // the pool's service monitor. Contract version 2.
   class Devices {
    public:
