@@ -126,6 +126,12 @@ class HeldOperation {
   InterposedLocalStoreFiles* _files = nullptr;
 };
 
+// The milliseconds a packed object's age is kept in: each reading converts them to a
+// file time afresh, which may differ below a millisecond.
+int64_t age_ms(std::filesystem::file_time_type time) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::file_clock::to_sys(time).time_since_epoch()).count();
+}
+
 // Pack compaction keeps what replay needs (Tom, 2026-11-14: Dagda's to fix; a defect
 // in Macha's store too, local_store.cpp:1738-1843 at f0597a4). A remove recorded in the
 // pack compacted away, whose put lies in an older pack, is carried forward: the object
@@ -182,10 +188,10 @@ TEST(StoreLocalStore, AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart) {
     reaffirmed = store->last_write(object_id(a));
     ASSERT_TRUE(store->remove(object_id(dead)));
     ASSERT_TRUE(store->compact_packs());
-    EXPECT_EQ(store->last_write(object_id(a)), reaffirmed);
+    EXPECT_EQ(age_ms(store->last_write(object_id(a))), age_ms(reaffirmed));
   }
   auto reopened = bed.open(root, options);
-  EXPECT_EQ(reopened->last_write(object_id(a)), reaffirmed);
+  EXPECT_EQ(age_ms(reopened->last_write(object_id(a))), age_ms(reaffirmed));
   EXPECT_FALSE(reopened->older_than(object_id(a), std::chrono::minutes(30)));
 }
 
@@ -213,11 +219,11 @@ TEST(StoreLocalStore, AReaffirmationOutlivesTheCompactionOfItsOwnPack) {
     reaffirmed = store->last_write(object_id(a));
     ASSERT_TRUE(store->remove(object_id(big)));
     ASSERT_TRUE(store->compact_packs());
-    EXPECT_EQ(store->last_write(object_id(a)), reaffirmed);
+    EXPECT_EQ(age_ms(store->last_write(object_id(a))), age_ms(reaffirmed));
   }
   auto reopened = bed.open(root, options);
   EXPECT_TRUE(reopened->has(object_id(a)));
-  EXPECT_EQ(reopened->last_write(object_id(a)), reaffirmed);
+  EXPECT_EQ(age_ms(reopened->last_write(object_id(a))), age_ms(reaffirmed));
   EXPECT_FALSE(reopened->older_than(object_id(a), std::chrono::minutes(30)));
 }
 
