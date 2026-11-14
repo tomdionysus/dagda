@@ -15,6 +15,7 @@
 #include <iterator>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -151,11 +152,27 @@ StoragePool::StoragePool(std::filesystem::path state, NodeId node, NodeId epoch,
       _pack_threshold(options.pack_threshold),
       _pack_target_size(options.pack_target_size),
       _ledger_cache_bytes(options.ledger_cache_bytes),
-      _service_monitor(_services.logger.child("pressure"), options.service_thresholds) {
+      _service_monitor(_services.logger.child("pressure"), options.service_thresholds),
+      _before_sync(options.before_sync) {
   if (_role == domain::Role::member && !_key) throw std::invalid_argument("storage pool needs a storage key");
   if (!_ledger_key)
     throw std::invalid_argument(
         "a pool's held ledgers are sealed under the node-local key (StoragePoolOptions::ledger_key): a node without custody cannot run a store");
+  if (!_state.empty()) {
+    std::ifstream in(_state / durability_failures_name);
+    std::string line;
+    Lock lock(_domain_mutex);
+    while (std::getline(in, line)) {
+      std::istringstream fields(line);
+      std::string issuer;
+      DurabilityFailure failure;
+      if (!(fields >> issuer >> failure.domain >> failure.durable)) continue;
+      const auto parsed = NodeId::parse(issuer);
+      if (!parsed) continue;
+      failure.epoch = *parsed;
+      _durability_failures.push_back(failure);
+    }
+  }
   reconfigure(options.backends);
   refresh();
 }
@@ -176,10 +193,40 @@ std::shared_ptr<DurabilityDomain> StoragePool::domain_for(const std::filesystem:
     found->second->add_representative(path);
     return found->second;
   }
-  auto domain = std::make_shared<DurabilityDomain>(
-      _next_domain_id++, path, DurabilityDomain::Services{_services.threads, _services.observations, _services.time}, _durability_batch_window);
+  const auto id = _next_domain_id++;
+  DurabilityDomain::Services services{_services.threads, _services.observations, _services.time};
+  services.on_failure = [this, id](uint64_t durable) { record_durability_failure(id, durable); };
+  services.before_sync = _before_sync;
+  auto domain = std::make_shared<DurabilityDomain>(id, path, std::move(services), _durability_batch_window);
   _domains_by_device[device] = domain;
   return domain;
+}
+
+void StoragePool::record_durability_failure(uint64_t domain, uint64_t durable) {
+  std::string text;
+  {
+    Lock lock(_domain_mutex);
+    _durability_failures.push_back({_epoch, domain, durable});
+    for (const auto& failure : _durability_failures)
+      text += dannan::identity::to_string(failure.epoch) + " " + std::to_string(failure.domain) + " " + std::to_string(failure.durable) + "\n";
+  }
+  _services.logger.error("storage durability barrier failed domain=" + std::to_string(domain) + " durable_generation=" + std::to_string(durable) +
+                         ": what it had not made durable is never re-derived, only put again");
+  if (_state.empty()) return;
+  try {
+    std::filesystem::create_directories(_state);
+    dannan::identity::durable_replace_file(_state / durability_failures_name, text);
+  } catch (const std::exception& error) {
+    // Held in memory for this process still; a restart without it would trust the cache.
+    _services.logger.error("cannot record the durability failure under " + _state.string() + ": " + error.what());
+  }
+}
+
+bool StoragePool::issued_past_failure(const DurabilityTicket& ticket) const {
+  Lock lock(_domain_mutex);
+  return std::any_of(_durability_failures.begin(), _durability_failures.end(), [&](const DurabilityFailure& failure) {
+    return failure.epoch == ticket.epoch && failure.domain == ticket.domain && ticket.generation > failure.durable;
+  });
 }
 
 std::filesystem::path StoragePool::identity_path(const std::filesystem::path& backend) const { return backend_identity_path(_state, backend); }
@@ -781,7 +828,11 @@ bool StoragePool::has(const ObjectId& id) const {
   return false;
 }
 
-std::optional<DurabilityTicket> StoragePool::reassert_durable(const ObjectId& id) {
+std::optional<DurabilityTicket> StoragePool::reassert_durable(const ObjectId& id, const std::optional<DurabilityTicket>& stale) {
+  if (stale && issued_past_failure(*stale)) {
+    _services.logger.warn("storage durability not re-derived for " + to_string(id) + ": its ticket was issued past a failed barrier");
+    return std::nullopt;
+  }
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
     std::filesystem::path path;
@@ -796,10 +847,13 @@ std::optional<DurabilityTicket> StoragePool::reassert_durable(const ObjectId& id
       domain = backend->durability_domain->id();
     }
     try {
-      if (!store->has(id)) continue;
+      // Read back, not presence: replay takes a pack record whose header
+      // decodes without reading its payload, so after a power cut a header
+      // can be present with its payload lost. After a reboot the page cache
+      // is empty and the read is the disk's.
+      if (!store->valid(id)) continue;
       // Anything this incarnation wrote reaches disk before the ticket is
-      // handed out; what a previous incarnation wrote is on disk by
-      // construction, since the index was rebuilt from the packs.
+      // handed out; a latched failure throws here.
       store->durability_barrier();
       return DurabilityTicket{_epoch, domain, store->durable_generation(), backend_instance};
     } catch (const std::exception& error) {

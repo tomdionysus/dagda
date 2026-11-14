@@ -50,7 +50,9 @@ DurabilityDomain::DurabilityDomain(uint64_t id, std::filesystem::path representa
       _batch_window(batch_window),
       _threads(services.threads),
       _observations(services.observations),
-      _time(services.time) {
+      _time(services.time),
+      _on_failure(std::move(services.on_failure)),
+      _before_sync(std::move(services.before_sync)) {
   if (!_id) throw std::invalid_argument("durability domain id must be non-zero");
   if (_batch_window < std::chrono::milliseconds::zero()) throw std::invalid_argument("durability batch window cannot be negative");
   add_representative(std::move(representative));
@@ -136,6 +138,7 @@ bool DurabilityDomain::failed() const {
 
 void DurabilityDomain::perform_barrier(Generation cut, const std::vector<PortableMutation>& portable) {
   const auto started = dannan::contract::Clock::now();
+  if (_before_sync) _before_sync();
 #if defined(__linux__)
   (void)cut;
   (void)portable;
@@ -228,8 +231,16 @@ void DurabilityDomain::loop(std::stop_token stop) {
     try {
       perform_barrier(cut, portable);
     } catch (...) {
+      const auto failure = std::current_exception();
+      // Recorded before any waiter hears of it, so none can re-derive first.
+      if (_on_failure) {
+        try {
+          _on_failure(durable_generation());
+        } catch (...) {
+        }
+      }
       Lock lock(_mutex);
-      _failure = std::current_exception();
+      _failure = failure;
       _wake.notify_all();
       return;
     }
