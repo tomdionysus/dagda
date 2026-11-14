@@ -248,5 +248,46 @@ TEST(Context, VersionTwoServesMachasObjectForms) {
   for (const auto& one : many) EXPECT_TRUE(one.met);
 }
 
+// Contract version 2's bare CONTROL forms, Macha's catalogue and metadata calls (the
+// callers' map, Macha d53ddfe): held here and read back; a strict local put, durable,
+// that offers and claims nothing; a fetch to local from a peer, verified, that claims
+// nothing; and an offer to every node, writing no claim. Claims stay Claims::retain.
+TEST(Context, VersionTwoServesMachasBareControlForms) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  auto& b = cluster.add("b");
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(60);
+  const auto id = store::object_id(data);
+  EXPECT_FALSE(a.api().control().has(id));
+  EXPECT_FALSE(a.api().control().get(id).has_value());
+  EXPECT_TRUE(a.api().control().put(id, std::span<const uint8_t>(data)));
+  EXPECT_TRUE(a.api().control().has(id));
+  ASSERT_TRUE(a.api().control().get(id).has_value());
+  EXPECT_EQ(*a.api().control().get(id), data);
+  EXPECT_FALSE(b.api().control().has(id));
+  EXPECT_FALSE(a.api().claims().retained(contract::RetentionClass::control, id));
+  EXPECT_THROW((void)a.api().control().put(store::object_id(test::numbered(61)), std::span<const uint8_t>(data)), std::exception);
+
+  // Fetched to b from a, nothing claimed.
+  EXPECT_TRUE(b.api().control().ensure_local(id));
+  ASSERT_TRUE(b.api().control().get(id).has_value());
+  EXPECT_EQ(*b.api().control().get(id), data);
+  EXPECT_FALSE(b.api().claims().retained(contract::RetentionClass::control, id));
+  EXPECT_FALSE(b.api().control().ensure_local(store::object_id(test::numbered(62))));
+
+  // Offered from a to every node, nothing claimed.
+  const auto more = test::numbered(63);
+  const auto more_id = store::object_id(more);
+  ASSERT_TRUE(a.api().control().put(more_id, std::span<const uint8_t>(more)));
+  const auto offered = a.api().control().offer({more_id});
+  EXPECT_EQ(offered.held_by, 2u);
+  EXPECT_TRUE(b.api().control().has(more_id));
+  EXPECT_FALSE(b.api().claims().retained(contract::RetentionClass::control, more_id));
+  EXPECT_FALSE(a.api().claims().retained(contract::RetentionClass::control, more_id));
+}
+
 }  // namespace
 }  // namespace dagda

@@ -82,7 +82,7 @@ std::optional<WriteEvidence> known(WriteEvidence evidence) {
 
 // ---- Version ----------------------------------------------------------------
 
-Context::Context(Node& node) : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node) {}
+Context::Context(Node& node) : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node), _control(node) {}
 
 uint32_t Context::version() const noexcept { return context_version; }
 
@@ -473,5 +473,17 @@ void Context::Activity::note(dannan::sched::FrameType frame, uint64_t bytes) { _
 std::chrono::milliseconds Context::Activity::idle_for(dannan::sched::WorkClass work) const { return _node.activity().idle_for(work); }
 
 uint64_t Context::Activity::take_bytes(dannan::sched::FrameType frame) { return _node.activity().take_bytes(frame); }
+
+// ---- Control ----------------------------------------------------------------
+
+bool Context::Control::has(const ObjectId& id) const { return _node.control().has(id); }
+
+std::optional<store::Bytes> Context::Control::get(const ObjectId& id) const { return _node.control().get(id); }
+
+bool Context::Control::put(const ObjectId& id, std::span<const uint8_t> data) { return _node.control().put(id, data); }
+
+bool Context::Control::ensure_local(const ObjectId& id) { return _node.store().ensure_control_local(id); }
+
+store::ControlOffer Context::Control::offer(const std::vector<ObjectId>& ids) { return _node.store().offer_control(ids); }
 
 }  // namespace dagda
