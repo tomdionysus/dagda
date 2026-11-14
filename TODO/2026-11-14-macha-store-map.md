@@ -155,8 +155,29 @@ test-first; its case and commit go here when it lands.
 **Fixed after that gate, on the same branch.** Gated at `3ce0e10` (node-c, Dannan 0.7.0, GCC Release with
 warnings as errors: 0 warnings; `dagda_tests` with Macha's fixtures 1088 ran, 1085 passed, 3 skipped, 0 failed), which
 holds every fix below through `1ee2740` (compaction, healing, requirement 5, `ReadEnd`, `BarrierLoss`, activity, the
-Context's object, CONTROL and filesystem forms); `3b57a6b` on (Devices and what follows) is gated at `780b8a9` when that
-run is in.
+Context's object, CONTROL and filesystem forms). Everything after it gated at `caec517` (same Pi and build: 0
+warnings; 1099 ran, 1096 passed, 3 skipped, 0 failed); the run at `780b8a9` before it failed only
+`ContractIncludeDirection.TheLibraryNamesNoIngest`, a comment of the Devices noun naming what the library may not name,
+reworded.
+
+Also landed and in that gate, the performance and port items: DATA claims on every holder at once (`1bfbb0d`,
+`DistributedStore.ClaimsGoToEveryHolderAtOnce`); repair pushes to the peers that answered (`0b8c789`, the maintainer's ruling;
+`StoreRepair.APushSendsNothingToAPeerTheSurveyCouldNotSettle` amended); a barrier at its writes' frame (`6a957c7`,
+`StoreDurabilityBarrier.ABarrierTravelsAtTheFrameItsWriteWasMadeAt`); a wait answering once its barriers have (`5b5a27a`,
+`.ATransientBarrierFailureAnswersAtOnceNotAtTheDeadline`); a short deferred write met at what landed (`7cbbce9`,
+`.AWriteThatEndedShortIsMetAtWhatLanded`); opportunistic copies in speculative memory (`b8edf6d`,
+`DistributedStore.AnOpportunisticCopyIsDroppedWhenSpeculativeMemoryIsShort`); the pool recovering beside the control
+chain, with Macha's stage names on `NodeOptions::startup_stage` (`39fffc4`,
+`Node.TheDataPoolAndTheControlChainRecoverSideBySide`); a reload beside a maintenance pass (`427bfb9`,
+`NodeReconfigure.AReloadDoesNotWaitForAMaintenancePassInProgress`); room before sealing (`e20f9ee`,
+`StoreLocalStore.APutRefusedForRoomSealsNothing`); the claim barrier's figures (`780b8a9`,
+`DistributedStore.ADataClaimBarrierIsMeasured`); and the Macha session's compaction case (`2f7eba6`,
+`StoreLocalStore.AnObjectPutAgainAfterItsRemoveSurvivesCompactionOfTheRemove`). The Macha session reviewed the
+compaction fix in code: it passes.
+
+Waiting on Dannan (asked 2026-11-14): a waiting retained-memory reserve with an owner on `Context::Budget`, for reads to
+hold their class's memory (cache gap 1, distributed store gap 6); promotion of a call in flight to loader (distributed
+store gap 12).
 - Safety: pack compaction kept what replay needs (the maintainer: Dagda's to fix; a defect in Macha's store too). A compacted
   pack's live puts are rewritten with their current age; a remove is carried while a put of its object survives in
   another pack; the newest touch of an object put elsewhere is carried; such records count as live (`7f14515`,
