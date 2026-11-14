@@ -414,6 +414,41 @@ TEST(DistributedStore, AReadSaysHowItEnded) {
   EXPECT_EQ(missing.end, ReadEnd::not_found);
 }
 
+// Macha claims on each holder at once, one std::async a node (distributed_store.cpp
+// :924-954 at f0597a4), so a publication's claim costs the slowest holder, not their sum
+// (the store map, retention gap 1). Both holders' claims are in flight together.
+TEST(DistributedStore, ClaimsGoToEveryHolderAtOnce) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  auto& c = cluster.add("c", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 26);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(a.store().write(id, data, write).met);
+  ASSERT_TRUE(a.data().has(id));
+  ASSERT_TRUE(b.data().has(id));
+
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  a.interpose(hold(message::retain_objects, gate));
+  b.interpose(hold(message::retain_objects, gate));
+  auto claimed = std::async(std::launch::async, [&] { return c.store().retain_data({id}, {c.id(), 1}, {}); });
+  EXPECT_TRUE(gate.wait_for_entries(2, 10s)) << "the holders were claimed on one after the other";
+  gate.open();
+  ASSERT_EQ(claimed.wait_for(30s), std::future_status::ready);
+  EXPECT_TRUE(claimed.get().empty());
+  EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, id));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
+}
+
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
 // objects no node present holds costs the one batched presence scan and
 // nothing per object: they are reported unheld. An object the peer does
