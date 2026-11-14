@@ -1,13 +1,14 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-13. `COMPLETED.md` is the record; the plan this file held until today (the ordered work of
+Last updated: 2026-11-14. `COMPLETED.md` is the record; the plan this file held until today (the ordered work of
 2026-11-06, the earlier table, Dannan as found, the approved plan of 2026-11-04, the port respec and what step 4
 waited on) is at the end of `COMPLETED.md`, "Archived from ACTIVE.md, 2026-11-12", word for word.
 
 ## Where it stands
 
 - **Every item of the 2026-11-06 order is done, and the capability report is sent**: `TODO/2026-11-10-dagda-capabilities.md`.
-  Dagda is at the tag the port freezes on, on Dannan 0.5.3 (Macha's port pins the same, `../macha/CMakeLists.txt:154`).
+  Dagda is at `0.1.5`, on Dannan 0.6, packaged for Debian; Macha moves to it before its flag day. The work now is the
+  three-systems design (`TODO/2026-11-13-three-systems-design.md`), slice 0's measurement, on the Pi cluster only.
 - **Macha's port**: the transport is Dannan's, 0.94.0 live on both nodes (branch `port/dannan-dagda`). Next there: the
   CI kit, clang-tidy and 0.94.1, then the Macha session's review of the report by reading Dagda's code at the tag
   (its task 8), then the store cutover on it. A defect the port finds pauses it until it is fixed here, with tests,

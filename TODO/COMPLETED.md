@@ -3,6 +3,26 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-14: 0.1.5: on Dannan 0.6, packaged for Debian, clean under GCC Release
+
+Tom: the Debian packages; then Dannan's ABI promise (0.6.0, renumbered from 0.5.7 because 0.5.4 had already changed
+`libdannan.so.0.5`), which 0.1.5 builds on; the x86-64 gate suspended (2026-11-14: "use only the cluster").
+- Dannan 0.6 (`find_package(dannan 0.6.0 CONFIG)`, SameMinorVersion; `Version.BuiltAgainstTheDannanItLinks` pins
+  the minor, now 6). Packaged as Dannan is: `libdagda0.1.5` (SONAME the whole version), `libdagda-dev` (exactly its
+  library, and `libdannan-dev (>= 0.6.0), (<< 0.7~)`), `dagda-tools` (`dagda-migrate` and its manual page);
+  `tools/build-deb.sh`, `docs/packaging.md`.
+- GCC 14 at Release with warnings as errors (the Macha session's finding on corvus-neptune; also on x86-64): a
+  `-Wnonnull` in `migrate/compare.cpp` (each branch now tests the cursor it advances), `-Wstringop-overread` from
+  libstdc++'s byte compare (the markers map and the loose sort take `BytesOrder`, the same order, under one scoped
+  pragma), and `-Wmaybe-uninitialized` in a test's sort (a multimap, which still shows a duplicate). Nothing silenced
+  in the build.
+- On the way: a Docker build failed ten tests on the folder shared from the Mac (root cannot copy a read-only file
+  there) and once ran out of memory; Tom then suspended the x86-64 gate and moved every Linux build to the Pis.
+
+Gate, macOS plain: **1041 passed, 6 disabled, 0 warnings**. Gate, arm64 (corvus-jupiter, GCC 14.2): the Debian
+packages with their tests **970 passed, 71 skipped, 0 failed**, lintian clean, installed and consumed; GCC Release with
+warnings as errors **0 warnings**, its tests **970 passed, 71 skipped, 0 failed**.
+
 ## 2026-11-13: 0.1.4: installable, as Dannan is
 
 Tom gave the word; the Macha session reviewed 0.1.3 and builds stage one (S, then 8a and 8b) on Dagda. Its blocker: no
