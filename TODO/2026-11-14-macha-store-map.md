@@ -48,12 +48,21 @@ partition. Key custody: Macha's nodes get Dannan key custody at the cutover.
 
 | Subsystem | Section | State |
 |---|---|---|
-| DistributedStore: put, get, deferred writes and tickets, the barrier, write copies, durability, reads and the server's handlers | `macha-store-map/distributed-store.md` | in progress |
-| StoragePool and LocalStore: durability domain, presence index, sealed journal, layout, device reserve, backends, scrub | `macha-store-map/pool-and-local-store.md` | in progress |
-| Retention, claims and reference counts; the ledgers (held ledger, object trie, trie diff and union, sightings, horizon) | `macha-store-map/retention-and-ledgers.md` | in progress |
-| Availability and the survey, repair, maintenance's store stages and pacing | `macha-store-map/availability-repair-maintenance.md` | in progress |
-| GC and the deletion path (claim_deletion, the collector, tombstones) | `macha-store-map/gc-and-deletion.md` | in progress |
-| Cache, io pressure, data credit and admission, the device reserve | `macha-store-map/cache-pressure-credit.md` | in progress |
+| Subsystem | Section | Rows (SAME / DIFFERS / MISSING) | Gaps |
+|---|---|---|---|
+| DistributedStore: put, get, deferred writes and tickets, the barrier, write copies, durability, reads and the server's handlers | `macha-store-map/distributed-store.md` | 41 (17 / 23 / 1) | 15 |
+| StoragePool and LocalStore: durability domain, presence index, sealed journal, layout, device reserve, backends, scrub | `macha-store-map/pool-and-local-store.md` | 58 (43 / 13 / 2) | 9 |
+| Retention, claims and reference counts; the ledgers (held ledger, object trie, trie diff and union, sightings, horizon) | `macha-store-map/retention-and-ledgers.md` | 46 (26 / 20 / 0) | 10 |
+| Availability and the survey, repair, maintenance's store stages and pacing (node loop) | `macha-store-map/availability-repair-maintenance.md` | 43 (23 / 15 / 5) | 13 |
+| GC and the deletion path (claim_deletion, the collector, tombstones) | `macha-store-map/gc-and-deletion.md` | 29 (15 / 12 / 2) | 9 |
+| Cache, io pressure, data credit and admission, the device reserve | `macha-store-map/cache-pressure-credit.md` | 50 (36 / 13 / 1) | 8 |
+| **All six (first pass, by six readers, 2026-11-14)** | | **267 (160 / 96 / 11)** | **64** |
+
+Each section's claims are the readers'; the sharpest are checked against code before a fix, and the ones checked so far
+held: the ticket cap (`distributed_store.h:276`, `.cpp:711-719`), Context's reach (`node.h:359`), the GC loop's
+dropped `!metadata_dirty` (`node.cpp:552` against Macha `maintenance.cpp:575`), serial DATA claims (`distributed_store.cpp:2256-2260`
+against Macha's `std::async` per node, `:924-954`), and the backend lock creating a missing mount's directory (Dannan's
+`StateLock`, `node_identity.cpp:25`).
 
 ## The callers' side (Macha's)
 
@@ -61,4 +70,37 @@ Written by the Macha session after its heap-corruption investigation (its standi
 
 ## Gaps and their fixes
 
-Collected from the sections as they land, each with its case and commit.
+The order: data safety first, then what blocks the port, then what loses performance, then the cosmetic. Each is fixed
+test-first; its case and commit go here when it lands.
+
+Data safety and correctness:
+1. A missing backend directory is created by the backend lock and can be adopted as a new, empty backend, so writes
+   meant for an unmounted disk land on the root filesystem; one that cannot be created refuses the whole node rather
+   than starting degraded (pool section, gap 2).
+2. The node loop collects garbage while metadata is dirty: `garbage_due = !busy`, Macha `!busy && !metadata_dirty`
+   (GC section, gap 4).
+3. A cancelled put that already landed a copy returns success; Macha fails it (DS section, gap 5).
+4. Deferred-write tickets capped at 4,096, the oldest unsettled forgotten past it: a 16 GiB publication at 4 MiB
+   extents loses its barrier (DS section, gap 1).
+5. The node loop builds repair's inventory only in a GC pass, so new objects go unrepaired during an ingest
+   (availability section, gap 1).
+6. No GC quiet window after an event, a generation move or a rebuilt inventory (GC section, gap 1).
+7. Repair's drop-local checks a claim and removes with nothing held between, in Macha and Dagda both (retention
+   section, gap 9).
+
+Blocks the port: `Context` serving every form Macha's store calls need, with Macha's semantics (the route above; DS
+gaps 7 to 10, retention gap 4, GC gap 8); the pool and the control chain opened side by side, and Macha's startup
+stage names (pool gap 1); a write ended short of its floor met at what landed (DS gap 4, when write copies exceed one).
+
+Loses performance: serial DATA claims (retention gap 1); the barrier's early answer and its frame (DS gaps 2, 3); read
+buffers and queued copies without retained memory (DS gap 6, cache gaps 1, 2); the node loop's fixed 1 s wake, stage
+order, GC schedule and survey failure (availability gaps 2, 3, 4, 10; GC gaps 2, 3); the survey's discarded trie roots
+(availability gap 7); a refused put sealed first (pool gap 3); a reload waiting on maintenance (pool gap 4); extra
+copies on writes and a speculative fetch not raised (DS gaps 11, 12); the defaults Macha's options must set
+(cache section: background concurrency, prompt read admission, the device reserve); the arbiter's activity clock (cache
+gap 4).
+
+Cosmetic: the remaining log lines, metrics, adverts, stage-hook names and exception types, each listed in its section.
+
+For the maintainer: repair is diff-only by his 2026-11-04 ruling, which restores copies more slowly than Macha's walk while a peer
+is seeding or slow (availability gap 13).

@@ -52,7 +52,7 @@ Verdicts: SAME (no observable difference to a caller), DIFFERS (exactly how), MI
 | 10 | `durability_barrier(token, urgency)` M:storage_pool.hpp:140-141, impl :476-509 | Returns once the generation is durable on that incarnation; a failure warns `storage durability barrier failed <path>: <error>`, takes the backend offline and rethrows; a vanished placement throws. All `std::runtime_error`. Macha's server checks the epoch first (M:storage_server.cpp:304-316). | `node.data().durability_barrier` D:storage_pool.h:206, impl :582-612 | DIFFERS (types only): an invalid ticket throws `std::invalid_argument` (a `logic_error`, D:storage_pool.cpp:583), another epoch and a vanished or changed placement throw `StaleDurabilityTicket` (a `runtime_error`, :584, 602, 611). Warning text and offline behaviour identical. | M: tests/test_invariants.cpp:3206, :2879. D: StoreStoragePool.ATicketFromAnotherProcessOrIncarnationSatisfiesNothing (:586), StoreDurabilityBarrier.AStaleProcessEpochIsRefused (store_durability_barrier_test.cpp:135) |
 | 11 | `durability_covered` M:storage_pool.hpp:142, impl :511-523 | Whether the incarnation's domain has passed the generation; no device wait. | D:storage_pool.h:207, impl :614-624 | SAME (false for another epoch, which a ticket from this pool never is) | M: tests/test_invariants.cpp:3340. D: StoreDurabilityBarrier.ACoveredGenerationCostsNoBarrierOverTheWire (:206) |
 | 12 | `reassert_durable` M:storage_pool.hpp:146, impl :643-673 | For a held object: flush the holding backend's last mutation, then a token at its durable generation. | D:storage_pool.h:211, impl :780-806 | SAME | M: tests/test_storage_v18.cpp:1082. D: StoreDurabilityBarrier.ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt (:362) |
-| 13 | `get` M:storage_pool.hpp:147, impl :571-621; caller M:src/filesystem/filesystem.cpp:1208 | Ranked order; `has` first; one timer sample with the bytes read; trace lines `DIAG backend-get ...` and every 5 s `DIAG storage-get ...`; `ObjectCorrupt`: warn `discarding corrupt local object`, remove, next backend; any other throw: counter `storage.read_failures`, warn `cannot read local object <id> on <path>; keeping it: ...`, next backend. | `node.data().get` D:storage_pool.h:216, impl :710-762 | SAME for a backend whose key was checked (every v19 marker written by a member carries the check, D:storage_pool.cpp:297-301, 323-326). DIFFERS only on a blind-adopted disk before the probe proves the key: a copy that does not open is kept and warned `... kept (key unchecked)` (:745-748). | M: tests/test_invariants.cpp:2493 (`test_a_failed_read_keeps_the_object_and_a_bad_record_is_removed`). D: StoreStoragePool.AReadErrorKeepsTheObject (:881), StoreLayoutV19.ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked (:360) |
+| 13 | `get` M:storage_pool.hpp:147, impl :571-621; caller M:src/filesystem/filesystem.cpp:1208 | Ranked order; `has` first; one timer sample with the bytes read; trace lines `DIAG backend-get ...` and every 5 s `DIAG storage-get ...`; `ObjectCorrupt`: warn `discarding corrupt local object`, remove, next backend; any other throw: counter `storage.read_failures`, warn `cannot read local object <id> on <path>; keeping it: ...`, next backend. | `node.data().get` D:storage_pool.h:216, impl :710-762 | SAME (every v19 marker a member writes carries the key check, D:storage_pool.cpp:297-301, 323-326). Only on a blind-adopted disk, before the probe proves the key, is a copy that does not open kept and warned `... kept (key unchecked)` (:745-748). | M: tests/test_invariants.cpp:2493 (`test_a_failed_read_keeps_the_object_and_a_bad_record_is_removed`). D: StoreStoragePool.AReadErrorKeepsTheObject (:881), StoreLayoutV19.ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked (:360) |
 | 14 | `has` M:storage_pool.hpp:148, impl :623-641; callers M:src/catalogue/catalogue.cpp:1392,1796 | Any online ranked backend's `has`; a throwing backend answers no; no device read once ledgers are seeded. | `node.data().has` D:storage_pool.h:217, impl :764-778; `Context::Objects::has` D:dagda/context.h:199 | SAME | M: tests/test_baselines.cpp (`test_baseline_data_store_has`). D: StoreStoragePool.DataStoreHasBaseline (:841) |
 | 15 | `held_view` M:storage_pool.hpp:151, impl :691-734 | Union of online backends' held tries sorted by disk token, each union made from the one before; removals never fall; incomplete while a backend seeds. | D:storage_pool.h:221, impl :820-857 | SAME | M: tests/test_presence.cpp:310, :371. D: StoreStoragePool.TheHeldIdentityNamesExactlyWhatThePoolHolds (:752), TheHeldIdentityIsTheSameOnAnyNumberOfDisks (:813) |
 | 16 | `valid` M:storage_pool.hpp:152, impl :675-689 | Some ranked online backend reads it back and it opens. | D:storage_pool.h:222, impl :808-818 | SAME | M: tests/test_invariants.cpp:2312. D: covered by StoreStoragePool.RebalanceNeverDeletesTheLastValidCopyForACorruptPreferredOne (:481) |
@@ -111,13 +111,15 @@ Verdicts: SAME (no observable difference to a caller), DIFFERS (exactly how), MI
 
 ### Counts
 
-58 rows: **SAME 41**, **DIFFERS 15**, **MISSING 2**.
+58 rows: **SAME 43, DIFFERS 13, MISSING 2**.
 
-- SAME: 4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 53, 55, 56, 57, 58 is 43 numbers, of which rows 13, 22 and 21/26 are split verdicts; counted by the row's caller-facing verdict as follows: 13 SAME (members' disks always carry the check). Corrected list of SAME: 4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 53, 55, 56, 57, 58 (43).
-- DIFFERS: 1, 2, 3, 5, 6, 10, 21, 22, 23, 26, 36, 46, 54 (13).
-- MISSING: 34, 35 (2).
+- SAME: 4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 53, 55, 56, 57, 58.
+- DIFFERS: 1, 2, 3, 5, 6, 10, 21, 22, 23, 26, 36, 46, 54.
+- MISSING: 34, 35.
 
-Final: **SAME 43, DIFFERS 13, MISSING 2** (58 rows). Rows 21, 22 and 26 are DIFFERS only at the node's stage hook; the pool operations themselves are SAME.
+Rows 21, 22 and 26 are DIFFERS only at the node's stage hook; the pool operations
+themselves are SAME. Row 13 is SAME for every disk a member adopted; it differs only on
+a disk a blind node adopted, before the member's key probe has passed.
 
 ## 2. Performance-relevant differences
 
@@ -195,9 +197,11 @@ Final: **SAME 43, DIFFERS 13, MISSING 2** (58 rows). Rows 21, 22 and 26 are DIFF
 1. **The DATA pool and the control chain do not recover side by side.** Macha needs the
    pool's open to run beside the control store, cache, claims and metadata, so that one
    plane can fail or stall while the other keeps recovering and is reported ready
-   (M:src/cluster/local_state.cpp:57-79; pinned by M:tests/test_service_root.cpp:191-208
-   and M:tests/test_invariants.cpp:1259-1274, 1388-1400, which hold `"data-storage"` and
-   expect `control_storage=ready, cache=recovering, data_storage=recovering`). Dagda
+   (M:src/cluster/local_state.cpp:57-79). M:tests/test_service_root.cpp:191-208 fails one
+   plane's stage while holding the other's and expects, for example,
+   `control_storage=ready, cache=recovering, data_storage=recovering` (:205-206);
+   M:tests/test_invariants.cpp:1272 and :1395 hold `"data-storage"` or
+   `"control-storage"` by name. Dagda
    opens them in sequence and refuses the node at the first failure
    (D:dagda/node.cpp:90-102, 214-277), and its trace hook names stages
    `"open storage-pool"` etc. rather than Macha's. Test that fails today:
@@ -240,9 +244,8 @@ Final: **SAME 43, DIFFERS 13, MISSING 2** (58 rows). Rows 21, 22 and 26 are DIFF
    `enter_stage("local-rebalance")`, `("scrub")`, `("ledger-verify")`
    (M:src/service/maintenance.cpp:1102, 1163, 1214); Dagda's stages do not
    (D:node.cpp:682-706, 799-824, 826-859) although `MaintenanceOptions::stage` promises
-   every stage in Macha's names (D:node.h:132-135). No Macha test holds these names (basemind
-   grep of `tests/`), but a stop requested while held there is how Macha's stop reaches
-   them. Test that fails today: `NodeMaintenance.TheStageHookHearsEveryLocalStageInMachasNames`.
+   every stage in Macha's names (D:node.h:132-135). No Macha test holds these names
+   (basemind grep of `tests/` finds none). Test that fails today: `NodeMaintenance.TheStageHookHearsEveryLocalStageInMachasNames`.
    Severity: **cosmetic**.
 7. **Macha's store-level read classification test was not ported.**
    M:tests/test_storage_v18.cpp:620 (`test_a_store_tells_a_bad_record_from_a_failed_read`,
