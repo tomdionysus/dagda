@@ -14,40 +14,37 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   and counter merges; leases on head spaces; the advert aggregate; group commit for heads in slice 2; contract v1 frozen
   at `0.1.4`, v2 at slice 4, the catalogue as v3. Lir and Lugh reviewed it and agreed; their needs files are
   `../lir/TODO/2026-11-13-lir-needs.md` and `../lugh/TODO/2026-11-13-lugh-needs-of-the-stack.md`.
-- **Slice 0 (the measurement) is under way**, on `feature/bench` (local, not pushed): `tools/dagda_bench.cpp` (the log
+- **Slice 0 (the measurement) is done but for two figures that need later slices** (the channel cost per space,
+  Lugh's leases as such). The bench is merged to develop (`d424572`, not pushed): `tools/dagda_bench.cpp` (the log
   prototype; builds standalone against Dannan 0.7 for the deferred reply, `build/bench070/CMakeLists.txt`) and
-  `dagda/test/bench_heads_test.cpp` (`BenchHeads.*`, disabled). The Mac's figures are in the design, "What slice 0 has
-  measured". The Pi run is on node-b now (below).
+  `dagda/test/bench_heads_test.cpp` (`BenchHeads.*`, disabled). The figures, Mac and Pi, are in the design, "What
+  slice 0 has measured". The verdict: the log passes the maintainer's PUBACK target on the Pi (p99 12.5 ms at a 10 ms tick, 23.5
+  ms at 20 ms); heads fall short twice, a node's 85-95 commits a second (group commit) and a follower that falls
+  behind in Lugh's shape on the Pi (seen 10-22 s later, growing).
 - **Dannan**: 0.6.0 tagged (the ABI promise; SameMinorVersion; SONAME `libdannan.so.0.6`); 0.7.0 on its
   `feature/deferred-reply` carries the deferred reply the log needs (slice 4 builds on it), accepted by dagda-bench with
   the per-connection call path found (Dannan's P5). CPU pacing moves into Dannan's class-aware pool (its P4).
 
-## Running at the clear (2026-11-14, about 01:30Z)
+## Running
 
-On node-b (192.0.2.2), under `/root/dagda-arm64`, claimed on the board as
-`stack/pis/node-b/claims/Dagda` until 02:45Z:
-1. `node-b-bench.sh` (status `status-bench.txt`, ends "donebench"): builds `feature/bench` at -j2 into `bench-build`,
-   runs the log prototype as three processes (`bench-log-runs.txt`: 1 log and 256 logs at 10 and 20 ms, 256 logs a
-   segment each, the 5 s backlog scans at 256 and 1,280), then `BenchHeads.*` (`bench-heads.txt`). The first figures on
-   a real device sync: the verdict against the maintainer's PUBACK target (p99 under 50 ms).
-2. Chained after it, `node-b-tagdebs.sh` (status `status-tagdebs.txt`, ends "donetagdebs"): the 0.1.5 Debian packages
-   from the tag, with `DAGDA_MACHA_FIXTURES=/root/dagda-arm64/macha-fixtures` (copied there, without
-   `state-live-a`) so the 68 fixture cases run, then lintian. The packages land in `dagda-tag/build-deb/`.
-
-When both end: read the figures (the summary snippets are in `build/scratch/` history, or parse the JSON lines), record
-them in the design's measured section; tell the Macha session where the tag's .debs are and the test counts; release
-the claim (publish an empty retained message to `stack/pis/node-b/claims/Dagda`, or `claim_release` once the
-board plugin loads); tell the Lugh session, which then makes node-b the shared TSan Pi (clang 19, a 4K-page kernel).
+Nothing. Dagda holds no Pi (node-b released 02:03Z to the Lugh session as the shared TSan Pi; the 0.1.5 .debs wait in
+`/root/dagda-arm64/dagda-tag/build-deb/` there for the Macha session to copy).
 
 ## Next
 
-1. Finish slice 0: the Pi figures above; the channel cost per space; Lugh's leases as such (after slice 3's leases
-   exist, measured then). Record and commit `feature/bench` to develop (it is measurement code: the bench and the
-   disabled cases).
-2. **Slice 1** (the maintainer, 2026-11-14): node-local spaces with no rollback and bounded churn; the change notice
+1. **Prove the follower's lag** (a measurement, beside slice 1, when a Pi is free): where node b's time goes in
+   `BenchHeads.DISABLED_LughsShape` on a Pi (the replica's cost counters and a profile); the suspect is O(state) per
+   imported delta (the design, "What slice 0 has measured (the Pi)"). Lugh needs a disable on A refused on B within
+   about a second on a Pi; its sign-in (P8.5) waits on it. The fix goes in slice 2 beside group commit unless the maintainer pulls
+   it forward (asked, 2026-11-14). The next Pi build of develop is also the gate for `13fdda1`, the bench fix not yet
+   built.
+2. Slice 0's last two figures, when their slices exist: the channel cost per space (Lir wants it: its retained-topic
+   index listens on the keys-changed notice), Lugh's leases as such (after slice 3). Tell Lir if the log's default
+   tick is ever set past 40 ms (p99 is the tick plus about 2.5 ms).
+3. **Slice 1** (the maintainer, 2026-11-14): node-local spaces with no rollback and bounded churn; the change notice
    (`Heads::watch`, `Heads::changed`); Dagda's in-process cluster fixture installed as `dagda::test_fixtures`; the tag
    records contract v1 as frozen at `0.1.4`. Test-first from the design; each noun's cases named before its code.
-3. Then slices 2 to 5 as the design orders them. A defect Macha's port finds still comes first.
+4. Then slices 2 to 5 as the design orders them. A defect Macha's port finds still comes first.
 
 How work runs now (the maintainer, 2026-11-14): **no builds, tests or benches on the Mac**, for any session; Linux gates are arm64
 on the shared Pis (node-a 192.0.2.1, node-b .169, node-c .170), claimed on Lir's board first, first come first

@@ -276,7 +276,47 @@ If (2) misses it, the log's design changes before anything is built on it.
 - Concurrent head writers on one node (`BenchHeads.DISABLED_ConcurrentWritersOnOneNode`, a tree change, 5 s each):
   85-90 commits a second whatever the writers (1, 4, 8) or spaces (1, 2); more writers only add latency (p50 10 ms at
   one writer, 91-115 ms at eight). A node-wide cost serialises head commits past each space's own mutation lock.
-- Not yet: the Pi run, Lugh's leases as such, the channel cost per space.
+- Not yet: Lugh's leases as such, the channel cost per space.
+
+### What slice 0 has measured (the Pi, 2026-11-14)
+
+node-b (arm64, NVMe, `throttled=0x0` throughout), `feature/bench` built at -j2 GCC Release, three processes on
+loopback, the same runs as the Mac; outputs in `/root/dagda-arm64/bench-log-runs.txt` and `bench-heads.txt` there.
+
+- **The log passes the maintainer's PUBACK target on a real device sync.** One log: p50 7.6 ms, p99 12.5 ms at a 10 ms tick;
+  p50 13.7 ms, p99 23.5 ms at 20 ms; 8,000 messages a second, nothing refused. 256 logs, a call per replica node per
+  tick, one shared segment: p99 12.4 and 23.6 ms, nothing refused. A replica's group sync (fdatasync on the NVMe) p99
+  1.5 ms at 10 ms and 1.9 ms at 20 ms; 14-16 MiB resident, 16 open files. The margin is the tick: p99 is about the tick
+  plus 2.5 ms, so the 50 ms target holds to a tick of about 40 ms.
+- A segment per log fails here as on the Mac: 471,520 of 479,920 refused (4,217 deadlines, 7,558 calls refused as
+  overloaded), a replica's sync p99 64-80 ms over 189 files a group, 265 open files, 41 MiB. The shared segment stands.
+- The lease-change scan: with a 5 s backlog (40,080 live), a new holder read 13,462 entries, 14.3 MB, in 11.4 ms at 256
+  logs and 11.3 ms at 1,280 (page cache warm); the replicas at 18 MiB and 12 open files either way. The log count costs
+  nothing in descriptors or memory on the Pi either.
+- Today's head commit (`BenchHeads.DISABLED_CommitsAcrossSpaces`): 67-194 commits a second, p50 20-63 ms, p99 25-109
+  ms; one node faster than the Mac (a note change 194 a second, p99 25 ms), three nodes about the same. Seen on node b:
+  a note change p50 14-27 ms, p99 17-29 ms; a tree change across 16 spaces p99 36 ms, but **a tree change in one space
+  p50 950 ms, p99 1.9 s**.
+- Concurrent writers on one node: 84-95 commits a second whatever the writers or spaces, latency growing with writers
+  (p50 12 ms at one writer, 89-92 ms at eight), as on the Mac: the node-wide cost group commit is for.
+- **Lugh's shape on the Pi falls behind**: the commit side is fine (39 a second, p50 25 ms, p99 29 ms, the fill of
+  50,000 keys 8.5 s), but node b saw them at p50 10.1 s, p99 22.0 s, max 22.6 s; every commit was seen in the end
+  (`unseen=0`), so b's catch-up runs slower than 39 a second and the lag grows through the minute. On the Mac the same
+  case was p50 103 ms, p99 347 ms. "Disabled on A, refused on B" would be 10-20 s on a Pi today (Lugh needs about a
+  second). Where b's time goes is not yet measured; it is the first thing slice 2 must explain, beside group commit,
+  and the Lugh session waits on it for its sign-in (its P8.5).
+  The suspected mechanism, from the code and not yet proven: a follower materializes every delta it imports, each at
+  O(state). `Replica::import_history` (`heads/replica.cpp:1547`) applies the delta to a copy of the parent's whole
+  state (`apply_delta`), re-encodes the whole record (`encode_after_counted`) and hashes the whole payload
+  (`valid_record_counted`). The replicator batches its rounds (`Exchange::replication_loop`, newest head only), but
+  `push_history_to_peer` still sends every entry in the run and the follower materializes each. Above about 25 ms an
+  entry at 50,000 keys on a Pi core, the follower cannot keep up at 39 a second and the lag grows without bound; the
+  Mac's cores stay under it. This is Macha's open "O(state) per delta". The proof: the replica's cost counters
+  (`record_bytes_hashed`, syncs) and a profile of node b in `BenchHeads.DISABLED_LughsShape` on a Pi. The fixes to
+  weigh then (the maintainer's call): a follower that applies a run of deltas and materializes only its newest, or a state whose
+  delta application and hash are O(change).
+- The bench prints one refusal reason with raw bytes in it (`reply type 127 ...request queue full...overloaded`): the
+  bench's formatting of an error reply, not the library's; fixed with the bench.
 
 ### Heads on one node: group commit, or owners batch (for the maintainer)
 
