@@ -126,6 +126,98 @@ class HeldOperation {
   InterposedLocalStoreFiles* _files = nullptr;
 };
 
+// Pack compaction keeps what replay needs (Tom, 2026-11-14: Dagda's to fix; a defect
+// in Macha's store too, local_store.cpp:1738-1843 at f0597a4). A remove recorded in the
+// pack compacted away, whose put lies in an older pack, is carried forward: the object
+// stays removed across compaction and a restart.
+TEST(StoreLocalStore, ARemovedObjectStaysRemovedAcrossCompactionAndRestart) {
+  StoreBed bed;
+  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  const auto root = bed.dir.path() / "store";
+  const auto a = pattern(8 * 1024, 1);
+  const auto filler = pattern(34 * 1024, 2);
+  const auto b = pattern(30 * 1024, 3);
+  {
+    auto store = bed.open(root, options);
+    // Pack one: a's put, and a filler that ends the pack.
+    ASSERT_TRUE(store->put(object_id(a), a));
+    ASSERT_TRUE(store->put(object_id(filler), filler));
+    // Pack two: a's remove, and b put and removed, so pack two is the most dead.
+    ASSERT_TRUE(store->remove(object_id(a)));
+    ASSERT_TRUE(store->put(object_id(b), b));
+    ASSERT_TRUE(store->remove(object_id(b)));
+    ASSERT_NE(store->object_path(object_id(filler)), store->object_path(object_id(b)));
+    ASSERT_TRUE(store->compact_packs());
+    EXPECT_FALSE(store->has(object_id(a)));
+  }
+  auto reopened = bed.open(root, options);
+  EXPECT_FALSE(reopened->has(object_id(a)));
+  EXPECT_FALSE(reopened->get(object_id(a)).has_value());
+  EXPECT_FALSE(reopened->has(object_id(b)));
+  EXPECT_TRUE(reopened->has(object_id(filler)));
+}
+
+// And a re-affirmed object keeps its age: its put is copied with the time its touch
+// gave it, so a restart does not hand the collector its first write's age.
+TEST(StoreLocalStore, AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart) {
+  StoreBed bed;
+  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  const auto root = bed.dir.path() / "store";
+  const auto a = pattern(8 * 1024, 4);
+  const auto dead = pattern(30 * 1024, 5);
+  const auto filler = pattern(4 * 1024, 6);
+  std::filesystem::file_time_type reaffirmed{};
+  {
+    auto store = bed.open(root, options);
+    // Pack one: a, a large object to be removed, and a filler that ends the pack.
+    ASSERT_TRUE(store->put(object_id(a), a));
+    ASSERT_TRUE(store->put(object_id(dead), dead));
+    ASSERT_TRUE(store->put(object_id(filler), filler));
+    // An hour on, a is re-affirmed (a touch record in pack two) and the large object
+    // removed, so pack one is the most dead.
+    bed.wall.advance(std::chrono::hours(1));
+    ASSERT_TRUE(store->put(object_id(a), a));
+    reaffirmed = store->last_write(object_id(a));
+    ASSERT_TRUE(store->remove(object_id(dead)));
+    ASSERT_TRUE(store->compact_packs());
+    EXPECT_EQ(store->last_write(object_id(a)), reaffirmed);
+  }
+  auto reopened = bed.open(root, options);
+  EXPECT_EQ(reopened->last_write(object_id(a)), reaffirmed);
+  EXPECT_FALSE(reopened->older_than(object_id(a), std::chrono::minutes(30)));
+}
+
+// The touch's own pack compacted away, its put in another: the touch is carried.
+TEST(StoreLocalStore, AReaffirmationOutlivesTheCompactionOfItsOwnPack) {
+  StoreBed bed;
+  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  const auto root = bed.dir.path() / "store";
+  const auto a = pattern(8 * 1024, 7);
+  const auto filler = pattern(31 * 1024, 8);
+  const auto big = pattern(30 * 1024, 9);
+  std::filesystem::file_time_type reaffirmed{};
+  {
+    auto store = bed.open(root, options);
+    // Pack one: a and a filler. Pack two: a large object, a's touch, the large
+    // object's remove, so pack two is the most dead and pack one holds none.
+    ASSERT_TRUE(store->put(object_id(a), a));
+    ASSERT_TRUE(store->put(object_id(filler), filler));
+    ASSERT_TRUE(store->put(object_id(big), big));
+    ASSERT_EQ(store->object_path(object_id(a)), store->object_path(object_id(filler)));
+    ASSERT_NE(store->object_path(object_id(a)), store->object_path(object_id(big)));
+    bed.wall.advance(std::chrono::hours(1));
+    ASSERT_TRUE(store->put(object_id(a), a));
+    reaffirmed = store->last_write(object_id(a));
+    ASSERT_TRUE(store->remove(object_id(big)));
+    ASSERT_TRUE(store->compact_packs());
+    EXPECT_EQ(store->last_write(object_id(a)), reaffirmed);
+  }
+  auto reopened = bed.open(root, options);
+  EXPECT_TRUE(reopened->has(object_id(a)));
+  EXPECT_EQ(reopened->last_write(object_id(a)), reaffirmed);
+  EXPECT_FALSE(reopened->older_than(object_id(a), std::chrono::minutes(30)));
+}
+
 // Macha: test_packs_store_compact_and_survive_restart. Small objects are
 // packed, deletions are tombstones, compaction reclaims dead space a bounded
 // slice at a time (and not at all once shutdown is requested), and a restart
