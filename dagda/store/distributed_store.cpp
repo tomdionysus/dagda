@@ -1771,6 +1771,22 @@ std::optional<Bytes> DistributedStore::get(const ObjectId& id, ReadOptions optio
 }
 
 ReadResult DistributedStore::read_impl(const ObjectId& id, const ReadOptions& options) {
+  const auto until = _time.now() + options.deadline;
+  auto result = read_stages(id, options);
+  if (result.object)
+    result.end = ReadEnd::served;
+  else if (result.answer == FetchAnswer::not_found)
+    result.end = ReadEnd::not_found;
+  else if (options.cancelled && options.cancelled->load(std::memory_order_relaxed))
+    result.end = ReadEnd::cancelled;
+  else if (options.deadline.count() > 0 && _time.now() >= until)
+    result.end = ReadEnd::timed_out;
+  else
+    result.end = ReadEnd::unavailable;
+  return result;
+}
+
+ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& options) {
   const bool foreground = options.frame == FrameType::foreground;
   const bool interactive = foreground || options.frame == FrameType::read_ahead;
   // Foreground demand is recorded before any storage access, so the first

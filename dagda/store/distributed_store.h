@@ -187,6 +187,10 @@ using ObjectData = std::shared_ptr<const ObjectBuffer>;
 // that; or try_later, nothing that settles it now.
 enum class FetchAnswer : uint8_t { ok, not_found, try_later };
 enum class ReadSource : uint8_t { none, local, cache, remote };
+// How a read ended (read requirement 2): served; not_found, as FetchAnswer's; or,
+// bringing nothing, cancelled by the caller, past the caller's deadline, or
+// unavailable (nothing that answered could settle it now, or the store is stopping).
+enum class ReadEnd : uint8_t { served, not_found, cancelled, timed_out, unavailable };
 
 struct ReadOptions {
   dannan::sched::FrameType frame = dannan::sched::FrameType::foreground;
@@ -206,6 +210,7 @@ struct ReadResult {
   // Which node's copy it is: this node's for local and cache.
   std::optional<dannan::identity::NodeId> served_by;
   FetchAnswer answer = FetchAnswer::try_later;
+  ReadEnd end = ReadEnd::unavailable;
 };
 
 // What an asynchronous claim came to. `ran`: it ran to its end, and then
@@ -650,7 +655,9 @@ class DistributedStore final : public ControlObjectSource {
   void note_local_unreadable(const ObjectId& id);
 
   bool put_on(const dannan::membership::NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame);
+  // The stages, then how the read ended.
   ReadResult read_impl(const ObjectId& id, const ReadOptions& options);
+  ReadResult read_stages(const ObjectId& id, const ReadOptions& options);
   // `until`: the deadline a read's earlier stages already ran on.
   ReadResult get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
                         std::optional<dannan::contract::TimePoint> until = std::nullopt);
