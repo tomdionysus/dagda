@@ -14,6 +14,17 @@ So two requirements, both binding: Macha uses Dagda natively, with no adapter la
 losing nothing; and Dagda, measured on its own terms against Macha's store on the same workloads, is at least as good
 a DHT store in every respect.
 
+## The route (Tom, 2026-11-14)
+
+Most of Macha's store calls (a write with a known id, put_here, deferred writes and many-ticket waits, hydrate,
+cache_local, ensure_local, the activity clocks, reads with no deadline on the caller's thread, the collector's steps,
+the retirement helpers, claimed collections) were reachable only through `Node`'s parts (`node.h:359`, "for an owner's
+maintenance and for tests"); `Context` offered a content-addressed write and read with a required deadline, `has`,
+`remove` and one ticket's wait, run on the store's four worker threads. **Ruled: `Context` grows to serve all of it,
+with Macha's semantics** (a blocking form on the caller's own thread, no worker hop; a read with no deadline under the
+admission window; many-ticket waits; known-id writes), and Macha calls `Context` only: one contract for Macha, Lugh and
+Lir, contract version 2. Every row below whose Dagda side is a `Node` part is a gap until `Context` serves it.
+
 ## Method
 
 Against Macha's develop `f0597a4` (0.94.2's code), extracted read-only at `build/macha-f0597a4/`. Written with the Macha
