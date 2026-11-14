@@ -204,6 +204,27 @@ class Context {
     void write(const ObjectId& id, store::Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done);
     WriteEvidence write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options);
     ReadResult read(const ObjectId& id, ReadOptions options);
+    // Macha's filesystem forms, on the caller's own thread. put_here: durable here
+    // and returned at once, the further copies owed to prompt replication; a
+    // put() on a node that hosts no extents. put_deferred_here: written here, made
+    // durable by a wait on the evidence's ticket. Both throw std::runtime_error
+    // when the bytes are not the id's.
+    bool put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+    WriteEvidence put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+    // In this node's pool or its cache. Asks no peer.
+    bool locally_available(const ObjectId& id) const;
+    // Written through to this node's cache, when it has one; false is only that
+    // the cache did not take it.
+    bool cache_local(const ObjectId& id, std::span<const uint8_t> data);
+    // This node has a cache to hydrate into.
+    bool hydration_available() const;
+    // True once the object is here, fetching it into the cache if not.
+    bool hydrate(const ObjectId& id, ReadOptions options = {});
+    // Made local: held and valid, else from the cache, else fetched.
+    bool ensure_local(const ObjectId& id, bool foreground = false);
+    // Moves when what this node can reach may have (the membership, its disks
+    // online): a write parked as unreachable retries when it does.
+    uint64_t reachability_epoch() const;
     // This node's pool holds it: the local ground truth. Asks no peer.
     static constexpr dannan::sched::Waits has_waits = dannan::sched::local_waits;
     bool has(const ObjectId& id) const;
@@ -258,6 +279,10 @@ class Context {
     // This node holds a claim on it.
     static constexpr dannan::sched::Waits retained_waits = dannan::sched::local_waits;
     bool retained(contract::RetentionClass type, const ObjectId& id) const;
+    // Contract version 2, Macha's retain_data_here: claims here whichever of
+    // `ids` this node holds, on the caller's own thread, and returns the rest,
+    // sorted and unique.
+    std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot);
 
    private:
     friend class Context;
