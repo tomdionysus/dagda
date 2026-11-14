@@ -248,6 +248,52 @@ TEST(Context, VersionTwoServesMachasObjectForms) {
   for (const auto& one : many) EXPECT_TRUE(one.met);
 }
 
+// Contract version 2's filesystem forms, Macha's (distributed_store.hpp at f0597a4,
+// the callers' map's filesystem and FUSE sections): a write durable here with the
+// further copies owed, and its deferred form; the local view (pool, then cache);
+// the cache written through and hydrated; a DATA object made local; claims here for
+// what is held; and the reachability epoch a parked write retries on.
+TEST(Context, VersionTwoServesMachasFilesystemForms) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  auto& a = cluster.add("a", options);
+  auto& b = cluster.add("b", options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto& objects = a.api().objects();
+
+  const auto here = test::numbered(70);
+  const auto here_id = store::object_id(here);
+  EXPECT_TRUE(objects.put_here(here_id, std::span<const uint8_t>(here)));
+  EXPECT_TRUE(objects.has(here_id));
+  EXPECT_TRUE(objects.locally_available(here_id));
+
+  const auto deferred = test::numbered(71);
+  const auto deferred_id = store::object_id(deferred);
+  const auto evidence = objects.put_deferred_here(deferred_id, std::span<const uint8_t>(deferred));
+  ASSERT_TRUE(evidence.ticket.valid());
+  const auto waited = a.api().tickets().wait(evidence.ticket, std::chrono::seconds(10));
+  ASSERT_TRUE(waited.has_value());
+  EXPECT_NE(waited->on(a.id()), nullptr);
+
+  // Made local on b from a, then held there.
+  EXPECT_TRUE(b.api().objects().ensure_local(here_id));
+  EXPECT_TRUE(b.api().objects().has(here_id));
+
+  // Claims here: what a holds, claimed; the rest returned.
+  const auto absent = store::object_id(test::numbered(72));
+  const auto rest = a.api().claims().retain_data_here({here_id, absent}, {a.id(), 9});
+  ASSERT_EQ(rest.size(), 1u);
+  EXPECT_EQ(rest[0], absent);
+  EXPECT_TRUE(a.api().claims().retained(contract::RetentionClass::data, here_id));
+
+  // No cache configured here: nothing to hydrate into, nothing written through.
+  EXPECT_EQ(objects.hydration_available(), a.dagda_node().store().hydration_available());
+  EXPECT_EQ(objects.reachability_epoch(), a.dagda_node().store().reachability_epoch());
+}
+
 // Contract version 2's bare CONTROL forms, Macha's catalogue and metadata calls (the
 // callers' map, Macha d53ddfe): held here and read back; a strict local put, durable,
 // that offers and claims nothing; a fetch to local from a peer, verified, that claims

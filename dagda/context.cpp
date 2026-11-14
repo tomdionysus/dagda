@@ -150,6 +150,26 @@ WriteEvidence Context::Objects::write(const ObjectId& id, std::span<const uint8_
 
 ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options) { return _node.store().read(id, std::move(options)); }
 
+bool Context::Objects::put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame) {
+  return _node.store().put_here(id, data, frame);
+}
+
+WriteEvidence Context::Objects::put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame) {
+  return _node.store().put_deferred_here(id, data, frame);
+}
+
+bool Context::Objects::locally_available(const ObjectId& id) const { return _node.store().locally_available(id); }
+
+bool Context::Objects::cache_local(const ObjectId& id, std::span<const uint8_t> data) { return _node.store().cache_local(id, data); }
+
+bool Context::Objects::hydration_available() const { return _node.store().hydration_available(); }
+
+bool Context::Objects::hydrate(const ObjectId& id, ReadOptions options) { return _node.store().hydrate(id, std::move(options)); }
+
+bool Context::Objects::ensure_local(const ObjectId& id, bool foreground) { return _node.store().ensure_local(id, foreground); }
+
+uint64_t Context::Objects::reachability_epoch() const { return _node.store().reachability_epoch(); }
+
 bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
 
 void Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
@@ -221,6 +241,10 @@ ClaimEvidence Context::Claims::retain(contract::RetentionClass type, std::vector
 }
 
 bool Context::Claims::retained(contract::RetentionClass type, const ObjectId& id) const { return _node.claims().retained(type, id); }
+
+std::vector<ObjectId> Context::Claims::retain_data_here(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot) {
+  return _node.store().retain_data_here(ids, dot);
+}
 
 // ---- Leases -----------------------------------------------------------------
 
