@@ -240,13 +240,11 @@ TEST(HeadsWatchCluster, ACommitOnOneNodeIsNoticedOnItsPeerWithTheKeyItChanged) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto id = a.api().heads().id_of("lugh/watch");
-  // b watches from the founded head: a watch taken while it still stood at genesis would
-  // be told, rightly, of the founding's keys too.
-  auto* held = b.dagda_node().spaces()->find(id);
-  ASSERT_NE(held, nullptr);
-  const auto founded_by = std::chrono::steady_clock::now() + 10s;
-  while (held->replica().committed_generation() < 2 && std::chrono::steady_clock::now() < founded_by) std::this_thread::sleep_for(10ms);
-  ASSERT_GE(held->replica().committed_generation(), 2U);
+  // b watches from the founded head: a quiet node stands at genesis until something reads
+  // the space, and a watch taken there would be told, rightly, of the founding's keys too.
+  const auto read = b.api().heads().read(id, dagda::HeadRead::converged, 10s);
+  ASSERT_TRUE(read.finished) << read.why;
+  ASSERT_GE(b.dagda_node().spaces()->find(id)->replica().committed_generation(), 2U);
   const auto watching = b.api().heads().watch(id, watcher.context.get_executor(), [&](HeadMoved move) { told.add(move); });
   ASSERT_TRUE(watching.watching) << watching.why;
   const auto result =
