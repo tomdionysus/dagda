@@ -3,6 +3,31 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-14 (04:45Z): slice 1 built and proven on the Pi, merged to develop (`1065b18`, not tagged)
+
+Written test-first from the three-systems design on `feature/slice1`, merged to develop:
+- D13, the fixture installed: `cluster.h`, `heads.h`, `heads_merge.h`, `heads_space.h`, `ledger.h`, `store.h`, `tree.h`
+  under `dagda/test/fixtures/`, the exported `dagda::test_fixtures`; `test/package/fixture_consumer.cpp` builds a
+  two-node cluster against the installed package (`docs/packaging.md`; `libdagda-dev` suggests `libgtest-dev`).
+- D4, the change notice: `Space::watch`, `unwatch`, `notice_if_moved` (from `accept` and the import path), and
+  `Space::changed` over `Tree::diff`; the Context's `Heads::watch`, `unwatch`, `changed` as evidence (`HeadWatch`,
+  `HeadChanges`). Contract version 2 is served, version 1 (`context_version_frozen`) beside it, as Tom ruled;
+  `Context.TheVersionCheckRefusesAMismatch` brought to that.
+- D3, node-local spaces: `Policy::node_local()`; no exchange, so nothing advertised, owed, answered or repaired; the
+  replica and the tree nodes sealed under the node-local key with the node-local domain in every AAD; the tree nodes in
+  a `NodePack` of the space's own (a `SealedJournal` that refuses a frame that will not open rather than cut it); founded
+  at open; upkeep in the maintenance turn (history re-rooted, the pack compacted to what the head reaches); the
+  no-rollback record `NodeLocalGenerations`, outside the space's directory, pending Tom on the counter. A node-local
+  space names no DATA object yet.
+
+Gate, corvus-jupiter, GCC 14.2 Release with warnings as errors at `6d503de`: **0 errors, 0 warnings**; `dagda_tests`
+**1065 ran, 992 passed, 71 skipped** (all Macha-fixture cases: no fixtures in this run), **2 failed**, both the tests'
+own faults, fixed and rerun (`0cdc8e7`, `253da4b`; both pass): a copy into a `heads/` directory b did not yet have, and
+a peer watching from genesis, which `changed` rightly answered with the founding's keys as well (a quiet node stands at
+genesis until something reads the space). Installed to a prefix and consumed: `consumer` and `fixture_consumer` pass.
+The churn case (10,000 records made and expired) leaves the space within a page of where it began. Not yet run: the
+Macha fixtures, which the tag needs since `accept` and the import path now look for watches (nothing when there are none).
+
 ## 2026-11-14 (02:05Z): slice 0 on the Pi; 0.1.5's packages from the tag; the bench merged
 
 On corvus-jupiter (arm64, NVMe, never throttled), claimed 01:25Z to 02:03Z and released. Figures in the design,
