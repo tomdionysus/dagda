@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <boost/asio/post.hpp>
 #include <chrono>
+#include <limits>
 #include <set>
 #include <thread>
 #include <utility>
@@ -590,7 +591,8 @@ Space::Upkeep Space::upkeep_node_local(const std::function<void(const std::set<O
   const auto before = _replica->diagnostics().history_records;
   // Nobody else holds this space's history, so nothing waits on its older entries:
   // re-rooted whenever one head stands.
-  (void)_replica->compact_history_if_safe(1, 0);
+  // A record threshold of two: a history already only its root is left as it is.
+  (void)_replica->compact_history_if_safe(2, std::numeric_limits<uint64_t>::max());
   out.truncated = _replica->diagnostics().history_records < before;
   const auto heads = _replica->accepted_heads();
   if (heads.empty() || _replica->diagnostics().history_records > heads.size()) return out;
