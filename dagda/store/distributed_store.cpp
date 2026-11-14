@@ -2121,6 +2121,15 @@ void DistributedStore::finish_fetch(const std::shared_ptr<SharedFetch>& fetch, O
 void DistributedStore::enqueue_local_copy(const ObjectId& id, std::span<const uint8_t> data, bool promote) {
   const bool cache = _cache.enabled();
   if (!cache && !promote) return;
+  // Held in speculative memory while queued, and dropped when there is none
+  // (Macha's ds:3111-3119 at f0597a4), so the queue never passes the node's memory.
+  auto memory = _context.budget().reserve(dannan::sched::WorkClass::speculative, data.size());
+  if (!memory) {
+    // Logged, so an unfilled cache is told from a broken one.
+    _logger.debug("opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory bytes=" + std::to_string(data.size()) +
+                  " cache=" + (cache ? "1" : "0") + " promote=" + (promote ? "1" : "0"));
+    return;
+  }
   // Opportunistic persistence must not hold back a reader: past the bound
   // the copy is dropped and repair converges later.
   {
@@ -2130,7 +2139,8 @@ void DistributedStore::enqueue_local_copy(const ObjectId& id, std::span<const ui
       return;
     }
     _local_copy_bytes += data.size();
-    _local_copies.push_back({id, Bytes(data.begin(), data.end()), promote});
+    LocalCopy copy{id, Bytes(data.begin(), data.end()), promote, std::move(*memory)};
+    _local_copies.push_back(std::move(copy));
   }
   _local_copy_wake.notify_one();
 }
