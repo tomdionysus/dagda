@@ -102,5 +102,17 @@ gap 4).
 
 Cosmetic: the remaining log lines, metrics, adverts, stage-hook names and exception types, each listed in its section.
 
-For Tom: repair is diff-only by his 2026-11-04 ruling, which restores copies more slowly than Macha's walk while a peer
-is seeding or slow (availability gap 13).
+Repair (availability gap 13), **ruled (Tom, 2026-11-14): push to the peers that answered.** Repair stays diff-only
+but repairs toward every peer whose survey settled rather than waiting for all; a peer that cannot answer is asked
+nothing (`StoreRepair.APushSendsNothingToAPeerTheSurveyCouldNotSettle` stands for that peer).
+
+Reads, for Macha's FUSE on libfuse's low-level API (Tom's decision of 2026-11-14, relayed by the Macha session: after
+the port Macha's FUSE reads become asynchronous and abandonable; Macha's heap investigation found today's
+`FuseFrontend::dispatch` returns ETIMEDOUT while a worker still writes the caller's buffer). Every read `Context` offers
+Macha must state and keep, each with its case:
+1. No write into caller memory after the call has returned, ever: results Dagda owns and hands over (shared extent
+   bytes, as Macha's `get_shared` does), or a caller buffer whose cancellation waits for the copy to stop.
+2. Prompt cancellation: a deadline and a cancel token, honoured at fetch boundaries, a remote fetch in flight
+   included, with the outcome told (cancelled, timed out, unavailable).
+3. An async form completing on the caller's executor, beside the blocking form.
+4. The read class per call (foreground, loader, speculative), as the frame type is today.
