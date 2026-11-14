@@ -14,11 +14,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "dagda/test/fixtures/cluster.h"
 
@@ -171,6 +176,76 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
   EXPECT_THROW(a.api().objects().remove({id}, {}, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().objects().read(id, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().claims().retain(contract::RetentionClass::data, {id}, {a.id(), 0}, {}, deadline), std::invalid_argument);
+}
+
+// Contract version 2's object forms, Macha's (the maintainer, 2026-11-14, the route: Context
+// serves every store call Macha makes, with Macha's semantics): a write naming its
+// id, hashed once; a blocking read and write on the caller's own thread, no worker
+// hop, with no deadline of their own unless the options name one; and one wait over
+// many tickets, one barrier a place.
+TEST(Context, VersionTwoServesMachasObjectForms) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  struct Stages {
+    std::mutex mutex;
+    std::vector<std::thread::id> on;
+  };
+  auto stages = std::make_shared<Stages>();
+  auto& a = cluster.add("a", [&] {
+    auto out = options;
+    out.store.read_trace = [stages](std::string_view) {
+      std::lock_guard lock(stages->mutex);
+      stages->on.push_back(std::this_thread::get_id());
+    };
+    return out;
+  }());
+  cluster.add("b", options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(44);
+  const auto id = store::object_id(data);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  const auto written = a.api().objects().write(id, std::span<const uint8_t>(data), write);
+  EXPECT_EQ(written.id, id);
+  EXPECT_TRUE(written.met);
+  // A wrong id is refused before anything is written.
+  EXPECT_THROW((void)a.api().objects().write(store::object_id(test::numbered(45)), std::span<const uint8_t>(data), write), std::exception);
+
+  {
+    std::lock_guard lock(stages->mutex);
+    stages->on.clear();
+  }
+  const auto read = a.api().objects().read(id, ReadOptions{});
+  ASSERT_NE(read.object, nullptr);
+  EXPECT_EQ(read.end, store::ReadEnd::served);
+  {
+    std::lock_guard lock(stages->mutex);
+    ASSERT_FALSE(stages->on.empty());
+    EXPECT_NE(std::find(stages->on.begin(), stages->on.end(), std::this_thread::get_id()), stages->on.end()) << "a blocking read hopped to a worker";
+  }
+
+  // Deferred writes, then one wait over all their tickets.
+  WriteOptions deferred = write;
+  deferred.deferred = true;
+  std::vector<Ticket> tickets;
+  for (int n = 46; n < 50; ++n) {
+    const auto bytes = test::numbered(n);
+    tickets.push_back(a.api().objects().write(store::object_id(bytes), std::span<const uint8_t>(bytes), deferred).ticket);
+  }
+  const auto waited = a.api().tickets().wait(tickets, std::chrono::seconds(10));
+  ASSERT_EQ(waited.size(), tickets.size());
+  for (const auto& one : waited) EXPECT_TRUE(one.met);
+
+  auto strand = boost::asio::make_strand(cluster.io().context);
+  const auto many = on_strand<std::vector<WriteEvidence>>(strand, [&](boost::asio::any_io_executor executor, Context::Tickets::ManyDone done) {
+    a.api().tickets().wait(tickets, std::chrono::seconds(10), executor, std::move(done));
+  });
+  ASSERT_EQ(many.size(), tickets.size());
+  for (const auto& one : many) EXPECT_TRUE(one.met);
 }
 
 }  // namespace
