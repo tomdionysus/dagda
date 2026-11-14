@@ -566,6 +566,7 @@ int run_appender(const Options& options) {
   Samples puback_ms;
   Samples call_ms;
   uint64_t failures = 0;
+  std::map<std::string, uint64_t> reasons;
   std::atomic<uint64_t> in_flight{0};
   uint64_t entries_sent = 0;
 
@@ -597,7 +598,14 @@ int run_appender(const Options& options) {
     for (const auto& replica : replicas) {
       context.routes().call(replica, log_append, payload, dannan::sched::FrameType::control, 5000ms, running.io.get_executor(),
                             [&, group](dannan::net::CallOutcome outcome) {
-                              if (!outcome.reply || outcome.reply->type != dannan::net::message::ok) group->failed = true;
+                              if (!outcome.reply || outcome.reply->type != dannan::net::message::ok) {
+                                group->failed = true;
+                                std::string why = outcome.reply ? "reply type " + std::to_string(static_cast<unsigned>(outcome.reply->type)) + " " +
+                                                                      std::string(outcome.reply->payload.begin(), outcome.reply->payload.end()).substr(0, 60)
+                                                                : outcome.failure;
+                                std::lock_guard lock(figures_mutex);
+                                ++reasons[why];
+                              }
                               if (--group->left != 0) return;
                               const auto now = Clock::now();
                               std::lock_guard lock(figures_mutex);
@@ -671,9 +679,17 @@ int run_appender(const Options& options) {
   std::lock_guard lock(figures_mutex);
   std::printf(
       "{\"event\":\"appender\",\"logs\":%u,\"group\":\"%s\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_per_s\":%.0f,"
-      "\"failed\":%llu,\"puback\":%s,\"call\":%s}\n",
+      "\"failed\":%llu,\"puback\":%s,\"call\":%s,\"reasons\":%s}\n",
       options.logs, options.group.c_str(), options.rate, options.tick_ms, options.edges, options.bytes, elapsed_s, static_cast<unsigned long long>(seq),
-      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str());
+      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str(), [&] {
+        std::string out = "{";
+        for (const auto& [why, n] : reasons) {
+          std::string clean;
+          for (const char c : why) clean += (c == '"' || c == '\\' || static_cast<unsigned char>(c) < 0x20) ? '_' : c;
+          out += (out.size() > 1 ? "," : "") + std::string("\"") + clean + "\":" + std::to_string(n);
+        }
+        return out + "}";
+      }().c_str());
   std::fflush(stdout);
   return failures == 0 ? 0 : 1;
 }
