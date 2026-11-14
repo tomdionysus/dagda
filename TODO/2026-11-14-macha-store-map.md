@@ -73,6 +73,29 @@ Written by the Macha session after its heap-corruption investigation (its standi
 The order: data safety first, then what blocks the port, then what loses performance, then the cosmetic. Each is fixed
 test-first; its case and commit go here when it lands.
 
+**Fixed on `feature/macha-store-gaps`** (gate: corvus-saturn, Dannan 0.7.0, GCC Release with warnings as errors at
+`5a5834d`: 0 warnings; `dagda_tests` with Macha's fixtures 1078 ran, 1075 passed, 3 skipped, 0 failed):
+- Safety 1, a missing backend directory: the node locks a backend's root only once its directory is there and the pool
+  takes it as the disk comes online (`StoragePoolOptions::lock_root`), only for roots still configured
+  (`2949bd6`, `e6e1d8f`, `ebf611b`). `Node.AMissingBackendPathStaysOfflineAndIsNotCreated`,
+  `.ABackendThatAppearsLaterComesOnlineHeldByThisNode`, `.ABackendPathThatCannotBeCreatedLeavesTheNodeDegradedNotRefused`.
+- Safety 2 and 6, garbage while metadata is dirty and the sweep's quiet window: `MaintenanceGates` in the node loop
+  (`404dd9b`). `MaintenanceGates.*` (five cases).
+- Safety 3, a cancelled put: `WriteEvidence::cancelled`; the put forms answer as Macha's (`f15b2e7`).
+  `DistributedStore.ACancelledPutFailsEvenWhenACopyLanded`.
+- Safety 4, the ticket table: a ticket still waiting, or a deferred one no caller has asked after, is never forgotten
+  under the bound; a ceiling (`max_waiting_tickets`) with a warning bounds what nobody consumes (`593e129`, `c67b70b`,
+  `5a5834d`). `StoreDurabilityBarrier.APublicationLargerThanTheTicketTableStillBarriersEveryExtent`,
+  `.TicketsStillWaitingAreBoundedByTheirCeiling`.
+- From the Macha session's review: a cache that cannot be had is turned off with Macha's warning, not a node refused
+  (`57993eb`), `Node.ACacheThatCannotBeHadIsDisabledAndTheNodeRuns`; the network estimate learns from writes, fetches
+  and CONTROL offers and pulls as Macha's does (`a7e2e88`), `DistributedStore.WritesAndReadsTeachTheNetworkEstimate`.
+
+**Waiting on Macha first (the rule: a defect in both is fixed in Macha, and Dagda matches):** pack compaction drops the
+victim's remove and touch records (both stores; the Macha session's review, verified in both by code). Also from that
+review, Macha-side first: prompt replication's wait with no timeout, the local barrier re-deriving on any failure, the
+repair-share wake's rounding.
+
 Data safety and correctness:
 1. A missing backend directory is created by the backend lock and can be adopted as a new, empty backend, so writes
    meant for an unmounted disk land on the root filesystem; one that cannot be created refuses the whole node rather
