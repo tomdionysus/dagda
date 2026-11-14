@@ -90,10 +90,10 @@ VersionCheck Context::check_version(uint32_t built_against) const noexcept {
   VersionCheck out;
   out.built_against = built_against;
   out.served = context_version;
-  out.accepted = built_against == context_version;
+  out.accepted = built_against == context_version || built_against == context_version_frozen;
   if (!out.accepted)
     out.why = "dagda::Context version " + std::to_string(built_against) + " was asked for and this library serves version " + std::to_string(context_version) +
-              ": rebuild the hosted system against this Dagda";
+              ", and version " + std::to_string(context_version_frozen) + " beside it: rebuild the hosted system against this Dagda";
   return out;
 }
 
@@ -377,6 +377,27 @@ MutationEvidence Context::Heads::mutate_delta(const heads::SpaceId& space, heads
   return await<MutationEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, Committed done) {
     mutate_delta(space, std::move(mutation), deadline, std::move(executor), std::move(done), identity, retries, work);
   });
+}
+
+heads::Space* Context::Heads::find(const heads::SpaceId& space, std::string& why) const {
+  auto* spaces = _node.spaces();
+  auto* found = spaces ? spaces->find(space) : nullptr;
+  if (!found) why = spaces ? space_not_open : heads_off;
+  return found;
+}
+
+HeadWatch Context::Heads::watch(const heads::SpaceId& space, boost::asio::any_io_executor executor, std::function<void(heads::HeadMoved)> notice) {
+  HeadWatch out;
+  auto* found = find(space, out.why);
+  if (!found) return out;
+  out.token = found->watch(std::move(executor), std::move(notice));
+  out.watching = true;
+  return out;
+}
+
+void Context::Heads::unwatch(const heads::SpaceId& space, uint64_t token) {
+  std::string why;
+  if (auto* found = find(space, why)) found->unwatch(token);
 }
 
 HeadsEvidence Context::Heads::heads(const heads::SpaceId& space) const {

@@ -33,11 +33,14 @@ add_executable(dagda_tests
   heads_replica_bytes_test.cpp
   heads_replica_test.cpp
   heads_retirement_test.cpp
+  heads_node_local_test.cpp
+  heads_node_pack_test.cpp
   heads_node_test.cpp
   heads_space_test.cpp
   heads_seed_test.cpp
   heads_tree_test.cpp
   heads_tree_vectors_test.cpp
+  heads_watch_test.cpp
   lease_claimed_collection_test.cpp
   lease_fence_test.cpp
   lease_keeper_test.cpp

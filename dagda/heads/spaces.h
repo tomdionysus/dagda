@@ -24,6 +24,7 @@
 #include "dagda/domain/storage_key.h"
 #include "dagda/heads/cache_seed.h"
 #include "dagda/heads/exchange.h"
+#include "dagda/heads/node_pack.h"
 #include "dagda/heads/space.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/local_store.h"
@@ -50,6 +51,19 @@ class StoreClaimBarrier final : public ClaimBarrier {
  private:
   store::DistributedStore& _store;
   const std::function<void()> _on_claimed;
+};
+
+// A node-local space's claims (D3). Its tree nodes are in its own pack, which the space
+// collects itself, so it claims no CONTROL object, and nothing goes to a peer. It names
+// no DATA object: a claim made here under a node-local dot would have nothing to release
+// it, so every DATA object is answered unheld and such a commit is refused.
+class NodeLocalClaimBarrier final : public ClaimBarrier {
+ public:
+  void claimed() override {}
+  std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const Dot&) override { return ids; }
+  std::vector<ObjectId> retain_data(const std::vector<ObjectId>& ids, const Dot&) override { return ids; }
+  bool retain_control_here(const std::vector<ObjectId>&, const Dot&) override { return true; }
+  void retain_on_peers(const Dot&, const CommitClaims&) override {}
 };
 
 // The node's head spaces, at <state>/heads/<space id hex>/, and the one thread the
@@ -99,8 +113,15 @@ class Spaces {
 
   // Opens a space and replays it. Throws std::invalid_argument for a policy that
   // waits on another session or a name already open, and what Replica throws,
-  // naming the file, for primary state that fails with no valid seed.
+  // naming the file, for primary state that fails with no valid seed. A node-local
+  // space (D3) has no exchange: nothing is advertised, no route answers for it, and
+  // its replica and tree nodes are sealed under the node-local key.
   Space& open(SpaceSpec spec) DANNAN_EXCLUDES(_mutex);
+
+  // Each node-local space's upkeep (Space::upkeep_node_local), its pack compacted to
+  // what its heads reach. The node's maintenance runs it beside history truncation.
+  // Waits on the state device. Returns how many packs were compacted.
+  size_t upkeep_node_local() DANNAN_EXCLUDES(_mutex);
   // The open space; null for one not open.
   Space* find(const SpaceId& space) const DANNAN_EXCLUDES(_mutex);
   // Its exchange; null for one not open.
@@ -119,6 +140,7 @@ class Spaces {
   dannan::sched::WaitGuard& guard() noexcept { return _guard; }
 
  private:
+  Space& open_node_local_locked(SpaceSpec spec, const SpaceId& id) DANNAN_REQUIRES(_mutex);
   void worker(std::stop_token stop) DANNAN_EXCLUDES(_queue_mutex);
   // What a peer's request does.
   dannan::net::Handled handle(const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request);
@@ -129,11 +151,16 @@ class Spaces {
 
   const Services _services;
   StoreClaimBarrier _barrier;
+  NodeLocalClaimBarrier _node_local_barrier;
   dannan::sched::WaitGuard _guard;
   const dannan::status::ScopedLogger _logger;
 
   // Held across a replay: spaces open one at a time.
   mutable dannan::contract::IoMutex _mutex;
+  // Node-local spaces' generations and node packs: declared before the spaces, so they
+  // outlive them. No generations without the node-local key.
+  std::unique_ptr<NodeLocalGenerations> _generations;
+  std::map<SpaceId, std::unique_ptr<NodePack>> _packs DANNAN_GUARDED_BY(_mutex);
   std::map<SpaceId, std::unique_ptr<Space>> _spaces DANNAN_GUARDED_BY(_mutex);
   std::map<SpaceId, std::unique_ptr<CacheSeed>> _seeds DANNAN_GUARDED_BY(_mutex);
   std::map<SpaceId, std::unique_ptr<Exchange>> _exchanges DANNAN_GUARDED_BY(_mutex);

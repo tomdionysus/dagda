@@ -55,9 +55,20 @@ rates on a Pi and a disable is seen on another node within about a second.
 2. Slice 0's last two figures, when their slices exist: the channel cost per space (Lir wants it: its retained-topic
    index listens on the keys-changed notice), Lugh's leases as such (after slice 3). Tell Lir if the log's default
    tick is ever set past 40 ms (p99 is the tick plus about 2.5 ms).
-3. **Slice 1** (Tom, 2026-11-14): node-local spaces with no rollback and bounded churn; the change notice
-   (`Heads::watch`, `Heads::changed`); Dagda's in-process cluster fixture installed as `dagda::test_fixtures`; the tag
-   records contract v1 as frozen at `0.1.4`. Test-first from the design; each noun's cases named before its code.
+3. **Slice 1** (Tom, 2026-11-14), on `feature/slice1` (local), written and not yet built (no builds on the Mac; the
+   first Pi build is `build/pi-slice1.sh`, run when a Pi is free):
+   - D13, the fixture installed (`90f2411`): seven fixture headers under `dagda/test/fixtures/`, `dagda::test_fixtures`,
+     and `test/package/fixture_consumer.cpp`.
+   - D4, the change notice (`3678a06`): `Space::watch`/`unwatch`/`notice_if_moved`/`changed`, the Context's
+     `Heads::watch`/`unwatch`/`changed` as evidence; `heads_watch_test.cpp`. Contract version 2 served beside the
+     frozen 1 (`context_version_frozen`); `Context.TheVersionCheckRefusesAMismatch` brought to it (Tom's ruling 3).
+   - D3, node-local spaces (`f275ba0`, `1660d58`): `Policy::node_local()`; no exchange; the replica and a node pack
+     (`heads/node_pack.h`) sealed under the node-local key; founded at open; upkeep in the maintenance turn; the
+     no-rollback record (`NodeLocalGenerations`) pending Tom's answer on the counter (the design, "How slice 1 builds
+     node_local"). A node-local space names no DATA object yet: its claims would have nothing to release them.
+     `heads_node_pack_test.cpp`, `heads_node_local_test.cpp`.
+   - Left: the Pi build and its fixes; the capability report and `docs/` for the new calls; the tag's notes recording v1
+     frozen at `0.1.4`.
 4. Then slices 2 to 5 as the design orders them. A defect Macha's port finds still comes first.
 
 How work runs now (Tom, 2026-11-14): **no builds, tests or benches on the Mac**, for any session; Linux gates are arm64

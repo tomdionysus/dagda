@@ -8,12 +8,15 @@
 #pragma once
 
 #include <atomic>
+#include <boost/asio/any_io_executor.hpp>
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -49,15 +52,19 @@ struct ExternalIdentity {
   uint64_t sequence = 0;
 };
 
-// Where a space's heads are kept. Macha has one every-node space. `replicas: N` is
-// L2's, which waits on holders that do not exist yet, and open() refuses it.
+// Where a space's heads are kept. Macha has one every-node space. `node_local` is
+// this node's alone (slice 1, D3): never advertised, exchanged, offered or repaired,
+// its tree nodes in a pack of its own under the node-local key. `replicas: N` is L2's,
+// which waits on holders that do not exist yet (slice 2), and open() refuses it.
 struct Policy {
-  enum class Kind : uint8_t { every_node, replicas };
+  enum class Kind : uint8_t { every_node, replicas, node_local };
   Kind kind = Kind::every_node;
   uint32_t replicas = 0;
 
   static Policy every_node() { return {}; }
   static Policy replicas_of(uint32_t count) { return {Kind::replicas, count}; }
+  static Policy node_local() { return {Kind::node_local, 0}; }
+  bool is_node_local() const noexcept { return kind == Kind::node_local; }
 };
 
 // Nothing, or why a space may not open under `policy`.
@@ -254,6 +261,14 @@ struct SpaceView {
   uint64_t revision = 0;
   Hash256 hash{};
   State state;
+};
+
+// A move of this node's committed head, as a watch is told of it (the three-systems
+// design, D4): the head before and the head after.
+struct HeadMoved {
+  HeadIdentity before;
+  HeadIdentity after;
+  bool operator==(const HeadMoved&) const = default;
 };
 
 // What a mutation came to. `covered`: an earlier attempt's dot, or the identity, is
@@ -473,8 +488,80 @@ class Space {
     return entries(tree, view, from, budget);
   }
 
+  // The change notice (D4). `notice` is posted to `executor`, never called inline, each
+  // time this node's committed head moves: a commit here, or one taken from a peer. The
+  // notices are posted in the order of the moves, each one's `before` the last one's
+  // `after`; a watcher on an executor of several threads orders them by generation. The
+  // executor must outlive the watch. Waits on nothing. Returns the token unwatch() takes.
+  uint64_t watch(boost::asio::any_io_executor executor, std::function<void(HeadMoved)> notice) DANNAN_EXCLUDES(_watch_mutex);
+  // After it returns nothing more is posted for the token; a notice already posted still
+  // runs. An unknown token is nothing to withdraw.
+  void unwatch(uint64_t token) DANNAN_EXCLUDES(_watch_mutex);
+  // A node-local space's upkeep (D3), what the exchange's truncation and the store's
+  // collector do for a shared one. Under the mutation lock, so no commit writes a node
+  // meanwhile: history is re-rooted at the one head once it stands, and then, when
+  // history holds nothing but the heads, `collect` is handed every tree node they reach,
+  // which is all the space still needs. Waits on the state device.
+  struct Upkeep {
+    bool truncated = false;
+    bool collected = false;
+    uint64_t reached = 0;
+  };
+  Upkeep upkeep_node_local(const std::function<void(const std::set<ObjectId>&)>& collect) DANNAN_EXCLUDES(_view_mutex, _owed_mutex);
+
+  // Tells the watches if the committed head moved since they were last told. accept()
+  // calls it; so does any path that moves the head without it (an imported history that
+  // prunes an accepted head). Waits on nothing but the replica's memory.
+  void notice_if_moved() DANNAN_EXCLUDES(_watch_mutex);
+
+  // The keys whose entries differ between two heads this node holds, in key order, one
+  // budget operation per key, after `from`. Only where the two trees differ is read
+  // (Tree::diff), so the cost follows the change, not the tree; each page reads that
+  // difference again. Keys present on one side only are named; a head with no tree has
+  // no keys. Throws HeadsNotReady for a head this node does not hold. entries_waits.
+  template <class Value>
+  dannan::sched::Page<std::string, std::string> changed(const Tree<Value>& tree, const HeadIdentity& before, const HeadIdentity& after,
+                                                        dannan::sched::Cursor<std::string> from, dannan::sched::Budget& budget) const {
+    dannan::sched::Page<std::string, std::string> page;
+    page.next = from;
+    std::vector<std::string> keys;
+    if (before != after) {
+      const auto before_root = root_of(before);
+      const auto after_root = root_of(after);
+      const auto reader = _services.read_nodes();
+      if (before_root && after_root) {
+        for (auto& [key, _] : tree.diff(*before_root, *after_root, *reader)) keys.push_back(key);
+      } else if (before_root || after_root) {
+        tree.walk(before_root ? *before_root : *after_root, *reader, [&](const std::string& key, const Value&) { keys.push_back(key); });
+      }
+    }
+    for (auto& key : keys) {
+      if (from.after && key <= *from.after) continue;
+      if (const auto stop = budget.must_stop(_time->now())) {
+        page.stopped = *stop;
+        return page;
+      }
+      if (!budget.take_operation()) {
+        page.stopped = dannan::sched::Stop::budget;
+        return page;
+      }
+      page.next.after = key;
+      page.items.push_back(std::move(key));
+    }
+    page.next = {};
+    page.stopped = dannan::sched::Stop::end;
+    return page;
+  }
+
  private:
   friend class Exchange;
+  struct Watch {
+    boost::asio::any_io_executor executor;
+    std::function<void(HeadMoved)> notice;
+  };
+  // A held head's tree root; none for a head with no tree. Throws HeadsNotReady for a
+  // head this node does not hold.
+  std::optional<ObjectId> root_of(const HeadIdentity& head) const;
   Record read_base();
   Record read_uncached();
   Record read_record();
@@ -526,6 +613,13 @@ class Space {
   uint64_t _view_remote_epoch DANNAN_GUARDED_BY(_view_mutex) = 0;
   std::atomic_uint64_t _available_generation{0};
   std::atomic_uint64_t _available_revision{0};
+
+  // The watches (D4) and the head they were last told of, none while nobody watches.
+  // Taken before the replica's own locks, and never held while anything is posted.
+  mutable dannan::contract::Mutex _watch_mutex;
+  std::map<uint64_t, Watch> _watches DANNAN_GUARDED_BY(_watch_mutex);
+  uint64_t _next_watch DANNAN_GUARDED_BY(_watch_mutex) = 1;
+  std::optional<HeadIdentity> _told DANNAN_GUARDED_BY(_watch_mutex);
 
   // What is owed the peers. Nothing is sent holding it.
   mutable dannan::contract::Mutex _owed_mutex;
