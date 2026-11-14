@@ -395,6 +395,30 @@ class Context {
     Node& _node;
   };
 
+  // When work of each class was last present here, on the one clock the store,
+  // repair, the local stages and DATA admission read (contract version 2). The
+  // store notes its own object work; a hosted system notes what only it sees, as
+  // Macha's HTTP server notes every API request and every response body still
+  // draining as a viewer present (Macha's law 2). Lock-free; waits on nothing;
+  // safe from any thread.
+  class Activity {
+   public:
+    static constexpr dannan::sched::Waits waits = dannan::sched::Waits::none;
+    // A class present now, with no bytes: a request.
+    void note(dannan::sched::WorkClass work);
+    // Bytes a frame class moved, and its class present.
+    void note(dannan::sched::FrameType frame, uint64_t bytes);
+    // 24 h when the class has never been present.
+    std::chrono::milliseconds idle_for(dannan::sched::WorkClass work) const;
+    // The bytes since the last take, for foreground, read-ahead and loader.
+    uint64_t take_bytes(dannan::sched::FrameType frame);
+
+   private:
+    friend class Context;
+    explicit Activity(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
   // Made by the node, for the node's life.
   explicit Context(Node& node);
   Context(const Context&) = delete;
@@ -414,6 +438,7 @@ class Context {
   Leases& leases() noexcept { return _leases; }
   Heads& heads() noexcept { return _heads; }
   Tickets& tickets() noexcept { return _tickets; }
+  Activity& activity() noexcept { return _activity; }
 
  private:
   Domains _domains;
@@ -422,6 +447,7 @@ class Context {
   Leases _leases;
   Heads _heads;
   Tickets _tickets;
+  Activity _activity;
 };
 
 }  // namespace dagda
