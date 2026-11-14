@@ -50,6 +50,9 @@ How work runs now (Tom, 2026-11-14): **no builds, tests or benches on the Mac**,
 on the shared Pis (neptune 10.44.1.202, jupiter .169, saturn .170), claimed on Lir's board first, first come first
 served, one heavy job per Pi, -j2, nice 19. The x86-64 gate is suspended. A release's gate: the Pi (GCC Release with
 warnings as errors and tests, the Debian packages with their tests and lintian, installed and consumed).
+Tom, 2026-11-14, to every session: no repeated test runs without a named reason (a flaky test, or odd behaviour), and
+ASan and TSan runs only for releases: "We're spending 50% of our time heating silicon for no good reason, and it stops
+now." The profile of the follower's lag (Next, 1) is one bench run, not a rerun.
 
 ## Open
 
