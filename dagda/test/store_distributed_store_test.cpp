@@ -1604,8 +1604,12 @@ TEST(StoreDistributedStore, HostingExtentsChangesWhileRunning) {
   EXPECT_TRUE(wait_until([&] { return node.store().holds_extents() && hosts_on_peer(); }));
 }
 
-// Macha's activity means object bytes this store moved. Dannan's clocks count every
-// inbound request, so traffic that is not object work does not read as present here.
+// Macha's activity is object bytes this store moved and what its owner notes. Dannan's
+// clocks count every inbound request, a peer's included, so traffic Dannan alone sees
+// does not read as present here. An owner's note through the Context does: Macha's
+// HTTP server notes every API request and draining body as a viewer present (law 2,
+// principles-and-laws.md:92-99; service.cpp:81-82 at f0597a4), and repair and DATA
+// admission must yield to it.
 TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
   Cluster cluster;
   auto& node = cluster.add("node", options(1));
@@ -1614,6 +1618,12 @@ TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
   const auto before = store.idle_for(dannan::sched::WorkClass::foreground);
   node.context().activity().note(FrameType::foreground, 4096);
   EXPECT_GE(store.idle_for(dannan::sched::WorkClass::foreground), before);
+  EXPECT_EQ(store.take_foreground_bytes(), 0u);
+  // An API request, noted by the owner on the store's clock: a viewer present.
+  ASSERT_GE(before, 10s);
+  node.api().activity().note(dannan::sched::WorkClass::foreground);
+  EXPECT_LT(store.idle_for(dannan::sched::WorkClass::foreground), 10s);
+  EXPECT_LT(node.api().activity().idle_for(dannan::sched::WorkClass::foreground), 10s);
   EXPECT_EQ(store.take_foreground_bytes(), 0u);
   const auto data = pattern(4096, 81);
   ASSERT_TRUE(store.put(object_id(data), data));

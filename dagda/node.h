@@ -375,8 +375,9 @@ class Node {
   store::DataResourceArbiter* credit() noexcept { return _credit.get(); }
   // Null with no device reserve.
   store::IoReserve* io() noexcept { return _io.get(); }
-  // When object work of each class was last present: the store's own, in Macha's
-  // meaning. Valid while running().
+  // When work of each class was last present, in Macha's meaning: the object work the
+  // store notes and what the owner notes through Context::activity() (an API request is
+  // a viewer present), never Dannan's inbound traffic. Valid while running().
   dannan::status::ActivityClocks& activity() noexcept { return *_activity; }
   const domain::WrapKey& wrap_key() const noexcept { return *_wrap; }
   lease::LeaseKeeper& lease_keeper() noexcept { return *_keeper; }

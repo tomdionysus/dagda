@@ -426,9 +426,9 @@ class DistributedStore final : public ControlObjectSource {
     // The ledger whose published inventory this node's half of an instant
     // delete checks. None: no inventory.
     const contract::ObjectLedger* ledger = nullptr;
-    // When object work of each class was last present, in Macha's meaning: object
-    // bytes this store moved, never every inbound request as Dannan's clocks count.
-    // None: the node's.
+    // When work of each class was last present, in Macha's meaning: object bytes
+    // this store moved and what the owner notes (an API request is a viewer), never
+    // every inbound request as Dannan's clocks count. None: the node's.
     dannan::status::ActivityClocks* activity = nullptr;
   };
 
