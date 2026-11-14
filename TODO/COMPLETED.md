@@ -3,6 +3,29 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-14 (02:05Z): slice 0 on the Pi; 0.1.5's packages from the tag; the bench merged
+
+On corvus-jupiter (arm64, NVMe, never throttled), claimed 01:25Z to 02:03Z and released. Figures in the design,
+"What slice 0 has measured (the Pi)":
+- The log passes Tom's PUBACK target on a real device sync: p99 12.5 ms at a 10 ms tick, 23.5 ms at 20 ms, the same at
+  256 logs on the shared segment; nothing refused at 8,000 a second. p99 is the tick plus about 2.5 ms. A segment per
+  log fails again. The scan burst: 13,462 entries in 11.4 ms; 18 MiB and 12 files at 256 or 1,280 logs. Told to Lir,
+  which recorded the verdict (its `3cb493b`) and asks to hear if the default tick passes 40 ms, and for the channel
+  cost per space.
+- Heads: 67-194 commits a second; one node 84-95 a second whatever the writers (group commit's ground, as on the Mac).
+  **Found: in Lugh's shape node b falls behind on the Pi** (seen at p50 10.1 s, p99 22.0 s, growing; the Mac 0.1 to
+  0.35 s). Suspected, not proven: a follower materializes every imported delta at O(state)
+  (`Replica::import_history`), Macha's open "O(state) per delta". Told to Lugh, whose sign-in (its P8.5) waits on
+  slice 2 bounding it.
+- 0.1.5's Debian packages from the tag with Macha's fixtures (without `state-macnessa`): `dagda_tests` 1,041 ran,
+  1,038 passed, 3 skipped (the opt-in NodeSeams pair and StoreRepair's root question), 0 failed, 6 disabled; the
+  fixture cases 83 (HeadsReplicaFixture 15, MigrateHeadsReal 20, HeadsReplicaDamagedCopy 48), none skipped; lintian
+  clean. The packages are at `/root/dagda-arm64/dagda-tag/build-deb/` on jupiter; told to the Macha session, which
+  expected 68 fixture cases and is asked to check the difference.
+- `feature/bench` merged to develop (`d424572`) with one fix: the bench's refusal reasons are kept to printable ASCII
+  (`13fdda1`, which also carries clang-format's reflow of the file). That last commit is not yet built: the next Pi
+  build of develop is its gate.
+
 ## 2026-11-13 to 14: the three-systems design ruled; slice 0 on the Mac
 
 Tom (2026-11-13): Dagda serves Macha, Lugh and Lir as first-class. The design
