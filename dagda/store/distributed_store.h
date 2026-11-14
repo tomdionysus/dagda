@@ -754,6 +754,8 @@ class DistributedStore final : public ControlObjectSource {
     ObjectId id;
     Bytes data;
     bool promote = false;
+    // The speculative memory its bytes hold until written or dropped.
+    dannan::sched::RetainedMemoryLedger::Lease memory;
   };
   dannan::contract::Mutex _local_copy_mutex;
   std::condition_variable_any _local_copy_wake;

@@ -634,6 +634,45 @@ TEST(DistributedStore, ARuntimeCacheKeepsAPlaybackFetch) {
   EXPECT_EQ(peer.calls_of(message::get_object), gets);
 }
 
+// An opportunistic copy is held in speculative memory while queued, and dropped when
+// there is none, so playback never waits behind it and the queue never passes the
+// node's memory (Macha's distributed_store.cpp:3111-3119 at f0597a4; the store map,
+// cache gap 2). The read is served all the same; the copy is repair's later.
+TEST(DistributedStore, AnOpportunisticCopyIsDroppedWhenSpeculativeMemoryIsShort) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(256 * 1024, 12);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(peer.data().put(id, bytes));
+  reader.cache().reconfigure({cluster.dir() / "reader" / "cache", 8, true});
+  ASSERT_TRUE(reader.cache().enabled());
+
+  // Every byte the speculative class may hold, held here.
+  std::vector<dannan::sched::RetainedMemoryLedger::Lease> held;
+  for (int i = 0; i < 1 << 16; ++i) {
+    auto lease = reader.context().budget().reserve(dannan::sched::WorkClass::speculative, 64 * 1024);
+    if (!lease) break;
+    held.push_back(std::move(*lease));
+  }
+  ASSERT_FALSE(reader.context().budget().reserve(dannan::sched::WorkClass::speculative, bytes.size()).has_value());
+
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  EXPECT_FALSE(reader.cache().has(id));
+  EXPECT_TRUE(reader.log().saw(dannan::status::LogLevel::debug, "opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory"));
+
+  // With room again, the next fetch is kept.
+  held.clear();
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  EXPECT_TRUE(reader.cache().has(id));
+}
+
 // test_store_control_objects_take_no_data_credit_and_commit_alone: the
 // control store is not on the DATA device: finding a local CONTROL object
 // never waits for DATA credit, here with every byte of background credit
