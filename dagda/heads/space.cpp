@@ -8,6 +8,7 @@
 #include "dagda/heads/space.h"
 
 #include <algorithm>
+#include <boost/asio/post.hpp>
 #include <chrono>
 #include <set>
 #include <thread>
@@ -542,7 +543,50 @@ bool Space::accept(const Acceptance& acceptance) {
   const auto after = _replica->committed();
   if (heads_changed && after.hash != before.hash && _services.seed) _services.seed->remember(_services.space, after);
   if (_services.accepted) _services.accepted(acceptance, heads_changed, after);
+  notice_if_moved();
   return true;
+}
+
+uint64_t Space::watch(boost::asio::any_io_executor executor, std::function<void(HeadMoved)> notice) {
+  if (!notice) throw std::invalid_argument("heads::Space::watch: no notice");
+  Lock lock(_watch_mutex);
+  // The first watch takes the head as it stands: what it is told of is a move from here.
+  if (_watches.empty()) _told = _replica->committed_identity();
+  const auto token = _next_watch++;
+  _watches.emplace(token, Watch{std::move(executor), std::move(notice)});
+  return token;
+}
+
+void Space::unwatch(uint64_t token) {
+  Lock lock(_watch_mutex);
+  _watches.erase(token);
+  if (_watches.empty()) _told.reset();
+}
+
+void Space::notice_if_moved() {
+  std::vector<Watch> told;
+  HeadMoved move;
+  {
+    // The head is read under the watch lock, so two callers racing tell one chain of
+    // moves, each once.
+    Lock lock(_watch_mutex);
+    if (_watches.empty()) return;
+    const auto now = _replica->committed_identity();
+    if (_told && *_told == now) return;
+    move = {_told.value_or(HeadIdentity{}), now};
+    _told = now;
+    told.reserve(_watches.size());
+    for (const auto& [_, watch] : _watches) told.push_back(watch);
+  }
+  // The executor rule: posted, never called here.
+  for (auto& watch : told) boost::asio::post(watch.executor, [notice = std::move(watch.notice), move] { notice(move); });
+}
+
+std::optional<ObjectId> Space::root_of(const HeadIdentity& head) const {
+  const auto held = _replica->materialized(head.hash);
+  if (!held || held->record.generation != head.generation)
+    throw HeadsNotReady("heads::Space::changed: this node does not hold the head at generation " + std::to_string(head.generation));
+  return _spec.codec->head_fields(held->state).root;
 }
 
 void Space::owe(Record head, std::optional<OwedClaims> claims) {

@@ -219,7 +219,10 @@ dannan::net::Handled Spaces::handle(const dannan::membership::NodeRecord& peer, 
     auto* exchange = addressed_to(entry.space);
     if (!exchange) return not_open();
     if (const auto why = exchange->scope_refusal(peer.id)) return Handled::failed(403, "scope_refused", *why);
-    return yes_no(exchange->space().replica().import_history(entry.form));
+    const bool imported = exchange->space().replica().import_history(entry.form);
+    // An import can prune an accepted head and so move the committed one, with no accept.
+    exchange->space().notice_if_moved();
+    return yes_no(imported);
   }
   if (type == n.accept_commit) {
     auto acceptance = message::addressed(payload, [](std::span<const uint8_t> bytes) { return decode_acceptance(bytes); });
