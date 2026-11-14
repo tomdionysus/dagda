@@ -619,6 +619,12 @@ class Node {
   dannan::status::NodeEvents::Kind _metadata_event = 0;
   dannan::status::NodeEvents::Kind _claims_event = 0;
 
+  // Reloads, one at a time, beside any maintenance pass (Macha's reload touched only
+  // the pool's locks). The cache's configured size, which Status reads, is the one
+  // option a reload changes that anything reads after the open.
+  dannan::contract::IoMutex _reload_mutex;
+  std::atomic<uint64_t> _cache_max_blocks{0};
+
   dannan::contract::IoMutex _maintenance_mutex;
   std::unique_ptr<ledger::UnreferencedSince> _data_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
   std::unique_ptr<ledger::UnreferencedSince> _control_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
