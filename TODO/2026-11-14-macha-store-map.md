@@ -152,7 +152,11 @@ test-first; its case and commit go here when it lands.
   (`57993eb`), `Node.ACacheThatCannotBeHadIsDisabledAndTheNodeRuns`; the network estimate learns from writes, fetches
   and CONTROL offers and pulls as Macha's does (`a7e2e88`), `DistributedStore.WritesAndReadsTeachTheNetworkEstimate`.
 
-**Fixed after that gate, on the same branch (gate below when it is in):**
+**Fixed after that gate, on the same branch.** Gated at `3ce0e10` (corvus-saturn, Dannan 0.7.0, GCC Release with
+warnings as errors: 0 warnings; `dagda_tests` with Macha's fixtures 1088 ran, 1085 passed, 3 skipped, 0 failed), which
+holds every fix below through `1ee2740` (compaction, healing, requirement 5, `ReadEnd`, `BarrierLoss`, activity, the
+Context's object, CONTROL and filesystem forms); `3b57a6b` on (Devices and what follows) is gated at `780b8a9` when that
+run is in.
 - Safety: pack compaction kept what replay needs (Tom: Dagda's to fix; a defect in Macha's store too). A compacted
   pack's live puts are rewritten with their current age; a remove is carried while a put of its object survives in
   another pack; the newest touch of an object put elsewhere is carried; such records count as live (`7f14515`,
