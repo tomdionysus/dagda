@@ -37,23 +37,19 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
 
 ## Running
 
-On node-b (claimed 03:02Z until 04:17Z): `/root/dagda-arm64/node-b-lag.sh` (status `status-lag.txt`, ends
-"donelag"): develop at `5070e61` built Release with `-g -fno-omit-frame-pointer` into `lag-build`, then one run of
-`BenchHeads.DISABLED_LughsShape` under `perf record -F 199 -g` (`lag.perf.data`, output `lag-run.txt`). It is also the
-build gate for `13fdda1`. When it ends: `perf report` by thread and symbol, to prove or refute O(state) per imported
-delta; release the claim.
+Nothing; node-b released 03:5xZ. The profile's data stay there (`/root/dagda-arm64/lag.perf.data`,
+`lag-off.perf.data`, `offcpu-report.keep.txt`; the analyser is `build/offcpu.py` here). develop `5070e61` built clean
+there at Release (the gate for `13fdda1`); the bench ran, the suite did not.
 
 The maintainer ruled (2026-11-14, relayed by the Lugh session): Lugh's P8.5 does not land until a follower keeps up with Lugh's
 rates on a Pi and a disable is seen on another node within about a second.
 
 ## Next
 
-1. **Prove the follower's lag** (a measurement, beside slice 1, when a Pi is free): where node b's time goes in
-   `BenchHeads.DISABLED_LughsShape` on a Pi (the replica's cost counters and a profile); the suspect is O(state) per
-   imported delta (the design, "What slice 0 has measured (the Pi)"). Lugh needs a disable on A refused on B within
-   about a second on a Pi; its sign-in (P8.5) waits on it. The fix goes in slice 2 beside group commit unless the maintainer pulls
-   it forward (asked, 2026-11-14). The next Pi build of develop is also the gate for `13fdda1`, the bench fix not yet
-   built.
+1. **The follower's lag** (Lugh's P8.5 waits on it, the maintainer 2026-11-14): profiled on the Pi. Not compute and not the
+   follower: the leader's replicator, blocked mostly in per-commit claim rounds to the peers and the entry-by-entry
+   history push (the design, "What slice 0 has measured (the Pi)"). Not yet closed: time the replicator's rounds from
+   inside, then batch them. Slice 2's first step unless the maintainer pulls it ahead of slice 1 (asked, 2026-11-14).
 2. Slice 0's last two figures, when their slices exist: the channel cost per space (Lir wants it: its retained-topic
    index listens on the keys-changed notice), Lugh's leases as such (after slice 3). Tell Lir if the log's default
    tick is ever set past 40 ms (p99 is the tick plus about 2.5 ms).
