@@ -236,6 +236,10 @@ struct DistributedStore::TicketRecord {
   mutable dannan::contract::Mutex mutex;
   size_t sought DANNAN_GUARDED_BY(mutex) = 0;
   bool cancelled DANNAN_GUARDED_BY(mutex) = false;
+  // A caller has asked after it (a wait armed or a status read): a settled deferred
+  // ticket may be forgotten only then, as Macha's batch kept each extent until its
+  // publisher consumed it.
+  mutable bool asked DANNAN_GUARDED_BY(mutex) = false;
   std::vector<ReplicaRecord> replicas DANNAN_GUARDED_BY(mutex);
   std::vector<std::shared_ptr<Waiter>> waiters DANNAN_GUARDED_BY(mutex);
 
@@ -712,8 +716,9 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
     Lock lock(_shared->mutex);
     record = std::make_shared<TicketRecord>(_shared->next_serial++, id, level, deferred);
     _shared->tickets.emplace(record->serial, record);
-    // Past the bound, settled tickets go, oldest first; one still waiting never does, as
-    // Macha's batch, the caller's, kept every extent it was handed. One walk frees what
+    // Past the bound, settled tickets go, oldest first; one still waiting never does, nor
+    // a deferred one nobody has yet asked after, as Macha's batch, the caller's, kept
+    // every extent it was handed until its publisher consumed it. One walk frees what
     // it can; when tickets still waiting keep the table over its bound, the next walk is
     // put off until it has grown as much again, so a publication of many extents costs
     // amortized constant time a write, not a walk each.
@@ -721,7 +726,9 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::new_ticket(con
     if (_shared->tickets.size() > std::max(bound, _shared->ticket_walk_at)) {
       for (auto it = _shared->tickets.begin(); it != _shared->tickets.end() && _shared->tickets.size() > bound;) {
         Lock ticket_lock(it->second->mutex);
-        if (!it->second->evidence_locked().settled) {
+        // A deferred ticket nobody has asked after is a publication's extent its
+        // publisher has yet to consume: kept, settled or not.
+        if (!it->second->evidence_locked().settled || (it->second->deferred && !it->second->asked)) {
           ++it;
           continue;
         }
@@ -1247,6 +1254,7 @@ std::optional<WriteEvidence> DistributedStore::status(Ticket ticket) const {
     record = found->second;
   }
   Lock lock(record->mutex);
+  record->asked = true;
   return record->evidence_locked();
 }
 
@@ -1335,6 +1343,7 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::arm_wait(Ticke
   bool barriers = false;
   {
     Lock lock(record->mutex);
+    record->asked = true;
     for (const auto& replica : record->replicas)
       if (replica.awaiting == Awaiting::barrier && !replica.running) barriers = true;
     const auto evidence = record->evidence_locked();
