@@ -132,7 +132,8 @@ class HeldOperation {
 // stays removed across compaction and a restart.
 TEST(StoreLocalStore, ARemovedObjectStaysRemovedAcrossCompactionAndRestart) {
   StoreBed bed;
-  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  options.pack_threshold = 40 * 1024;
   const auto root = bed.dir.path() / "store";
   const auto a = pattern(8 * 1024, 1);
   const auto filler = pattern(34 * 1024, 2);
@@ -161,7 +162,8 @@ TEST(StoreLocalStore, ARemovedObjectStaysRemovedAcrossCompactionAndRestart) {
 // gave it, so a restart does not hand the collector its first write's age.
 TEST(StoreLocalStore, AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart) {
   StoreBed bed;
-  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  options.pack_threshold = 40 * 1024;
   const auto root = bed.dir.path() / "store";
   const auto a = pattern(8 * 1024, 4);
   const auto dead = pattern(30 * 1024, 5);
@@ -190,7 +192,8 @@ TEST(StoreLocalStore, AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart) {
 // The touch's own pack compacted away, its put in another: the touch is carried.
 TEST(StoreLocalStore, AReaffirmationOutlivesTheCompactionOfItsOwnPack) {
   StoreBed bed;
-  const auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  options.pack_threshold = 40 * 1024;
   const auto root = bed.dir.path() / "store";
   const auto a = pattern(8 * 1024, 7);
   const auto filler = pattern(31 * 1024, 8);
