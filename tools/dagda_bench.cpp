@@ -237,8 +237,8 @@ struct Samples {
   }
   std::string json(const std::string& unit) {
     char line[256];
-    std::snprintf(line, sizeof(line), "{\"n\":%zu,\"p50_%s\":%.3f,\"p90_%s\":%.3f,\"p99_%s\":%.3f,\"max_%s\":%.3f}", values.size(), unit.c_str(),
-                  at(0.50), unit.c_str(), at(0.90), unit.c_str(), at(0.99), unit.c_str(), at(1.0));
+    std::snprintf(line, sizeof(line), "{\"n\":%zu,\"p50_%s\":%.3f,\"p90_%s\":%.3f,\"p99_%s\":%.3f,\"max_%s\":%.3f}", values.size(), unit.c_str(), at(0.50),
+                  unit.c_str(), at(0.90), unit.c_str(), at(0.99), unit.c_str(), at(1.0));
     return line;
   }
 };
@@ -583,11 +583,11 @@ int run_replica(const Options& options) {
              });
   if (options.deferred) {
 #if defined(DAGDA_BENCH_DEFERRED)
-    routes.bind_deferred(log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request,
-                                         dannan::net::Answer& answer) {
-      replica.append_deferred(request.payload, std::move(answer));
-      return dannan::net::Handled::deferred();
-    });
+    routes.bind_deferred(
+        log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request, dannan::net::Answer& answer) {
+          replica.append_deferred(request.payload, std::move(answer));
+          return dannan::net::Handled::deferred();
+        });
 #endif
   } else {
     routes.bind(log_append, [&](const dannan::membership::NodeRecord&, dannan::sched::FrameType, const dannan::net::Message& request) {
@@ -709,7 +709,8 @@ int run_appender(const Options& options) {
     for (uint64_t i = 0; i < count; ++i) {
       const auto s = ++seq;
       this_tick.push_back(s);
-      const auto arrived = now - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(spacing * static_cast<double>(count - i)));
+      const auto arrived =
+          now - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(spacing * static_cast<double>(count - i)));
       if (unbatched) {
         send({Entry{Kind::append, log_of(s), origin, s, 0, "topic/" + std::to_string(s % 64), body}}, {Message{s, Clock::now()}});
       } else {
@@ -753,18 +754,22 @@ int run_appender(const Options& options) {
   running.shutdown();
   std::lock_guard lock(figures_mutex);
   std::printf(
-      "{\"event\":\"appender\",\"logs\":%u,\"group\":\"%s\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_per_s\":%.0f,"
+      "{\"event\":\"appender\",\"logs\":%u,\"group\":\"%s\",\"rate\":%u,\"tick_ms\":%u,\"edges\":%u,\"bytes\":%u,\"seconds\":%.1f,\"messages\":%llu,\"entries_"
+      "per_s\":%.0f,"
       "\"failed\":%llu,\"puback\":%s,\"call\":%s,\"scan\":%s,\"reasons\":%s}\n",
       options.logs, options.group.c_str(), options.rate, options.tick_ms, options.edges, options.bytes, elapsed_s, static_cast<unsigned long long>(seq),
-      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str(), scan.c_str(), [&] {
+      static_cast<double>(entries_sent) / elapsed_s, static_cast<unsigned long long>(failures), puback_ms.json("ms").c_str(), call_ms.json("ms").c_str(),
+      scan.c_str(),
+      [&] {
         std::string out = "{";
         for (const auto& [why, n] : reasons) {
           std::string clean;
-          for (const char c : why) clean += (c == '"' || c == '\\' || static_cast<unsigned char>(c) < 0x20) ? '_' : c;
+          for (const char c : why) clean += (c == '"' || c == '\\' || static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) ? '_' : c;
           out += (out.size() > 1 ? "," : "") + std::string("\"") + clean + "\":" + std::to_string(n);
         }
         return out + "}";
-      }().c_str());
+      }()
+          .c_str());
   std::fflush(stdout);
   return failures == 0 ? 0 : 1;
 }
