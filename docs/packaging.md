@@ -32,6 +32,10 @@ cmake --build build/release -j8 && cmake --install build/release
 `test/package` is a consumer of that install: configure it with
 `-DDAGDA_EXPECTED_VERSION=<version>` and both prefixes on `CMAKE_PREFIX_PATH`,
 build it and run `consumer <version>`; it exits 0 when it linked that version.
+It also builds `fixture_consumer`, which needs GoogleTest: one case on the
+installed in-process cluster fixture (`dagda::test_fixtures`, the headers under
+`dagda/test/fixtures/`), as Lugh's and Lir's multi-node tests use it. Run it; it
+exits 0 when the case passes.
 
 ## Building
 

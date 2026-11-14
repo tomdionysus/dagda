@@ -752,6 +752,8 @@ void Node::history_truncate_locked(LocalTurn& turn) {
       exchange->truncate_history(background);
       if (exchange->space().replica().diagnostics().history_records < before) ++out.history_truncated;
     }
+    // Node-local spaces have no exchange: their own upkeep, history and node pack (D3).
+    (void)_spaces->upkeep_node_local();
   } catch (const contract::MaintenanceStopping&) {
     throw;
   } catch (const std::exception& error) {

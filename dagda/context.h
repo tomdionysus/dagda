@@ -25,6 +25,7 @@
 #include "dagda/lease/lease.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/object_id.h"
+#include "dannan/sched/walk.h"
 #include "dannan/sched/work.h"
 
 // What a hosted system holds of the store (requirements C1, C2): the
@@ -37,18 +38,21 @@
 // from one of the io context's threads; nothing that happened on more than
 // one node is a bare boolean. Every noun is thread-safe.
 //
-// Version 1 as it stands carries Domains, Objects (with the instant delete,
-// step 7b), Claims, Leases, Tickets and, on one node, Heads. Retained and node-local spaces are added at step 4, with
-// the domain catalogue, and version 1 is frozen only then: until it is, a
-// hosted system built against it is built against a contract still
-// growing.
+// Version 1 is frozen at 0.1.4 (the maintainer, 2026-11-13): Domains, Objects (with the
+// instant delete), Claims, Leases, Tickets and, on one node, Heads; it is what
+// Macha's port builds on, and it stays served. Version 2 adds the three-systems
+// design's nouns slice by slice, from slice 1 the change notice (Heads::watch,
+// Heads::changed), and is frozen at slice 4: until then a hosted system built
+// against it is built against a contract still growing, pinned to a slice's tag.
 namespace dagda {
 
 class Node;
 
 // The contract's version. A hosted system states the version it was built
-// against (check_version, require_version), and a mismatch is refused.
-inline constexpr uint32_t context_version = 1;
+// against (check_version, require_version): this one, or the frozen one served
+// beside it; anything else is refused.
+inline constexpr uint32_t context_version = 2;
+inline constexpr uint32_t context_version_frozen = 1;
 
 // A version check's evidence: what the system was built against, what this
 // library serves, and why it was refused.
@@ -132,6 +136,22 @@ struct HeadsEvidence {
   heads::ExchangeStatus status;
   heads::ConvergenceDemandDiagnostics convergence;
   heads::OwedBacklog owed;
+  std::string why;
+};
+
+// A watch on a space (D4). `watching`: the space is open here, and `token` withdraws the
+// watch; otherwise `why` says why not.
+struct HeadWatch {
+  bool watching = false;
+  uint64_t token = 0;
+  std::string why;
+};
+
+// The keys whose entries differ between two heads (D4). `finished`: they could be read,
+// and `page` is a page of them, empty for none; otherwise `why` says why they could not.
+struct HeadChanges {
+  bool finished = false;
+  dannan::sched::Page<std::string, std::string> page;
   std::string why;
 };
 
@@ -315,9 +335,37 @@ class Context {
     // heads_waits.
     HeadsEvidence heads(const heads::SpaceId& space) const;
 
+    // The change notice (D4), heads::Space::watch on this node's space: `notice` is
+    // posted to `executor`, never called inline, each time this node's committed head
+    // moves, a peer's commit arriving included. The executor must outlive the watch.
+    // Waits on nothing.
+    HeadWatch watch(const heads::SpaceId& space, boost::asio::any_io_executor executor, std::function<void(heads::HeadMoved)> notice);
+    // Nothing is posted for the token after it returns. Waits on nothing.
+    void unwatch(const heads::SpaceId& space, uint64_t token);
+    // The keys whose entries differ between two heads this node holds, a page at a time
+    // in key order, with the owner's tree: heads::Space::changed. Reads only where the
+    // trees differ, at most until the budget's deadline. What a notice names as `before`
+    // and `after` is held here when it is told.
+    template <class Value>
+    HeadChanges changed(const heads::Tree<Value>& tree, const heads::SpaceId& space, const heads::HeadIdentity& before, const heads::HeadIdentity& after,
+                        dannan::sched::Cursor<std::string> from, dannan::sched::Budget& budget) const {
+      HeadChanges out;
+      auto* found = find(space, out.why);
+      if (!found) return out;
+      try {
+        out.page = found->changed(tree, before, after, from, budget);
+        out.finished = true;
+      } catch (const std::exception& error) {
+        out.why = error.what();
+      }
+      return out;
+    }
+
    private:
     friend class Context;
     explicit Heads(Node& node) : _node(node) {}
+    // This node's open space, or none with `why` saying so.
+    heads::Space* find(const heads::SpaceId& space, std::string& why) const;
     void commit(const heads::SpaceId& space, heads::MutationFactory mutation, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
                 Committed done, std::optional<heads::ExternalIdentity> identity, size_t retries, dannan::sched::WorkContext work, bool supplied);
     Node& _node;

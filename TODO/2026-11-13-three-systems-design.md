@@ -84,6 +84,35 @@ stack's shape: a deadline, the caller's executor, a completion posted there, evi
   node-local records made, each expiring within 60 s, under stepped time; the space's disk and memory afterwards as
   before.
 
+How slice 1 builds `node_local` (2026-11-14, from the code at `0.1.5`):
+- **Its own node store.** A space's tree nodes are CONTROL objects in the node's shared control store, which "inherit
+  replication, repair and GC" (`heads/control_node_store.h:22-25`, H19): a node-local space's nodes there would be
+  repaired out to its peers. So a node-local space keeps its tree nodes in a store of its own under its directory,
+  sealed under the node-local key (`StorageKey::derive_node_local`, label `dagda/node-local/1`) with the node-local
+  domain (`domain::node_local_domain(self)`) in every AAD, its replica's files too. Nothing of it is in the shared
+  control store, so the census, repair and the collector never see it.
+- **No exchange.** `Spaces::open` gives it no `Exchange`: no adverts, no routes answer for it, nothing is owed, no claim
+  goes to a peer. Its commit claims nothing in the shared store; its own node store is collected by the space itself.
+- **Bounded under churn.** The space truncates its history (the exchange does this for shared spaces) and collects its
+  node store against what its retained heads and history reach, at a budget, so a space whose records come and go
+  returns to its size. The case: 10,000 records made, each expired within 60 s of stepped time by the owner's mutations,
+  then a maintenance turn: the space's files and its materialization cache as before, within a page.
+- **No rollback.** A head that is an ancestor of the held one changes nothing, as for every space. A restored older copy
+  of the space's directory is refused at open by a generation kept outside it. **For the maintainer:** the design says "beside the
+  node's custody", and Dannan's custody (`<state>/identity/custody`) offers no counter, nor should Dagda write into
+  Dannan's directory. The Dannan session agrees the counter is Dannan's (Lugh's node-local state needs it too, rule 3)
+  and adds the limit: sealing proves a file unaltered, not latest, so a counter on the same disk as the data refuses one
+  directory restored alone but not a whole state restored together. Recommended, both layers, Dannan's:
+  1. A sealed per-label counter beside custody, `read(label)` and `advance(label, value)` refusing to go back, durable
+     before it returns, sealed under HKDF(seal root, "dannan/counter/1"). Dagda records each node-local space's
+     generation there.
+  2. The rollback defence proper: each node gossips its labels' high-water marks, peers remember the highest they have
+     seen of each node, and at open a node refuses to serve a label below what its peers witnessed. A lone node falls
+     back to the local counter, a stated limit. (A TPM's NV counter would do it on one node; the Pis have none.)
+  Until then Dagda keeps the generations in one file of its own state root, sealed under the node-local key and outside
+  every space's directory: it refuses one space's directory restored alone, not a whole state restored together, and
+  the case says which.
+
 `SpaceSpec` gains `copies` (k) for the Replicated level, at most N. A commit takes a `Durability`:
 `persisted` returns when this node holds it (today's behaviour, and Macha's); `replicated` when k replicas have
 accepted it; `durable` when every available replica has, a replica Dannan sees as dead named pending. The evidence

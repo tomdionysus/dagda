@@ -28,22 +28,29 @@ namespace {
 using test::Cluster;
 using test::ClusterNodeOptions;
 
+// Version 2 is served from slice 1, and version 1, frozen at 0.1.4, beside it (the maintainer,
+// 2026-11-13, "Ruled" 3): a system built against either is accepted, any other refused.
 TEST(Context, TheVersionCheckRefusesAMismatch) {
   Cluster cluster;
   auto& a = cluster.add("a");
   a.start();
   auto& api = a.api();
-  EXPECT_EQ(api.version(), 1u);
+  EXPECT_EQ(api.version(), 2u);
   EXPECT_EQ(api.version(), context_version);
   const auto same = api.check_version(context_version);
   EXPECT_TRUE(same.accepted);
   EXPECT_TRUE(same.why.empty());
+  const auto frozen = api.check_version(context_version_frozen);
+  EXPECT_EQ(context_version_frozen, 1u);
+  EXPECT_TRUE(frozen.accepted);
+  EXPECT_TRUE(frozen.why.empty());
   const auto other = api.check_version(context_version + 1);
   EXPECT_FALSE(other.accepted);
   EXPECT_EQ(other.built_against, context_version + 1);
   EXPECT_EQ(other.served, context_version);
-  EXPECT_NE(other.why.find("version 2 was asked for"), std::string::npos) << other.why;
+  EXPECT_NE(other.why.find("version 3 was asked for"), std::string::npos) << other.why;
   EXPECT_NO_THROW(api.require_version(context_version));
+  EXPECT_NO_THROW(api.require_version(context_version_frozen));
   EXPECT_THROW(api.require_version(0), ContextVersionMismatch);
   a.stop();
 }
