@@ -5,8 +5,8 @@ Maintainer: tomdionysus <tomdionysus@users.noreply.github.com>
 Build-Depends:
  debhelper-compat (= 13),
  cmake,
- libdannan-dev (>= 0.6.0),
- libdannan-dev (<< 0.7~),
+ libdannan-dev (>= 0.7.0),
+ libdannan-dev (<< 0.8~),
  libboost-dev (>= 1.83),
  libssl-dev,
  libgtest-dev <!nocheck>,
@@ -38,8 +38,8 @@ Multi-Arch: same
 Section: libdevel
 Depends:
  libdagda0.1.5 (= ${binary:Version}),
- libdannan-dev (>= 0.6.0),
- libdannan-dev (<< 0.7~),
+ libdannan-dev (>= 0.7.0),
+ libdannan-dev (<< 0.8~),
  ${misc:Depends},
 Suggests:
  libgtest-dev,

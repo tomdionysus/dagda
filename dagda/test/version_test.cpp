@@ -29,7 +29,7 @@ TEST(Version, BuiltAgainstTheDannanItLinks) {
   const std::string loaded = dannan::library_version();
   EXPECT_EQ(built, loaded);
   EXPECT_EQ(dannan::kVersionMajor, 0);
-  EXPECT_EQ(dannan::kVersionMinor, 6);
+  EXPECT_EQ(dannan::kVersionMinor, 7);
 }
 
 // Dannan's shared fixtures are usable from here and write inside the build

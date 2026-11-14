@@ -15,10 +15,12 @@
 #include <chrono>
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include "dagda/lease/membership.h"
 #include "dagda/test/fixtures/lease.h"
+#include "dannan/membership/agreed_roster.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda::lease {
@@ -38,17 +40,17 @@ NodeRecord record(const NodeId& id) {
 // an absent node was last heard of.
 class RosterNodes final : public dannan::Nodes {
  public:
-  explicit RosterNodes(NodeId self) : _self(record(self)) { members.push_back(_self); }
+  explicit RosterNodes(NodeId self) : _self(record(self)) { on_roster.push_back(_self); }
 
-  std::vector<NodeRecord> members;
+  std::vector<NodeRecord> on_roster;
   std::map<NodeId, dannan::contract::TimePoint> absent;
 
   void leave(const NodeId& id, dannan::contract::TimePoint last_heard) {
-    std::erase_if(members, [&](const NodeRecord& member) { return member.id == id; });
+    std::erase_if(on_roster, [&](const NodeRecord& member) { return member.id == id; });
     absent[id] = last_heard;
   }
   void join(const NodeId& id) {
-    members.push_back(record(id));
+    on_roster.push_back(record(id));
     absent.erase(id);
   }
 
@@ -57,9 +59,9 @@ class RosterNodes final : public dannan::Nodes {
   uint64_t watch(boost::asio::any_io_executor, std::function<void(dannan::RosterChange)>) override { return 0; }
   void unwatch(uint64_t) override {}
   NodeRecord self() const override { return _self; }
-  std::vector<NodeRecord> roster() const override { return members; }
-  std::vector<NodeRecord> active() const override { return members; }
-  dannan::RosterSnapshot snapshot() const override { return {members, members}; }
+  std::vector<NodeRecord> roster() const override { return on_roster; }
+  std::vector<NodeRecord> active() const override { return on_roster; }
+  dannan::RosterSnapshot snapshot() const override { return {on_roster, on_roster}; }
   std::optional<dannan::contract::TimePoint> absent_since(const dannan::identity::NodeId& id) const override {
     const auto found = absent.find(id);
     return found == absent.end() ? std::nullopt : std::optional(found->second);
@@ -77,6 +79,16 @@ class RosterNodes final : public dannan::Nodes {
   std::vector<NodeRecord> placement(std::span<const uint8_t>, size_t, const dannan::placement::Scheme&, const std::string&) const override { return {}; }
   void advertise(const std::string&, dannan::net::Bytes) override {}
   void withdraw(const std::string&) override {}
+  // Dannan 0.7's partition view and agreed roster, which membership does not read.
+  dannan::membership::Partition partition() const override { return {}; }
+  uint64_t watch_partition(boost::asio::any_io_executor, std::function<void(dannan::membership::Partition)>) override { return 0; }
+  void unwatch_partition(uint64_t) override {}
+  std::set<dannan::identity::NodeId> members() const override {
+    std::set<dannan::identity::NodeId> out;
+    for (const auto& member : on_roster) out.insert(member.id);
+    return out;
+  }
+  bool retire(const dannan::identity::NodeId&) override { return false; }
 
  private:
   NodeRecord _self;
