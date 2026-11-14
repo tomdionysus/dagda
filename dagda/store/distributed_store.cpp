@@ -1013,7 +1013,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     auto record = into ? std::move(into) : new_ticket(id, options.level, deferred);
     {
       Lock ticket_lock(record->mutex);
-      record->sought = floor;
+      // A deferred write that ended short is made durable at what landed, as Macha's
+      // batch required (ds:375, :475 at f0597a4); the rest is owed to prompt replication.
+      record->sought = deferred && level != Durability::durable && success > 0 && success < floor ? success : floor;
       record->cancelled = cancelled_seen;
       record->frame = options.frame;
       record->replicas.clear();

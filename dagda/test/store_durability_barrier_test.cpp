@@ -562,6 +562,30 @@ TEST(StoreDurabilityBarrier, ATransientBarrierFailureAnswersAtOnceNotAtTheDeadli
   EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::acknowledged);
 }
 
+// A deferred write that ended short of its floor (no further copy could be had
+// promptly) is made durable at what landed, as Macha's batch required what landed
+// (distributed_store.cpp:375, :475 at f0597a4); the copies it is owed are prompt
+// replication's and repair's (the store map, distributed store gap 4).
+TEST(StoreDurabilityBarrier, AWriteThatEndedShortIsMetAtWhatLanded) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::put_object_deferred || seen == message::put_object) return Handled::failed(507, "storage_full", "storage limit reached");
+    return std::nullopt;
+  });
+  const auto bytes = pattern(32 * 1024, 93);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 1u);
+  EXPECT_EQ(written.sought, 1u);
+  const auto evidence = a.store().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_TRUE(evidence->met);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::acknowledged);
+}
+
 // The asynchronous form posts its evidence, never inline, in the order asked;
 // nothing to wait for and a forgotten ticket are answers too.
 TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
