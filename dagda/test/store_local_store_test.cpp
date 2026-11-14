@@ -214,6 +214,44 @@ TEST(StoreLocalStore, AReaffirmedObjectKeepsItsAgeAcrossCompactionAndRestart) {
   EXPECT_FALSE(reopened->older_than(object_id(a), std::chrono::minutes(30)));
 }
 
+// A remove followed by a put again is never carried (the Macha session's review of the
+// fix): the object put again is live in a later pack, so compacting the remove's pack
+// carries nothing that would replay after it. Present after a restart, with its re-put's
+// age.
+TEST(StoreLocalStore, AnObjectPutAgainAfterItsRemoveSurvivesCompactionOfTheRemove) {
+  StoreBed bed;
+  auto options = packed_options(64ULL * 1024 * 1024, 40 * 1024);
+  options.pack_threshold = 40 * 1024;
+  const auto root = bed.dir.path() / "store";
+  const auto x = pattern(8 * 1024, 10);
+  const auto filler = pattern(31 * 1024, 11);
+  const auto big = pattern(32 * 1024, 12);
+  std::filesystem::file_time_type put_again{};
+  {
+    auto store = bed.open(root, options);
+    // Pack one: x and a filler. Pack two: a large object and x's remove. Pack three:
+    // x put again, and the large object's remove, so pack two is the most dead.
+    ASSERT_TRUE(store->put(object_id(x), x));
+    ASSERT_TRUE(store->put(object_id(filler), filler));
+    ASSERT_TRUE(store->put(object_id(big), big));
+    ASSERT_TRUE(store->remove(object_id(x)));
+    bed.wall.advance(std::chrono::hours(1));
+    ASSERT_TRUE(store->put(object_id(x), x));
+    put_again = store->last_write(object_id(x));
+    const auto removed_in = store->object_path(object_id(big));
+    ASSERT_NE(store->object_path(object_id(x)), removed_in);
+    ASSERT_TRUE(store->remove(object_id(big)));
+    ASSERT_TRUE(store->compact_packs());
+    EXPECT_FALSE(std::filesystem::exists(removed_in)) << "the remove's pack was not the one compacted";
+    EXPECT_TRUE(store->has(object_id(x)));
+  }
+  auto reopened = bed.open(root, options);
+  EXPECT_TRUE(reopened->has(object_id(x)));
+  EXPECT_EQ(reopened->get(object_id(x)), x);
+  EXPECT_EQ(age_ms(reopened->last_write(object_id(x))), age_ms(put_again));
+  EXPECT_FALSE(reopened->has(object_id(big)));
+}
+
 // The touch's own pack compacted away, its put in another: the touch is carried.
 TEST(StoreLocalStore, AReaffirmationOutlivesTheCompactionOfItsOwnPack) {
   StoreBed bed;
