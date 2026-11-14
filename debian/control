@@ -17,7 +17,7 @@ Vcs-Git: https://github.com/tomdionysus/dagda.git
 Vcs-Browser: https://github.com/tomdionysus/dagda
 Rules-Requires-Root: no
 
-Package: libdagda0.1.4
+Package: libdagda0.1.5
 Architecture: any
 Multi-Arch: same
 Depends:
@@ -37,7 +37,7 @@ Architecture: any
 Multi-Arch: same
 Section: libdevel
 Depends:
- libdagda0.1.4 (= ${binary:Version}),
+ libdagda0.1.5 (= ${binary:Version}),
  libdannan-dev (>= 0.6.0),
  libdannan-dev (<< 0.7~),
  ${misc:Depends},
