@@ -19,7 +19,10 @@
 #include <string>
 #include <utility>
 
+#include "dagda/heads/sealed_file.h"
 #include "dagda/store/object_id.h"
+#include "dannan/identity/durable_file.h"
+#include "dannan/net/codec.h"
 
 namespace dagda::heads {
 namespace {
@@ -166,6 +169,57 @@ class PackFacade final : public TreeNodeStore {
 
 std::function<std::unique_ptr<TreeNodeStore>()> NodePack::factory() {
   return [this]() -> std::unique_ptr<TreeNodeStore> { return std::make_unique<PackFacade>(*this); };
+}
+
+namespace {
+
+constexpr Magic generations_magic{'D', 'G', 'N', 'L', 'G', 'E', 'N', '1'};
+
+}  // namespace
+
+NodeLocalGenerations::NodeLocalGenerations(std::filesystem::path file, std::shared_ptr<const domain::StorageKey> key, Bytes aad)
+    : _file(std::move(file)), _key(std::move(key)), _aad(std::move(aad)) {
+  if (!_key) throw std::invalid_argument("node-local generations need a key");
+  if (!std::filesystem::exists(_file)) return;
+  std::ifstream in(_file, std::ios::binary);
+  const Bytes sealed((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (!in.good() && !in.eof()) throw std::runtime_error("cannot read " + _file.string());
+  Bytes plain;
+  try {
+    plain = open_file(*_key, generations_magic, _aad, sealed);
+  } catch (const std::exception& error) {
+    throw std::runtime_error(_file.string() + " does not open under this node's node-local key: " + error.what());
+  }
+  dannan::net::Reader reader(plain);
+  const auto count = reader.u32();
+  for (uint32_t i = 0; i < count; ++i) {
+    const Hash256 space{reader.fixed<32>()};
+    _generations[space] = reader.u64();
+  }
+  reader.finish();
+}
+
+uint64_t NodeLocalGenerations::of(const Hash256& space) const {
+  Lock lock(_mutex);
+  const auto found = _generations.find(space);
+  return found == _generations.end() ? 0 : found->second;
+}
+
+void NodeLocalGenerations::raise(const Hash256& space, uint64_t generation) {
+  Lock lock(_mutex);
+  auto& held = _generations[space];
+  if (generation <= held) return;
+  auto next = _generations;
+  next[space] = generation;
+  dannan::net::Writer writer;
+  writer.u32(static_cast<uint32_t>(next.size()));
+  for (const auto& [id, at] : next) {
+    writer.fixed(id.bytes);
+    writer.u64(at);
+  }
+  const auto sealed = seal_file(*_key, generations_magic, _aad, writer.take());
+  dannan::identity::durable_replace_file(_file, std::string_view(reinterpret_cast<const char*>(sealed.data()), sealed.size()));
+  held = generation;
 }
 
 }  // namespace dagda::heads

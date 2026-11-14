@@ -17,6 +17,7 @@
 #include <span>
 
 #include "dagda/domain/storage_key.h"
+#include "dagda/heads/record.h"
 #include "dagda/heads/tree.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dannan/contract/thread_safety.h"
@@ -91,6 +92,32 @@ class NodePack {
   mutable dannan::contract::Mutex _mutex;
   std::unique_ptr<ledger::SealedJournal> _journal DANNAN_GUARDED_BY(_mutex);
   std::map<ObjectId, uint64_t> _index DANNAN_GUARDED_BY(_mutex);
+};
+
+// The highest generation each node-local space has committed (D3, no rollback): one
+// small file, <state>/heads/node-local.generations, outside every space's directory and
+// sealed under the node-local key, raised durably as each commit is accepted. A space
+// opening older than its record is a restored older copy, and is refused. It refuses one
+// space's directory restored alone, not a whole state directory restored with it: the
+// defence against that is the peers' witness, which is Dannan's to offer (the design's
+// question for Tom). Thread-safe; raise() waits on the state device.
+class NodeLocalGenerations {
+ public:
+  // Throws std::runtime_error for a file that will not open under `key`.
+  NodeLocalGenerations(std::filesystem::path file, std::shared_ptr<const domain::StorageKey> key, Bytes aad);
+  static std::filesystem::path file(const std::filesystem::path& state) { return state / "heads" / "node-local.generations"; }
+
+  // Zero for a space never recorded.
+  uint64_t of(const Hash256& space) const DANNAN_EXCLUDES(_mutex);
+  // Durable before it returns; a generation at or below the record changes nothing.
+  void raise(const Hash256& space, uint64_t generation) DANNAN_EXCLUDES(_mutex);
+
+ private:
+  const std::filesystem::path _file;
+  const std::shared_ptr<const domain::StorageKey> _key;
+  const Bytes _aad;
+  mutable dannan::contract::Mutex _mutex;
+  std::map<Hash256, uint64_t> _generations DANNAN_GUARDED_BY(_mutex);
 };
 
 }  // namespace dagda::heads
