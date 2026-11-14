@@ -46,8 +46,10 @@ to be rewritten to use native Dagda effectively, and that's the NO LOSS of perfo
 MUST be capable of handling DHT storage AT LEAST AS WELL as Macha." Then (asked in this session): the side-by-side
 comparison runs on the Pis first (a harness driving Macha's store, built read-only from Macha's develop, and Dagda with
 identical workloads), then on macnessa and inverbeg against Macha's live baselines; the call-by-call map is written by
-Dagda and the Macha session together, split by subsystem, each reviewing the other's; key custody is to be talked
-through with Tom before deciding. Two requirements, both binding: Macha uses Dagda
+Dagda and the Macha session together, split by subsystem, each reviewing the other's. Key custody, talked through and
+ruled: **Macha's nodes get Dannan key custody**, a one-time step on each node made part of the cutover beside
+`dagda-migrate`; the node-local key stays only on its node, as designed. A node that loses its credential loses its
+ledgers, not its objects, and rebuilds what it holds by rescanning its disks. Two requirements, both binding: Macha uses Dagda
 natively with no adapter layer, rewritten where needed and losing nothing; and Dagda, measured on its own terms against
 Macha's store on the same workloads, is at least as good a DHT store in every respect. Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
 proven; **0.2.0 stays tagged locally and unpushed** until Tom says. The proof (proposed to Tom): a call-by-call map from
