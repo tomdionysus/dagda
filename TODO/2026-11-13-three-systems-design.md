@@ -268,7 +268,32 @@ If (2) misses it, the log's design changes before anything is built on it.
 - Lugh's shape (one space of 50,000 keys, one writer, 50 a second wanted): 37 a second reached, commit p50 18 ms and
   p99 102 ms; seen on node b at p50 103 ms, p99 347 ms: "disabled on A, refused on B" on today's path. A head-backed
   lease's acquire would cost about a commit and that round, until slice 2's replicated commit replaces the round.
-- Not yet: the Pi run, the lease-change scan burst, the 1,280-log count, Lugh's leases as such.
+- The lease-change scan (Lir, 2026-11-14): with a 5 s backlog held live (40,073 entries), a new holder reading back a
+  third of the logs' live entries from the shared segment read 13,460 entries, 14 MB, in 29 ms (28 ms at 1,280 logs;
+  the page cache warm). A replica at 256 or at 1,280 logs used about 17 MiB at most and 12 open files: the shared
+  segment makes the count cost nothing in descriptors. The prototype has no notify channels, so their cost per space
+  is not yet measured.
+- Concurrent head writers on one node (`BenchHeads.DISABLED_ConcurrentWritersOnOneNode`, a tree change, 5 s each):
+  85-90 commits a second whatever the writers (1, 4, 8) or spaces (1, 2); more writers only add latency (p50 10 ms at
+  one writer, 91-115 ms at eight). A node-wide cost serialises head commits past each space's own mutation lock.
+- Not yet: the Pi run, Lugh's leases as such, the channel cost per space.
+
+### Heads on one node: group commit, or owners batch (for the maintainer)
+
+Lugh's storm (2026-11-14): a TOTP sign-in is a lease acquire and one lugh/secrets commit (the session and the step
+together; the lease lapses rather than being released, Lugh's own cuts), so 50 sign-ins a second is about 100 head
+commits a second, and a storm can land on one node. Today's heads reach 85-90 a second on one node in total, so they
+fall short, and Lir's per-shard spaces meet the same node-wide cost. Two ways:
+
+1. **Group commit for heads** (Lugh's preference, and mine): the commits waiting on a node, across spaces, share
+   their dots, their CONTROL writes and their sync, as the log's appends do. The cost lives in the store, so the fix
+   does too; every owner gains without batching its own writes. The every-node path Macha runs changes (its sync is
+   shared), so it is proven by Macha's gate and baseline.
+2. **Owners batch**: each owner folds its writes into fewer commits. Dagda unchanged; each owner carries the cost and
+   the rate stays bounded near 90 a second a node.
+
+First, find where the node-wide time goes (the dot, the control store, the sync), since group commit's form depends on
+it; that is slice 0 work before the Pi run.
 
 ### The contract
 
