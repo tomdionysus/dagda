@@ -108,10 +108,10 @@ GoogleTest, and an installed Dannan of the pinned minor, at least the pinned pat
 tag from the sibling checkout into the build tree once, then configure against it:
 
 ```bash
-git clone --branch 0.6.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.6.0
-cmake -S build/deps/dannan-0.6.0 -B build/deps/dannan-0.6.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.7.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.7.0
+cmake -S build/deps/dannan-0.7.0 -B build/deps/dannan-0.7.0-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.6.0-build -j8 && cmake --install build/deps/dannan-0.6.0-build
+cmake --build build/deps/dannan-0.7.0-build -j8 && cmake --install build/deps/dannan-0.7.0-build
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
   -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
