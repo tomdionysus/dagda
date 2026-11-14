@@ -1,97 +1,84 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-14. `COMPLETED.md` is the record; the plan this file held until today (the ordered work of
-2026-11-06, the earlier table, Dannan as found, the approved plan of 2026-11-04, the port respec and what step 4
-waited on) is at the end of `COMPLETED.md`, "Archived from ACTIVE.md, 2026-11-12", word for word.
+Last updated: 2026-11-14. `COMPLETED.md` is the record. The plan is the three-systems design,
+`TODO/2026-11-13-three-systems-design.md`: its nouns, its slices, its measurements and Tom's rulings ("Ruled", 1 to 7).
+The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archived from ACTIVE.md, 2026-11-12".
 
 ## Where it stands
 
-- **Every item of the 2026-11-06 order is done, and the capability report is sent**: `TODO/2026-11-10-dagda-capabilities.md`.
-  Dagda is at `0.1.5`, on Dannan 0.6, packaged for Debian; Macha moves to it before its flag day. The work now is the
-  three-systems design (`TODO/2026-11-13-three-systems-design.md`), slice 0's measurement, on the Pi cluster only.
-- **Macha's port**: the transport is Dannan's, 0.94.0 live on both nodes (branch `port/dannan-dagda`). Next there: the
-  CI kit, clang-tidy and 0.94.1, then the Macha session's review of the report by reading Dagda's code at the tag
-  (its task 8), then the store cutover on it. A defect the port finds pauses it until it is fixed here, with tests,
-  and Dagda freezes again (Tom, relayed 2026-11-06).
-- **The migration rehearsal is done** (2026-11-12, corvus-develop, macnessa's 0.92.4 copy): every step and comparison
-  passed. The Macha session supplies, at its review: macnessa's state as it is now under 0.94.0, and a timing at 4 TB.
+- **`0.1.5` is tagged and pushed** (main `c20f88c`): on Dannan 0.6, packaged for Debian, clean under GCC Release with
+  warnings as errors. It is what Macha's port builds on through its flag day (stage S, then 8a and 8b; 8b is empty for
+  Macha). The capability report (`TODO/2026-11-10-dagda-capabilities.md`) is brought to it.
+- **Dagda serves Macha, Lugh and Lir as first-class** (Tom, 2026-11-13). The design is ruled: head spaces with
+  placements (`capable`, `replicas`, `node_local`), a per-space k, change notices; the log as a noun; built-in register
+  and counter merges; leases on head spaces; the advert aggregate; group commit for heads in slice 2; contract v1 frozen
+  at `0.1.4`, v2 at slice 4, the catalogue as v3. Lir and Lugh reviewed it and agreed; their needs files are
+  `../lir/TODO/2026-11-13-lir-needs.md` and `../lugh/TODO/2026-11-13-lugh-needs-of-the-stack.md`.
+- **Slice 0 (the measurement) is under way**, on `feature/bench` (local, not pushed): `tools/dagda_bench.cpp` (the log
+  prototype; builds standalone against Dannan 0.7 for the deferred reply, `build/bench070/CMakeLists.txt`) and
+  `dagda/test/bench_heads_test.cpp` (`BenchHeads.*`, disabled). The Mac's figures are in the design, "What slice 0 has
+  measured". The Pi run is on corvus-jupiter now (below).
+- **Dannan**: 0.6.0 tagged (the ABI promise; SameMinorVersion; SONAME `libdannan.so.0.6`); 0.7.0 on its
+  `feature/deferred-reply` carries the deferred reply the log needs (slice 4 builds on it), accepted by dagda-bench with
+  the per-connection call path found (Dannan's P5). CPU pacing moves into Dannan's class-aware pool (its P4).
+
+## Running at the clear (2026-11-14, about 01:30Z)
+
+On corvus-jupiter (10.44.1.169), under `/root/dagda-arm64`, claimed on the board as
+`stack/pis/corvus-jupiter/claims/Dagda` until 02:45Z:
+1. `jupiter-bench.sh` (status `status-bench.txt`, ends "donebench"): builds `feature/bench` at -j2 into `bench-build`,
+   runs the log prototype as three processes (`bench-log-runs.txt`: 1 log and 256 logs at 10 and 20 ms, 256 logs a
+   segment each, the 5 s backlog scans at 256 and 1,280), then `BenchHeads.*` (`bench-heads.txt`). The first figures on
+   a real device sync: the verdict against Tom's PUBACK target (p99 under 50 ms).
+2. Chained after it, `jupiter-tagdebs.sh` (status `status-tagdebs.txt`, ends "donetagdebs"): the 0.1.5 Debian packages
+   from the tag, with `DAGDA_MACHA_FIXTURES=/root/dagda-arm64/macha-fixtures` (copied there, without
+   `state-macnessa`) so the 68 fixture cases run, then lintian. The packages land in `dagda-tag/build-deb/`.
+
+When both end: read the figures (the summary snippets are in `build/scratch/` history, or parse the JSON lines), record
+them in the design's measured section; tell the Macha session where the tag's .debs are and the test counts; release
+the claim (publish an empty retained message to `stack/pis/corvus-jupiter/claims/Dagda`, or `claim_release` once the
+board plugin loads); tell the Lugh session, which then makes jupiter the shared TSan Pi (clang 19, a 4K-page kernel).
+
+## Next
+
+1. Finish slice 0: the Pi figures above; the channel cost per space; Lugh's leases as such (after slice 3's leases
+   exist, measured then). Record and commit `feature/bench` to develop (it is measurement code: the bench and the
+   disabled cases).
+2. **Slice 1** (Tom, 2026-11-14): node-local spaces with no rollback and bounded churn; the change notice
+   (`Heads::watch`, `Heads::changed`); Dagda's in-process cluster fixture installed as `dagda::test_fixtures`; the tag
+   records contract v1 as frozen at `0.1.4`. Test-first from the design; each noun's cases named before its code.
+3. Then slices 2 to 5 as the design orders them. A defect Macha's port finds still comes first.
+
+How work runs now (Tom, 2026-11-14): **no builds, tests or benches on the Mac**, for any session; Linux gates are arm64
+on the shared Pis (neptune 10.44.1.202, jupiter .169, saturn .170), claimed on Lir's board first, first come first
+served, one heavy job per Pi, -j2, nice 19. The x86-64 gate is suspended. A release's gate: the Pi (GCC Release with
+warnings as errors and tests, the Debian packages with their tests and lintian, installed and consumed).
 
 ## Open
 
 From the report's "Open and unexplained" and "What I could not show without a running port", kept there in full:
-- The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, Tom 2026-11-09).
+- The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, Tom 2026-11-09). Macha is
+  chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
 - The pool's `get` stopping at the first backend's empty answer: Macha's, kept.
 - The trie pins aged on the node's time source where Macha reads the real clock (the same on live nodes).
-- inverbeg's outage of 2026-11-11 and the Pis' under-voltage: their supplies are Tom's to look at.
-- The store's journal lines: mapped and restored to Macha's (0.1.2); what still differs is in `2026-11-12-journal-mapping.md`, section 8.
-- Lir (2026-11-13, via Tom): Dagda is written for Macha and does not do replicas. Objects are replicated (the four
-  levels, with evidence); head spaces held on N nodes (L2), a per-space k (L3), node-local spaces (L5) and Lir's scale (L6)
-  are not built. L2 can be added beside the every-node path without changing Macha (the policy is chosen at open and is not
-  on the wire or in the records; the wire already addresses a space other than the first; only the exchange's active-set
-  sends branch). Told to Lir; its place in the order is Tom's.
+- The Pis' under-voltage under heavy builds: their supplies are Tom's to look at; journals are persistent now.
+- The store's journal lines: what still differs from Macha's is in `2026-11-12-journal-mapping.md`, section 8.
 - Everything only the port can show: Macha's merge hash for hash, delta replay through Macha's codec, end to end,
-  performance against the baselines, a real state started, reliability over time, macnessa's heap corruption.
+  performance against the baselines, a real state started, reliability over time.
 
-## While the port waits (Tom, 2026-11-12)
+## The goal
 
-Cleanup, testing, hardening and improvement in scope, and nothing else: the manifest's partial held by its pass
-(`0.1.2`), TSan on the Mac at the tag, the journal mapping, and this file; then, at the Macha session's ask, forked test
-children ending on their own sanitizer reports, with TSan on arm64 (`0.1.3`). No change after the tag the Macha session
-reviews unless the port or Tom asks for it.
-
-## The goal (Tom, 2026-11-06, relayed by the Macha session)
-
-"development will continue on them with macha code frozen until they can answer Yes unconditionally, the entire reason
-for their existence is this."
-
-What it means (Tom, relayed, in answer to "do ruled changes count"): "Dannan and Dagda are generalisations of macha's cluster
-and storage layer. The intent is to devlop them to the point where they are at least as capable as the macha code they are
-based on, then replace the macha code with them. MachaDFS and cluster become systems implemented with Dannan and Dagda as
-fundamental libraries. The fidelity point is that after that, Macha should work just as well as it ever did." So the test is
-what an operator, client or user of Macha would lose or find worse, and every piece of data surviving, not whether internals
-stay the same. v19 and ledgers under custody do not count in themselves. The device reserve, lease fence and claim parts are
-judged by the baselines; the options to turn them off stay, for if they are worse. (The last two sentences are the Macha
-session's reading, and mine.)
-
-The question: does Macha move onto Dagda with no change in data, functionality, reliability and performance? The only
-answer that counts is Yes, with nothing attached. A bounded claim, an exception list or a tolerance is a No. Macha stays
-frozen at `9a08846`. ~~There is no other purpose for Dagda; Lugh and Lir do not change that, and L items wait unless Macha
-needs them.~~ **Superseded (Tom, 2026-11-13): "It needs to support Macha, Lir, and Lugh and not as afterthoughts."**
-Next: a design serving all three as first-class, with the Lir and Lugh sessions, to Tom before anything changes; then
-`0.1.5` (Dannan 0.5.6 and the Debian packages, on `feature/dannan-056`). Tell the Macha session when the answer is Yes.
-
-**How it ends (Tom, relayed, 2026-11-06):**
-- This plan ends with a capabilities report to the Macha session, with the evidence for each, naming what the port needs from Dagda,
-  and saying plainly what could not be shown without a running port. "you are the review", to the Macha session: its judgement of
-  that report is the review, and the review by this session after a clear is gone.
-- The Macha session builds the port, once satisfied, "which will be frozen during the port": Dagda frozen, `../macha` read only for
-  Dagda. Macha stays at `9a08846` until the port starts.
-- A defect the port finds: "The port will pause until the relevant agent has identified and fixed the fault, with testing. The port
-  will then continue with the relevant codebase frozen again."
-- Proof on the nodes: "We will convert macnessa and inverbeg store backends and install there to test, prove and iterate." The real
-  migration runs on the live disks after the port is built, with no 670 GB copy, spare hardware or separate timed run. So
-  `dagda-migrate`'s resume, refusals and comparison tool must be ready before then. `--reverse` stays built, not a gate.
-
-## Hosted systems waiting on Dagda
-
-- Lugh (`../lugh`, the identity/SSO server; Tom has told it to align with
-  and use Dannan and Dagda). Its store today is one sealed log per table
-  (14 tables), version-conditional puts, kept-forever tombstones, unique
-  secondary indexes rebuilt at open, per-table DEKs under a node master
-  key. Under Tom's rules (2026-11-03 night) Lugh uses Dagda for
-  everything it persists, shared and node-local, and deletes its store
-  and keyring: **Lugh's persistence waits on Dagda entirely.** Until
-  then Lugh keeps its store and keyring frozen and deletes them the day
-  Dagda carries its spaces (Tom, in the Lugh session: "Keep the store
-  until Dagda"). Its
-  requirements on Dagda (node-local spaces; binding to domain and object
-  id; no rollback of a head space) are in the stack document. Lugh takes
-  Dannan's callback shape, so Dagda's Context does too. Recommended to
-  Tom: Dagda's first step is Lugh's slice, single-node first (stack
-  document, "Waiting on Tom" 1).
+Tom, 2026-11-13: "It needs to support Macha, Lir, and Lugh and not as afterthoughts", and to the stack: Dannan and
+Dagda "support Macha, Lugh and Lir as first class citizens. This was the purpose of splitting out the technologies."
+Macha's port still loses nothing: the question for Macha stays Tom's of 2026-11-06, "does Macha move onto Dagda with
+no change in data, functionality, reliability and performance?", answered Yes with nothing attached, proven on its
+nodes; the Macha session reviews, builds the port, and pauses it for a defect Dagda must fix with tests.
 
 ## Decisions
+
+The rulings of 2026-11-13 and 2026-11-14 are in the design's "Ruled" section; those below stand where it does not
+supersede them.
 
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
@@ -150,8 +137,8 @@ answer, Tom rules on it in Macha and Dagda takes the result.
 Tom's, to the Dagda session, 2026-11-03 night:
 
 - **Dagda replaces Macha's DHT** by extracting how Macha's store works and
-  generalising it. Macha's needs come first; Lugh's and Lir's are
-  generalisations.
+  generalising it. ~~Macha's needs come first; Lugh's and Lir's are
+  generalisations.~~ Superseded 2026-11-13: the three are first-class.
 - **Move the store code** from Macha into Dagda and generalise it in
   place, bearing in mind it runs on Dannan: Macha's transport, crypto,
   durable files, logging and time give way to Dannan's as it arrives.

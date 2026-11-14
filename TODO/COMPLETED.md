@@ -3,6 +3,29 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-13 to 14: the three-systems design ruled; slice 0 on the Mac
+
+Tom (2026-11-13): Dagda serves Macha, Lugh and Lir as first-class. The design
+(`TODO/2026-11-13-three-systems-design.md`) was written with the Lir and Lugh sessions, reviewed by both and by
+Macha's for what Macha sees, and ruled by Tom point by point ("Ruled", 1 to 7): the log as a noun; a 10-minute
+tombstone window as QoS 2's stated limit; the slice order, slice 0 first; built-in merges and the advert aggregate;
+0.1.5 on Dannan 0.6; the x86-64 gate suspended and every build on the Pis; group commit for heads in slice 2.
+Raised with Dannan and taken there: the advert aggregate is Dagda's (adverts are for slow facts); the version rule
+(Dannan 0.6.0's ABI promise); CPU pacing moving into Dannan; a deferred reply (Dannan 0.7.0, accepted by the bench);
+the per-connection call path (Dannan's P5).
+
+Slice 0 on the Mac (`feature/bench`; figures in the design, "What slice 0 has measured"):
+- The log prototype passes Tom's PUBACK target (p99 under 50 ms) in the layout Lir needs only with one shared segment
+  per node and a call per replica node per tick (p99 21-24 ms at 256 logs); a segment per log failed both ways. The
+  design's on-disk form changed to match, with compaction for long-lived logs.
+- Today's head commit: 85-90 commits a second per node whatever the writers or spaces (half CONTROL tree-node writes,
+  half claims, one durability barrier): the ground for group commit. A node refuses its 256th space ("at most 64
+  adverts"). Lugh's shape: "disabled on A, refused on B" in about 0.1 s typical, 0.35 s worst.
+- Lir's scan burst (a third of a 5 s backlog, 13,460 entries, in 29 ms) and footprint (256 or 1,280 logs in about
+  17 MiB and 12 files).
+
+No gate: measurement code only; `dagda_tests` is unchanged outside the disabled `BenchHeads.*` cases.
+
 ## 2026-11-14: 0.1.5: on Dannan 0.6, packaged for Debian, clean under GCC Release
 
 Tom: the Debian packages; then Dannan's ABI promise (0.6.0, renumbered from 0.5.7 because 0.5.4 had already changed
