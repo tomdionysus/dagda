@@ -483,7 +483,8 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
 }
 
 // Macha's distributed_store.cpp:580 at 98b816d: a local barrier that fails is warned
-// of, and the copy stays owed.
+// of. The copy is re-derived from disk (Tom, 2026-11-14: "healing is better"); with
+// the backend gone it is absent, and the write is short of it.
 TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   Cluster cluster;
   // Nothing flushed by itself before the backend goes.

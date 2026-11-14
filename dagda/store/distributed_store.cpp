@@ -1539,24 +1539,23 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     try {
       _data.durability_barrier(place->ticket, DurabilityUrgency::batchable);
       each(place->records, place->node, [](ReplicaRecord& replica) { acknowledge(replica); });
-    } catch (const StaleDurabilityTicket& error) {
-      // A ticket of this process whose placement changed is a barrier that failed, as
-      // Macha says (distributed_store.cpp:569-580 at 98b816d warns of all but another
-      // process's ticket). Either way the same answer comes from disk, no call.
-      if (place->ticket.epoch == _context.identity().durability_epoch()) _logger.warn("local storage durability barrier failed: " + std::string(error.what()));
+    } catch (const std::exception& error) {
+      // A stale ticket, or a barrier that failed: either way the answer comes from
+      // disk, no call, and heals (Tom, 2026-11-14: "healing is better", as Macha's
+      // re-derivation at f0597a4, distributed_store.cpp:606-646). Only another
+      // process's ticket is not worth a warning. A copy that cannot be re-derived is
+      // absent, and the object is put again.
+      if (place->ticket.epoch == _context.identity().durability_epoch() || !dynamic_cast<const StaleDurabilityTicket*>(&error))
+        _logger.warn("local storage durability barrier failed: " + std::string(error.what()));
       for (const auto& record : place->records) {
-        const auto fresh = _data.reassert_durable(record->id);
+        const auto fresh = _data.reassert_durable(record->id, place->ticket);
         update(record, place->node, [&](ReplicaRecord& replica) {
           if (fresh)
             acknowledge(replica, fresh);
           else
-            refuse(replica, "absent here after the backend changed");
+            refuse(replica, "absent here: not re-derived from disk");
         });
       }
-    } catch (const std::exception& error) {
-      const std::string why = error.what();
-      _logger.warn("local storage durability barrier failed: " + why);
-      each(place->records, place->node, [&](ReplicaRecord& replica) { transient(replica, why); });
     }
   }
 }

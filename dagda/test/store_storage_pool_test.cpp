@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <future>
@@ -47,6 +48,7 @@
 
 #include "dagda/contract/id_lookup.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/placement.h"
@@ -615,6 +617,99 @@ TEST(StoreStoragePool, ATicketFromAnotherProcessOrIncarnationSatisfiesNothing) {
   EXPECT_NE(reasserted->backend_instance, ticket->backend_instance);
   EXPECT_TRUE(pool->durability_covered(*reasserted));
   EXPECT_FALSE(pool->reassert_durable(object_id(pattern(64, 1))).has_value());
+}
+
+// Healing never reports durable bytes that are not (Tom, 2026-11-14: "healing is
+// better", with the Macha session's guards). Replay takes a pack record whose header
+// decodes without reading its payload, so after a power cut a header can be present
+// with its payload lost: the re-derivation reads the copy back and finds nothing.
+TEST(StoreStoragePool, ATornPayloadBehindAnIntactHeaderIsNotReasserted) {
+  StoreBed bed;
+  const auto disk = bed.dir.path() / "disk";
+  const auto state = bed.dir.path() / "state";
+  std::filesystem::create_directories(disk);
+  StoragePoolOptions options;
+  options.backends = {{disk, 64 * mib}};
+  options.ledger_key = bed.node_local;
+  const auto node = NodeId::random();
+  const auto bytes = pattern(64 * 1024, 11);
+  const auto id = object_id(bytes);
+  std::optional<DurabilityTicket> ticket;
+  {
+    StoragePool pool(state, node, NodeId::random(), options, bed.key, bed.pool_services());
+    ticket = pool.put_deferred(id, bytes);
+    ASSERT_TRUE(ticket.has_value());
+    pool.durability_barrier(*ticket, DurabilityUrgency::immediate);
+  }
+  std::filesystem::path pack;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(disk))
+    if (entry.path().extension() == ".pack") pack = entry.path();
+  ASSERT_FALSE(pack.empty());
+  {
+    // The header kept, the payload behind it never written.
+    std::fstream file(pack, std::ios::in | std::ios::out | std::ios::binary);
+    file.seekp(static_cast<std::streamoff>(local_format::pack_header_size));
+    const std::string zeros(bytes.size(), '\0');
+    file.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+    ASSERT_TRUE(file.good());
+  }
+  StoragePool pool(state, node, NodeId::random(), options, bed.key, bed.pool_services());
+  ASSERT_EQ(pool.online_backends(), 1u);
+  ASSERT_TRUE(wait_until([&] { return pool.has(id); }));
+  EXPECT_FALSE(pool.reassert_durable(id, ticket).has_value());
+}
+
+// After a failed sync the failed pages stay cached and clean until a reboot, so a copy
+// written past the failure reads back though the disk may not hold it, and a reopened
+// backend's domain has no latch. The failure is kept under the state directory: what
+// was durable before it is re-derived, what was not never is, after a reopen or a
+// restart.
+TEST(StoreStoragePool, ALatchedFailureIsNotReassertedAfterAReopenOrARestart) {
+  StoreBed bed;
+  const auto disk = bed.dir.path() / "disk";
+  const auto away = bed.dir.path() / "disk.away";
+  const auto state = bed.dir.path() / "state";
+  std::filesystem::create_directories(disk);
+  auto failing = std::make_shared<std::atomic<bool>>(false);
+  StoragePoolOptions options;
+  options.backends = {{disk, 64 * mib}};
+  options.ledger_key = bed.node_local;
+  options.before_sync = [failing] {
+    if (failing->load()) throw std::runtime_error("injected sync failure");
+  };
+  const auto node = NodeId::random();
+  const auto good = pattern(64 * 1024, 12);
+  const auto lost = pattern(64 * 1024, 13);
+  std::optional<DurabilityTicket> good_ticket;
+  std::optional<DurabilityTicket> lost_ticket;
+  {
+    StoragePool pool(state, node, NodeId::random(), options, bed.key, bed.pool_services());
+    good_ticket = pool.put_deferred(object_id(good), good);
+    ASSERT_TRUE(good_ticket.has_value());
+    pool.durability_barrier(*good_ticket, DurabilityUrgency::immediate);
+    lost_ticket = pool.put_deferred(object_id(lost), lost);
+    ASSERT_TRUE(lost_ticket.has_value());
+    failing->store(true);
+    EXPECT_ANY_THROW(pool.durability_barrier(*lost_ticket, DurabilityUrgency::immediate));
+    failing->store(false);
+    EXPECT_TRUE(std::filesystem::exists(state / durability_failures_name));
+
+    // Reopened in the same process: a new incarnation on a new domain.
+    std::filesystem::rename(disk, away);
+    pool.refresh();
+    std::filesystem::rename(away, disk);
+    pool.refresh();
+    ASSERT_EQ(pool.online_backends(), 1u);
+    ASSERT_TRUE(wait_until([&] { return pool.has(object_id(lost)); }));
+    EXPECT_FALSE(pool.reassert_durable(object_id(lost), lost_ticket).has_value());
+    EXPECT_TRUE(pool.reassert_durable(object_id(good), good_ticket).has_value());
+  }
+  // Restarted without a reboot: another process, the failure read back from the state.
+  StoragePool pool(state, node, NodeId::random(), options, bed.key, bed.pool_services());
+  ASSERT_EQ(pool.online_backends(), 1u);
+  ASSERT_TRUE(wait_until([&] { return pool.has(object_id(lost)); }));
+  EXPECT_FALSE(pool.reassert_durable(object_id(lost), lost_ticket).has_value());
+  EXPECT_TRUE(pool.reassert_durable(object_id(good), good_ticket).has_value());
 }
 
 // Requirement L21 and the seam step 2's claims attach to: a claimed copy is

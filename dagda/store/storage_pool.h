@@ -76,7 +76,17 @@ struct StoragePoolOptions {
   // the reason. Never called for a path that is not a directory: a missing one is a
   // disk not mounted, and nothing is made in its place. None: nothing is locked.
   std::function<void(const std::filesystem::path&)> lock_root{};
+  // A test's device: called before each barrier's sync, and what it throws
+  // fails the barrier as the device would. None in service.
+  std::function<void()> before_sync{};
 };
+
+// <state>/durability-failures: one line a latched barrier failure, "<epoch>
+// <domain> <durable generation>". A ticket of that process and domain past that
+// generation is never re-derived: after a failed sync the failed pages stay
+// cached and clean until a reboot, so no read in the same boot proves the disk
+// holds them, and a later incarnation's domain has no latch of its own.
+inline constexpr std::string_view durability_failures_name = "durability-failures";
 
 // A backend's marker, `.macha.backend` in its root, mirrored under
 // <state>/backend-identities/<SHA-256 of the path>.id: "dagda-backend-v19
@@ -212,10 +222,16 @@ class StoragePool final : public contract::ObjectStore {
   // and rethrows a failed barrier, taking that backend offline.
   void durability_barrier(const DurabilityTicket& ticket, DurabilityUrgency urgency = DurabilityUrgency::batchable);
   bool durability_covered(const DurabilityTicket& ticket) const;
-  // A ticket for an object already held, whose earlier ticket died with its
-  // process or backend incarnation. The holding backend is flushed first, so
-  // present implies durable. Nothing if no online backend holds it.
-  std::optional<DurabilityTicket> reassert_durable(const ObjectId& id);
+  // A ticket for an object already held, whose earlier ticket (`stale`, when
+  // known) died with its process or backend incarnation, or whose barrier
+  // failed. Nothing, the object to be put again, when `stale` was issued past
+  // a failed barrier (durability_failures_name), or when no online backend
+  // holds a copy that reads back: a member's opens to its id, so a record whose
+  // header survived a power cut without its payload is not taken for one. The
+  // holding backend is then flushed, so present implies durable; a latched
+  // failure makes that throw, and the next backend is asked. A blind backend
+  // can check only that the whole record is there.
+  std::optional<DurabilityTicket> reassert_durable(const ObjectId& id, const std::optional<DurabilityTicket>& stale = std::nullopt);
   // Reads in rank order. A copy that does not open is an object failure, not
   // a backend's: it is removed (where the backend's key check has passed)
   // and the next backend asked. Throws std::logic_error on a blind pool,
@@ -309,6 +325,9 @@ class StoragePool final : public contract::ObjectStore {
   std::vector<std::shared_ptr<Backend>> ranked(const ObjectId& id) const;
   std::optional<CursorItem> next_physical(Cursor& cursor, bool& pass_complete) const;
   std::shared_ptr<DurabilityDomain> domain_for(const std::filesystem::path& path) DANNAN_EXCLUDES(_domain_mutex);
+  // A domain's latched failure, kept in memory and under <state>.
+  void record_durability_failure(uint64_t domain, uint64_t durable) DANNAN_EXCLUDES(_domain_mutex);
+  bool issued_past_failure(const DurabilityTicket& ticket) const DANNAN_EXCLUDES(_domain_mutex);
   void observe_get(size_t bytes, uint64_t elapsed_ms) const;
 
   // Fixed at construction.
@@ -337,6 +356,13 @@ class StoragePool final : public contract::ObjectStore {
   uint64_t _next_domain_id DANNAN_GUARDED_BY(_domain_mutex) = 1;
   uint64_t _next_backend_instance DANNAN_GUARDED_BY(_domain_mutex) = 1;
   std::map<uint64_t, std::shared_ptr<DurabilityDomain>> _domains_by_device DANNAN_GUARDED_BY(_domain_mutex);
+  const std::function<void()> _before_sync;
+  struct DurabilityFailure {
+    dannan::identity::NodeId epoch;
+    uint64_t domain = 0;
+    uint64_t durable = 0;
+  };
+  std::vector<DurabilityFailure> _durability_failures DANNAN_GUARDED_BY(_domain_mutex);
   // Each cursor is owned by the maintenance step that runs it.
   Cursor _rebalance_cursor;
   Cursor _scrub_cursor;

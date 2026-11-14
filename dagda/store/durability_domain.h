@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -59,6 +60,13 @@ class DurabilityDomain {
     dannan::status::Observations& observations;
     // When a batch window ends.
     const dannan::contract::TimeSource& time = dannan::contract::steady_time_source();
+    // Told, once, the last generation made durable when a barrier fails and the
+    // failure is latched: the owner keeps it where a later incarnation finds it.
+    // Called on the worker with no lock held; what it throws is ignored.
+    std::function<void(uint64_t durable)> on_failure{};
+    // A test's device: called before each barrier's sync, and what it throws
+    // fails the barrier as the device would.
+    std::function<void()> before_sync{};
   };
 
   // `id` is non-zero; `batch_window` is not negative. Throws
@@ -117,6 +125,8 @@ class DurabilityDomain {
   dannan::supervise::SupervisedThreads& _threads;
   dannan::status::Observations& _observations;
   const dannan::contract::TimeSource& _time;
+  const std::function<void(uint64_t)> _on_failure;
+  const std::function<void()> _before_sync;
 
   mutable dannan::contract::Mutex _mutex;
   std::condition_variable_any _wake;

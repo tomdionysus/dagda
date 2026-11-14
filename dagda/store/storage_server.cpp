@@ -309,7 +309,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
         }
         message::BarrierProbeAnswer answer{epoch, {}};
         for (const auto& id : barrier.probe)
-          if (auto ticket = _data.reassert_durable(id)) answer.present.emplace_back(id, *ticket);
+          if (auto ticket = _data.reassert_durable(id, barrier.ticket)) answer.present.emplace_back(id, *ticket);
         _logger.info("object durability re-derived after epoch change present=" + std::to_string(answer.present.size()) + "/" +
                      std::to_string(barrier.probe.size()) + " expected=" + expected + " current=" + current);
         advertise();
