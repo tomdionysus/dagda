@@ -214,6 +214,7 @@ TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
     void add(dannan::net::MessageType type, dannan::net::Registration registration, dannan::net::RequestHandler) override { table.add(type, registration); }
     void retire(dannan::net::MessageType) override {}
     void bind(dannan::net::MessageType, dannan::net::RequestHandler) override {}
+    void bind_deferred(dannan::net::MessageType, dannan::net::DeferringHandler) override {}
     void unbind(dannan::net::MessageType) override {}
     std::shared_ptr<dannan::net::CallHandle> call(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
                                                   std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
