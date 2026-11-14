@@ -46,6 +46,9 @@ rates on a Pi and a disable is seen on another node within about a second.
 
 ## Next
 
+0. **Tom, 2026-11-14 (asked in this session):** slice 1 is released as `0.2.0`, tagged and pushed (main, develop and the
+   tag); the no-rollback defence is both layers in Dannan (the design, node_local); the lag's fix is slice 2's first
+   step.
 1. **The follower's lag** (Lugh's P8.5 waits on it, Tom 2026-11-14): profiled on the Pi. Not compute and not the
    follower: the leader's replicator, blocked mostly in per-commit claim rounds to the peers and the entry-by-entry
    history push (the design, "What slice 0 has measured (the Pi)"). Not yet closed: time the replicator's rounds from

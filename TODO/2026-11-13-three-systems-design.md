@@ -112,6 +112,8 @@ How slice 1 builds `node_local` (2026-11-14, from the code at `0.1.5`):
   Until then Dagda keeps the generations in one file of its own state root, sealed under the node-local key and outside
   every space's directory: it refuses one space's directory restored alone, not a whole state restored together, and
   the case says which.
+  **Ruled (Tom, 2026-11-14): both layers, in Dannan.** Dagda moves its record onto Dannan's counter when Dannan offers
+  it, and refuses below the peers' witness when that comes.
 
 `SpaceSpec` gains `copies` (k) for the Replicated level, at most N. A commit takes a `Durability`:
 `persisted` returns when this node holds it (today's behaviour, and Macha's); `replicated` when k replicas have
