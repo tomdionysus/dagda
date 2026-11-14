@@ -43,7 +43,11 @@ The maintainer: "Port through dagda::Node and Context is correct, but you must m
 as well as it did before with Dagda as its storage backend. It is not enough for the concepts and primitives to be
 'sorta' like Macha." And: "there must be no 'shims' in Macha to make Dagda work for it. Both: parts of Macha may need
 to be rewritten to use native Dagda effectively, and that's the NO LOSS of performance/reliability/etc - AND - Dagda
-MUST be capable of handling DHT storage AT LEAST AS WELL as Macha." Two requirements, both binding: Macha uses Dagda
+MUST be capable of handling DHT storage AT LEAST AS WELL as Macha." Then (asked in this session): the side-by-side
+comparison runs on the Pis first (a harness driving Macha's store, built read-only from Macha's develop, and Dagda with
+identical workloads), then on live-a and live-b against Macha's live baselines; the call-by-call map is written by
+Dagda and the Macha session together, split by subsystem, each reviewing the other's; key custody is to be talked
+through with the maintainer before deciding. Two requirements, both binding: Macha uses Dagda
 natively with no adapter layer, rewritten where needed and losing nothing; and Dagda, measured on its own terms against
 Macha's store on the same workloads, is at least as good a DHT store in every respect. Ruled the same evening: **all slice work is paused** until Macha runs on Dagda as well as before,
 proven; **0.2.0 stays tagged locally and unpushed** until the maintainer says. The proof (proposed to the maintainer): a call-by-call map from
