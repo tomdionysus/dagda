@@ -533,6 +533,35 @@ TEST(StoreDurabilityBarrier, ABarrierTravelsAtTheFrameItsWriteWasMadeAt) {
   EXPECT_EQ(b.frames_of(message::object_durability_barrier), std::set<FrameType>{FrameType::speculative});
 }
 
+// Macha's barrier answers false at once on a transient failure (distributed_store.cpp
+// :766-767 at f0597a4): the wait answers when its barriers have, with the copy still
+// owed, not at the caller's deadline (the store map, distributed store gap 2).
+TEST(StoreDurabilityBarrier, ATransientBarrierFailureAnswersAtOnceNotAtTheDeadline) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::object_durability_barrier) return Handled::failed(500, "barrier_failed", "storage durability barrier failed: injected");
+    return std::nullopt;
+  });
+  const auto bytes = pattern(32 * 1024, 92);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 2u);
+  const auto started = std::chrono::steady_clock::now();
+  const auto evidence = a.store().wait(written.ticket, 30s);
+  const auto took = std::chrono::steady_clock::now() - started;
+  ASSERT_TRUE(evidence);
+  EXPECT_LT(took, 10s) << "the wait ran on to its deadline";
+  EXPECT_FALSE(evidence->met);
+  EXPECT_FALSE(evidence->settled);
+  ASSERT_NE(evidence->on(b.id()), nullptr);
+  EXPECT_EQ(evidence->on(b.id())->state, ReplicaState::pending);
+  EXPECT_EQ(evidence->on(b.id())->loss, BarrierLoss::none);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::acknowledged);
+}
+
 // The asynchronous form posts its evidence, never inline, in the order asked;
 // nothing to wait for and a forgotten ticket are answers too.
 TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {

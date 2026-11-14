@@ -1443,6 +1443,35 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
       place->records.push_back(record);
     }
   }
+  // Once every place of this round has answered, acknowledged, refused or failed
+  // for now, a wait for its tickets to settle answers with the evidence as it stands,
+  // as Macha's barrier answered false at once on a transient failure and ignored a
+  // peer spilled past (distributed_store.cpp:766-767 at f0597a4). A wait for the
+  // ticket to complete waits on.
+  struct Round {
+    std::atomic<size_t> left{0};
+    std::vector<std::shared_ptr<TicketRecord>> records;
+  };
+  auto round = std::make_shared<Round>();
+  round->left = places.size();
+  round->records = records;
+  const auto place_done = [round] {
+    if (round->left.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+    for (const auto& record : round->records) {
+      std::vector<std::shared_ptr<Waiter>> due;
+      WriteEvidence evidence;
+      {
+        Lock lock(record->mutex);
+        evidence = record->evidence_locked();
+        std::erase_if(record->waiters, [&](const std::shared_ptr<Waiter>& waiter) {
+          if (waiter->complete) return false;
+          due.push_back(waiter);
+          return true;
+        });
+      }
+      for (const auto& waiter : due) tell(waiter, evidence);
+    }
+  };
   // A refusal because a peer's process or backend changed means "your ticket
   // is dead", not "your bytes are gone" (discipline 1): asked again with the
   // ids, the peer answers from disk with fresh tickets.
@@ -1469,79 +1498,88 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     const auto found = peers.find(place->node);
     if (found == peers.end()) {
       each(place->records, place->node, [&](ReplicaRecord& replica) { refuse(replica, BarrierLoss::unknown_node, "unknown node"); });
+      place_done();
       continue;
     }
     const auto peer = found->second;
     message::BarrierRequest request{place->ticket, {}};
-    _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(request), place->frame, deadline, _executor,
-                           [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each](CallOutcome outcome) {
-                             if (outcome.reply && outcome.reply->type == dannan::net::message::ok) {
-                               each(asked->records, asked->node, [](ReplicaRecord& replica) { acknowledge(replica); });
-                               return;
-                             }
-                             if (!refused_with(outcome, 409)) {
-                               const auto why = outcome_text(outcome);
-                               each(asked->records, asked->node, [&](ReplicaRecord& replica) { transient(replica, why); });
-                               return;
-                             }
-                             const auto shared = weak.lock();
-                             if (!shared) return;
-                             ReadLock alive(shared->alive);
-                             if (!shared->store) {
-                               each(asked->records, asked->node, [](ReplicaRecord& replica) { replica.running = false; });
-                               return;
-                             }
-                             // One probe with every id that named this place, as many as a
-                             // request may carry; once every part has answered, Macha's line
-                             // (distributed_store.cpp:725 at 98b816d) for this peer.
-                             struct Rederived {
-                               std::atomic<size_t> reasserted{0};
-                               std::atomic<size_t> absent{0};
-                               std::atomic<size_t> left{0};
-                             };
-                             auto rederived = std::make_shared<Rederived>();
-                             rederived->left = (asked->records.size() + message::max_barrier_probe - 1) / message::max_barrier_probe;
-                             const auto part_done = [this, rederived] {
-                               if (rederived->left.fetch_sub(1) != 1) return;
-                               _logger.info("object durability re-derived after incarnation change reasserted=" + std::to_string(rederived->reasserted.load()) +
-                                            " absent=" + std::to_string(rederived->absent.load()) + " peers=1");
-                             };
-                             for (size_t start = 0; start < asked->records.size(); start += message::max_barrier_probe) {
-                               const auto count = std::min<size_t>(message::max_barrier_probe, asked->records.size() - start);
-                               std::vector<std::shared_ptr<TicketRecord>> part(asked->records.begin() + static_cast<std::ptrdiff_t>(start),
-                                                                               asked->records.begin() + static_cast<std::ptrdiff_t>(start + count));
-                               message::BarrierRequest probe{asked->ticket, {}};
-                               for (const auto& record : part) probe.probe.push_back(record->id);
-                               _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), asked->frame, deadline,
-                                                      _executor, [part, node = asked->node, transient, refuse, each, rederived, part_done](CallOutcome answer) {
-                                                        if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
-                                                          const auto why = outcome_text(answer);
-                                                          each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
-                                                          part_done();
-                                                          return;
-                                                        }
-                                                        try {
-                                                          const auto fresh = message::decode_probe_answer(answer.reply->payload);
-                                                          const std::map<ObjectId, DurabilityTicket> present(fresh.present.begin(), fresh.present.end());
-                                                          for (const auto& record : part) {
-                                                            const auto held = present.find(record->id);
-                                                            // Definitive when absent: the peer no longer holds it. Put it again.
-                                                            (held != present.end() ? rederived->reasserted : rederived->absent).fetch_add(1);
-                                                            update(record, node, [&](ReplicaRecord& replica) {
-                                                              if (held != present.end())
-                                                                acknowledge(replica, held->second);
-                                                              else
-                                                                refuse(replica, BarrierLoss::absent_on_peer, "absent on the peer after its restart");
-                                                            });
-                                                          }
-                                                        } catch (const std::exception& error) {
-                                                          const std::string why = error.what();
-                                                          each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
-                                                        }
-                                                        part_done();
-                                                      });
-                             }
-                           });
+    _context.routes().call(
+        peer, message::object_durability_barrier, message::encode_barrier(request), place->frame, deadline, _executor,
+        [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each, place_done](CallOutcome outcome) {
+          if (outcome.reply && outcome.reply->type == dannan::net::message::ok) {
+            each(asked->records, asked->node, [](ReplicaRecord& replica) { acknowledge(replica); });
+            place_done();
+            return;
+          }
+          if (!refused_with(outcome, 409)) {
+            const auto why = outcome_text(outcome);
+            each(asked->records, asked->node, [&](ReplicaRecord& replica) { transient(replica, why); });
+            place_done();
+            return;
+          }
+          const auto shared = weak.lock();
+          if (!shared) {
+            place_done();
+            return;
+          }
+          ReadLock alive(shared->alive);
+          if (!shared->store) {
+            each(asked->records, asked->node, [](ReplicaRecord& replica) { replica.running = false; });
+            place_done();
+            return;
+          }
+          // One probe with every id that named this place, as many as a
+          // request may carry; once every part has answered, Macha's line
+          // (distributed_store.cpp:725 at 98b816d) for this peer.
+          struct Rederived {
+            std::atomic<size_t> reasserted{0};
+            std::atomic<size_t> absent{0};
+            std::atomic<size_t> left{0};
+          };
+          auto rederived = std::make_shared<Rederived>();
+          rederived->left = (asked->records.size() + message::max_barrier_probe - 1) / message::max_barrier_probe;
+          const auto part_done = [this, rederived, place_done] {
+            if (rederived->left.fetch_sub(1) != 1) return;
+            _logger.info("object durability re-derived after incarnation change reasserted=" + std::to_string(rederived->reasserted.load()) +
+                         " absent=" + std::to_string(rederived->absent.load()) + " peers=1");
+            place_done();
+          };
+          for (size_t start = 0; start < asked->records.size(); start += message::max_barrier_probe) {
+            const auto count = std::min<size_t>(message::max_barrier_probe, asked->records.size() - start);
+            std::vector<std::shared_ptr<TicketRecord>> part(asked->records.begin() + static_cast<std::ptrdiff_t>(start),
+                                                            asked->records.begin() + static_cast<std::ptrdiff_t>(start + count));
+            message::BarrierRequest probe{asked->ticket, {}};
+            for (const auto& record : part) probe.probe.push_back(record->id);
+            _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), asked->frame, deadline, _executor,
+                                   [part, node = asked->node, transient, refuse, each, rederived, part_done](CallOutcome answer) {
+                                     if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
+                                       const auto why = outcome_text(answer);
+                                       each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
+                                       part_done();
+                                       return;
+                                     }
+                                     try {
+                                       const auto fresh = message::decode_probe_answer(answer.reply->payload);
+                                       const std::map<ObjectId, DurabilityTicket> present(fresh.present.begin(), fresh.present.end());
+                                       for (const auto& record : part) {
+                                         const auto held = present.find(record->id);
+                                         // Definitive when absent: the peer no longer holds it. Put it again.
+                                         (held != present.end() ? rederived->reasserted : rederived->absent).fetch_add(1);
+                                         update(record, node, [&](ReplicaRecord& replica) {
+                                           if (held != present.end())
+                                             acknowledge(replica, held->second);
+                                           else
+                                             refuse(replica, BarrierLoss::absent_on_peer, "absent on the peer after its restart");
+                                         });
+                                       }
+                                     } catch (const std::exception& error) {
+                                       const std::string why = error.what();
+                                       each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
+                                     }
+                                     part_done();
+                                   });
+          }
+        });
   }
   for (const auto& [key, place] : places) {
     if (place->node != _self) continue;
@@ -1566,6 +1604,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
         });
       }
     }
+    place_done();
   }
 }
 
