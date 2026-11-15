@@ -91,9 +91,10 @@ ObjectData take_object_reply(dannan::net::Message message, const ObjectId& expec
   return object;
 }
 
-ObjectData buffer_of(Bytes bytes) {
+ObjectData buffer_of(Bytes bytes, dannan::sched::RetainedMemoryLedger::Lease lease = {}) {
   auto object = std::make_shared<ObjectBuffer>();
   object->bytes = std::move(bytes);
+  object->lease = std::move(lease);
   return object;
 }
 
@@ -1865,22 +1866,31 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
   const auto past_deadline = [&] { return own_deadline && _time.now() >= until; };
   const auto wait = [&] { return own_deadline ? std::optional(std::chrono::ceil<std::chrono::milliseconds>(until - _time.now())) : no_caller_deadline; };
   std::optional<Bytes> local;
+  std::optional<dannan::sched::RetainedMemoryLedger::Lease> local_memory;
   {
     const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
     if (!admitted) return {};
+    // The reader's class of memory, held by the buffer until its last reader lets
+    // it go (Macha's ds:1749-1753 at f0597a4).
+    local_memory = read_memory(options, own_deadline, until);
+    if (!local_memory) return {};
     local = _data.get(id);
   }
   if (_options.read_trace) _options.read_trace("local");
   if (local) {
     if (interactive) _activity.note(options.frame, local->size());
     said("owned", local->size(), true);
-    return {buffer_of(std::move(*local)), ReadSource::local, _self, FetchAnswer::ok};
+    return {buffer_of(std::move(*local), std::move(*local_memory)), ReadSource::local, _self, FetchAnswer::ok};
   }
+  local_memory.reset();
   if (past_deadline()) return {};
   std::optional<Bytes> cached;
+  std::optional<dannan::sched::RetainedMemoryLedger::Lease> cache_memory;
   {
     const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
     if (!admitted) return {};
+    cache_memory = read_memory(options, own_deadline, until);
+    if (!cache_memory) return {};
     cached = _cache.get(id);
   }
   if (_options.read_trace) _options.read_trace("cache");
@@ -1888,13 +1898,42 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
     if (interactive) _activity.note(options.frame, cached->size());
     if (should_own(id)) enqueue_local_copy(id, *cached, true);
     said("cache", cached->size(), true);
-    return {buffer_of(std::move(*cached)), ReadSource::cache, _self, FetchAnswer::ok};
+    return {buffer_of(std::move(*cached), std::move(*cache_memory)), ReadSource::cache, _self, FetchAnswer::ok};
   }
+  cache_memory.reset();
   if (past_deadline() || (options.cancelled && options.cancelled->load(std::memory_order_relaxed))) return {};
   auto result = get_remote(id, options, interactive, own_deadline ? std::optional(until) : std::nullopt);
   if (result.object && options.frame == FrameType::read_ahead) _activity.note(options.frame, result.object->bytes.size());
   said("remote", result.object ? result.object->bytes.size() : 0, static_cast<bool>(result.object));
   return result;
+}
+
+std::optional<dannan::sched::RetainedMemoryLedger::Lease> DistributedStore::read_memory(const ReadOptions& options, bool own_deadline,
+                                                                                        dannan::contract::TimePoint until) {
+  // The budget waits on the steady clock and only sees a cancel when woken, so the
+  // wait is taken in slices, the flag read between them, as the arbiter polls it. A
+  // read with no deadline of its own waits under the no-progress bound its peer calls
+  // have: no call here waits for ever.
+  constexpr auto slice = std::chrono::milliseconds(25);
+  const auto work = dannan::sched::work_class(options.frame);
+  // Rounded up, so a wait that runs out ends at or past the read's deadline, never a
+  // part of a millisecond before it.
+  const auto left = own_deadline ? std::chrono::ceil<std::chrono::milliseconds>(until - _time.now()) : _options.call_no_progress;
+  const auto end = dannan::contract::Clock::now() + std::max(left, std::chrono::milliseconds::zero());
+  auto& budget = _context.budget();
+  // An extent no class but control could ever hold is refused at once, not waited on.
+  if (const auto stats = budget.stats(); _options.extent_size > stats.capacity_bytes - stats.control_reserve_bytes) return std::nullopt;
+  while (true) {
+    if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) return std::nullopt;
+    const auto now = dannan::contract::Clock::now();
+    if (now >= end) return budget.reserve(work, object_payload_owner, _options.extent_size);
+    const auto until_slice = std::min(end, now + slice);
+    if (auto lease = budget.acquire(work, object_payload_owner, _options.extent_size, until_slice)) return lease;
+    // Empty well inside its slice: the budget is stopping, which asking again does not
+    // change. A timed wait may wake a little early; that is a slice, not a refusal.
+    if (dannan::contract::Clock::now() < now + slice / 2 && until_slice > now + slice / 2) return std::nullopt;
+    if (_stopping.load(std::memory_order_relaxed)) return std::nullopt;
+  }
 }
 
 ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
@@ -2125,7 +2164,7 @@ void DistributedStore::enqueue_local_copy(const ObjectId& id, std::span<const ui
   if (!cache && !promote) return;
   // Held in speculative memory while queued, and dropped when there is none
   // (Macha's ds:3111-3119 at f0597a4), so the queue never passes the node's memory.
-  auto memory = _context.budget().reserve(dannan::sched::WorkClass::speculative, data.size());
+  auto memory = _context.budget().reserve(dannan::sched::WorkClass::speculative, object_payload_owner, data.size());
   if (!memory) {
     // Logged, so an unfilled cache is told from a broken one.
     _logger.debug("opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory bytes=" + std::to_string(data.size()) +

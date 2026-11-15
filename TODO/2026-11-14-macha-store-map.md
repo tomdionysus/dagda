@@ -180,9 +180,19 @@ cancelled)` and an owned `reserve`, in Dannan 0.8.0, for reads to hold their cla
 store gap 6): built here once 0.8.0 is merged (`feature/budget-acquire` in Dannan; gate on the 0.8.0 tag, build early
 on develop once merged). `acquire` refuses a default deadline, so a read with no deadline of its own waits under the
 arbiter's no-progress window; a cancel is seen only when the ledger is woken (`Budget::wake()` after the flag is set);
-`Budget::stats()` gives the ledger with its owners' bytes. Built on `feature/read-memory` (reads hold their class's
-memory, `3e53986` to `cc59e99`), gated early on Dannan develop `26ba1be` in a private prefix: 1106 ran, 1103 passed,
-0 failed; that branch's copy of this map has the detail. It merges here once 0.8.0 is tagged. Promotion of a call in flight to loader (distributed store gap 12) is a
+`Budget::stats()` gives the ledger with its owners' bytes. Reviewed and approved from Dagda's side (Dannan develop
+`8794aae`). Built on `feature/read-memory` (off this branch; it needs Dannan 0.8.0, so it merges once the tag is
+installed): a read takes an extent of its class's memory, owner `object_payload_owner` (`hosted_first` + 1), after
+admission and before each of the local and cache reads, kept by the buffer to its last reader and let go on a miss;
+the wait is taken in 25 ms slices so a cancel is seen with nothing for the caller to wake; the opportunistic copy
+queue is charged to the same owner (`3e53986`, `DistributedStore.AReadHoldsItsClassMemoryUntilTheLastReaderLetsGo`).
+Built early on Dannan develop `26ba1be` (installed into a private prefix on corvus-saturn, nothing system-wide):
+GCC Release with warnings as errors, 0 warnings; `dagda_tests` with Macha's fixtures 1106 ran, 1103 passed, 3 skipped,
+0 failed, at `cc59e99`. On the way, for 0.8.0: `DAGDA_DANNAN_MINIMUM` 0.8.0 (SameMinorVersion, so a 0.7.0 request
+never finds 0.8.0), the roster double's advert watch (`dannan::Nodes::watch_advert`, new in 0.8.0), the version case's
+minor, and two of this branch's own (an early wake taken for a refusal; a wait floored to the millisecond ending just
+short of the deadline). Dannan 0.8.0 tagged 2026-11-15 (`6c240cc`): merged into this branch, with `CONTRIBUTING.md`,
+the Debian control and the docs' build lines moved to 0.8.0. Promotion of a call in flight to loader (distributed store gap 12) is a
 new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
 protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
 cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.

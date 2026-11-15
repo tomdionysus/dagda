@@ -83,6 +83,11 @@ class RosterNodes final : public dannan::Nodes {
   dannan::membership::Partition partition() const override { return {}; }
   uint64_t watch_partition(boost::asio::any_io_executor, std::function<void(dannan::membership::Partition)>) override { return 0; }
   void unwatch_partition(uint64_t) override {}
+  // Dannan 0.8's advert watch, which membership does not read.
+  uint64_t watch_advert(const std::string&, std::chrono::milliseconds, boost::asio::any_io_executor, std::function<void(dannan::AdvertChange)>) override {
+    return 0;
+  }
+  void unwatch_advert(uint64_t) override {}
   std::set<dannan::identity::NodeId> members() const override {
     std::set<dannan::identity::NodeId> out;
     for (const auto& member : on_roster) out.insert(member.id);
