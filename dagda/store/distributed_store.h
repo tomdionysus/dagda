@@ -126,7 +126,8 @@ struct Ticket {
 // members first, in placement order, then the other nodes it reached.
 struct WriteEvidence {
   ObjectId id{};
-  Durability level = Durability::replicated;
+  // The acknowledgement level the write was asked for (the stack's ack_level).
+  Durability ack_level = Durability::replicated;
   // A deferred write: copies are on disk once a wait() makes them so.
   bool deferred = false;
   // Acknowledgements the level asks for (for durable, the members waited
@@ -165,7 +166,9 @@ struct WriteScope {
 };
 
 struct WriteOptions {
-  Durability level = Durability::replicated;
+  // When the write answers: the stack's acknowledgement standard (Tom, 2026-11-15),
+  // the setting named ack_level in every project.
+  Durability ack_level = Durability::replicated;
   // Written now, made durable by a later wait() (Macha's put_deferred).
   bool deferred = false;
   // The call returns by then, whatever is still pending. Zero: none of its own, as

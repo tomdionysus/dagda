@@ -54,7 +54,7 @@ ClusterNodeOptions options(size_t replication) {
 // Written on `writer`, on disk on every member of its replication set.
 ObjectId write_everywhere(ClusterNode& writer, uint64_t n, size_t copies) {
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   const auto evidence = writer.api().objects().write(test::numbered(n), write, deadline);
   EXPECT_TRUE(evidence.met);
   EXPECT_EQ(evidence.acknowledged(), copies);

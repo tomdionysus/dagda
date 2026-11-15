@@ -139,7 +139,7 @@ TEST(Node, OpensAndStopsInOrderOnAFreshStateAndAReopenedOne) {
   const auto data = test::numbered(7);
   const auto id = store::object_id(data);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(id, data, write).met);
   a.stop();
   EXPECT_EQ(stages.take(), stops);
@@ -271,7 +271,7 @@ TEST(Node, TheStorageLockRefusesASecondNodeAndTheMigration) {
 
   const auto data = test::numbered(11);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   EXPECT_TRUE(a.store().write(store::object_id(data), data, write).met);
 
   // The other way: the migration holds the backend (as it does while it
@@ -354,7 +354,7 @@ TEST(Node, PublishesTheStoresFiguresAndGoesReady) {
 
   const auto data = test::numbered(3);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(store::object_id(data), data, write).met);
   a.dagda_node().publish_status();
   snapshot = a.context().status().snapshot();
@@ -668,7 +668,7 @@ TEST(Node, AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery) {
 
   const auto data = test::numbered(11);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(store::object_id(data), data, write).met);
   a.stop();
   // No clean checkpoint to trust: the open's accounting scan walks the store,

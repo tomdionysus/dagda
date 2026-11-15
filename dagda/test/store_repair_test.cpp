@@ -1401,7 +1401,7 @@ TEST(StoreRepair, AWriteWithNoDeadlineWaitsForAPeerInsideTheWindowPastAnyLimit) 
   const auto bytes = pattern(64 * 1024, 57);
   const auto id = object_id(bytes);
   WriteOptions durable;
-  durable.level = Durability::durable;
+  durable.ack_level = Durability::durable;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
@@ -1436,7 +1436,7 @@ TEST(StoreRepair, AWriteWithNoDeadlineFailsAPeerSilentForTheWindow) {
   const auto bytes = pattern(64 * 1024, 58);
   const auto id = object_id(bytes);
   WriteOptions durable;
-  durable.level = Durability::durable;
+  durable.ack_level = Durability::durable;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
@@ -1472,7 +1472,7 @@ TEST(StoreRepair, AWriteWithABudgetEndsWhenNothingMovesForIt) {
   const auto bytes = pattern(64 * 1024, 61);
   const auto id = object_id(bytes);
   WriteOptions publication;
-  publication.level = Durability::durable;
+  publication.ack_level = Durability::durable;
   publication.no_progress_budget = 30s;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
@@ -1512,7 +1512,7 @@ TEST(StoreRepair, AWritesBudgetIsReArmedByItsPipelinesProgress) {
   const auto id = object_id(bytes);
   auto progress = std::make_shared<std::atomic_uint64_t>(0);
   WriteOptions publication;
-  publication.level = Durability::durable;
+  publication.ack_level = Durability::durable;
   publication.no_progress_budget = 30s;
   publication.progress = progress;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, publication); });
@@ -1554,7 +1554,7 @@ TEST(StoreRepair, AWriteWithItsOwnDeadlineReturnsAtItAndItsCallRunsOn) {
   const auto bytes = pattern(64 * 1024, 59);
   const auto id = object_id(bytes);
   WriteOptions durable;
-  durable.level = Durability::durable;
+  durable.ack_level = Durability::durable;
   durable.deadline = 10s;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
@@ -1692,7 +1692,7 @@ TEST(StoreRepair, APutToAPeerEndsAtTheObjectTransferDeadline) {
   const auto bytes = pattern(64 * 1024, 63);
   const auto id = object_id(bytes);
   WriteOptions durable;
-  durable.level = Durability::durable;
+  durable.ack_level = Durability::durable;
   auto write = std::async(std::launch::async, [&] { return a.store().write(id, bytes, durable); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
@@ -2522,7 +2522,7 @@ TEST(StoreRepair, RepairConvergesAfterAPartitionHeals) {
 
   std::vector<ObjectId> written;
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   for (uint8_t i = 0; i < 5; ++i) {
     const auto bytes = pattern(96 * 1024, static_cast<uint8_t>(20 + i));
     const auto evidence = a.store().write(object_id(bytes), bytes, write);
@@ -2563,7 +2563,7 @@ TEST(StoreRepair, ATicketReportsTheCopiesRepairMade) {
   const auto bytes = pattern(96 * 1024, 61);
   const auto id = object_id(bytes);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = a.store().write(id, bytes, write);
   ASSERT_TRUE(evidence.met);
   EXPECT_TRUE(evidence.settled);
@@ -2622,7 +2622,7 @@ TEST(StoreRepair, ALoaderSaturatingDataLeavesControlWithinABound) {
   for (int t = 0; t < 8; ++t)
     loaders.emplace_back([&] {
       WriteOptions write;
-      write.level = Durability::persisted;
+      write.ack_level = Durability::persisted;
       while (loading.load()) {
         auto bytes = pattern(128 * 1024, 7);
         const auto n = counter.fetch_add(1);

@@ -553,7 +553,7 @@ TEST(HeadsExchange, ATouchCommitsWhileAHolderIsAway) {
   const auto input = test::pattern(128 * 1024);
   const auto extent = store::object_id(input);
   store::WriteOptions write;
-  write.level = store::Durability::durable;
+  write.ack_level = store::Durability::durable;
   ASSERT_TRUE(a.store().write(extent, input, write).met);
   const auto naming = [&](uint32_t mode) {
     NeutralItem item;
@@ -1798,7 +1798,7 @@ TEST(NodeHeads, AStaleRetirementIsErasedOnceByTheLoopAndThePeerFollows) {
     const auto data = test::numbered(n);
     const auto id = store::object_id(data);
     store::WriteOptions write;
-    write.level = store::Durability::persisted;
+    write.ack_level = store::Durability::persisted;
     EXPECT_TRUE(a.store().write(id, data, write).met);
     return id;
   };

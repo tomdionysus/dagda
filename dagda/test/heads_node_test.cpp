@@ -94,7 +94,7 @@ store::ObjectId write_object(ClusterNode& node, uint64_t n) {
   const auto data = test::numbered(n);
   const auto id = store::object_id(data);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   EXPECT_TRUE(node.store().write(id, data, write).met);
   return id;
 }

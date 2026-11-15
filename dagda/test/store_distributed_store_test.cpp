@@ -115,7 +115,7 @@ TEST(DistributedStore, APutIsLoaderActivityNotViewerActivity) {
 // (Tom, 2026-11-15: the disk that took it), so the writes name it.
 TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
   WriteOptions floor;
-  floor.level = Durability::persisted;
+  floor.ack_level = Durability::persisted;
   {
     dannan::test::Gate owners_answer;
     Cluster cluster;
@@ -223,7 +223,7 @@ TEST(DistributedStore, WritesAndReadsTeachTheNetworkEstimate) {
   ASSERT_EQ(writer.store().estimated_network_bps(), 0.0);
   const auto data = pattern(64 * 1024, 21);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(writer.store().write(object_id(data), data, write).met);
   EXPECT_GT(writer.store().estimated_network_bps(), 0.0);
 
@@ -300,7 +300,7 @@ TEST(DistributedStore, ACallerMayCancelAndGoWhileItsFetchIsInFlight) {
   const auto data = pattern(64 * 1024, 23);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(writer.store().write(id, data, write).met);
 
   dannan::test::Gate gate;
@@ -350,7 +350,7 @@ TEST(DistributedStore, AReadSaysHowItEnded) {
   const auto data = pattern(64 * 1024, 24);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(writer.store().write(id, data, write).met);
 
   const auto read = [&](ReadOptions options) {
@@ -434,7 +434,7 @@ TEST(DistributedStore, ClaimsGoToEveryHolderAtOnce) {
   const auto data = pattern(64 * 1024, 26);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(a.store().write(id, data, write).met);
   ASSERT_TRUE(a.data().has(id));
   ASSERT_TRUE(b.data().has(id));
@@ -464,7 +464,7 @@ TEST(DistributedStore, ADataClaimBarrierIsMeasured) {
   const auto data = pattern(64 * 1024, 27);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(a.store().write(id, data, write).met);
   const auto absent = object_id(pattern(64 * 1024, 28));
   auto& observations = a.context().observations();
@@ -1023,7 +1023,7 @@ TEST(DistributedStore, WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull) {
   const auto data = preferred_for(b, a.id(), 128 * 1024);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = b.store().write(id, data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_FALSE(a.data().has(id));
@@ -1202,7 +1202,7 @@ TEST(DistributedStore, ADeferredWritesBarrierAcrossPeerRestarts) {
   ASSERT_TRUE(cluster.converged());
   WriteOptions deferred;
   deferred.deferred = true;
-  deferred.level = Durability::replicated;
+  deferred.ack_level = Durability::replicated;
 
   // Ordinary: both copies awaiting the barrier, then on disk.
   const auto data = pattern(64 * 1024, 91);
@@ -1278,7 +1278,7 @@ TEST(DistributedStore, EphemeralReturnsAtOnceAndItsTicketReportsTheCopies) {
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 41);
   WriteOptions write;
-  write.level = Durability::ephemeral;
+  write.ack_level = Durability::ephemeral;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_FALSE(evidence.settled);
@@ -1306,7 +1306,7 @@ TEST(DistributedStore, PersistedReturnsOnTheFirstCopyOnDisk) {
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 42);
   WriteOptions write;
-  write.level = Durability::persisted;
+  write.ack_level = Durability::persisted;
   write.deadline = 10s;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -1330,7 +1330,7 @@ TEST(DistributedStore, ReplicatedWaitsForAMajorityOfTheReplicas) {
   ASSERT_TRUE(cluster.converged());
   const auto data = pattern(32 * 1024, 43);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_EQ(evidence.sought, 2u);
@@ -1366,7 +1366,7 @@ TEST(DistributedStore, DurableWritesEveryLiveMember) {
   ASSERT_TRUE(cluster.converged());
   const auto data = pattern(32 * 1024, 44);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 10s;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
@@ -1395,7 +1395,7 @@ TEST(DistributedStore, DurableSkipsADeadMemberAndCatchesItUp) {
 
   const auto data = pattern(32 * 1024, 45);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 10s;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -1433,7 +1433,7 @@ TEST(DistributedStore, DurableWaitsForASilentLiveMemberToTheDeadline) {
 
   const auto data = pattern(32 * 1024, 46);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 400ms;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -1496,7 +1496,7 @@ TEST(DistributedStore, CompletionsArePostedNeverRunInline) {
   // Ephemeral is answered at once: still posted.
   std::optional<WriteEvidence> queued;
   WriteOptions ephemeral;
-  ephemeral.level = Durability::ephemeral;
+  ephemeral.ack_level = Durability::ephemeral;
   node.store().write(object_id(pattern(8 * 1024, 49)), pattern(8 * 1024, 49), ephemeral, caller.get_executor(),
                      [&](WriteEvidence evidence) { queued = std::move(evidence); });
   EXPECT_FALSE(queued);
@@ -1608,7 +1608,7 @@ TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
   EXPECT_TRUE(two.get());
   const auto evidence = one.get();
   EXPECT_TRUE(evidence.deferred);
-  EXPECT_EQ(evidence.level, Durability::persisted);
+  EXPECT_EQ(evidence.ack_level, Durability::persisted);
   EXPECT_TRUE(careful.data().has(object_id(bytes)));
   const auto settled = careful.store().wait(evidence.ticket, 10s);
   ASSERT_TRUE(settled.has_value());

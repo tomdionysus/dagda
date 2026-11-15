@@ -73,7 +73,7 @@ TEST(StoreScope, WithNoSourceNodePrincipalsWriteAndADirectoryPrincipalIsRefused)
 
   const auto own = pattern(4096, 1);
   WriteOptions as_node;
-  as_node.level = Durability::durable;
+  as_node.ack_level = Durability::durable;
   const auto landed = a.store().write(object_id(own), own, as_node);
   EXPECT_TRUE(landed.met);
   EXPECT_EQ(landed.acknowledged(), 2u);
@@ -132,7 +132,7 @@ TEST(StoreScope, AnInstalledSourceRefusesOnePrefixOnEveryReplica) {
 
   const auto secret = pattern(4096, 11);
   WriteOptions under_secrets;
-  under_secrets.level = Durability::durable;
+  under_secrets.ack_level = Durability::durable;
   under_secrets.principal = Principal{Principal::Kind::directory, "alice"};
   under_secrets.prefix = "lugh/secrets/alice";
   const auto refused = a.store().write(object_id(secret), secret, under_secrets);
@@ -160,7 +160,7 @@ TEST(StoreScope, AnInstalledSourceRefusesOnePrefixOnEveryReplica) {
   // A node principal under the refused prefix is refused the same: the
   // source decides, whoever writes.
   WriteOptions node_under_secrets;
-  node_under_secrets.level = Durability::durable;
+  node_under_secrets.ack_level = Durability::durable;
   node_under_secrets.prefix = "lugh/secrets";
   const auto node_refused = a.store().write(object_id(pattern(4096, 13)), pattern(4096, 13), node_under_secrets);
   EXPECT_TRUE(node_refused.lost);
@@ -170,7 +170,7 @@ TEST(StoreScope, AnInstalledSourceRefusesOnePrefixOnEveryReplica) {
   // The default prefix is the domain's name ("macha" for domain v1), which
   // the source grants.
   WriteOptions by_default;
-  by_default.level = Durability::durable;
+  by_default.ack_level = Durability::durable;
   EXPECT_TRUE(a.store().write(object_id(pattern(4096, 14)), pattern(4096, 14), by_default).met);
 }
 
@@ -185,7 +185,7 @@ TEST(StoreScope, ClaimsAreCheckedAsWritesAre) {
   const auto data = pattern(4096, 21);
   const auto id = object_id(data);
   WriteOptions durable;
-  durable.level = Durability::durable;
+  durable.ack_level = Durability::durable;
   ASSERT_TRUE(a.store().write(id, data, durable).met);
   for (auto* node : {&a, &b}) node->context().identity().install_scope_source(std::make_shared<OnePrefixRefused>("lugh/secrets"));
 

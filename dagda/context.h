@@ -187,7 +187,7 @@ class Context {
   // Content-addressed objects in the node's domain, named by the SHA-256
   // of their bytes. A write is checked at every storing replica under
   // options.principal and options.prefix (this node and the domain's name
-  // when unset) and waits for options.level; its evidence names every node
+  // when unset) and waits for options.ack_level; its evidence names every node
   // and carries the ticket that outlives the call. A read is local, then
   // the cache, then remote owners in latency order.
   class Objects {

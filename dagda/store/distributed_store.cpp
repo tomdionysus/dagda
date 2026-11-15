@@ -228,11 +228,11 @@ void tell(const std::shared_ptr<Waiter>& waiter, const WriteEvidence& evidence) 
 }  // namespace
 
 struct DistributedStore::TicketRecord {
-  TicketRecord(uint64_t serial_, const ObjectId& id_, Durability level_, bool deferred_) : serial(serial_), id(id_), level(level_), deferred(deferred_) {}
+  TicketRecord(uint64_t serial_, const ObjectId& id_, Durability level_, bool deferred_) : serial(serial_), id(id_), ack_level(level_), deferred(deferred_) {}
 
   const uint64_t serial;
   const ObjectId id;
-  const Durability level;
+  const Durability ack_level;
   const bool deferred;
   mutable dannan::contract::Mutex mutex;
   size_t sought DANNAN_GUARDED_BY(mutex) = 0;
@@ -250,7 +250,7 @@ struct DistributedStore::TicketRecord {
   WriteEvidence evidence_locked() const DANNAN_REQUIRES(mutex) {
     WriteEvidence out;
     out.id = id;
-    out.level = level;
+    out.ack_level = ack_level;
     out.deferred = deferred;
     out.sought = sought;
     out.cancelled = cancelled;
@@ -266,7 +266,7 @@ struct DistributedStore::TicketRecord {
     out.settled = !awaited;
     out.complete = std::none_of(out.replicas.begin(), out.replicas.end(), [](const ReplicaEvidence& r) { return r.state == ReplicaState::pending; });
     out.lost = !acknowledged && !awaited && !out.holders();
-    switch (level) {
+    switch (ack_level) {
       case Durability::ephemeral:
         out.met = !out.lost;
         break;
@@ -821,7 +821,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   const bool own_deadline = options.deadline.count() > 0;
   const auto deadline = _time.now() + options.deadline;
   // An ephemeral write runs in the background as the store's ordinary write.
-  const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
+  const auto level = options.ack_level == Durability::ephemeral ? Durability::replicated : options.ack_level;
   const bool deferred = options.deferred;
 
   auto placement = write_placement(id);
@@ -1060,7 +1060,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
 
     // The evidence, built under the run's lock: a call answering from here on
     // lands in the ticket instead.
-    auto record = into ? std::move(into) : new_ticket(id, options.level, deferred);
+    auto record = into ? std::move(into) : new_ticket(id, options.ack_level, deferred);
     {
       Lock ticket_lock(record->mutex);
       // A deferred write that ended short is made durable at what landed, as Macha's
@@ -1157,13 +1157,13 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     evidence = into->evidence_locked();
   }
   for (const auto& waiter : told) tell(waiter, evidence);
-  if (!success) _logger.debug("object write landed nowhere id=" + to_string(id) + " level=" + durability_name(options.level));
+  if (!success) _logger.debug("object write landed nowhere id=" + to_string(id) + " level=" + durability_name(options.ack_level));
   return evidence;
 }
 
 WriteEvidence DistributedStore::write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options) {
   check_write(id, data);
-  if (options.level != Durability::ephemeral) return run_write(id, data, options);
+  if (options.ack_level != Durability::ephemeral) return run_write(id, data, options);
   // Received and queued: the set is named pending until the queued write
   // runs.
   auto record = new_ticket(id, Durability::ephemeral, options.deferred);
@@ -1201,7 +1201,7 @@ WriteEvidence DistributedStore::write(const ObjectId& id, std::span<const uint8_
 
 void DistributedStore::write(const ObjectId& id, Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done) {
   check_write(id, data);
-  if (options.level == Durability::ephemeral) {
+  if (options.ack_level == Durability::ephemeral) {
     auto evidence = write(id, std::span<const uint8_t>(data), options);
     boost::asio::post(executor, [done = std::move(done), evidence = std::move(evidence)] { done(evidence); });
     return;
@@ -1213,7 +1213,7 @@ void DistributedStore::write(const ObjectId& id, Bytes data, WriteOptions option
   if (!submit(std::move(job))) {
     WriteEvidence refused_evidence;
     refused_evidence.id = id;
-    refused_evidence.level = options.level;
+    refused_evidence.ack_level = options.ack_level;
     refused_evidence.settled = true;
     refused_evidence.lost = true;
     boost::asio::post(executor, [done = std::move(done), refused_evidence] { done(refused_evidence); });
@@ -1226,7 +1226,7 @@ ObjectId DistributedStore::put(std::span<const uint8_t> data, WriteOptions optio
   const auto evidence = write(id, data, options);
   // Macha's: a cancel seen while the write waited fails it, whatever landed.
   if (evidence.cancelled) throw std::runtime_error("object replication cancelled");
-  if (!evidence.holders() && options.level != Durability::ephemeral) throw StorageUnavailable("object replication quorum unavailable");
+  if (!evidence.holders() && options.ack_level != Durability::ephemeral) throw StorageUnavailable("object replication quorum unavailable");
   if (_logger.enabled(dannan::status::LogLevel::all))
     _logger.trace("DIAG object-put id=" + to_string(id) + " bytes=" + std::to_string(data.size()) +
                   " ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()));
@@ -1236,7 +1236,7 @@ ObjectId DistributedStore::put(std::span<const uint8_t> data, WriteOptions optio
 bool DistributedStore::put(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options) {
   const auto evidence = write(id, data, options);
   if (evidence.cancelled) return false;
-  return options.level == Durability::ephemeral ? !evidence.lost : evidence.holders() > 0;
+  return options.ack_level == Durability::ephemeral ? !evidence.lost : evidence.holders() > 0;
 }
 
 ObjectId DistributedStore::put_deferred(std::span<const uint8_t> data, WriteOptions options) {
@@ -1250,14 +1250,14 @@ WriteEvidence DistributedStore::put_deferred_here(const ObjectId& id, std::span<
   options.frame = frame;
   // Here is one copy, and this node is tried first; on a node that hosts none, the
   // next in placement order: persisted, the disk that took it (Tom, 2026-11-15).
-  options.level = Durability::persisted;
+  options.ack_level = Durability::persisted;
   return write(id, data, options);
 }
 
 bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> data, FrameType frame) {
   WriteOptions options;
   options.frame = frame;
-  options.level = Durability::persisted;
+  options.ack_level = Durability::persisted;
   if (!holds_extents()) return put(id, data, options);
   check_write(id, data);
   if (const auto refusal = scope_refusal(writer_of(std::nullopt, {}))) {
