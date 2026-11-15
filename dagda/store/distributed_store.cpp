@@ -610,9 +610,18 @@ DistributedStore::WritePlacement DistributedStore::write_placement(const ObjectI
   std::erase_if(roster.all, not_hosting);
   std::erase_if(roster.active, not_hosting);
   WritePlacement out;
+  out.order = dannan::placement::by_capacity(id.bytes, roster.active, _options.replication, data_scheme());
+  // Every node live, as nearly always: the same candidates rank the same, so the set
+  // is the order's head and the write ranks once.
+  const bool all_live = roster.all.size() == roster.active.size() && std::all_of(roster.active.begin(), roster.active.end(), [&](const NodeRecord& live) {
+                          return std::any_of(roster.all.begin(), roster.all.end(), [&](const NodeRecord& node) { return node.id == live.id; });
+                        });
+  if (all_live) {
+    out.set.assign(out.order.begin(), out.order.begin() + static_cast<std::ptrdiff_t>(std::min(out.order.size(), _options.replication)));
+    return out;
+  }
   out.set = dannan::placement::by_capacity(id.bytes, roster.all, _options.replication, data_scheme());
   if (out.set.size() > _options.replication) out.set.resize(_options.replication);
-  out.order = dannan::placement::by_capacity(id.bytes, roster.active, _options.replication, data_scheme());
   return out;
 }
 
