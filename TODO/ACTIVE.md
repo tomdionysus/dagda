@@ -14,6 +14,16 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   and counter merges; leases on head spaces; the advert aggregate; group commit for heads in slice 2; contract v1 frozen
   at `0.1.4`, v2 at slice 4, the catalogue as v3. Lir and Lugh reviewed it and agreed; their needs files are
   `../lir/TODO/2026-11-13-lir-needs.md` and `../lugh/TODO/2026-11-13-lugh-needs-of-the-stack.md`.
+- **Acknowledgement levels are the stack's standard** (the maintainer, 2026-11-15, to this session; the standard is Kvasir's
+  `../kvasir/TODO/2026-11-15-ack-levels-standard.md`): ephemeral (answered at once), persisted (this node's own disk
+  has it), decided (a majority has agreed it; Dannan's agreement, 0.9.0, so not before), replicated (a majority of the
+  replicas have it on disk); the setting is `ack_level` everywhere. Dagda changes to the standard's meanings: persisted
+  no longer falls back to a peer's disk, and replicated waits for a majority of the replication set, not
+  write_copies. Dagda's durable (every available member) stays beside them until the maintainer says otherwise. Macha's port is
+  told first: at replication 2, replicated becomes both nodes.
+- **Small-file CPU against Macha** (the maintainer, 2026-11-15): all three, in order. The advert aggregate (D11) now, agreed
+  with Macha because its cache-advert names change; then fewer thread hand-offs and less placement per write; then
+  remeasure on Dannan 0.9.0.
 - **Agreement waits for Dannan** (the maintainer, 2026-11-15, relayed by the Dannan session): anything that can use consensus
   or agreement waits for Dannan's agreement primitive (0.9.0, after 0.8.3). Dagda builds no consensus, no lease
   standing in for it and no workaround meanwhile. Dagda's soft leases are a different guarantee and stand as they
