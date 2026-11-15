@@ -773,6 +773,63 @@ TEST(DistributedStore, ARuntimeCacheKeepsAPlaybackFetch) {
   EXPECT_EQ(peer.calls_of(message::get_object), gets);
 }
 
+// A read holds an extent of its class's retained memory from before it reads until
+// the last reader lets its buffer go, as Macha's (distributed_store.cpp:1744-1767 at
+// f0597a4; the store map, cache gap 1 and distributed store gap 6): many readers
+// cannot pass the node's memory. Short of it, the read waits under its deadline.
+TEST(DistributedStore, AReadHoldsItsClassMemoryUntilTheLastReaderLetsGo) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 14);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(node.data().put(id, bytes));
+  const uint64_t extent = options(1).store.extent_size;
+  auto& budget = node.context().budget();
+  const auto owned = [&] {
+    const auto stats = budget.stats();
+    const auto found = stats.owner_bytes.find(object_payload_owner);
+    return found == stats.owner_bytes.end() ? uint64_t{0} : found->second;
+  };
+  ASSERT_EQ(owned(), 0u);
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  {
+    const auto read = node.store().read(id, playback);
+    ASSERT_NE(read.object, nullptr);
+    auto shared = read.object;
+    EXPECT_EQ(owned(), extent);
+  }
+  EXPECT_EQ(owned(), 0u);
+
+  // Every byte the loader class may hold, held here: a loader read waits, and ends at
+  // its deadline with nothing.
+  std::vector<dannan::sched::RetainedMemoryLedger::Lease> held;
+  for (int i = 0; i < 1 << 16; ++i) {
+    auto lease = budget.reserve(dannan::sched::WorkClass::loader, 64 * 1024);
+    if (!lease) break;
+    held.push_back(std::move(*lease));
+  }
+  ReadOptions loading;
+  loading.frame = FrameType::loader;
+  loading.deadline = 300ms;
+  const auto starved = node.store().read(id, loading);
+  EXPECT_EQ(starved.object, nullptr);
+  EXPECT_EQ(starved.end, ReadEnd::timed_out);
+  // A cancel ends the wait too, with nothing for the caller to wake.
+  ReadOptions cancelled = loading;
+  cancelled.deadline = 30s;
+  cancelled.cancelled = std::make_shared<std::atomic_bool>(false);
+  auto waiting = std::async(std::launch::async, [&] { return node.store().read(id, cancelled); });
+  EXPECT_EQ(waiting.wait_for(200ms), std::future_status::timeout);
+  *cancelled.cancelled = true;
+  ASSERT_EQ(waiting.wait_for(5s), std::future_status::ready);
+  EXPECT_EQ(waiting.get().end, ReadEnd::cancelled);
+  held.clear();
+  EXPECT_NE(node.store().read(id, loading).object, nullptr);
+}
+
 // An opportunistic copy is held in speculative memory while queued, and dropped when
 // there is none, so playback never waits behind it and the queue never passes the
 // node's memory (Macha's distributed_store.cpp:3111-3119 at f0597a4; the store map,

@@ -190,11 +190,20 @@ struct WriteOptions {
   std::string prefix;
 };
 
+// Dagda's owner on the node's retained-memory budget for object bytes a read or
+// a queued copy holds (Macha's MemoryOwner::object_payload). Dannan numbers its
+// own below hosted_first, which its unowned reserve() charges; Dagda's start
+// after it.
+inline constexpr dannan::sched::MemoryOwner object_payload_owner =
+    static_cast<dannan::sched::MemoryOwner>(static_cast<uint16_t>(dannan::sched::MemoryOwner::hosted_first) + 1);
+
 // An object as read, and the memory its bytes hold (a reply's retained
-// frame) until the last reader lets it go.
+// frame, or the reader's class of the node's budget) until the last reader
+// lets it go.
 struct ObjectBuffer {
   Bytes bytes;
   dannan::net::MemoryHold memory;
+  dannan::sched::RetainedMemoryLedger::Lease lease;
 };
 using ObjectData = std::shared_ptr<const ObjectBuffer>;
 
@@ -672,6 +681,10 @@ class DistributedStore final : public ControlObjectSource {
   void note_local_unreadable(const ObjectId& id);
 
   bool put_on(const dannan::membership::NodeRecord& target, const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame);
+  // An extent of the reader's class of the node's memory, waited for under the
+  // read's deadline (or the no-progress bound with none) and its cancel; nothing
+  // past either.
+  std::optional<dannan::sched::RetainedMemoryLedger::Lease> read_memory(const ReadOptions& options, bool own_deadline, dannan::contract::TimePoint until);
   // The stages, then how the read ended.
   ReadResult read_impl(const ObjectId& id, const ReadOptions& options);
   ReadResult read_stages(const ObjectId& id, const ReadOptions& options);
