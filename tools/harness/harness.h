@@ -228,11 +228,15 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
   const size_t extents = file_bytes / extent_bytes;
   std::atomic<bool> failed{false};
   Latencies barrier;
+  Latencies extent;
   const auto one_file = [&](uint64_t file) {
     auto publishing = store.publication(0, Frame::loader);
     for (size_t e = 0; e < extents; ++e) {
       const auto data = pattern(extent_bytes, file * 1000003 + e);
-      if (!publishing->extent(store.id_of(data), data)) failed = true;
+      const auto id = store.id_of(data);
+      const auto wrote = Clock::now();
+      if (!publishing->extent(id, data)) failed = true;
+      extent.add(Clock::now() - wrote);
     }
     const auto started = Clock::now();
     if (!publishing->finish()) failed = true;
@@ -251,6 +255,7 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
   const auto took = Clock::now() - started;
   report.span(before, process_figures(), took, file_bytes * std::max<size_t>(1, concurrent), all_barriers(store) - barriers_before);
   report.latencies("barrier", barrier);
+  report.latencies("extent", extent);
   report.figure("failed", failed ? 1 : 0, "bool");
 }
 

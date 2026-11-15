@@ -94,6 +94,8 @@ struct ClusterNodeOptions {
   bool keeps_backend = false;
   bool packed = false;
   size_t pack_target_size = 0;
+  // The largest object packed; with none, the pack target (everything packs).
+  size_t pack_threshold = 0;
   // More DATA backends beside the node's first, by path; a case adds one to
   // what a restart opens.
   std::vector<std::filesystem::path> more_backends;
@@ -413,7 +415,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     out.pool.pack_threshold = 0;
     out.pool.pack_target_size = 0;
   } else if (_options.pack_target_size) {
-    out.pool.pack_threshold = _options.pack_target_size;
+    out.pool.pack_threshold = _options.pack_threshold ? _options.pack_threshold : _options.pack_target_size;
     out.pool.pack_target_size = _options.pack_target_size;
   }
   out.cache = _options.cache;
