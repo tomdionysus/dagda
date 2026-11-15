@@ -64,12 +64,33 @@ handling DHT storage AT LEAST AS WELL as Macha"), after the call-by-call map.
 Where Macha's `build/baselines/baseline.py` already has a phase, its sizes are taken, so the numbers compare with
 Macha's results-0.94.2.
 
+## Settled with the Macha session (2026-11-15, checked in Macha's code at f0597a4)
+
+- **Dannan 0.5.3 exactly** for Macha's side: f0597a4's `find_package(dannan 0.5.3 CONFIG REQUIRED)`, and the live
+  nodes run 0.94.2 on `libdannan.so.0.5.3`.
+- **A metadata commit** (workload 5): N new tree nodes, a few KiB to tens of KiB each, N from a file created in a deep
+  path up to a 200-file directory, each put as `ControlNamespaceNodeStore::put` does (namespace_control_store.cpp:15-36:
+  `has(id)`, else a local control put, no peer asked), then the publication's claims barrier over them
+  (node_services.cpp:346-554: DATA claims on their holders, CONTROL claims here and the peers' share). Reads as `::get`
+  does (:38-44): local control get, else `ensure_control_local`. Dagda's side: `Context::Control::put` and `get` /
+  `ensure_local`, then `Claims::retain` for DATA and CONTROL.
+- **A catalogue install** (workload 5): changed shards and the manifest put with `local_.control().put`
+  (catalogue.cpp:1858-1866); convergence makes them local on each node with `ensure_control_local` (:1126-1141) and
+  offers them with `store_.offer_control(objects)` (:1146), whose figures (objects_sent, bytes_sent, held_by) are
+  compared. A manifest of 64 shards, with 1, 8 and all 64 changed. Dagda's side: `Context::Control::put`,
+  `ensure_local` and `offer`.
+- **The fixtures copied come from the extract at f0597a4** (`BareNode`, `distributed_store_for`, `config_for`): on
+  Macha's port branch `BareNode` builds a Dagda node, so that copy would be the wrong one.
+- **The transport differs.** Macha's side runs Dannan 0.5.3 and Dagda's 0.8.0. Immaterial for one node's workloads;
+  for 3 and 7 the transport differs as well as the store, so each figure carries its Dannan version, and a 3 or 7
+  difference is not put down to the store alone.
+- **Same compiler and flags on both:** RelWithDebInfo, -O2, as Macha deploys.
+- **Cold runs** do `sync; echo 3 > /proc/sys/vm/drop_caches` first and say so.
+- **Three runs a workload**, the median and spread reported: enough for a spread, not endless (the maintainer's rule on test
+  volume).
+
 ## What is still to settle before anything runs
 
-- The Dannan 0.5 patch Macha 0.94.2 runs on (the Macha session).
-- 5 and 6 drive Macha's metadata and catalogue CONTROL paths: on Macha's side through `NamespaceControlStore` and the
-  catalogue's objects in `macha_core`; on Dagda's through Context::Control and Claims, until 8c gives both heads. The
-  Macha session to say which Macha calls stand for "a commit" and "a manifest".
 - 9's `dm-delay` needs device-mapper on the Pi kernel and root: checked, not installed.
 - The order: 1, 2, 4 and 8 on one Pi first (they need no link), then 3 and 7 on two, then 5, 6, 9, 10.
 
