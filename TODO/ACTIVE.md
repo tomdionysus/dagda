@@ -14,6 +14,11 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   and counter merges; leases on head spaces; the advert aggregate; group commit for heads in slice 2; contract v1 frozen
   at `0.1.4`, v2 at slice 4, the catalogue as v3. Lir and Lugh reviewed it and agreed; their needs files are
   `../lir/TODO/2026-11-13-lir-needs.md` and `../lugh/TODO/2026-11-13-lugh-needs-of-the-stack.md`.
+- **Louhi (compute, started by Tom 2026-11-15) is a fourth consumer** (its session's word, 2026-11-15). Tom ruled that
+  Louhi's scheduler waits for Dagda's cluster-wide leases, not scheduling without one. Its step 5 (one active
+  scheduler on a fenced lease) depends on leases on head spaces; until then `Context::Leases` orders work on one node
+  only. Its step 4 (records in head spaces with watches) needs a Dagda ref it can pin; nothing is pushed while 0.2.0
+  is held. Nothing is asked of Dagda now, and where leases on heads stand is Tom's to say.
 - **Slice 0 (the measurement) is done but for two figures that need later slices** (the channel cost per space,
   Lugh's leases as such). The bench is merged to develop (`d424572`, not pushed): `tools/dagda_bench.cpp` (the log
   prototype; builds standalone against Dannan 0.7 for the deferred reply, `build/bench070/CMakeLists.txt`) and
