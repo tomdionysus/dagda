@@ -206,7 +206,10 @@ store gap 12).
 
 **Still Macha-side first:** prompt replication's wait with no timeout, the repair-share wake's rounding.
 
-**For the maintainer (asked with the next batch):** GC gap 8 and the interim loop. The collector's steps, the local stages and
+**Ruled (the maintainer, 2026-11-15): Node for the owner.** The composition root that opens and owns the node keeps `Node`'s owner
+surface (open, stop, reload, the maintenance steps), and the retirement codec and `lease::ClaimedCollection` stay
+library helpers; the Context serves every call Macha's callers make. GC gap 8 is closed by this ruling. The question as
+asked: The collector's steps, the local stages and
 the retirement codecs are the owner's maintenance surface, on `Node` and in `dagda::heads`; Macha's interim loop
 (`MaintenanceOptions::automatic = false` until 8c) drives them. Recommended: the composition root, which opens and
 owns the node, keeps `Node`'s owner surface (open, stop, reconfigure, the maintenance steps), and the library helpers
