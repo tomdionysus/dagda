@@ -14,6 +14,11 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   and counter merges; leases on head spaces; the advert aggregate; group commit for heads in slice 2; contract v1 frozen
   at `0.1.4`, v2 at slice 4, the catalogue as v3. Lir and Lugh reviewed it and agreed; their needs files are
   `../lir/TODO/2026-11-13-lir-needs.md` and `../lugh/TODO/2026-11-13-lugh-needs-of-the-stack.md`.
+- **Agreement waits for Dannan** (the maintainer, 2026-11-15, relayed by the Dannan session): anything that can use consensus
+  or agreement waits for Dannan's agreement primitive (0.9.0, after 0.8.3). Dagda builds no consensus, no lease
+  standing in for it and no workaround meanwhile. Dagda's soft leases are a different guarantee and stand as they
+  are; anything in Dagda wanting a linearizable decision waits. Dagda's part is the persisting acceptor store, on a
+  node-local log once slice 4 builds it.
 - **Louhi (compute, started by the maintainer 2026-11-15) is a fourth consumer** (its session's word, 2026-11-15). The maintainer first
   ruled that its scheduler waits for cluster-wide leases, then changed it the same day: Louhi places tasks with
   Dannan's placement over the roster, and uses a lease only to fence tasks that must not run twice, claiming no
