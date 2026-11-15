@@ -210,6 +210,15 @@ cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
   hydration_available, hydrate, ensure_local, reachability_epoch, and `Claims::retain_data_here` (`1ee2740`);
   `Context::Devices` DATA admission for the owner's disk I/O and the device monitor (`3b57a6b`). `Context.VersionTwo*`.
 
+Gated at `e1ec1d1` (2026-11-15, same Pi and build: 0 warnings; 1104 ran, 1101 passed, 3 skipped, 0 failed): Macha's
+names for the local stages (`9069770`, `NodeLocalMaintenance.TheStageHookHearsEveryLocalStageInMachasNames`); a
+foreground copy to a peer as foreground activity (`1599b7c`, `DistributedStore.AForegroundReplicateAllIsForegroundActivity`);
+a delete of a claimed object answered claimed however busy (`04ee76f`,
+`DistributedStore.ADeleteOfAClaimedObjectIsClaimedEvenWhenBusy`); the disks online and the cache advertised on every
+refresh (`7ae0c5c`, `e1ec1d1`; `.ARefreshAdvertisesTheBackendsOnline`, `.TheCacheIsAdvertisedWithItsActivity`). After
+it, not yet gated: a reload naming a disk twice refused before any lock (`7519170`,
+`NodeReconfigure.AReloadRefusedForADuplicateBackendChangesNothing`).
+
 Reviewer findings checked against code (2026-11-15): the local CONTROL claim's failure escaping before any peer is
 tried is **SAME** as Macha's (both `retain_control` loops, Macha `distributed_store.cpp:1112-1122` at f0597a4, Dagda
 `:2554-2562`, put the graph and claim locally first with no catch); Dagda alone takes a control slot for the local put
