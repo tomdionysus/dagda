@@ -94,17 +94,20 @@ void StorageServer::set_hosts_extents(bool hosts) {
 void StorageServer::advertise() {
   auto& nodes = _context.nodes();
   nodes.advertise(capacity_advert, dannan::membership::u64_advert(_data.limit()));
-  nodes.advertise(used_advert, dannan::membership::u64_advert(_data.used()));
-  nodes.advertise(backends_online_advert, dannan::membership::u64_advert(_data.online_backends()));
+  StoreFigures figures;
+  figures.used = _data.used();
+  figures.backends_online = _data.online_backends();
   if (_cache) {
     const auto extent = static_cast<uint64_t>(_options.extent_size);
     const auto stats = _cache->stats();
-    nodes.advertise(cache_capacity_advert, dannan::membership::u64_advert(static_cast<uint64_t>(_cache->max_blocks()) * extent));
-    nodes.advertise(cache_used_advert, dannan::membership::u64_advert(static_cast<uint64_t>(_cache->blocks()) * extent));
-    nodes.advertise(cache_hits_advert, dannan::membership::u64_advert(stats.hits));
-    nodes.advertise(cache_misses_advert, dannan::membership::u64_advert(stats.misses));
-    nodes.advertise(cache_evictions_advert, dannan::membership::u64_advert(stats.evictions));
+    figures.has_cache = true;
+    figures.cache_capacity = static_cast<uint64_t>(_cache->max_blocks()) * extent;
+    figures.cache_used = static_cast<uint64_t>(_cache->blocks()) * extent;
+    figures.cache_hits = stats.hits;
+    figures.cache_misses = stats.misses;
+    figures.cache_evictions = stats.evictions;
   }
+  nodes.advertise(figures_advert, encode_figures(figures));
   if (_hosts_extents.load(std::memory_order_relaxed))
     nodes.advertise(extents_advert, Bytes{1});
   else
