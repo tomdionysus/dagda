@@ -11,6 +11,10 @@
 // packing at 1 MiB into 64 MiB packs, a 500 ms durability window. Every call goes
 // through the Context, as Macha's port will.
 //
+// No maintenance runs, as none runs on Macha's BareNode: the fixture's maintenance is
+// not automatic, and the driver calls no pass, so no collector, repair, survey, scrub
+// or local stage carries load the Macha side does not. Prompt replication runs on both.
+//
 //   harness-dagda <workload>
 
 #include <cstdio>
@@ -115,10 +119,11 @@ class DagdaStore final : public harness::Store {
   };
   std::unique_ptr<Publication> publication(size_t node, harness::Frame frame) override { return std::make_unique<DagdaPublication>(api(node), frame); }
 
-  std::optional<harness::Bytes> read(size_t node, const harness::Id& id, harness::Frame frame, std::chrono::milliseconds deadline) override {
+  std::optional<harness::Bytes> read(size_t node, const harness::Id& id, size_t stripe, harness::Frame frame, std::chrono::milliseconds deadline) override {
     dagda::ReadOptions options;
     options.frame = frame_of(frame);
     options.deadline = deadline;
+    options.stripe = stripe;
     const auto result = api(node).objects().read(object_of(id), options);
     if (!result.object) return std::nullopt;
     return result.object->bytes;
