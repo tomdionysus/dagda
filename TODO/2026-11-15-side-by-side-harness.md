@@ -185,9 +185,12 @@ Findings:
    replication makes it during the publication (write amplification 1.99 at the barrier), Macha's mostly after (1.78).
    For Macha to rule on: whether a loader's barrier should come first and replication after, as Macha's does.
 2. **CPU: Dagda spends more, still a gap.** +13% to settle one publication, +4% for ten, +12% on small files. Part
-   is Dannan's placement, which copied every roster record with its adverts about five times a call (376 perf samples
-   against Macha's 139 on small files). Dannan fixed it on `feature/placement-copies` (6145bcc, for 0.8.2), reviewed
-   by Dagda; the before-and-after figure follows. The rest is to profile on publication-one.
+   was thought to be Dannan's placement, which copied every roster record with its adverts about five times a call
+   (376 perf samples against Macha's 139 on small files). Dannan removed those copies on `feature/placement-copies`
+   (6145bcc, for 0.8.2), reviewed by Dagda. But the before-and-after shows no measurable CPU change: small-files 0.772 s
+   [0.706-0.787] before, 0.797 s [0.785-0.803] after, copy samples 234 to 188
+   (`placement-before-after.jsonl`). What copies remain are per message in Dannan's net layer (told to Dannan, not
+   asked for). The gap is mostly Dagda's own: next, profile publication-one, which shows it largest (+13%).
 3. **The viewer: Dagda better** alone and under load, at a 3% lower loader rate.
 4. The publication-ten variance seen in phase 1 was the method: with fstrim and a rest both stores are steady,
    bar one slow run each (Macha 184, Dagda 147 MB/s), different rounds and orders.
