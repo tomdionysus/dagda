@@ -1919,15 +1919,18 @@ std::optional<dannan::sched::RetainedMemoryLedger::Lease> DistributedStore::read
   const auto left = own_deadline ? std::chrono::duration_cast<std::chrono::milliseconds>(until - _time.now()) : _options.call_no_progress;
   const auto end = dannan::contract::Clock::now() + std::max(left, std::chrono::milliseconds::zero());
   auto& budget = _context.budget();
+  // An extent no class but control could ever hold is refused at once, not waited on.
+  if (const auto stats = budget.stats(); _options.extent_size > stats.capacity_bytes - stats.control_reserve_bytes) return std::nullopt;
   while (true) {
     if (options.cancelled && options.cancelled->load(std::memory_order_relaxed)) return std::nullopt;
     const auto now = dannan::contract::Clock::now();
     if (now >= end) return budget.reserve(work, object_payload_owner, _options.extent_size);
     const auto until_slice = std::min(end, now + slice);
     if (auto lease = budget.acquire(work, object_payload_owner, _options.extent_size, until_slice)) return lease;
-    // Empty before its slice ended: the class can never hold an extent, or the
-    // budget is stopping. Neither changes by asking again.
-    if (dannan::contract::Clock::now() < until_slice || _stopping.load(std::memory_order_relaxed)) return std::nullopt;
+    // Empty well inside its slice: the budget is stopping, which asking again does not
+    // change. A timed wait may wake a little early; that is a slice, not a refusal.
+    if (dannan::contract::Clock::now() < now + slice / 2 && until_slice > now + slice / 2) return std::nullopt;
+    if (_stopping.load(std::memory_order_relaxed)) return std::nullopt;
   }
 }
 
