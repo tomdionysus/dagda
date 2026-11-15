@@ -669,7 +669,10 @@ void Node::reconfigure(const NodeReload& reload) {
   dannan::contract::Lock lock(_reload_mutex);
   if (!_data) throw NodeRefused("the node is not running");
   std::set<std::filesystem::path> wanted;
+  std::set<std::filesystem::path> named;
   for (const auto& backend : reload.backends) {
+    // Refused before anything changes, as the pool would refuse it after.
+    if (!named.insert(backend.path.lexically_normal()).second) throw NodeRefused("duplicate storage backend: " + backend.path.lexically_normal().string());
     if (const auto why = store::backend_refusal_v18(_options.state, backend.path)) throw NodeRefused(*why);
     wanted.insert(backend.path);
   }

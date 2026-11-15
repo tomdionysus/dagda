@@ -378,6 +378,26 @@ TEST(NodeReconfigure, BackendsAndCacheFollowALiveReload) {
   EXPECT_NO_THROW(store::StorageLock free_again(second));
 }
 
+// A reload naming one disk twice is refused before anything changes: no new root is
+// locked and the node keeps what it had, as Node::reconfigure promises (the store map,
+// pool gap 8).
+TEST(NodeReconfigure, AReloadRefusedForADuplicateBackendChangesNothing) {
+  Cluster cluster;
+  auto& node = cluster.add("node", fast_link());
+  cluster.start_all();
+  const auto backends = node.dagda_node().options().pool.backends;
+  const auto second = cluster.dir() / "second";
+  std::filesystem::create_directories(second);
+  auto twice = backends;
+  twice.push_back({second, 64ULL * 1024 * 1024, 0});
+  twice.push_back({second, 64ULL * 1024 * 1024, 0});
+  EXPECT_THROW(node.dagda_node().reconfigure({twice, {}}), NodeRefused);
+  EXPECT_EQ(node.data().online_backends(), 1u);
+  EXPECT_EQ(node.dagda_node().options().pool.backends.size(), backends.size());
+  // Not locked by the refused reload: another may take it.
+  EXPECT_NO_THROW(store::StorageLock free(second));
+}
+
 // Macha's reload touches only the pool's locks (local_state.cpp:189-193 at f0597a4):
 // a maintenance pass in progress does not hold it back (the store map, pool gap 4).
 TEST(NodeReconfigure, AReloadDoesNotWaitForAMaintenancePassInProgress) {
