@@ -605,9 +605,20 @@ DistributedStore::LogicalCapacity DistributedStore::logical_capacity() const {
   const size_t replicas = std::max<size_t>(1, std::min<size_t>(_options.replication, nodes.size()));
   const uint64_t total = dannan::placement::logical_capacity(nodes, replicas, capacity_advert);
   if (!total) return local();
-  unsigned __int128 physical_used = 0;
-  for (const auto& node : nodes) physical_used += node.advert_u64(used_advert).value_or(0);
-  const auto used = static_cast<uint64_t>(std::min<unsigned __int128>(physical_used / replicas, std::numeric_limits<uint64_t>::max()));
+  // The sum of every node's used over the replicas, exact without a 128-bit
+  // integer (pedantic C++ has none): each node's quotient, then the remainders',
+  // saturating at the largest figure.
+  constexpr uint64_t most = std::numeric_limits<uint64_t>::max();
+  uint64_t used = 0;
+  uint64_t remainders = 0;
+  for (const auto& node : nodes) {
+    const auto bytes = node.advert_u64(used_advert).value_or(0);
+    const auto share = bytes / replicas;
+    used = used > most - share ? most : used + share;
+    remainders += bytes % replicas;
+  }
+  const auto rest = remainders / replicas;
+  used = used > most - rest ? most : used + rest;
   return {total, std::min(used, total)};
 }
 
