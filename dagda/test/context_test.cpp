@@ -104,7 +104,7 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
   const auto data = test::numbered(42);
   const auto id = store::object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = on_strand<WriteEvidence>(strand, [&](boost::asio::any_io_executor executor, Context::Objects::WriteDone done) {
     a.api().objects().write(data, write, deadline, executor, std::move(done));
   });
@@ -208,7 +208,7 @@ TEST(Context, VersionTwoServesMachasObjectForms) {
   const auto data = test::numbered(44);
   const auto id = store::object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto written = a.api().objects().write(id, std::span<const uint8_t>(data), write);
   EXPECT_EQ(written.id, id);
   EXPECT_TRUE(written.met);
@@ -376,7 +376,7 @@ TEST(Context, VersionTwoGivesTheLogicalCapacityAsMachasStatfs) {
 
   const auto data = test::numbered(70);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   ASSERT_TRUE(a.api().objects().write(store::object_id(data), std::span<const uint8_t>(data), write).met);
 
   // Two domains of one pool each at two replicas: one pool's worth of logical space.

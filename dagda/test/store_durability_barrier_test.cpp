@@ -264,7 +264,7 @@ struct AskedBarriers {
 WriteOptions deferred_replicated() {
   WriteOptions out;
   out.deferred = true;
-  out.level = Durability::replicated;
+  out.ack_level = Durability::replicated;
   return out;
 }
 
@@ -596,7 +596,7 @@ TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
   const auto bytes = pattern(32 * 1024, 7);
   WriteOptions deferred;
   deferred.deferred = true;
-  deferred.level = Durability::persisted;
+  deferred.ack_level = Durability::persisted;
   const auto written = a.store().write(object_id(bytes), bytes, deferred);
 
   boost::asio::io_context caller;
