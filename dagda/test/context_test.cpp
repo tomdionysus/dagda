@@ -355,5 +355,49 @@ TEST(Context, VersionTwoServesMachasBareControlForms) {
   EXPECT_FALSE(a.api().claims().retained(contract::RetentionClass::control, more_id));
 }
 
+// Contract version 2's logical capacity, Macha's statfs (FileSystem::logical_capacity,
+// filesystem.cpp:2412 at f0597a4; the Macha session's port, R2): over the active nodes
+// that host extents, the water level at min(replication, nodes) replicas across failure
+// domains, and their advertised used over that many replicas, never above the total. An
+// edge node holding no extents is not in it; with no hosting node known, this node's
+// own pool.
+TEST(Context, VersionTwoGivesTheLogicalCapacityAsMachasStatfs) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  auto& a = cluster.add("a", options);
+  auto& b = cluster.add("b", options);
+  auto edge_options = options;
+  edge_options.hosts_extents = false;
+  auto& c = cluster.add("c", edge_options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(70);
+  WriteOptions write;
+  write.level = Durability::replicated;
+  ASSERT_TRUE(a.api().objects().write(store::object_id(data), std::span<const uint8_t>(data), write).met);
+
+  // Two domains of one pool each at two replicas: one pool's worth of logical space.
+  const auto expected_used = [&] { return (a.data().used() + b.data().used()) / 2; };
+  for (auto* node : {&a, &b, &c}) {
+    EXPECT_TRUE(test::wait_until([&] {
+      const auto capacity = node->api().objects().logical_capacity();
+      return capacity.total == options.limit && capacity.used == expected_used() && capacity.used > 0;
+    })) << "total "
+        << node->api().objects().logical_capacity().total << " used " << node->api().objects().logical_capacity().used << " expected " << expected_used();
+  }
+
+  // Alone, a node's figure is its own pool's.
+  Cluster single;
+  auto& d = single.add("d", options);
+  single.start_all();
+  EXPECT_TRUE(test::wait_until([&] {
+    const auto capacity = d.api().objects().logical_capacity();
+    return capacity.total == d.data().limit() && capacity.used == std::min(d.data().limit(), d.data().used());
+  }));
+}
+
 }  // namespace
 }  // namespace dagda
