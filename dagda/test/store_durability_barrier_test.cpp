@@ -28,7 +28,10 @@
 #include <filesystem>
 #include <future>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "dagda/store/distributed_store.h"
@@ -619,6 +622,94 @@ TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
   (void)caller.poll();
   ASSERT_TRUE(told.has_value());
   EXPECT_TRUE(told->empty());
+}
+
+// Macha's lines for a barrier that leaves a write short are its barrier's, whoever
+// waits (distributed_store.cpp:725-727 and :760-764 at f0597a4): so through the
+// contract's waits too, and a local copy re-derived from disk is counted on the round's
+// one re-derived line, as Macha counts its stale local tokens (the store map,
+// distributed store gap 14).
+TEST(StoreDurabilityBarrier, AnUnmetBarrierThroughTheContractIsLoggedAsMachaLogsIt) {
+  Cluster cluster;
+  auto one = options(1);
+  one.durability_window = 2s;
+  auto& a = cluster.add("a", one);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(32 * 1024, 78);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_NE(written.on(a.id()), nullptr);
+  ASSERT_TRUE(written.on(a.id())->durability);
+  std::filesystem::remove_all(a.backend());
+  const auto evidence = a.api().tickets().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_FALSE(evidence->met);
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(a.log().saw(LogLevel::debug, "object durability quorum unavailable id=" + to_string(written.id) + " required=1 durable=0 transient=no"));
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=0 absent=1 peers=0"));
+}
+
+// One barrier round that probes two restarted peers says so on one line with the
+// count of peers probed, as Macha's (distributed_store.cpp:725-727 at f0597a4), not a
+// line a peer.
+TEST(StoreDurabilityBarrier, ARoundThatProbesTwoPeersSaysSoOnOneLine) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(3, 3));
+  auto& b = cluster.add("b", options(3, 3));
+  auto& c = cluster.add("c", options(3, 3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  WriteOptions durable;
+  durable.deferred = true;
+  durable.ack_level = Durability::durable;
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 4; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(230 + i));
+    const auto written = a.store().write(object_id(bytes), bytes, durable);
+    ASSERT_EQ(written.holders(), 3u);
+    tickets.push_back(written.ticket);
+  }
+  b.restart();
+  c.restart();
+  ASSERT_TRUE(cluster.converged());
+  std::vector<WriteEvidence> evidence;
+  ASSERT_TRUE(wait_until(
+      [&] {
+        evidence = a.store().wait(tickets, 2s);
+        return std::all_of(evidence.begin(), evidence.end(), [](const WriteEvidence& one) { return one.settled; });
+      },
+      30s));
+  for (const auto& one : evidence) EXPECT_TRUE(one.met);
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=8 absent=0 peers=2"));
+  EXPECT_FALSE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=4 absent=0 peers=1"));
+}
+
+// Macha's write quorum line says result=1 for any write that landed a copy and was not
+// cancelled, one that ended short of its floor included (distributed_store.cpp:288 and
+// :475 at f0597a4). The line is written only for a write of half a second or more, so
+// the peer's refusal is held that long.
+TEST(StoreDurabilityBarrier, ASlowWriteThatEndedShortIsLoggedAsLanded) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen != message::put_object_deferred && seen != message::put_object) return std::nullopt;
+    // Real time: the line's threshold is the write's own steady clock, as Macha's.
+    std::this_thread::sleep_for(600ms);
+    return Handled::failed(507, "storage_full", "storage limit reached");
+  });
+  const auto bytes = pattern(32 * 1024, 94);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 1u);
+  std::optional<std::string> line;
+  for (const auto& one : a.log().lines())
+    if (one.find("object write quorum id=" + to_string(written.id)) != std::string::npos) line = one;
+  ASSERT_TRUE(line);
+  EXPECT_NE(line->find(" success=1 "), std::string::npos) << *line;
+  EXPECT_TRUE(line->ends_with(" result=1")) << *line;
 }
 
 // The synchronous wait runs on the caller's thread, as Macha's durability_barrier did
