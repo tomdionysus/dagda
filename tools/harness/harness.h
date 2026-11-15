@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -101,6 +102,16 @@ struct ProcessFigures {
   uint64_t hwm_bytes = 0;
   uint64_t write_bytes = 0;
 };
+
+// When HARNESS_PERF_CTL names perf's control fifo (perf record -D -1 --control
+// fifo:<path>), the profile covers only the measured span: enabled where a workload's
+// figures start, disabled where they end, so each store's startup and teardown stay out.
+inline void perf_control(const char* command) {
+  const char* path = std::getenv("HARNESS_PERF_CTL");
+  if (!path || !*path) return;
+  std::ofstream out(path);
+  out << command << '\n';
+}
 
 inline uint64_t status_kib(const std::string& key) {
   std::ifstream in("/proc/self/status");
@@ -250,6 +261,7 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
     if (!publishing->finish()) failed = true;
     barrier.add(Clock::now() - started);
   };
+  perf_control("enable");
   const auto before = process_figures();
   const auto barriers_before = all_barriers(store);
   const auto started = Clock::now();
@@ -288,6 +300,7 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
     if (next_unheld < pending.size()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   const auto settled = process_figures();
+  perf_control("disable");
   report.figure("settled", next_unheld == pending.size() ? 1 : 0, "bool");
   report.figure("settled_seconds", std::chrono::duration<double>(Clock::now() - started).count(), "s");
   report.figure("settled_cpu_per_gb", (settled.cpu_seconds - before.cpu_seconds) / (static_cast<double>(bytes) / 1e9), "s/GB");
@@ -305,6 +318,7 @@ inline void small_files(Store& store, size_t count, size_t size, size_t publishe
   Latencies file;
   std::atomic<size_t> next{0};
   std::atomic<size_t> failed{0};
+  perf_control("enable");
   const auto before = process_figures();
   const auto barriers_before = all_barriers(store);
   const auto started = Clock::now();
@@ -332,7 +346,9 @@ inline void small_files(Store& store, size_t count, size_t size, size_t publishe
       if (!done) break;
     }
   const auto took = Clock::now() - started;
-  report.span(before, process_figures(), took, count * size, all_barriers(store) - barriers_before);
+  const auto after = process_figures();
+  perf_control("disable");
+  report.span(before, after, took, count * size, all_barriers(store) - barriers_before);
   report.latencies("file", file);
   report.figure("publish_seconds", std::chrono::duration<double>(wrote - started).count(), "s");
   report.figure("gc_removal_and_compaction_seconds", std::chrono::duration<double>(Clock::now() - wrote).count(), "s");
