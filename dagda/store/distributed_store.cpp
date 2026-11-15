@@ -857,7 +857,10 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     floor = waited.size();
   } else {
     order = nodes;
-    if (!nodes.empty()) floor = level == Durability::persisted ? 1 : std::max<size_t>(1, std::min(_options.write_copies, nodes.size()));
+    // Persisted: the disk that took it, this node's first. Replicated: a majority of
+    // the replication set on disk, dead members counted (the stack's acknowledgement
+    // standard, the maintainer, 2026-11-15); write_copies no longer decides it.
+    if (!nodes.empty()) floor = level == Durability::persisted ? 1 : std::max<size_t>(1, set.size() / 2 + 1);
     initial = std::min(floor, order.size());
   }
   const size_t target = std::min(_options.replication, nodes.size());

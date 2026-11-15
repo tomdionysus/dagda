@@ -65,9 +65,11 @@ enum class Durability : uint8_t {
   // Received in memory and queued; the call returns at once. Best effort: it
   // may be lost.
   ephemeral,
-  // On disk on at least one node.
+  // On the disk that took it: this node's when it can hold the copy, else the next
+  // in placement order (the stack's acknowledgement standard, the maintainer, 2026-11-15).
   persisted,
-  // On disk on at least k nodes: for objects k is the store's write_copies.
+  // On disk on a majority of the replication set, a member Dannan sees as dead
+  // counted, so it cannot be met without the majority.
   replicated,
   // On disk on every available node of the replication set. A node Dannan
   // already sees as dead is not waited on and is named pending; a live one
