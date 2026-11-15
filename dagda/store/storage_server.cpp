@@ -95,6 +95,7 @@ void StorageServer::advertise() {
   auto& nodes = _context.nodes();
   nodes.advertise(capacity_advert, dannan::membership::u64_advert(_data.limit()));
   nodes.advertise(used_advert, dannan::membership::u64_advert(_data.used()));
+  nodes.advertise(backends_online_advert, dannan::membership::u64_advert(_data.online_backends()));
   if (_hosts_extents.load(std::memory_order_relaxed))
     nodes.advertise(extents_advert, Bytes{1});
   else

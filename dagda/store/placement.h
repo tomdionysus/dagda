@@ -36,6 +36,9 @@ inline constexpr const char* extents_advert = "dagda/extents";
 // The DATA bytes a node holds, as a u64: with its capacity, whether it has
 // room for one more extent (Macha's NodeInfo::used).
 inline constexpr const char* used_advert = "dagda/used";
+// How many of a node's DATA disks are online, as a u64, refreshed with its storage
+// (Macha's storage_backends_online, storage_server.cpp:56-57 at f0597a4).
+inline constexpr const char* backends_online_advert = "dagda/backends-online";
 
 // The scheme DATA is placed under. Waits on nothing; thread-safe.
 const dannan::placement::Scheme& data_scheme();
