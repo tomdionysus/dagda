@@ -312,7 +312,7 @@ TEST(StoreRepair, APushPassesAPeerWithNoRoom) {
   // Within an extent of its limit, as its adverts say.
   const auto filler = local_objects(full, 3, 512 * 1024, 90);
   full.server().advertise();
-  ASSERT_TRUE(wait_until([&] { return record_of(writer, full.id()).advert_u64(used_advert).value_or(0) + extent > 2 * extent; }));
+  ASSERT_TRUE(wait_until([&] { return used_of(record_of(writer, full.id())) + extent > 2 * extent; }));
 
   // An object the full peer would own: among the first three in rank.
   Bytes bytes;
@@ -337,7 +337,7 @@ TEST(StoreRepair, APushPassesAPeerWithNoRoom) {
 
   for (const auto& filled : filler) ASSERT_TRUE(full.data().remove(filled));
   full.server().advertise();
-  ASSERT_TRUE(wait_until([&] { return record_of(writer, full.id()).advert_u64(used_advert).value_or(0) + extent <= 2 * extent; }));
+  ASSERT_TRUE(wait_until([&] { return used_of(record_of(writer, full.id())) + extent <= 2 * extent; }));
   const auto again = lacks_of({{full.id(), live}, {fallback.id(), {}}, {owner.id(), {}}});
   for (int pass = 0; pass < 4 && full.calls_of(message::put_object) == 0; ++pass)
     (void)writer.store().repair_step({inventory_of(live), {}, again, {}}, 8ULL * 1024 * 1024, 16);

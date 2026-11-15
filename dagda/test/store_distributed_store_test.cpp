@@ -527,7 +527,8 @@ TEST(DistributedStore, ARefreshAdvertisesTheBackendsOnline) {
   ASSERT_TRUE(cluster.converged());
   const auto seen = [&]() -> std::optional<uint64_t> {
     for (const auto& node : b.context().nodes().active())
-      if (node.id == a.id()) return node.advert_u64(backends_online_advert);
+      if (node.id == a.id())
+        if (const auto figures = figures_of(node)) return figures->backends_online;
     return std::nullopt;
   };
   a.server().refresh();
@@ -560,16 +561,67 @@ TEST(DistributedStore, TheCacheIsAdvertisedWithItsActivity) {
   ASSERT_EQ(reader.store().get(id, playback), bytes);
   reader.server().refresh();
   const uint64_t extent = options(2).store.extent_size;
-  const auto advert = [&](const char* name) -> std::optional<uint64_t> {
+  const auto figures = [&]() -> std::optional<StoreFigures> {
     for (const auto& node : peer.context().nodes().active())
-      if (node.id == reader.id()) return node.advert_u64(name);
+      if (node.id == reader.id()) return figures_of(node);
     return std::nullopt;
   };
-  EXPECT_TRUE(wait_until([&] { return advert(cache_capacity_advert) == std::optional<uint64_t>(8 * extent); }));
-  EXPECT_EQ(advert(cache_used_advert), std::optional<uint64_t>(extent));
-  EXPECT_GE(advert(cache_hits_advert).value_or(0), 1u);
-  EXPECT_TRUE(advert(cache_misses_advert).has_value());
-  EXPECT_TRUE(advert(cache_evictions_advert).has_value());
+  EXPECT_TRUE(wait_until([&] { return figures() && figures()->cache_capacity == 8 * extent; }));
+  ASSERT_TRUE(figures().has_value());
+  EXPECT_TRUE(figures()->has_cache);
+  EXPECT_EQ(figures()->cache_used, extent);
+  EXPECT_GE(figures()->cache_hits, 1u);
+}
+
+// The store's figures travel as one advert beside the three placement and sealing
+// read on their own (capacity, extents and the domain's wrap key), so a roster record,
+// copied on every placement and every message, carries four of Dagda's adverts, not ten
+// (the maintainer, 2026-11-15: the side-by-side harness found the copies a part of Dagda's CPU
+// on small files). A peer reads them through figures_of, never by parsing.
+TEST(DistributedStore, TheStoresFiguresTravelAsOneAdvert) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(a.data().put(object_id(pattern(64 * 1024, 17)), pattern(64 * 1024, 17)));
+  a.server().refresh();
+  const auto record = [&]() -> std::optional<dannan::membership::NodeRecord> {
+    for (const auto& node : b.context().nodes().active())
+      if (node.id == a.id()) return node;
+    return std::nullopt;
+  };
+  EXPECT_TRUE(wait_until([&] {
+    const auto seen = record();
+    return seen && figures_of(*seen) && figures_of(*seen)->used == a.data().used() && used_of(*seen) == a.data().used();
+  }));
+  const auto seen = record();
+  ASSERT_TRUE(seen.has_value());
+  size_t dagda_adverts = 0;
+  for (const auto& [key, value] : seen->adverts) dagda_adverts += key.rfind("dagda", 0) == 0 ? 1 : 0;
+  EXPECT_EQ(dagda_adverts, 4u);
+  EXPECT_TRUE(seen->adverts.contains(capacity_advert));
+  EXPECT_TRUE(seen->adverts.contains(extents_advert));
+  EXPECT_TRUE(seen->adverts.contains(figures_advert));
+  EXPECT_EQ(figures_of(*seen)->backends_online, 1u);
+  // A record without the advert has no figures, and its used reads as zero.
+  dannan::membership::NodeRecord bare;
+  EXPECT_FALSE(figures_of(bare).has_value());
+  EXPECT_EQ(used_of(bare), 0u);
+  // What the encoder writes, the reader reads.
+  StoreFigures written;
+  written.used = 7;
+  written.backends_online = 2;
+  written.has_cache = true;
+  written.cache_capacity = 11;
+  written.cache_used = 3;
+  written.cache_hits = 5;
+  written.cache_misses = 1;
+  written.cache_evictions = 4;
+  bare.adverts[figures_advert] = encode_figures(written);
+  ASSERT_TRUE(figures_of(bare).has_value());
+  EXPECT_EQ(*figures_of(bare), written);
+  EXPECT_EQ(used_of(bare), 7u);
 }
 
 // A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
