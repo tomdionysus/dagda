@@ -175,9 +175,12 @@ chain, with Macha's stage names on `NodeOptions::startup_stage` (`39fffc4`,
 `StoreLocalStore.AnObjectPutAgainAfterItsRemoveSurvivesCompactionOfTheRemove`). The Macha session reviewed the
 compaction fix in code: it passes.
 
-Waiting on Dannan (asked 2026-11-14): a waiting retained-memory reserve with an owner on `Context::Budget`, for reads to
-hold their class's memory (cache gap 1, distributed store gap 6); promotion of a call in flight to loader (distributed
-store gap 12).
+From Dannan (asked 2026-11-14, answered 2026-11-15): a waiting `Budget::acquire(class, owner, bytes, deadline,
+cancelled)` and an owned `reserve`, in Dannan 0.8.0, for reads to hold their class's memory (cache gap 1, distributed
+store gap 6): built here once 0.8.0 is merged. Promotion of a call in flight to loader (distributed store gap 12) is a
+new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
+protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
+cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
 - Safety: pack compaction kept what replay needs (the maintainer: Dagda's to fix; a defect in Macha's store too). A compacted
   pack's live puts are rewritten with their current age; a remove is carried while a put of its object survives in
   another pack; the newest touch of an object put elsewhere is carried; such records count as live (`7f14515`,
