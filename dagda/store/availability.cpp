@@ -135,7 +135,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   for (const auto& peer : _context.nodes().active()) {
     if (peer.id == self || !peer.advert(extents_advert)) continue;
     hosts.push_back(peer);
-    peers.emplace_back(peer.id, peer.advert_u64(used_advert).value_or(0));
+    peers.emplace_back(peer.id, used_of(peer));
   }
   std::sort(peers.begin(), peers.end());
   const auto previous = _snapshot.handle();

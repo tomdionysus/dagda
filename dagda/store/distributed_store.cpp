@@ -612,7 +612,7 @@ DistributedStore::LogicalCapacity DistributedStore::logical_capacity() const {
   uint64_t used = 0;
   uint64_t remainders = 0;
   for (const auto& node : nodes) {
-    const auto bytes = node.advert_u64(used_advert).value_or(0);
+    const auto bytes = used_of(node);
     const auto share = bytes / replicas;
     used = used > most - share ? most : used + share;
     remainders += bytes % replicas;
@@ -1811,7 +1811,7 @@ void DistributedStore::prompt_replication_loop(std::stop_token stop) {
         }
         // Room as the node advertises it; a refused put wastes the link.
         const auto capacity = node.advert_u64(capacity_advert).value_or(0);
-        const auto used = node.advert_u64(used_advert).value_or(0);
+        const auto used = used_of(node);
         if (capacity && used + room_needed > capacity) {
           skipped_full = true;
           continue;
@@ -3063,7 +3063,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   const auto has_room = [&](const NodeRecord& peer) {
     if (peer.id == _self) return true;
     const auto capacity = peer.advert_u64(capacity_advert).value_or(0);
-    return !capacity || peer.advert_u64(used_advert).value_or(0) + extent <= capacity;
+    return !capacity || used_of(peer) + extent <= capacity;
   };
   // What the diff says a peer holds, or nothing for a peer it did not ask.
   const auto known_present = [&](const NodeId& peer, const ObjectId& id) -> std::optional<bool> {
