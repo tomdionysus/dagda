@@ -280,12 +280,14 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     }
     if (type == message::delete_object) {
       const auto id = message::decode_id(request.payload);
-      const auto admitted = admit_data(frame, extent, false);
-      if (!admitted) return busy();
       {
-        // The claim check marks the object for the delete.
+        // The claim check first, as Macha's handler (storage_server.cpp:393-410 at
+        // f0597a4): a claimed object is claimed whatever the node's load. It marks the
+        // object for the delete; admission is tried once under the mark, never waited for.
         const auto deletion = _data.claim_locks().deletion(id, [&] { return _claims.retained(contract::RetentionClass::data, id); });
         if (deletion.claimed()) return Handled::failed(409, "claimed", "object has an active retention claim");
+        const auto admitted = admit_data(frame, extent, false);
+        if (!admitted) return busy();
         (void)_data.remove(id);
       }
       if (_cache) (void)_cache->remove(id);

@@ -473,6 +473,49 @@ TEST(DistributedStore, ADataClaimBarrierIsMeasured) {
   EXPECT_GE(observations.histogram("claim.data_barrier_us").snapshot().count, 1u);
 }
 
+// Macha's delete handler checks the claim before admission (storage_server.cpp:393-410
+// at f0597a4): a claimed object answers 409 "claimed" however busy the node is; an
+// unclaimed one on a busy node answers 503 (the store map, retention gap 7).
+TEST(DistributedStore, ADeleteOfAClaimedObjectIsClaimedEvenWhenBusy) {
+  Cluster cluster;
+  auto busy_options = options(1);
+  const uint64_t extent = busy_options.store.extent_size;
+  busy_options.data_inflight_bytes = 2 * extent;
+  busy_options.foreground_reserve_bytes = extent;
+  busy_options.background_concurrency = 1;
+  auto& a = cluster.add("a", busy_options);
+  auto& b = cluster.add("b", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto claimed = pattern(32 * 1024, 30);
+  const auto unclaimed = pattern(32 * 1024, 31);
+  ASSERT_TRUE(a.data().put(object_id(claimed), claimed));
+  ASSERT_TRUE(a.data().put(object_id(unclaimed), unclaimed));
+  a.claims().retain(contract::RetentionClass::data, object_id(claimed), {a.id(), 1});
+
+  // Every byte of a's loader credit held.
+  ASSERT_NE(a.credit(), nullptr);
+  const DataWorkContext loader(FrameType::loader);
+  auto held = a.credit()->try_acquire(loader, extent);
+  ASSERT_TRUE(held.has_value());
+  ASSERT_FALSE(a.credit()->try_acquire(loader, 1).has_value());
+
+  std::optional<dannan::membership::NodeRecord> target;
+  for (const auto& node : b.context().nodes().active())
+    if (node.id == a.id()) target = node;
+  ASSERT_TRUE(target.has_value());
+  const auto ask = [&](const Bytes& data) -> uint16_t {
+    const auto outcome = b.context().routes().call_and_wait(*target, message::delete_object, message::encode_id(object_id(data)), FrameType::loader, 10s);
+    if (!outcome.reply) return 0;
+    const auto refusal = dannan::net::refusal_of(*outcome.reply);
+    return refusal ? refusal->status : 0;
+  };
+  EXPECT_EQ(ask(claimed), 409);
+  EXPECT_TRUE(a.data().has(object_id(claimed)));
+  EXPECT_EQ(ask(unclaimed), 503);
+  EXPECT_TRUE(a.data().has(object_id(unclaimed)));
+}
+
 // A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
 // (distributed_store.cpp:1345-1346 at f0597a4; the store map, distributed store gap 15).
 TEST(DistributedStore, AForegroundReplicateAllIsForegroundActivity) {
