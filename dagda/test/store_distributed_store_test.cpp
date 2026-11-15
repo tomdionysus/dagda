@@ -540,6 +540,38 @@ TEST(DistributedStore, ARefreshAdvertisesTheBackendsOnline) {
   EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(1); }));
 }
 
+// Each storage refresh advertises the cache's capacity, its use and its activity, as
+// Macha's (storage_server.cpp:62-65 at f0597a4, shown by Status per node; the store
+// map, cache gap 3).
+TEST(DistributedStore, TheCacheIsAdvertisedWithItsActivity) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(256 * 1024, 13);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(peer.data().put(id, bytes));
+  reader.cache().reconfigure({cluster.dir() / "reader" / "cache", 8, true});
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.server().refresh();
+  const uint64_t extent = options(2).store.extent_size;
+  const auto advert = [&](const char* name) -> std::optional<uint64_t> {
+    for (const auto& node : peer.context().nodes().active())
+      if (node.id == reader.id()) return node.advert_u64(name);
+    return std::nullopt;
+  };
+  EXPECT_TRUE(wait_until([&] { return advert(cache_capacity_advert) == std::optional<uint64_t>(8 * extent); }));
+  EXPECT_EQ(advert(cache_used_advert), std::optional<uint64_t>(extent));
+  EXPECT_GE(advert(cache_hits_advert).value_or(0), 1u);
+  EXPECT_TRUE(advert(cache_misses_advert).has_value());
+  EXPECT_TRUE(advert(cache_evictions_advert).has_value());
+}
+
 // A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
 // (distributed_store.cpp:1345-1346 at f0597a4; the store map, distributed store gap 15).
 TEST(DistributedStore, AForegroundReplicateAllIsForegroundActivity) {

@@ -96,6 +96,15 @@ void StorageServer::advertise() {
   nodes.advertise(capacity_advert, dannan::membership::u64_advert(_data.limit()));
   nodes.advertise(used_advert, dannan::membership::u64_advert(_data.used()));
   nodes.advertise(backends_online_advert, dannan::membership::u64_advert(_data.online_backends()));
+  if (_cache) {
+    const auto extent = static_cast<uint64_t>(_options.extent_size);
+    const auto stats = _cache->stats();
+    nodes.advertise(cache_capacity_advert, dannan::membership::u64_advert(static_cast<uint64_t>(_cache->max_blocks()) * extent));
+    nodes.advertise(cache_used_advert, dannan::membership::u64_advert(static_cast<uint64_t>(_cache->blocks()) * extent));
+    nodes.advertise(cache_hits_advert, dannan::membership::u64_advert(stats.hits));
+    nodes.advertise(cache_misses_advert, dannan::membership::u64_advert(stats.misses));
+    nodes.advertise(cache_evictions_advert, dannan::membership::u64_advert(stats.evictions));
+  }
   if (_hosts_extents.load(std::memory_order_relaxed))
     nodes.advertise(extents_advert, Bytes{1});
   else
