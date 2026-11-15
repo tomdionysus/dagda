@@ -36,7 +36,13 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
    on node-b, three alternating rounds against Macha, with the protocol in the harness plan. The experiment predicted
    about 3%.
 2. **Fewer thread hand-offs and less placement per write** (the small-file profile: placement 125 samples against
-   Macha's 78, more sealing, futex wake-ups), test-first, then remeasure.
+   Macha's 78, more sealing, futex wake-ups), test-first, then remeasure. **Built and gated, not yet measured**
+   (2026-11-15 night): the synchronous waits run their barriers on the caller's thread with no timer, worker job or
+   post (`616df37`, test `a019e2f` failed first at 15 s against 5); the barrier round reads the roster only for a peer
+   place (same commit); a write ranks once when every node is live (`3df3b8d`). Gates: `3df3b8d` node-c 1109 ran /
+   1106 passed / 3 skipped; the measurement script is `build/pi-advert.sh` (Macha, `e9e93f0`, the tip; rotating).
+   What stays like for like and is not changed: the peer's re-advertising on every put (Macha's storage server does
+   the same), the events counter, prompt replication's probe-then-put (Macha's design).
 3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
 4. **Harness phase 2**: reads (local and over a shaped link: a note on the claim board first), CONTROL graphs, deletes
    and GC, repair, recovery (kill -9), disk pressure (dm-delay), cache; strace fsync counts on a separate rerun.
@@ -44,7 +50,10 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes an
    adapter over it.
-6. Cosmetic gaps left from the store map: DS gap 14's log lines, the pool's gap 9 TimedLock (Dannan), 8c's loop items.
+6. Cosmetic gaps left from the store map: the pool's gap 9 TimedLock (Dannan), 8c's loop items (gc-and-deletion gaps
+   1-4 are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9, a null inventory letting an instant
+   delete go, is a design question for the maintainer with Lugh and Lir). DS gap 14's log lines done (`6adc5ed`, tests `b54784a`;
+   node-a 1112 / 1109 / 3).
 
 Paused with the slices, kept for when the maintainer resumes them: `0.2.0`'s release steps (`COMPLETED.md`, "Archived from
 ACTIVE.md, 2026-11-15"), the follower's lag (Lugh's P8.5 waits on it; slice 2's first step), slice 0's last two
@@ -60,6 +69,9 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 - The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, the maintainer 2026-11-09). Macha is
   chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
+- `StoreRepair.AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow` failed once (node-c, 2026-11-15, `616df37`, Lir's
+  build beside it): the read did not move on within 30 s of the stepped clock's 301 s advance. Suspected the case's
+  race (a call's progress noted after the advance restarts its window); passed in the next whole run. Not looked into.
 - The pool's `get` stopping at the first backend's empty answer: Macha's, kept.
 - The trie pins aged on the node's time source where Macha reads the real clock (the same on live nodes).
 - The Pis' under-voltage under heavy builds: their supplies are the maintainer's to look at; journals are persistent now.

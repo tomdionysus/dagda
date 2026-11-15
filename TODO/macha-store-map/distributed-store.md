@@ -182,6 +182,8 @@ Counts: SAME 17 (rows 15, 16, 17, 18, 19, 22, 24, 25, 26, 28, 29, 30, 31, 33, 34
    CTX:425-445); the re-derived line is per peer with `peers=1` (DS:1450-1451) where Macha's is one line
    with the peer count (ds:725-727); the quorum line's `result=` differs (DS:1049 vs ds:288). Test:
    `StoreDurabilityBarrier.AnUnmetBarrierThroughTheContractIsLoggedAsMachaLogsIt`. Severity: cosmetic.
+   **Done 2026-11-15** (`6adc5ed`; tests `b54784a`, with `.ARoundThatProbesTwoPeersSaysSoOnOneLine` and
+   `.ASlowWriteThatEndedShortIsLoggedAsLanded`): the barrier round writes both lines before its waits answer.
 15. **`replicate_all` at foreground does not note foreground bytes** (ds:1345-1346 vs DS:1177-1199).
    Test: `DistributedStore.AForegroundReplicateAllIsForegroundActivity`. Severity: cosmetic.
 
