@@ -1916,7 +1916,9 @@ std::optional<dannan::sched::RetainedMemoryLedger::Lease> DistributedStore::read
   // have: no call here waits for ever.
   constexpr auto slice = std::chrono::milliseconds(25);
   const auto work = dannan::sched::work_class(options.frame);
-  const auto left = own_deadline ? std::chrono::duration_cast<std::chrono::milliseconds>(until - _time.now()) : _options.call_no_progress;
+  // Rounded up, so a wait that runs out ends at or past the read's deadline, never a
+  // part of a millisecond before it.
+  const auto left = own_deadline ? std::chrono::ceil<std::chrono::milliseconds>(until - _time.now()) : _options.call_no_progress;
   const auto end = dannan::contract::Clock::now() + std::max(left, std::chrono::milliseconds::zero());
   auto& budget = _context.budget();
   // An extent no class but control could ever hold is refused at once, not waited on.
