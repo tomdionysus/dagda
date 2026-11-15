@@ -594,6 +594,23 @@ DistributedStore::WritePlacement DistributedStore::write_placement(const ObjectI
   return out;
 }
 
+DistributedStore::LogicalCapacity DistributedStore::logical_capacity() const {
+  auto nodes = _context.nodes().active();
+  std::erase_if(nodes, [](const NodeRecord& node) { return !node.adverts.contains(extents_advert); });
+  const auto local = [&] {
+    const uint64_t limit = _data.limit();
+    return LogicalCapacity{limit, std::min(limit, _data.used())};
+  };
+  if (nodes.empty()) return local();
+  const size_t replicas = std::max<size_t>(1, std::min<size_t>(_options.replication, nodes.size()));
+  const uint64_t total = dannan::placement::logical_capacity(nodes, replicas, capacity_advert);
+  if (!total) return local();
+  unsigned __int128 physical_used = 0;
+  for (const auto& node : nodes) physical_used += node.advert_u64(used_advert).value_or(0);
+  const auto used = static_cast<uint64_t>(std::min<unsigned __int128>(physical_used / replicas, std::numeric_limits<uint64_t>::max()));
+  return {total, std::min(used, total)};
+}
+
 std::vector<NodeRecord> DistributedStore::replication_set(const ObjectId& id) const {
   auto set = dannan::placement::by_capacity(id.bytes, hosting(_context.nodes().roster()), _options.replication, data_scheme());
   if (set.size() > _options.replication) set.resize(_options.replication);

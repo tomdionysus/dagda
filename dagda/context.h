@@ -239,6 +239,9 @@ class Context {
     // This node's pool holds it: the local ground truth. Asks no peer.
     static constexpr dannan::sched::Waits has_waits = dannan::sched::local_waits;
     bool has(const ObjectId& id) const;
+    // The cluster's logical space and use, as Macha's statfs gives them
+    // (store::DistributedStore::logical_capacity). Waits on nothing.
+    store::DistributedStore::LogicalCapacity logical_capacity() const;
 
     // The instant delete (Tom, 2026-11-04 night, "Claims and space"; the
     // message and the replica's rule are store/remove.h). Every node present

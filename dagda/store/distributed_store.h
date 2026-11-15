@@ -563,6 +563,17 @@ class DistributedStore final : public ControlObjectSource {
   // Active hosting nodes in placement order: the first `replication` the
   // owners, the rest fallbacks.
   std::vector<dannan::membership::NodeRecord> ranked(const ObjectId& id) const;
+  // Macha's statfs (FileSystem::logical_capacity, filesystem.cpp:2412 at f0597a4):
+  // over the active nodes that host extents, the water level at min(replication,
+  // nodes) replicas across failure domains (Dannan's placement::logical_capacity),
+  // and their advertised used over that many replicas, at most the total. With no
+  // hosting node known, or none with a capacity yet, this node's own pool, its used
+  // at most its limit. Waits on nothing.
+  struct LogicalCapacity {
+    uint64_t total = 0;
+    uint64_t used = 0;
+  };
+  LogicalCapacity logical_capacity() const;
   // A write's two placements from one reading of the roster: the replication set
   // (every hosting node known) and the order (the active ones), as replication_set
   // and ranked give them, with no node in one and missing from the other's roster.

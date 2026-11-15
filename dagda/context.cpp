@@ -173,6 +173,8 @@ uint64_t Context::Objects::reachability_epoch() const { return _node.store().rea
 
 bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
 
+store::DistributedStore::LogicalCapacity Context::Objects::logical_capacity() const { return _node.store().logical_capacity(); }
+
 void Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
                               boost::asio::any_io_executor executor, RemoveDone done) {
   check_deadline(deadline);
