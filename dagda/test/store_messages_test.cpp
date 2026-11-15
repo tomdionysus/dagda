@@ -286,6 +286,16 @@ TEST(StoreMessages, APutOrAClaimCarriesItsPrincipalAfterMachasFields) {
   truncated.pop_back();
   EXPECT_THROW(decode_object(truncated), dannan::net::DecodeError);
 
+  // An extent is encoded in one allocation of its exact size: a buffer grown as it is
+  // written copies and zeroes an extent's pages again (the side-by-side harness found
+  // it the largest part of Dagda's CPU over Macha's on a publication, 2026-11-15).
+  const Bytes extent(4 * 1024 * 1024 + 7, 0x5a);
+  const auto sized = encode_object(id_a, extent, alice);
+  EXPECT_EQ(sized.capacity(), sized.size());
+  EXPECT_EQ(decode_object(sized).data, extent);
+  EXPECT_EQ(decode_object(sized).principal, std::optional<WritePrincipal>(alice));
+  EXPECT_EQ(encode_object(id_a, extent).capacity(), encode_object(id_a, extent).size());
+
   contract::RetentionDot dot;
   dot.origin.bytes.fill(0x11);
   dot.sequence = 5;
