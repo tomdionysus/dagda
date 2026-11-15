@@ -56,6 +56,8 @@ dagda::test::ClusterNodeOptions node_options() {
   out.limit = 16ULL * 1024 * 1024 * 1024;
   out.packed = true;
   out.pack_target_size = 64ULL * 1024 * 1024;
+  // Packing at 1 MiB, as Macha's side: a 4 MiB extent is a loose file on both.
+  out.pack_threshold = 1024 * 1024;
   out.durability_window = 500ms;
   out.store.replication = 2;
   out.store.write_copies = 1;
