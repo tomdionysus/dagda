@@ -177,7 +177,10 @@ compaction fix in code: it passes.
 
 From Dannan (asked 2026-11-14, answered 2026-11-15): a waiting `Budget::acquire(class, owner, bytes, deadline,
 cancelled)` and an owned `reserve`, in Dannan 0.8.0, for reads to hold their class's memory (cache gap 1, distributed
-store gap 6): built here once 0.8.0 is merged. Promotion of a call in flight to loader (distributed store gap 12) is a
+store gap 6): built here once 0.8.0 is merged (`feature/budget-acquire` in Dannan; gate on the 0.8.0 tag, build early
+on develop once merged). `acquire` refuses a default deadline, so a read with no deadline of its own waits under the
+arbiter's no-progress window; a cancel is seen only when the ledger is woken (`Budget::wake()` after the flag is set);
+`Budget::stats()` gives the ledger with its owners' bytes. Promotion of a call in flight to loader (distributed store gap 12) is a
 new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
 protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
 cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
@@ -206,6 +209,12 @@ cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
   and a claimless offer (`c02be9d`); the filesystem forms put_here, put_deferred_here, locally_available, cache_local,
   hydration_available, hydrate, ensure_local, reachability_epoch, and `Claims::retain_data_here` (`1ee2740`);
   `Context::Devices` DATA admission for the owner's disk I/O and the device monitor (`3b57a6b`). `Context.VersionTwo*`.
+
+Reviewer findings checked against code (2026-11-15): the local CONTROL claim's failure escaping before any peer is
+tried is **SAME** as Macha's (both `retain_control` loops, Macha `distributed_store.cpp:1112-1122` at f0597a4, Dagda
+`:2554-2562`, put the graph and claim locally first with no catch); Dagda alone takes a control slot for the local put
+and skips it when the reserve is full. `cache_local` and `hydrate` are **SAME** (Macha `:2235-2265`). Claims and
+reference counts opening after the pool: resolved by the side-by-side open (`39fffc4`).
 
 **Still Macha-side first:** prompt replication's wait with no timeout, the repair-share wake's rounding.
 
