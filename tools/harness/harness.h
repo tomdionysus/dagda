@@ -349,10 +349,23 @@ inline void viewer_under_load(Store& store, std::chrono::seconds seconds, const 
   report.figure("loader_throughput", static_cast<double>(loaded_bytes.load()) / static_cast<double>(seconds.count()) / 1e6, "MB/s");
 }
 
+// Idle: both nodes up and converged, nothing asked of the store, for `seconds`. What
+// the store's own loops cost a second, which every timed workload carries beside its
+// work.
+inline void idle(Store& store, std::chrono::seconds seconds, const Report& report) {
+  const auto before = process_figures();
+  const auto barriers_before = all_barriers(store);
+  const auto started = Clock::now();
+  std::this_thread::sleep_for(seconds);
+  report.span(before, process_figures(), Clock::now() - started, 0, all_barriers(store) - barriers_before);
+}
+
 // The workloads by name, as both drivers take them on the command line.
 inline int run(Store& store, const std::string& workload) {
   const Report report(store.describe(), workload);
-  if (workload == "publication-one") {
+  if (workload == "idle") {
+    idle(store, std::chrono::seconds(20), report);
+  } else if (workload == "publication-one") {
     publication(store, 512ULL * 1024 * 1024, 1, report);
   } else if (workload == "publication-ten") {
     // 512 MiB a file, as baseline.py's and as ingest's media files are: 5 GiB a run.
@@ -362,7 +375,7 @@ inline int run(Store& store, const std::string& workload) {
   } else if (workload == "viewer-under-load") {
     viewer_under_load(store, std::chrono::seconds(30), report);
   } else {
-    std::fprintf(stderr, "unknown workload %s: publication-one, publication-ten, small-files, viewer-under-load\n", workload.c_str());
+    std::fprintf(stderr, "unknown workload %s: idle, publication-one, publication-ten, small-files, viewer-under-load\n", workload.c_str());
     return 2;
   }
   return 0;

@@ -115,6 +115,11 @@ struct ClusterNodeOptions {
   store::IoReserveOptions io;
   bool device_reserve = true;
   std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
+  // The cadences, quick so a case converges fast; the harness sets a deployment's.
+  std::chrono::milliseconds heartbeat{100};
+  std::chrono::milliseconds telemetry_interval{200};
+  std::chrono::milliseconds status_interval{200};
+  std::chrono::milliseconds refresh_interval{500};
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
   store::RepairOptions repair = [] {
@@ -426,7 +431,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     out.admission.reset();
   }
   out.server.hosts_extents = _options.hosts_extents;
-  out.server.refresh_interval = std::chrono::milliseconds(500);
+  out.server.refresh_interval = _options.refresh_interval;
   out.server.admission_wait = _options.admission_wait;
   out.store = _options.store;
   out.store.admission_wait = _options.admission_wait;
@@ -435,7 +440,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.maintenance = _options.maintenance;
   out.garbage_grace = _options.garbage_grace;
   if (_options.wall) out.wall = _options.wall;
-  out.status_interval = std::chrono::milliseconds(200);
+  out.status_interval = _options.status_interval;
   out.trace = _options.trace;
   out.startup_stage = _options.startup_stage;
   out.startup_progress = _options.startup_progress;
@@ -487,9 +492,9 @@ inline void ClusterNode::open() {
   config.failure_domain = _options.failure_domain.empty() ? _name : _options.failure_domain;
   config.bootstrap = _cluster.seeds_for(*this);
   config.inbound = dannan::reach::Inbound::yes;
-  config.heartbeat = std::chrono::milliseconds(100);
+  config.heartbeat = _options.heartbeat;
   config.dead_after = _cluster.dead_after();
-  config.telemetry_interval = std::chrono::milliseconds(200);
+  config.telemetry_interval = _options.telemetry_interval;
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;

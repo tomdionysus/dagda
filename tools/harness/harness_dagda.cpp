@@ -67,6 +67,13 @@ dagda::test::ClusterNodeOptions node_options() {
   out.background_concurrency = 2;
   out.device_reserve = false;
   out.store.prompt_read_admission = false;
+  // The cadences Macha's side runs (its harness's 1 s heartbeat, which its storage
+  // server also refreshes at, and its default 10 s telemetry), not the fixture's test
+  // speeds: a 100 ms heartbeat cost Dagda's side about 25 ms of CPU a second at idle.
+  out.heartbeat = 1s;
+  out.telemetry_interval = 10s;
+  out.status_interval = 10s;
+  out.refresh_interval = 1s;
   return out;
 }
 
