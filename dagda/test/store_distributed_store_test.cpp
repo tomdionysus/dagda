@@ -473,6 +473,22 @@ TEST(DistributedStore, ADataClaimBarrierIsMeasured) {
   EXPECT_GE(observations.histogram("claim.data_barrier_us").snapshot().count, 1u);
 }
 
+// A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
+// (distributed_store.cpp:1345-1346 at f0597a4; the store map, distributed store gap 15).
+TEST(DistributedStore, AForegroundReplicateAllIsForegroundActivity) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 29);
+  (void)a.store().take_foreground_bytes();
+  EXPECT_GE(a.store().replicate_all(object_id(data), data, true), 1u);
+  EXPECT_GE(a.store().take_foreground_bytes(), data.size());
+  EXPECT_GE(a.store().replicate_all(object_id(data), data, false), 1u);
+  EXPECT_EQ(a.store().take_foreground_bytes(), 0u);
+}
+
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
 // objects no node present holds costs the one batched presence scan and
 // nothing per object: they are reported unheld. An object the peer does
