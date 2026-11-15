@@ -77,6 +77,11 @@ bool PersistentBlockCache::enabled() const {
   return _store && _options.max_blocks;
 }
 
+size_t PersistentBlockCache::max_blocks() const {
+  Lock lock(_state_mutex);
+  return _store ? _options.max_blocks : 0;
+}
+
 void PersistentBlockCache::rebuild_lru_locked() {
   _lru.clear();
   _lru_index.clear();

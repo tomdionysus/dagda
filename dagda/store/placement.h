@@ -39,6 +39,14 @@ inline constexpr const char* used_advert = "dagda/used";
 // How many of a node's DATA disks are online, as a u64, refreshed with its storage
 // (Macha's storage_backends_online, storage_server.cpp:56-57 at f0597a4).
 inline constexpr const char* backends_online_advert = "dagda/backends-online";
+// The node's cache, each a u64, refreshed with its storage (Macha's advertise_cache,
+// storage_server.cpp:62-65 at f0597a4): capacity and use in bytes, and its hits,
+// misses and evictions since start.
+inline constexpr const char* cache_capacity_advert = "dagda/cache-capacity";
+inline constexpr const char* cache_used_advert = "dagda/cache-used";
+inline constexpr const char* cache_hits_advert = "dagda/cache-hits";
+inline constexpr const char* cache_misses_advert = "dagda/cache-misses";
+inline constexpr const char* cache_evictions_advert = "dagda/cache-evictions";
 
 // The scheme DATA is placed under. Waits on nothing; thread-safe.
 const dannan::placement::Scheme& data_scheme();

@@ -80,6 +80,8 @@ class PersistentBlockCache {
   bool has(const ObjectId& id) const;
   bool remove(const ObjectId& id);
   size_t blocks() const;
+  // The blocks it may hold: zero when off.
+  size_t max_blocks() const;
 
   // Cumulative since start; entries is instantaneous. Sustained zero hits
   // with high evictions is a defect.
