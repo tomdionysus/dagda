@@ -75,12 +75,15 @@ class Store {
   };
   virtual std::unique_ptr<Publication> publication(size_t node, Frame frame) = 0;
 
-  // A read through the store (local, cache, then peers); nothing when it brought nothing
-  // by the deadline.
-  virtual std::optional<Bytes> read(size_t node, const Id& id, Frame frame, std::chrono::milliseconds deadline) = 0;
+  // A read through the store (local, cache, then peers), as Macha's readers make it: the
+  // store's shared buffer, copied once into the result (get_shared on Macha's side, the
+  // ReadResult's object on Dagda's). `stripe` is the extent's index in its file, as
+  // FUSE's ReadHandle passes it. Nothing when it brought nothing by the deadline.
+  virtual std::optional<Bytes> read(size_t node, const Id& id, size_t stripe, Frame frame, std::chrono::milliseconds deadline) = 0;
 
-  // The node's own copy removed (a delete reaching this node), and one bounded
-  // compaction of dead pack bytes.
+  // The node's own copy removed and one bounded compaction of dead pack bytes: what the
+  // collector does after the garbage grace (Macha removes a deleted file's bytes only
+  // there, never at the delete).
   virtual bool remove_local(size_t node, const Id& id) = 0;
   virtual size_t compact(size_t node) = 0;
 
@@ -251,24 +254,32 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
   report.figure("failed", failed ? 1 : 0, "bool");
 }
 
-// 2. Small files: `count` objects of `size`, each made durable, then every one removed
-// and the dead bytes compacted: packing, removes and compaction (the pattern live-b
-// crashed under).
-inline void small_files(Store& store, size_t count, size_t size, const Report& report) {
-  std::vector<Id> ids;
-  Latencies put;
-  size_t failed = 0;
+// 2. Small files: `count` files of `size`, each published as FUSE publishes a small file
+// (one extent written deferred, then its barrier), by `publishers` at once as Macha's
+// commit workers do, so the durability window group-commits barriers across files. Then
+// the collector's part, after the garbage grace: every copy removed and the dead bytes
+// compacted (packing, removes and compaction: the pattern live-b crashed under).
+inline void small_files(Store& store, size_t count, size_t size, size_t publishers, const Report& report) {
+  std::vector<Id> ids(count);
+  Latencies file;
+  std::atomic<size_t> next{0};
+  std::atomic<size_t> failed{0};
   const auto before = process_figures();
   const auto barriers_before = all_barriers(store);
   const auto started = Clock::now();
-  for (size_t i = 0; i < count; ++i) {
-    const auto data = pattern(size, 7000000 + i);
-    const auto id = store.id_of(data);
-    const auto call = Clock::now();
-    if (!store.put(0, id, data, Frame::loader)) ++failed;
-    put.add(Clock::now() - call);
-    ids.push_back(id);
-  }
+  std::vector<std::thread> workers;
+  for (size_t w = 0; w < publishers; ++w)
+    workers.emplace_back([&] {
+      for (size_t i = next++; i < count; i = next++) {
+        const auto data = pattern(size, 7000000 + i);
+        ids[i] = store.id_of(data);
+        const auto call = Clock::now();
+        auto publishing = store.publication(0, Frame::loader);
+        if (!publishing->extent(ids[i], data) || !publishing->finish()) ++failed;
+        file.add(Clock::now() - call);
+      }
+    });
+  for (auto& worker : workers) worker.join();
   const auto wrote = Clock::now();
   for (const auto& id : ids)
     for (size_t n = 0; n < store.nodes(); ++n) (void)store.remove_local(n, id);
@@ -281,11 +292,11 @@ inline void small_files(Store& store, size_t count, size_t size, const Report& r
     }
   const auto took = Clock::now() - started;
   report.span(before, process_figures(), took, count * size, all_barriers(store) - barriers_before);
-  report.latencies("put", put);
-  report.figure("write_seconds", std::chrono::duration<double>(wrote - started).count(), "s");
-  report.figure("delete_and_compact_seconds", std::chrono::duration<double>(Clock::now() - wrote).count(), "s");
+  report.latencies("file", file);
+  report.figure("publish_seconds", std::chrono::duration<double>(wrote - started).count(), "s");
+  report.figure("gc_removal_and_compaction_seconds", std::chrono::duration<double>(Clock::now() - wrote).count(), "s");
   report.figure("compactions", static_cast<double>(compactions), "packs");
-  report.figure("failed", static_cast<double>(failed), "puts");
+  report.figure("failed", static_cast<double>(failed.load()), "files");
 }
 
 // 4. A viewer under load: foreground reads of objects already held, timed, while a
@@ -300,9 +311,9 @@ inline void viewer_under_load(Store& store, std::chrono::seconds seconds, const 
   }
   // The viewer alone first, for its unloaded latency.
   Latencies alone;
-  for (const auto& id : held) {
+  for (size_t stripe = 0; stripe < held.size(); ++stripe) {
     const auto started = Clock::now();
-    if (!store.read(0, id, Frame::foreground, std::chrono::seconds(30))) throw std::runtime_error("an unloaded read brought nothing");
+    if (!store.read(0, held[stripe], stripe, Frame::foreground, std::chrono::seconds(30))) throw std::runtime_error("an unloaded read brought nothing");
     alone.add(Clock::now() - started);
   }
   report.latencies("viewer_alone", alone);
@@ -327,7 +338,8 @@ inline void viewer_under_load(Store& store, std::chrono::seconds seconds, const 
   size_t i = 0;
   while (Clock::now() < until) {
     const auto started = Clock::now();
-    if (!store.read(0, held[i++ % held.size()], Frame::foreground, std::chrono::seconds(30))) ++misses;
+    const auto stripe = i++ % held.size();
+    if (!store.read(0, held[stripe], stripe, Frame::foreground, std::chrono::seconds(30))) ++misses;
     viewer.add(Clock::now() - started);
   }
   stop = true;
@@ -343,9 +355,10 @@ inline int run(Store& store, const std::string& workload) {
   if (workload == "publication-one") {
     publication(store, 512ULL * 1024 * 1024, 1, report);
   } else if (workload == "publication-ten") {
-    publication(store, 64ULL * 1024 * 1024, 10, report);
+    // 512 MiB a file, as baseline.py's and as ingest's media files are: 5 GiB a run.
+    publication(store, 512ULL * 1024 * 1024, 10, report);
   } else if (workload == "small-files") {
-    small_files(store, 200, 64 * 1024, report);
+    small_files(store, 200, 64 * 1024, 8, report);
   } else if (workload == "viewer-under-load") {
     viewer_under_load(store, std::chrono::seconds(30), report);
   } else {

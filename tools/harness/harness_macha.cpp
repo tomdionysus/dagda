@@ -233,10 +233,12 @@ class MachaStore final : public harness::Store {
   };
   std::unique_ptr<Publication> publication(size_t node, harness::Frame frame) override { return std::make_unique<MachaPublication>(store(node), frame); }
 
-  std::optional<harness::Bytes> read(size_t node, const harness::Id& id, harness::Frame frame, std::chrono::milliseconds deadline) override {
-    auto bytes = store(node).get(object_of(id), 0, frame_of(frame), Clock::now() + deadline);
-    if (!bytes) return std::nullopt;
-    return harness::Bytes(bytes->begin(), bytes->end());
+  // As Macha's readers read (FUSE's ReadHandle, the media inputs): the shared buffer,
+  // copied once.
+  std::optional<harness::Bytes> read(size_t node, const harness::Id& id, size_t stripe, harness::Frame frame, std::chrono::milliseconds deadline) override {
+    const auto shared = store(node).get_shared(object_of(id), stripe, frame_of(frame), Clock::now() + deadline);
+    if (!shared) return std::nullopt;
+    return harness::Bytes(shared->bytes.begin(), shared->bytes.end());
   }
 
   bool remove_local(size_t node, const harness::Id& id) override { return _nodes.at(node)->local_state().data().remove(object_of(id)); }
