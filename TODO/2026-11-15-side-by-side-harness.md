@@ -194,3 +194,35 @@ Findings:
 3. **The viewer: Dagda better** alone and under load, at a 3% lower loader rate.
 4. The publication-ten variance seen in phase 1 was the method: with fstrim and a rest both stores are steady,
    bar one slow run each (Macha 184, Dagda 147 MB/s), different rounds and orders.
+
+### The publication CPU gap: found and fixed (2026-11-15)
+
+Profiled with perf confined to the measured span (`HARNESS_PERF_CTL`, `f595941`), publication-one showed Dagda at
+105,335 task-clock samples against Macha's 99,614. 4,835 of them were in `run_write`'s `message::encode_object`:
+every write encoded its payload for a peer call, even when only this node's copy was launched (write_copies 1). The
+encode also grew its buffer once the principal was appended after a 4 MiB payload, so each extent was copied twice and
+4 MiB of fresh pages zeroed (capacity 8,388,694 for 4,194,373 bytes). Fixed test-first: `StoreMessages.
+APutOrAClaimCarriesItsPrincipalAfterMachasFields` asserts one allocation of the exact size (failed at `2a734c6`,
+passes at `07ad6d2`; the wire bytes unchanged, by the golden hex beside it). The payload is now encoded at the first
+peer call only. Gate on neptune at `07ad6d2`, Dannan 0.8.0: 1106 ran, 1103 passed, 3 skipped, 0 failed, 0 warnings.
+
+After the fix (`rerun4-after-encode.jsonl`, the same protocol; Macha then Dagda, medians):
+
+| Workload | Figure | Macha | Dagda |
+|---|---|---|---|
+| publication-one | MB/s to the barrier | 114.7 | 117.8 |
+| | CPU s/GB to the barrier / settled | 12.59 / 14.49 | 12.06 / 14.11 |
+| | seconds until both nodes hold it | 5.88 | 5.76 |
+| | replicated at the barrier | 0.766 | 0.766 |
+| publication-ten | CPU s/GB to the barrier / settled | 9.98 / 16.14 | 8.64 / 15.56 |
+| | MB/s to the barrier, median [range] | 179.2 [142.1-224.3] | 220.5 [123.7-229.3] |
+| | seconds until settled, median [range] | 69.6 [65.8-81.9] | 73.4 [69.4-82.0] |
+| small-files | CPU | 0.701 s | 0.768 s |
+
+- One publication: Dagda now as good or better on every figure. The earlier "Dagda replicates during the
+  publication" (finding 1 above) was the encode slowing Dagda's writer, not a faster replicator: replication at the
+  barrier is now equal, so Macha's question 2 needs no change.
+- Ten publications: Dagda spends less CPU. Throughput and time to settle varied widely on both sides in this round
+  (a slow run each), so no difference is claimed there.
+- **Small files: still a gap**, 9.4% (about 0.33 ms a file), now the only one in phase 1. Next: the same in-span
+  profile on small-files.
