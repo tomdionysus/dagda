@@ -1264,12 +1264,13 @@ TEST(DistributedStore, PersistedReturnsOnTheFirstCopyOnDisk) {
   held.open();
 }
 
-// Replicated: on disk on k = write_copies nodes before it returns.
-TEST(DistributedStore, ReplicatedWaitsForWriteCopies) {
+// Replicated: on disk on a majority of the replication set before it returns, the
+// stack's acknowledgement standard (Tom, 2026-11-15), whatever write_copies is.
+TEST(DistributedStore, ReplicatedWaitsForAMajorityOfTheReplicas) {
   Cluster cluster;
-  auto& writer = cluster.add("writer", options(3, 2));
-  cluster.add("one", options(3, 2));
-  cluster.add("two", options(3, 2));
+  auto& writer = cluster.add("writer", options(3, 1));
+  cluster.add("one", options(3, 1));
+  cluster.add("two", options(3, 1));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto data = pattern(32 * 1024, 43);
@@ -1284,6 +1285,19 @@ TEST(DistributedStore, ReplicatedWaitsForWriteCopies) {
   EXPECT_GE(holding, 2u);
   // Every member of the replication set is named.
   EXPECT_EQ(std::count_if(evidence.replicas.begin(), evidence.replicas.end(), [](const ReplicaEvidence& r) { return r.in_set; }), 3);
+
+  // Of two replicas the majority is both.
+  Cluster pair;
+  auto& first = pair.add("first", options(2, 1));
+  auto& second = pair.add("second", options(2, 1));
+  pair.start_all();
+  ASSERT_TRUE(pair.converged());
+  const auto both = pattern(32 * 1024, 46);
+  const auto on_both = first.store().write(object_id(both), both, write);
+  EXPECT_TRUE(on_both.met);
+  EXPECT_EQ(on_both.sought, 2u);
+  EXPECT_TRUE(first.data().has(object_id(both)));
+  EXPECT_TRUE(second.data().has(object_id(both)));
 }
 
 // Durable: on disk on every live member of the replication set, named by
