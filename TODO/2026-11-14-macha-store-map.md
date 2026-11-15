@@ -229,6 +229,11 @@ reference counts opening after the pool: resolved by the side-by-side open (`39f
 
 **Still Macha-side first:** prompt replication's wait with no timeout, the repair-share wake's rounding.
 
+**Ruled (the maintainer, 2026-11-15): the side-by-side harness builds Macha's store from the extract.** Dagda builds Macha's
+store code from the read-only extract of f0597a4 in its own `build/macha-f0597a4/`, copied to a Pi and built there,
+and drives both stores with one workload driver of Dagda's; `../macha` is never touched, and the Macha session reviews
+the driver.
+
 **Ruled (the maintainer, 2026-11-15): Node for the owner.** The composition root that opens and owns the node keeps `Node`'s owner
 surface (open, stop, reload, the maintenance steps), and the retirement codec and `lease::ClaimedCollection` stay
 library helpers; the Context serves every call Macha's callers make. GC gap 8 is closed by this ruling. The question as
