@@ -209,6 +209,15 @@ struct ReplicaRecord {
 // A local copy left undone on purpose, already logged.
 struct Skipped {};
 
+// A synchronous wait's answers, one slot a ticket, each filled once by whichever
+// thread settles it. A leaf lock: nothing is told under a ticket's lock.
+struct SyncWait {
+  dannan::contract::Mutex mutex;
+  std::condition_variable_any filled;
+  std::vector<std::optional<WriteEvidence>> slots DANNAN_GUARDED_BY(mutex);
+  size_t left DANNAN_GUARDED_BY(mutex) = 0;
+};
+
 struct Waiter {
   boost::asio::any_io_executor executor;
   DistributedStore::WriteDone done;
@@ -216,11 +225,24 @@ struct Waiter {
   bool complete = false;
   std::shared_ptr<boost::asio::steady_timer> timer;
   std::atomic<bool> fired{false};
+  // A synchronous wait's, in place of the executor and the timer: its slot.
+  std::shared_ptr<SyncWait> sync;
+  size_t slot = 0;
 };
 
-// Posts the evidence to the waiter once, never inline.
+// Tells the waiter once: an asynchronous one's evidence posted, never inline; a
+// synchronous one's put in its slot for the caller's thread, which is waiting.
 void tell(const std::shared_ptr<Waiter>& waiter, const WriteEvidence& evidence) {
   if (waiter->fired.exchange(true)) return;
+  if (waiter->sync) {
+    {
+      Lock lock(waiter->sync->mutex);
+      waiter->sync->slots[waiter->slot] = evidence;
+      --waiter->sync->left;
+    }
+    waiter->sync->filled.notify_all();
+    return;
+  }
   if (waiter->timer) boost::asio::post(waiter->timer->get_executor(), [timer = waiter->timer] { timer->cancel(); });
   boost::asio::post(waiter->executor, [done = waiter->done, evidence] { done(evidence); });
 }
@@ -1361,20 +1383,81 @@ void DistributedStore::wait(std::vector<Ticket> tickets, std::chrono::millisecon
 }
 
 std::vector<WriteEvidence> DistributedStore::wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline) {
-  auto promise = std::make_shared<std::promise<std::vector<WriteEvidence>>>();
-  auto future = promise->get_future();
-  wait(tickets, deadline, _executor, [promise](std::vector<WriteEvidence> evidence) { promise->set_value(std::move(evidence)); });
-  // The deadline answers first; the margin only covers the executor.
-  if (future.wait_for(deadline + std::chrono::seconds(5)) == std::future_status::ready) {
-    auto evidence = future.get();
-    for (const auto& one : evidence) note_unmet_barrier(one);
-    return evidence;
+  auto evidence = wait_here(tickets, false, deadline);
+  for (const auto& one : evidence) note_unmet_barrier(one);
+  return evidence;
+}
+
+std::vector<WriteEvidence> DistributedStore::wait_here(const std::vector<Ticket>& tickets, bool complete, std::chrono::milliseconds deadline) {
+  // On the caller's thread, which waits anyway, as Macha's durability_barrier ran
+  // (distributed_store.cpp:681 at f0597a4): no timer, worker job or post a ticket,
+  // so a publication's barrier crosses no more threads than the barrier's own.
+  const auto until = std::chrono::steady_clock::now() + deadline;
+  auto sync = std::make_shared<SyncWait>();
+  {
+    Lock lock(sync->mutex);
+    sync->slots.resize(tickets.size());
+    sync->left = tickets.size();
+  }
+  std::vector<std::pair<std::shared_ptr<TicketRecord>, std::shared_ptr<Waiter>>> armed;
+  std::vector<std::shared_ptr<TicketRecord>> due;
+  for (size_t i = 0; i < tickets.size(); ++i) {
+    auto waiter = std::make_shared<Waiter>();
+    waiter->complete = complete;
+    waiter->sync = sync;
+    waiter->slot = i;
+    std::shared_ptr<TicketRecord> record;
+    {
+      Lock lock(_shared->mutex);
+      if (const auto found = _shared->tickets.find(tickets[i].serial); found != _shared->tickets.end()) record = found->second;
+    }
+    if (!record) {
+      // Forgotten: an evidence with no ticket, settled.
+      WriteEvidence unknown;
+      unknown.settled = true;
+      tell(waiter, unknown);
+      continue;
+    }
+    bool barriers = false;
+    {
+      Lock lock(record->mutex);
+      record->asked = true;
+      for (const auto& replica : record->replicas)
+        if (replica.awaiting == Awaiting::barrier && !replica.running) barriers = true;
+      const auto evidence = record->evidence_locked();
+      if (complete ? evidence.complete : evidence.settled) {
+        lock.unlock();
+        tell(waiter, evidence);
+        continue;
+      }
+      record->waiters.push_back(waiter);
+    }
+    armed.emplace_back(record, waiter);
+    if (barriers) due.push_back(std::move(record));
+  }
+  if (!due.empty()) run_barriers(due, deadline);
+  {
+    Lock lock(sync->mutex);
+    (void)sync->filled.wait_until(lock.native(), until, [&]() DANNAN_REQUIRES(sync->mutex) { return sync->left == 0; });
+  }
+  // At the deadline, each still waiting is told the evidence as it stands, as the
+  // asynchronous wait's timer tells it.
+  for (const auto& [record, waiter] : armed) {
+    if (waiter->fired.load()) continue;
+    WriteEvidence evidence;
+    {
+      Lock lock(record->mutex);
+      std::erase(record->waiters, waiter);
+      evidence = record->evidence_locked();
+    }
+    tell(waiter, evidence);
   }
   std::vector<WriteEvidence> out;
-  for (const auto& ticket : tickets) {
-    auto evidence = status(ticket);
-    out.push_back(evidence ? std::move(*evidence) : WriteEvidence{});
-  }
+  out.reserve(tickets.size());
+  Lock lock(sync->mutex);
+  // Every waiter has fired; one told on another thread may still be filling its slot.
+  sync->filled.wait(lock.native(), [&]() DANNAN_REQUIRES(sync->mutex) { return sync->left == 0; });
+  for (auto& slot : sync->slots) out.push_back(slot ? std::move(*slot) : WriteEvidence{});
   return out;
 }
 
@@ -1429,12 +1512,7 @@ std::shared_ptr<DistributedStore::TicketRecord> DistributedStore::arm_wait(Ticke
 
 std::optional<WriteEvidence> DistributedStore::wait(Ticket ticket, std::chrono::milliseconds deadline) {
   if (!status(ticket)) return std::nullopt;
-  auto promise = std::make_shared<std::promise<WriteEvidence>>();
-  auto future = promise->get_future();
-  wait(ticket, deadline, _executor, [promise](WriteEvidence evidence) { promise->set_value(std::move(evidence)); });
-  // The deadline answers first; the margin only covers the executor.
-  if (future.wait_for(deadline + std::chrono::seconds(5)) != std::future_status::ready) return status(ticket);
-  auto evidence = future.get();
+  auto evidence = std::move(wait_here({ticket}, false, deadline).front());
   if (!evidence.ticket.valid()) return std::nullopt;
   note_unmet_barrier(evidence);
   return evidence;
@@ -1460,11 +1538,7 @@ void DistributedStore::note_unmet_barrier(const WriteEvidence& evidence) const {
 
 std::optional<WriteEvidence> DistributedStore::wait_complete(Ticket ticket, std::chrono::milliseconds deadline) {
   if (!status(ticket)) return std::nullopt;
-  auto promise = std::make_shared<std::promise<WriteEvidence>>();
-  auto future = promise->get_future();
-  wait_complete(ticket, deadline, _executor, [promise](WriteEvidence evidence) { promise->set_value(std::move(evidence)); });
-  if (future.wait_for(deadline + std::chrono::seconds(5)) != std::future_status::ready) return status(ticket);
-  auto evidence = future.get();
+  auto evidence = std::move(wait_here({ticket}, true, deadline).front());
   if (!evidence.ticket.valid()) return std::nullopt;
   return evidence;
 }
@@ -1546,8 +1620,11 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
   };
   // Remote barriers go out first, so the local one's batch window does not
   // serialise them.
+  // The roster is read only when a place is a peer: a publication whose copies are all
+  // this node's copies no record for its barrier.
   std::map<NodeId, NodeRecord> peers;
-  for (const auto& peer : _context.nodes().roster()) peers.emplace(peer.id, peer);
+  if (std::any_of(places.begin(), places.end(), [&](const auto& entry) { return entry.second->node != _self; }))
+    for (auto& peer : _context.nodes().roster()) peers.emplace(peer.id, std::move(peer));
   for (const auto& [key, place] : places) {
     if (place->node == _self) continue;
     const auto found = peers.find(place->node);
