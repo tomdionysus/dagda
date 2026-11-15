@@ -786,6 +786,8 @@ void Node::local_rebalance_locked(LocalTurn& turn) {
   auto& out = turn.stages;
   if (_local_quiescent_events && *_local_quiescent_events != turn.events) _local_quiescent_events.reset();
   if (turn.busy || _local_quiescent_events || _local_credit < static_cast<double>(_options.store.extent_size)) return;
+  // Macha's stage name (maintenance.cpp:1102 at f0597a4).
+  enter_stage("local-rebalance");
   out.rebalance_ran = true;
   const auto started = dannan::contract::Clock::now();
   out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, local_yield(turn));
@@ -901,6 +903,7 @@ void Node::compact_packs_locked(LocalTurn& turn) {
 void Node::local_scrub_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
   if (turn.busy || !turn.scrub_due || _scrub_credit < static_cast<double>(_options.store.extent_size)) return;
+  enter_stage("scrub");
   auto& out = turn.stages;
   out.scrub_ran = true;
   const auto started = dannan::contract::Clock::now();
@@ -934,6 +937,7 @@ void Node::ledger_verify_locked(LocalTurn& turn) {
   const auto directories = static_cast<size_t>(_verify_credit);
   if (!directories) return;
   _verify_credit -= static_cast<double>(directories);
+  enter_stage("ledger-verify");
   auto& out = turn.stages;
   out.verify_ran = true;
   const auto data = _data->verify_step(directories);
