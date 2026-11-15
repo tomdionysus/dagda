@@ -98,3 +98,41 @@ Macha's results-0.94.2.
 
 Kept under `build/harness/results/<date>/`, one JSON line a figure, and summarised here with both stores' numbers side
 by side, each difference a finding: Dagda at least as good, or a gap fixed test-first before the port.
+
+### Phase 1 (2026-11-15, node-b)
+
+Machine: a Raspberry Pi 5, 16 GB, NVMe, the whole machine claimed; `vcgencmd get_throttled` 0x50000 before and after
+(under-voltage and throttling happened since boot, none during the runs). Builds: RelWithDebInfo -O2, GCC.
+"macha f0597a4 on dannan 0.5.3" against "dagda 0.2.0 on dannan 0.8.0" (Dagda `fa65232`). Three runs each, alternating
+Macha then Dagda, cold. Medians, with the range in brackets; `build/harness/results/2026-11-15/phase1.jsonl`.
+
+| Workload | Figure | Macha | Dagda |
+|---|---|---|---|
+| publication-one (512 MiB) | MB/s | 114.2 [113.1-114.4] | 115.3 [114.3-115.8] |
+| | CPU s/GB | 12.76 | 11.99 |
+| | write amplification | 1.785 | 1.589 |
+| | RSS high-water | 191 MB | 174 MB |
+| | barrier | 511 ms | 503 ms |
+| publication-ten (10 x 512 MiB) | MB/s | 222.6 [123.4-224.0] | 171.5 [120.1-206.2] |
+| | CPU s/GB | 9.25 | 9.11 |
+| | write amplification | 1.238 | 1.126 |
+| | barrier p50 / p99 | 480 / 533 ms | 476 / 593 ms |
+| small-files (200 x 64 KiB, 8 publishers) | seconds | 12.78 | 12.79 |
+| | CPU s/GB | 53.8 [53.3-54.3] | 89.4 [88.9-90.1] |
+| | file p50 / p99 | 502 / 514 ms | 502 / 504 ms |
+| | GC removal and compaction | 215 ms | 226 ms |
+| viewer-under-load (30 s) | viewer alone p50 / p99 | 10.5 / 13.7 ms | 9.9 / 13.1 ms |
+| | viewer loaded p50 / p99 / max | 9.7 / 19.9 / 24.5 ms | 8.7 / 18.3 / 24.5 ms |
+| | loader MB/s | 36.9 | 40.3 |
+
+Findings:
+1. **publication-ten: not yet a finding, the method.** Both stores slowed run on run (Macha 24.1, 24.0, 43.5 s; Dagda
+   26.0, 31.3, 44.7 s): the NVMe takes 6 GB a run, and Dagda always ran second in a round, on a disk each time fuller and
+   later. To rerun with the order alternating (Dagda first in alternate rounds), `fstrim` and a rest between runs, before
+   any difference is put down to the store.
+2. **small-files: Dagda spends more CPU.** 1.17 s against 0.70 s for the 200 files on two nodes, the same in every round
+   (about 2.3 ms more a file), with the same wall time (both bound by the 500 ms window) and the same bytes written. A gap:
+   profile both (perf on the Pi) and find where Dagda's per-write cost goes (candidates from the map: a ticket and its
+   evidence a write, the scope check on every local copy, the Context's copies), then fix it test-first.
+3. Everything else is Dagda as good or better: one publication's throughput, CPU and write amplification; the viewer's
+   latency alone and under load, with more loader throughput beside it.
