@@ -109,8 +109,10 @@ class DagdaStore final : public harness::Store {
   }
 
   bool put(size_t node, const harness::Id& id, std::span<const uint8_t> data, harness::Frame frame) override {
+    // Persisted, as Macha's port writes (its floor at write_copies 1; the stack's
+    // acknowledgement standard, the maintainer, 2026-11-15), so both sides do the same work.
     dagda::WriteOptions write;
-    write.level = dagda::Durability::replicated;
+    write.ack_level = dagda::Durability::persisted;
     write.frame = frame_of(frame);
     return api(node).objects().write(object_of(id), data, write).met;
   }
@@ -118,7 +120,7 @@ class DagdaStore final : public harness::Store {
   class DagdaPublication final : public Publication {
    public:
     DagdaPublication(dagda::Context& api, harness::Frame frame) : _api(api) {
-      _write.level = dagda::Durability::replicated;
+      _write.ack_level = dagda::Durability::persisted;
       _write.deferred = true;
       _write.frame = frame_of(frame);
     }
