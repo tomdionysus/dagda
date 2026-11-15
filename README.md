@@ -1,4 +1,4 @@
-# Dagda - The Store
+# Dagda - The Distributed Object Store
 
 Dagda is the store for a cluster of trusted machines. It is a C++20 library that keeps
 objects, claims, leases and shared state across a set of nodes, sealed at rest, with

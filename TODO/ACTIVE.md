@@ -223,7 +223,7 @@ The maintainer's, to the Dagda session, 2026-11-03 night:
 - ~~**Formats stay compatible**, "because they work": layout v18 and the
   store encodings, byte for byte.~~ Superseded 2026-11-04 night (below:
   one layout, v18 migrated in place). Small values must be handled well.
-- **Header tagline: "Dagda - The Store".**
+- **Header tagline: "Dagda - The Distributed Object Store"** (the maintainer, 2026-11-15; it was "Dagda - The Store").
 - **Every write carries a durability level** chosen by the caller
   (2026-11-03, refined 2026-11-04): Ephemeral (in memory, queued, best
   effort), Persisted (on disk on at least one node), Replicated (on disk
@@ -333,7 +333,8 @@ concurrent duplicate adds keep Macha's answer for byte identity (replicas
 settle at the next merge), and new owners' duplicate rules must not
 depend on which record kept the key.
 
-Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store",
+Settled earlier: the plan (approved 2026-11-04), "Dagda - The Store" (now "Dagda - The Distributed Object Store",
+The maintainer, 2026-11-15),
 Dagda's own version number from `0.1.0` pinning a Dannan tag, Dannan
 0.2.0, free message registration from 512, byte-for-byte compatibility
 (superseded 2026-11-04 night: one layout, migrated in place).
