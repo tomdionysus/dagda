@@ -266,6 +266,15 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
   report.span(before, after, took, bytes, all_barriers(store) - barriers_before);
   report.latencies("barrier", barrier);
   report.latencies("extent", extent);
+  // How far replication had got when the barrier answered: the extents every node
+  // already held.
+  size_t everywhere = 0;
+  for (const auto& id : ids) {
+    bool all = true;
+    for (size_t n = 0; n < store.nodes() && all; ++n) all = store.holds(n, id);
+    if (all) ++everywhere;
+  }
+  report.figure("replicated_at_barrier", ids.empty() ? 0 : static_cast<double>(everywhere) / static_cast<double>(ids.size()), "fraction");
   // Settled: every extent held by every node, so the replication the barrier did not
   // wait for is counted too, and the stores compare at equal work. Polled each 100 ms,
   // for at most ten minutes.
