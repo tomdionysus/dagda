@@ -86,6 +86,8 @@ class Store {
   // there, never at the delete).
   virtual bool remove_local(size_t node, const Id& id) = 0;
   virtual size_t compact(size_t node) = 0;
+  // Whether `node`'s own store holds `id` (its DATA, not a cache).
+  virtual bool holds(size_t node, const Id& id) = 0;
 
   // The node's physical barriers so far (syncfs or fsync calls the store made).
   virtual uint64_t barriers(size_t node) const = 0;
@@ -229,11 +231,17 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
   std::atomic<bool> failed{false};
   Latencies barrier;
   Latencies extent;
+  std::mutex ids_mutex;
+  std::vector<Id> ids;
   const auto one_file = [&](uint64_t file) {
     auto publishing = store.publication(0, Frame::loader);
     for (size_t e = 0; e < extents; ++e) {
       const auto data = pattern(extent_bytes, file * 1000003 + e);
       const auto id = store.id_of(data);
+      {
+        std::lock_guard lock(ids_mutex);
+        ids.push_back(id);
+      }
       const auto wrote = Clock::now();
       if (!publishing->extent(id, data)) failed = true;
       extent.add(Clock::now() - wrote);
@@ -253,9 +261,28 @@ inline void publication(Store& store, size_t file_bytes, size_t concurrent, cons
     for (auto& file : files) file.join();
   }
   const auto took = Clock::now() - started;
-  report.span(before, process_figures(), took, file_bytes * std::max<size_t>(1, concurrent), all_barriers(store) - barriers_before);
+  const auto bytes = file_bytes * std::max<size_t>(1, concurrent);
+  const auto after = process_figures();
+  report.span(before, after, took, bytes, all_barriers(store) - barriers_before);
   report.latencies("barrier", barrier);
   report.latencies("extent", extent);
+  // Settled: every extent held by every node, so the replication the barrier did not
+  // wait for is counted too, and the stores compare at equal work. Polled each 100 ms,
+  // for at most ten minutes.
+  const auto settle_until = Clock::now() + std::chrono::minutes(10);
+  size_t next_unheld = 0;
+  std::vector<std::pair<size_t, Id>> pending;
+  for (const auto& id : ids)
+    for (size_t n = 0; n < store.nodes(); ++n) pending.push_back({n, id});
+  while (next_unheld < pending.size() && Clock::now() < settle_until) {
+    while (next_unheld < pending.size() && store.holds(pending[next_unheld].first, pending[next_unheld].second)) ++next_unheld;
+    if (next_unheld < pending.size()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  const auto settled = process_figures();
+  report.figure("settled", next_unheld == pending.size() ? 1 : 0, "bool");
+  report.figure("settled_seconds", std::chrono::duration<double>(Clock::now() - started).count(), "s");
+  report.figure("settled_cpu_per_gb", (settled.cpu_seconds - before.cpu_seconds) / (static_cast<double>(bytes) / 1e9), "s/GB");
+  report.figure("settled_write_amplification", static_cast<double>(settled.write_bytes - before.write_bytes) / static_cast<double>(bytes), "x");
   report.figure("failed", failed ? 1 : 0, "bool");
 }
 
