@@ -248,3 +248,11 @@ Tried, each gated, neither a measurable gain on small files:
 Where it stands: about 11% (0.4 ms a file), wall time and bytes equal. The rest is a record carrying its whole
 advert map through every message and placement (Dannan's 0.9.0 list: net-layer copies by value) and Dagda's thread
 hand-offs per write. Neither has one fix; the next step is Tom's call (below).
+
+An experiment on the advert aggregate (D11, slice 2) before proposing it: each roster record carries 10 adverts,
+765 bytes (`dagda.wrap`, the five cache figures, backends online, capacity, used, extents; printed by the harness at
+start). A build advertising only 4 (wrap, capacity, used, extents), on the Pi's scratch copy, never committed: small
+files 0.741 s [0.741-0.744] against 0.767 s [0.700-0.790] with 10, three alternating rounds each
+(`experiment-advert-count.jsonl`). About 3%. Folding Dagda's figures into one advert would take that much, and leave
+about 6% against Macha's 0.70 s. It also changes the advert names Macha's port reads for its cache figures, so it is
+Macha's to agree as well as Tom's to order.

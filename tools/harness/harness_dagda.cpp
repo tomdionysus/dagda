@@ -86,6 +86,17 @@ class DagdaStore final : public harness::Store {
     _nodes.push_back(&_cluster.add("b", node_options()));
     _cluster.start_all();
     if (!_cluster.converged()) throw std::runtime_error("the two nodes did not converge");
+    // What each roster record carries, which every copy of it copies: to stderr, beside
+    // the figures.
+    for (const auto& record : _nodes[0]->context().nodes().roster()) {
+      size_t bytes = 0;
+      std::string keys;
+      for (const auto& [key, value] : record.adverts) {
+        bytes += key.size() + value.size();
+        keys += (keys.empty() ? "" : ",") + key;
+      }
+      std::fprintf(stderr, "harness-dagda: record adverts=%zu bytes=%zu keys=%s\n", record.adverts.size(), bytes, keys.c_str());
+    }
   }
 
   std::string describe() const override { return std::string("dagda ") + dagda::library_version() + " on dannan " + dannan::library_version(); }
