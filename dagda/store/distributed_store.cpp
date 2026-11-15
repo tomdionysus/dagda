@@ -1246,6 +1246,8 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
       _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, _options.object_transfer_call, peer_call_watch());
   const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
   if (ok) note_network(data.size(), Clock::now() - started);
+  // Foreground bytes moved, as Macha's put_on notes them (ds:1345-1346 at f0597a4).
+  if (frame == FrameType::foreground) _activity.note(frame, data.size());
   return ok;
 }
 
