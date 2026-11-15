@@ -1248,15 +1248,16 @@ WriteEvidence DistributedStore::put_deferred_here(const ObjectId& id, std::span<
   WriteOptions options;
   options.deferred = true;
   options.frame = frame;
-  // Here is one copy, and this node is tried first; on a node that hosts none,
-  // as put_deferred.
-  if (holds_extents()) options.level = Durability::persisted;
+  // Here is one copy, and this node is tried first; on a node that hosts none, the
+  // next in placement order: persisted, the disk that took it (Tom, 2026-11-15).
+  options.level = Durability::persisted;
   return write(id, data, options);
 }
 
 bool DistributedStore::put_here(const ObjectId& id, std::span<const uint8_t> data, FrameType frame) {
   WriteOptions options;
   options.frame = frame;
+  options.level = Durability::persisted;
   if (!holds_extents()) return put(id, data, options);
   check_write(id, data);
   if (const auto refusal = scope_refusal(writer_of(std::nullopt, {}))) {

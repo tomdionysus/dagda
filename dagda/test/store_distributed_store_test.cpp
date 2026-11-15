@@ -109,10 +109,13 @@ TEST(DistributedStore, APutIsLoaderActivityNotViewerActivity) {
 }
 
 // test_store_put_publishes_at_the_floor_and_copies_promptly: a put returns
-// at write_copies with the local copy, never waiting for owners beyond the
-// floor; the prompt worker then copies it to one more owner, and never to an
-// owner that advertises no room.
+// with the local copy, never waiting for owners beyond it; the prompt worker
+// then copies it to one more owner, and never to an owner that advertises no
+// room. Macha's floor is persisted under the stack's acknowledgement standard
+// (Tom, 2026-11-15: the disk that took it), so the writes name it.
 TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
+  WriteOptions floor;
+  floor.level = Durability::persisted;
   {
     dannan::test::Gate owners_answer;
     Cluster cluster;
@@ -127,7 +130,7 @@ TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
 
     const auto data = pattern(128 * 1024);
     const auto id = object_id(data);
-    const auto evidence = writer.store().write(id, data, {});
+    const auto evidence = writer.store().write(id, data, floor);
     EXPECT_EQ(owners_answer.entered(), 0u);
     EXPECT_TRUE(evidence.met);
     EXPECT_EQ(evidence.acknowledged(), 1u);
@@ -147,7 +150,7 @@ TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
     const auto other = pattern(128 * 1024, 7);
-    ASSERT_TRUE(writer.store().put(object_id(other), other));
+    ASSERT_TRUE(writer.store().put(object_id(other), other, floor));
     ASSERT_TRUE(wait_until([&] { return writer.store().prompt_replication_stats().skipped_no_room == 1; }));
     const auto stats = writer.store().prompt_replication_stats();
     EXPECT_EQ(stats.dropped, 1u);
