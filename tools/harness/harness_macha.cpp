@@ -242,6 +242,7 @@ class MachaStore final : public harness::Store {
   }
 
   bool remove_local(size_t node, const harness::Id& id) override { return _nodes.at(node)->local_state().data().remove(object_of(id)); }
+  bool holds(size_t node, const harness::Id& id) override { return _nodes.at(node)->local_state().data().has(object_of(id)); }
   size_t compact(size_t node) override { return static_cast<size_t>(_nodes.at(node)->local_state().data().compact_packs(std::stop_token{})); }
   // Macha's pool counts no barriers of its own: the figure comes from strace on a
   // rerun instead (the plan), so this reads zero.

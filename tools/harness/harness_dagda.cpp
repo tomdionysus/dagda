@@ -140,6 +140,7 @@ class DagdaStore final : public harness::Store {
 
   bool remove_local(size_t node, const harness::Id& id) override { return _nodes.at(node)->data().remove(object_of(id)); }
   size_t compact(size_t node) override { return _nodes.at(node)->data().compact_packs(); }
+  bool holds(size_t node, const harness::Id& id) override { return _nodes.at(node)->data().has(object_of(id)); }
   uint64_t barriers(size_t node) const override { return _nodes.at(node)->data().physical_barriers(); }
 
  private:
