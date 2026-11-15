@@ -185,7 +185,14 @@ arbiter's no-progress window; a cancel is seen only when the ledger is woken (`B
 installed): a read takes an extent of its class's memory, owner `object_payload_owner` (`hosted_first` + 1), after
 admission and before each of the local and cache reads, kept by the buffer to its last reader and let go on a miss;
 the wait is taken in 25 ms slices so a cancel is seen with nothing for the caller to wake; the opportunistic copy
-queue is charged to the same owner (`3e53986`, `DistributedStore.AReadHoldsItsClassMemoryUntilTheLastReaderLetsGo`). Promotion of a call in flight to loader (distributed store gap 12) is a
+queue is charged to the same owner (`3e53986`, `DistributedStore.AReadHoldsItsClassMemoryUntilTheLastReaderLetsGo`).
+Built early on Dannan develop `26ba1be` (installed into a private prefix on corvus-saturn, nothing system-wide):
+GCC Release with warnings as errors, 0 warnings; `dagda_tests` with Macha's fixtures 1106 ran, 1103 passed, 3 skipped,
+0 failed, at `cc59e99`. On the way, for 0.8.0: `DAGDA_DANNAN_MINIMUM` 0.8.0 (SameMinorVersion, so a 0.7.0 request
+never finds 0.8.0), the roster double's advert watch (`dannan::Nodes::watch_advert`, new in 0.8.0), the version case's
+minor, and two of this branch's own (an early wake taken for a refusal; a wait floored to the millisecond ending just
+short of the deadline). To merge once 0.8.0 is tagged and installed on the Pis, with `CONTRIBUTING.md`, the Debian
+control and the docs' build lines moved to 0.8.0. Promotion of a call in flight to loader (distributed store gap 12) is a
 new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
 protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
 cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
