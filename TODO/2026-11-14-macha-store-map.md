@@ -180,7 +180,9 @@ cancelled)` and an owned `reserve`, in Dannan 0.8.0, for reads to hold their cla
 store gap 6): built here once 0.8.0 is merged (`feature/budget-acquire` in Dannan; gate on the 0.8.0 tag, build early
 on develop once merged). `acquire` refuses a default deadline, so a read with no deadline of its own waits under the
 arbiter's no-progress window; a cancel is seen only when the ledger is woken (`Budget::wake()` after the flag is set);
-`Budget::stats()` gives the ledger with its owners' bytes. Promotion of a call in flight to loader (distributed store gap 12) is a
+`Budget::stats()` gives the ledger with its owners' bytes. Built on `feature/read-memory` (reads hold their class's
+memory, `3e53986` to `cc59e99`), gated early on Dannan develop `26ba1be` in a private prefix: 1106 ran, 1103 passed,
+0 failed; that branch's copy of this map has the detail. It merges here once 0.8.0 is tagged. Promotion of a call in flight to loader (distributed store gap 12) is a
 new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
 protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
 cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
