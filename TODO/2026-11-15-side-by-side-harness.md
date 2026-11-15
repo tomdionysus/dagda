@@ -226,3 +226,25 @@ After the fix (`rerun4-after-encode.jsonl`, the same protocol; Macha then Dagda,
   (a slow run each), so no difference is claimed there.
 - **Small files: still a gap**, 9.4% (about 0.33 ms a file), now the only one in phase 1. Next: the same in-span
   profile on small-files.
+
+### Small files: what the in-span profile shows (2026-11-15)
+
+perf confined to the span: Dagda 8,508 task-clock samples against Macha's 8,100. No single hotspot.
+- libc time: about 1,670 against 1,320 (allocation, copies, locking).
+- NodeRecord copies and destructions, attributed to callers: 528 samples against 218. They are spread over:
+  - the write's two placements: replication_set over roster(), and ranked through Nodes::placement;
+  - Dannan's net layer: Session::deliver, a reply handler capturing the record, CallOutcome and RequestScheduler::Job
+    each carrying one;
+  - prompt replication and the barrier worker.
+- futex wake-ups: a write crosses more threads than Macha's.
+
+Tried, each gated, neither a measurable gain on small files:
+- **One roster reading per write** (`5502327`): run_write takes its set and its order from one Nodes::snapshot(),
+  narrowed in place. Kept for consistency (a write's set and order can no longer come from two rosters). Small-files
+  CPU 0.768 s before, 0.768 s after; copy samples 528 before, 549 after (`rerun5-snapshot.jsonl`).
+- **Dannan 0.8.2** (placement ranks pointers, copies only the answer): Dagda 0.775 s against Macha's 0.695 s
+  (`rerun6-dannan082.jsonl`).
+
+Where it stands: about 11% (0.4 ms a file), wall time and bytes equal. The rest is a record carrying its whole
+advert map through every message and placement (Dannan's 0.9.0 list: net-layer copies by value) and Dagda's thread
+hand-offs per write. Neither has one fix; the next step is Tom's call (below).
