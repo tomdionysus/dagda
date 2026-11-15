@@ -108,10 +108,10 @@ GoogleTest, and an installed Dannan of the pinned minor, at least the pinned pat
 tag from the sibling checkout into the build tree once, then configure against it:
 
 ```bash
-git clone --branch 0.7.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.7.0
-cmake -S build/deps/dannan-0.7.0 -B build/deps/dannan-0.7.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.8.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.8.0
+cmake -S build/deps/dannan-0.8.0 -B build/deps/dannan-0.8.0-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.7.0-build -j8 && cmake --install build/deps/dannan-0.7.0-build
+cmake --build build/deps/dannan-0.8.0-build -j8 && cmake --install build/deps/dannan-0.8.0-build
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
   -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
@@ -188,7 +188,7 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.2.0, on Dannan 0.7.0. Built and tested: the local store and its
+Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.8.0. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
 evidence, tickets, availability and repair; an instant delete beside the collector's
