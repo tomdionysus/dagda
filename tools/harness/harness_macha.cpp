@@ -229,7 +229,7 @@ class MachaStore final : public harness::Store {
    private:
     DistributedStore& _store;
     FrameType _frame;
-    DurabilityBatch _batch;
+    DistributedStore::DurabilityBatch _batch;
   };
   std::unique_ptr<Publication> publication(size_t node, harness::Frame frame) override { return std::make_unique<MachaPublication>(store(node), frame); }
 
