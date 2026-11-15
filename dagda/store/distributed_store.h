@@ -563,6 +563,14 @@ class DistributedStore final : public ControlObjectSource {
   // Active hosting nodes in placement order: the first `replication` the
   // owners, the rest fallbacks.
   std::vector<dannan::membership::NodeRecord> ranked(const ObjectId& id) const;
+  // A write's two placements from one reading of the roster: the replication set
+  // (every hosting node known) and the order (the active ones), as replication_set
+  // and ranked give them, with no node in one and missing from the other's roster.
+  struct WritePlacement {
+    std::vector<dannan::membership::NodeRecord> set;
+    std::vector<dannan::membership::NodeRecord> order;
+  };
+  WritePlacement write_placement(const ObjectId& id) const;
   // The replication set over every hosting node known, dead ones included.
   std::vector<dannan::membership::NodeRecord> replication_set(const ObjectId& id) const;
   bool has_on(const dannan::membership::NodeRecord& target, const ObjectId& id);

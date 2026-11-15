@@ -580,6 +580,20 @@ std::vector<NodeRecord> DistributedStore::ranked(const ObjectId& id) const {
   return _context.nodes().placement(id.bytes, _options.replication, data_scheme(), extents_advert);
 }
 
+DistributedStore::WritePlacement DistributedStore::write_placement(const ObjectId& id) const {
+  // One snapshot, narrowed in place: a write ranked twice from two roster reads
+  // copied every record four times over (the side-by-side harness, 2026-11-15).
+  auto roster = _context.nodes().snapshot();
+  const auto not_hosting = [](const NodeRecord& node) { return !node.adverts.contains(extents_advert); };
+  std::erase_if(roster.all, not_hosting);
+  std::erase_if(roster.active, not_hosting);
+  WritePlacement out;
+  out.set = dannan::placement::by_capacity(id.bytes, roster.all, _options.replication, data_scheme());
+  if (out.set.size() > _options.replication) out.set.resize(_options.replication);
+  out.order = dannan::placement::by_capacity(id.bytes, roster.active, _options.replication, data_scheme());
+  return out;
+}
+
 std::vector<NodeRecord> DistributedStore::replication_set(const ObjectId& id) const {
   auto set = dannan::placement::by_capacity(id.bytes, hosting(_context.nodes().roster()), _options.replication, data_scheme());
   if (set.size() > _options.replication) set.resize(_options.replication);
@@ -782,8 +796,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   const auto level = options.level == Durability::ephemeral ? Durability::replicated : options.level;
   const bool deferred = options.deferred;
 
-  const auto set = replication_set(id);
-  auto nodes = ranked(id);
+  auto placement = write_placement(id);
+  const auto set = std::move(placement.set);
+  auto nodes = std::move(placement.order);
   // The local store is the first replica tried, then placement order, so an
   // offsite writer's first copy and its readers do not depend on the WAN.
   if (const auto self = std::find_if(nodes.begin(), nodes.end(), [&](const NodeRecord& node) { return node.id == _self; });
