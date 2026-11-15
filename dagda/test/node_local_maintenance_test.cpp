@@ -16,6 +16,9 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <string>
 #include <thread>
 #include <variant>
 
@@ -103,6 +106,43 @@ TEST(NodeLocalMaintenance, RebalanceMovesCopiesOntoTheirPreferredBackend) {
   EXPECT_EQ(figure(node, "dagda.maintenance.rebalance_objects"), moved);
   for (const auto& id : ids) EXPECT_TRUE(node.data().has(id));
   EXPECT_FALSE(node.run_maintenance_once().local.rebalance_ran);
+}
+
+// The stage hook hears each local stage in Macha's names as it runs
+// (maintenance.cpp:1102, 1163, 1214 at f0597a4; the store map, pool gap 6).
+TEST(NodeLocalMaintenance, TheStageHookHearsEveryLocalStageInMachasNames) {
+  struct Heard {
+    std::mutex mutex;
+    std::set<std::string> stages;
+  };
+  auto heard = std::make_shared<Heard>();
+  dannan::test::SteppedWall wall(dannan::contract::system_wall_clock().unix_ms());
+  auto options = fast_link();
+  options.wall = &wall;
+  options.maintenance.stage = [heard](std::string_view stage) {
+    std::lock_guard lock(heard->mutex);
+    heard->stages.emplace(stage);
+  };
+  Cluster cluster;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  for (uint64_t n = 0; n < 16; ++n) (void)put_one(node, n);
+  node.add_backend(cluster.dir() / "second");
+  node.restart();
+  ASSERT_EQ(node.data().online_backends(), 2u);
+  wall.advance(std::chrono::hours(24 * 30) + 1s);
+  bool rebalance = false;
+  bool scrub = false;
+  bool verify = false;
+  for (int pass = 0; pass < 8 && !(rebalance && scrub && verify); ++pass) {
+    const auto report = node.run_maintenance_once();
+    rebalance = rebalance || report.local.rebalance_ran;
+    scrub = scrub || report.local.scrub_ran;
+    verify = verify || report.local.verify_ran;
+  }
+  ASSERT_TRUE(rebalance && scrub && verify);
+  std::lock_guard lock(heard->mutex);
+  for (const auto* stage : {"local-rebalance", "scrub", "ledger-verify"}) EXPECT_TRUE(heard->stages.contains(stage)) << stage;
 }
 
 // Past 4096 records the claims' journal is compacted by the pass.
