@@ -699,8 +699,6 @@ class DistributedStore final : public ControlObjectSource {
   std::optional<IoReserve::Slot> admit_control() const;
   // How a peer's put or fetch is watched: it has no other limit past a caller's own.
   dannan::net::CallWatch peer_call_watch() const;
-  // Logs a deferred write a barrier left short of its level.
-  void note_unmet_barrier(const WriteEvidence& evidence) const;
   // A synchronous call other than a transfer: control_no_progress.
   dannan::net::CallWatch control_call_watch() const;
   void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);
