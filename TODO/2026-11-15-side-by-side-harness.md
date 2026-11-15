@@ -136,3 +136,58 @@ Findings:
    evidence a write, the scope check on every local copy, the Context's copies), then fix it test-first.
 3. Everything else is Dagda as good or better: one publication's throughput, CPU and write amplification; the viewer's
    latency alone and under load, with more loader throughput beside it.
+
+**Superseded the same day: phase 1's Dagda side was not configured as Macha's.** Profiling the small-files CPU found
+two harness faults, both in how the driver built Dagda's nodes from the test fixture, not in the store:
+- **Test cadences.** The fixture runs Dannan's heartbeat at 100 ms, telemetry and status at 200 ms and the storage
+  server's refresh at 500 ms, so a case converges quickly. Macha's side ran a 1 s heartbeat (its storage server
+  refreshing at the same) and 10 s telemetry. At idle for 20 s that cost Dagda 0.57 s of CPU against Macha's 0.075 s
+  (`idle`, a workload added for it). The fixture now takes the four cadences as options (its defaults unchanged), and
+  the driver sets Macha's: 1 s heartbeat, 10 s telemetry and status, 1 s refresh (`33d9489`). Idle is then 0.077 s
+  against 0.069 s.
+- **Packing.** Given a pack target, the fixture packed everything up to it, so Dagda's side packed its 4 MiB extents
+  into 64 MiB packs while Macha's packed only below 1 MiB. That serialised every extent append under the pack lock
+  while it held one of the two loader leases (76% of the publishers' off-CPU time was waiting for those leases). It
+  also made Dagda's write amplification look lower. The fixture now takes a threshold of its own, and the driver sets
+  1 MiB (`3250405`).
+
+### Phase 1 rerun (2026-11-15, corvus-jupiter, matched configuration)
+
+The same machine and builds as phase 1, plus three method changes: the order alternates (Macha first in odd rounds,
+Dagda first in even), each run follows `fstrim /` and a 30 s rest from a cold page cache, and `vcgencmd
+get_throttled` is read before and after every run (no run had bits 0-3 set; 0x50000 throughout). Publications now also
+report `settled`: the time, CPU and bytes until both nodes hold every extent, so replication the barrier does not wait
+for is counted and the stores compare at equal work (`3e0d3b7`). Medians [range];
+`build/harness/results/2026-11-15/rerun2-matched.jsonl` and `rerun3-settled.jsonl` (publications from rerun 3).
+
+| Workload | Figure | Macha | Dagda |
+|---|---|---|---|
+| idle (20 s) | CPU | 0.069 s | 0.077 s |
+| publication-one | MB/s to the barrier | 115.0 [110.1-115.9] | 95.1 [94.7-101.1] |
+| | write amplification at the barrier | 1.777 | 1.988 |
+| | seconds until both nodes hold it | 5.93 | 5.77 |
+| | CPU s/GB until both hold it | 14.39 | 16.26 |
+| | write amplification until both hold it | 2.004 | 2.004 |
+| | extent write p50 | 27.7 ms | 33.4 ms |
+| publication-ten | MB/s to the barrier | 222.0 [184.1-223.7] | 219.2 [147.0-221.4] |
+| | seconds until both nodes hold it | 62.0 | 61.2 |
+| | CPU s/GB until both hold it | 15.71 | 16.36 |
+| | write amplification, barrier / settled | 1.234 / 2.004 | 1.238 / 2.004 |
+| small-files | CPU | 0.704 s | 0.786 s |
+| | file p50 / p99, GC and compaction | 502 / 503 ms, 215 ms | 502 / 504 ms, 221 ms |
+| viewer-under-load | viewer alone p50 / p99 | 10.7 / 14.3 ms | 9.1 / 12.7 ms |
+| | viewer loaded p50 / p99 / max | 9.2 / 17.0 / 19.7 ms | 7.7 / 14.8 / 18.0 ms |
+| | loader MB/s | 42.5 | 41.4 |
+
+Findings:
+1. **Time to two copies: Dagda as good** (5.77 against 5.93 s, 61.2 against 62.0 s, the same bytes). Its lower
+   throughput to the barrier on one publication is when the second copy is made, not more work: Dagda's prompt
+   replication makes it during the publication (write amplification 1.99 at the barrier), Macha's mostly after (1.78).
+   For Macha to rule on: whether a loader's barrier should come first and replication after, as Macha's does.
+2. **CPU: Dagda spends more, still a gap.** +13% to settle one publication, +4% for ten, +12% on small files. Part
+   is Dannan's placement, which copied every roster record with its adverts about five times a call (376 perf samples
+   against Macha's 139 on small files). Dannan fixed it on `feature/placement-copies` (6145bcc, for 0.8.2), reviewed
+   by Dagda; the before-and-after figure follows. The rest is to profile on publication-one.
+3. **The viewer: Dagda better** alone and under load, at a 3% lower loader rate.
+4. The publication-ten variance seen in phase 1 was the method: with fstrim and a rest both stores are steady,
+   bar one slow run each (Macha 184, Dagda 147 MB/s), different rounds and orders.
