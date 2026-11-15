@@ -192,7 +192,9 @@ GCC Release with warnings as errors, 0 warnings; `dagda_tests` with Macha's fixt
 never finds 0.8.0), the roster double's advert watch (`dannan::Nodes::watch_advert`, new in 0.8.0), the version case's
 minor, and two of this branch's own (an early wake taken for a refusal; a wait floored to the millisecond ending just
 short of the deadline). Dannan 0.8.0 tagged 2026-11-15 (`6c240cc`): merged into this branch, with `CONTRIBUTING.md`,
-the Debian control and the docs' build lines moved to 0.8.0. Promotion of a call in flight to loader (distributed store gap 12) is a
+the Debian control and the docs' build lines moved to 0.8.0. **Gated on the tag** at `f6e3b58` (node-c, Dannan
+0.8.0 built from the tag into a private prefix; GCC Release with warnings as errors, 0 warnings; `dagda_tests` with
+Macha's fixtures 1106 ran, 1103 passed, 3 skipped, 0 failed), which also holds `7519170`. Promotion of a call in flight to loader (distributed store gap 12) is a
 new wire message, ruled for Dannan 0.9.0 with the wire batch: until then a **stated difference** (the restriction is
 protocol 23's, which has only promote_read_ahead and promote_foreground, not a law). Macha pins Dannan 0.8.0 for its
 cutover, so Dagda is built and gated on 0.8.0 before Macha ships on both.
