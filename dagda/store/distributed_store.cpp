@@ -1178,7 +1178,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     _logger.debug("object write quorum id=" + to_string(id) + " bytes=" + std::to_string(data.size()) + " replicas=" + std::to_string(target) +
                   " required=" + std::to_string(floor) + " minimum=" + std::to_string(floor) + " success=" + std::to_string(success) +
                   " local_ms=" + std::to_string(local.count()) + " remote_max_ms=" + std::to_string(remote_max.count()) +
-                  " total_ms=" + std::to_string(total.count()) + " result=" + std::to_string(success >= floor && success > 0 ? 1 : 0));
+                  // Macha's result: a copy landed and the caller did not cancel, a write
+                  // that ended short of its floor included (ds:475 at f0597a4).
+                  " total_ms=" + std::to_string(total.count()) + " result=" + std::to_string(success > 0 && !cancelled_seen ? 1 : 0));
   }
   std::vector<std::shared_ptr<Waiter>> told;
   WriteEvidence evidence;
@@ -1392,9 +1394,7 @@ void DistributedStore::wait(std::vector<Ticket> tickets, std::chrono::millisecon
 }
 
 std::vector<WriteEvidence> DistributedStore::wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline) {
-  auto evidence = wait_here(tickets, false, deadline);
-  for (const auto& one : evidence) note_unmet_barrier(one);
-  return evidence;
+  return wait_here(tickets, false, deadline);
 }
 
 std::vector<WriteEvidence> DistributedStore::wait_here(const std::vector<Ticket>& tickets, bool complete, std::chrono::milliseconds deadline) {
@@ -1523,14 +1523,16 @@ std::optional<WriteEvidence> DistributedStore::wait(Ticket ticket, std::chrono::
   if (!status(ticket)) return std::nullopt;
   auto evidence = std::move(wait_here({ticket}, false, deadline).front());
   if (!evidence.ticket.valid()) return std::nullopt;
-  note_unmet_barrier(evidence);
   return evidence;
 }
 
+namespace {
+
 // Macha's line when a barrier leaves a write short of its durability
-// (distributed_store.cpp:753-764 at 98b816d): each copy, its place and why.
-void DistributedStore::note_unmet_barrier(const WriteEvidence& evidence) const {
-  if (!evidence.deferred || evidence.met || !evidence.ticket.valid() || !_logger.enabled(dannan::status::LogLevel::debug)) return;
+// (distributed_store.cpp:753-764 at 98b816d): each copy, its place and why. Written by
+// the barrier round, whoever waits.
+void note_unmet_barrier(const dannan::status::ScopedLogger& logger, const WriteEvidence& evidence) {
+  if (!evidence.deferred || evidence.met || !evidence.ticket.valid() || !logger.enabled(dannan::status::LogLevel::debug)) return;
   bool transient = false;
   std::string detail;
   for (const auto& replica : evidence.replicas) {
@@ -1541,9 +1543,11 @@ void DistributedStore::note_unmet_barrier(const WriteEvidence& evidence) const {
     const auto outcome = replica.state == ReplicaState::acknowledged ? std::string("durable") : replica.why.empty() ? std::string("unexamined") : replica.why;
     detail += " outcome=\"" + outcome + "\"";
   }
-  _logger.debug("object durability quorum unavailable id=" + to_string(evidence.id) + " required=" + std::to_string(evidence.sought) +
-                " durable=" + std::to_string(evidence.acknowledged()) + (transient ? " transient=yes" : " transient=no") + detail);
+  logger.debug("object durability quorum unavailable id=" + to_string(evidence.id) + " required=" + std::to_string(evidence.sought) +
+               " durable=" + std::to_string(evidence.acknowledged()) + (transient ? " transient=yes" : " transient=no") + detail);
 }
+
+}  // namespace
 
 std::optional<WriteEvidence> DistributedStore::wait_complete(Ticket ticket, std::chrono::milliseconds deadline) {
   if (!status(ticket)) return std::nullopt;
@@ -1586,15 +1590,28 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
   // as Macha's barrier answered false at once on a transient failure and ignored a
   // peer spilled past (distributed_store.cpp:766-767 at f0597a4). A wait for the
   // ticket to complete waits on.
+  // Its lines are Macha's barrier's (distributed_store.cpp:725-727, 760-764 at f0597a4),
+  // written as it ends and before any wait for its tickets to settle is told: one line
+  // for what was re-derived, here and on every peer probed, and one for each write left
+  // short.
   struct Round {
+    explicit Round(dannan::status::ScopedLogger logger_) : logger(std::move(logger_)) {}
+    const dannan::status::ScopedLogger logger;
     std::atomic<size_t> left{0};
     std::vector<std::shared_ptr<TicketRecord>> records;
+    std::atomic<bool> rederived{false};
+    std::atomic<size_t> reasserted{0};
+    std::atomic<size_t> absent{0};
+    std::atomic<size_t> peers_probed{0};
   };
-  auto round = std::make_shared<Round>();
+  auto round = std::make_shared<Round>(_logger);
   round->left = places.size();
   round->records = records;
   const auto place_done = [round] {
     if (round->left.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+    if (round->rederived.load())
+      round->logger.info("object durability re-derived after incarnation change reasserted=" + std::to_string(round->reasserted.load()) +
+                         " absent=" + std::to_string(round->absent.load()) + " peers=" + std::to_string(round->peers_probed.load()));
     for (const auto& record : round->records) {
       std::vector<std::shared_ptr<Waiter>> due;
       WriteEvidence evidence;
@@ -1607,8 +1624,27 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
           return true;
         });
       }
+      note_unmet_barrier(round->logger, evidence);
       for (const auto& waiter : due) tell(waiter, evidence);
     }
+  };
+  // A replica changed by the round: a wait for its ticket to complete is told when it
+  // does; one for it to settle, when the round ends (place_done).
+  const auto in_round = [](const std::shared_ptr<TicketRecord>& record, const NodeId& node, const auto& change) {
+    std::vector<std::shared_ptr<Waiter>> told;
+    WriteEvidence evidence;
+    {
+      Lock lock(record->mutex);
+      change(record->replica_locked(node));
+      evidence = record->evidence_locked();
+      if (evidence.complete)
+        std::erase_if(record->waiters, [&](const std::shared_ptr<Waiter>& waiter) {
+          if (!waiter->complete) return false;
+          told.push_back(waiter);
+          return true;
+        });
+    }
+    for (const auto& waiter : told) tell(waiter, evidence);
   };
   // A refusal because a peer's process or backend changed means "your ticket
   // is dead", not "your bytes are gone" (discipline 1): asked again with the
@@ -1624,8 +1660,8 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     replica.awaiting = Awaiting::none;
     replica.running = false;
   };
-  const auto each = [](const std::vector<std::shared_ptr<TicketRecord>>& tickets, const NodeId& node, const auto& change) {
-    for (const auto& record : tickets) update(record, node, change);
+  const auto each = [in_round](const std::vector<std::shared_ptr<TicketRecord>>& tickets, const NodeId& node, const auto& change) {
+    for (const auto& record : tickets) in_round(record, node, change);
   };
   // Remote barriers go out first, so the local one's batch window does not
   // serialise them.
@@ -1646,7 +1682,8 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
     message::BarrierRequest request{place->ticket, {}};
     _context.routes().call(
         peer, message::object_durability_barrier, message::encode_barrier(request), place->frame, deadline, _executor,
-        [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each, place_done](CallOutcome outcome) {
+        [this, weak = std::weak_ptr<Shared>(_shared), asked = place, peer, deadline, transient, refuse, each, in_round, round,
+         place_done](CallOutcome outcome) {
           if (outcome.reply && outcome.reply->type == dannan::net::message::ok) {
             each(asked->records, asked->node, [](ReplicaRecord& replica) { acknowledge(replica); });
             place_done();
@@ -1670,20 +1707,13 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
             return;
           }
           // One probe with every id that named this place, as many as a
-          // request may carry; once every part has answered, Macha's line
-          // (distributed_store.cpp:725 at 98b816d) for this peer.
-          struct Rederived {
-            std::atomic<size_t> reasserted{0};
-            std::atomic<size_t> absent{0};
-            std::atomic<size_t> left{0};
-          };
-          auto rederived = std::make_shared<Rederived>();
-          rederived->left = (asked->records.size() + message::max_barrier_probe - 1) / message::max_barrier_probe;
-          const auto part_done = [this, rederived, place_done] {
-            if (rederived->left.fetch_sub(1) != 1) return;
-            _logger.info("object durability re-derived after incarnation change reasserted=" + std::to_string(rederived->reasserted.load()) +
-                         " absent=" + std::to_string(rederived->absent.load()) + " peers=1");
-            place_done();
+          // request may carry, counted on the round's line; the place is done
+          // once every part has answered.
+          round->rederived = true;
+          round->peers_probed.fetch_add(1);
+          auto parts = std::make_shared<std::atomic<size_t>>((asked->records.size() + message::max_barrier_probe - 1) / message::max_barrier_probe);
+          const auto part_done = [parts, place_done] {
+            if (parts->fetch_sub(1) == 1) place_done();
           };
           for (size_t start = 0; start < asked->records.size(); start += message::max_barrier_probe) {
             const auto count = std::min<size_t>(message::max_barrier_probe, asked->records.size() - start);
@@ -1692,7 +1722,7 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
             message::BarrierRequest probe{asked->ticket, {}};
             for (const auto& record : part) probe.probe.push_back(record->id);
             _context.routes().call(peer, message::object_durability_barrier, message::encode_barrier(probe), asked->frame, deadline, _executor,
-                                   [part, node = asked->node, transient, refuse, each, rederived, part_done](CallOutcome answer) {
+                                   [part, node = asked->node, transient, refuse, each, in_round, round, part_done](CallOutcome answer) {
                                      if (!answer.reply || answer.reply->type != dannan::net::message::ok) {
                                        const auto why = outcome_text(answer);
                                        each(part, node, [&](ReplicaRecord& replica) { transient(replica, "probe: " + why); });
@@ -1705,8 +1735,8 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
                                        for (const auto& record : part) {
                                          const auto held = present.find(record->id);
                                          // Definitive when absent: the peer no longer holds it. Put it again.
-                                         (held != present.end() ? rederived->reasserted : rederived->absent).fetch_add(1);
-                                         update(record, node, [&](ReplicaRecord& replica) {
+                                         (held != present.end() ? round->reasserted : round->absent).fetch_add(1);
+                                         in_round(record, node, [&](ReplicaRecord& replica) {
                                            if (held != present.end())
                                              acknowledge(replica, held->second);
                                            else
@@ -1735,9 +1765,12 @@ void DistributedStore::run_barriers(const std::vector<std::shared_ptr<TicketReco
       // absent, and the object is put again.
       if (place->ticket.epoch == _context.identity().durability_epoch() || !dynamic_cast<const StaleDurabilityTicket*>(&error))
         _logger.warn("local storage durability barrier failed: " + std::string(error.what()));
+      // Counted on the round's line, as Macha counts its stale local tokens.
+      round->rederived = true;
       for (const auto& record : place->records) {
         const auto fresh = _data.reassert_durable(record->id, place->ticket);
-        update(record, place->node, [&](ReplicaRecord& replica) {
+        (fresh ? round->reasserted : round->absent).fetch_add(1);
+        in_round(record, place->node, [&](ReplicaRecord& replica) {
           if (fresh)
             acknowledge(replica, fresh);
           else
