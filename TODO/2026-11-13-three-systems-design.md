@@ -225,6 +225,11 @@ The lease template stays (E1-E9; `lease/keeper.h`). Its records move from one no
 `lir/shard/<n>` leases in a space placed with the same scheme as the shard, so the holder is drawn from the replica set
 (D5, Lir N5); Lugh's rotation lease in an every-node or replicas space. Epochs and the fence are unchanged.
 
+To weigh when slice 3 is built (2026-11-15, not ruled): the maintainer ruled that Dannan will build a linearizable register over
+a caller-supplied replica set, the hosted system holding the acceptor state (for Mimir's agreement commands). If Lugh
+and Louhi take that in place of leases, head-backed leases keep Lir's shard leases (N5) as their consumer and lose two.
+Louhi already uses a lease only to fence tasks that must not run twice (its session, 2026-11-15).
+
 ### The domain catalogue
 
 An every-node space of the register-map merge, made at genesis, holding each domain's description, its member
