@@ -687,6 +687,10 @@ class DistributedStore final : public ControlObjectSource {
   // Sets the wait going; the ticket when its barriers are still to be asked for.
   std::shared_ptr<TicketRecord> arm_wait(Ticket ticket, bool complete, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
                                          WriteDone done);
+  // The synchronous waits, on the caller's thread: its barriers asked there, its
+  // answers filled under a condition, nothing posted to the executor. Waits up to
+  // `deadline`. A forgotten ticket's evidence holds no ticket.
+  std::vector<WriteEvidence> wait_here(const std::vector<Ticket>& tickets, bool complete, std::chrono::milliseconds deadline);
 
   // Admission for this node's devices: DATA credit and a DATA slot, as
   // store::admit_data takes `wait`; a control slot.
