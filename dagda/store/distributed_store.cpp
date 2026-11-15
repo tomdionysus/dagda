@@ -822,7 +822,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
   auto run = std::make_shared<WriteRun>();
   run->deferred = deferred;
   const auto writer = writer_of(options.principal, options.prefix);
-  const auto payload = message::encode_object(id, data, writer);
+  // Encoded at the first peer call, on this thread (every launch is): a write whose
+  // only copy is this node's never copies its bytes into a message.
+  std::optional<Bytes> payload;
   const auto type = deferred ? message::put_object_deferred : message::put_object;
   size_t next_fallback = initial;
   size_t replacement_needed = 0;
@@ -887,8 +889,9 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     }
     // A call runs on past the write while it moves, so a slow peer's answer still
     // reaches the ticket.
+    if (!payload) payload = message::encode_object(id, data, writer);
     auto handle = _context.routes().call(
-        node, type, payload, options.frame, _options.object_transfer_call, _executor,
+        node, type, *payload, options.frame, _options.object_transfer_call, _executor,
         [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); }, peer_call_watch());
     Lock lock(run->mutex);
     run->calls[index].handle = std::move(handle);

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
 namespace dagda::store::message {
 namespace {
@@ -89,11 +90,20 @@ WritePrincipal decode_principal(Reader& reader) {
 }
 
 Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal) {
-  Writer writer;
-  writer.fixed(id.bytes);
-  writer.bytes(data);
-  if (principal) encode_principal(writer, *principal);
-  return writer.take();
+  // The writer's bytes, laid out in one allocation of the exact size: an extent
+  // written through a growing buffer is copied and its pages zeroed again.
+  if (data.size() > 0xffffffffull) throw std::length_error("encoded blob too large");
+  Writer tail;
+  if (principal) encode_principal(tail, *principal);
+  const auto& trailer = tail.data();
+  Bytes out;
+  out.reserve(id.bytes.size() + 4 + data.size() + trailer.size());
+  out.insert(out.end(), id.bytes.begin(), id.bytes.end());
+  const auto length = static_cast<uint32_t>(data.size());
+  for (int shift = 24; shift >= 0; shift -= 8) out.push_back(static_cast<uint8_t>(length >> shift));
+  out.insert(out.end(), data.begin(), data.end());
+  out.insert(out.end(), trailer.begin(), trailer.end());
+  return out;
 }
 
 ObjectPayload decode_object(std::span<const uint8_t> payload) {
