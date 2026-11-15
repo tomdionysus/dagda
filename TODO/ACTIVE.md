@@ -17,10 +17,13 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
 - **Acknowledgement levels are the stack's standard** (the maintainer, 2026-11-15, to this session; the standard is Kvasir's
   `../kvasir/TODO/2026-11-15-ack-levels-standard.md`): ephemeral (answered at once), persisted (this node's own disk
   has it), decided (a majority has agreed it; Dannan's agreement, 0.9.0, so not before), replicated (a majority of the
-  replicas have it on disk); the setting is `ack_level` everywhere. Dagda changes to the standard's meanings: persisted
-  no longer falls back to a peer's disk, and replicated waits for a majority of the replication set, not
-  write_copies. Dagda's durable (every available member) stays beside them until the maintainer says otherwise. Macha's port is
-  told first: at replication 2, replicated becomes both nodes.
+  replicas have it on disk); the setting is `ack_level` everywhere. Dagda changes to the standard's meanings:
+  replicated waits for a majority of the replication set, not write_copies. Persisted, the maintainer's reading the same day
+  (asked with Macha's edge and full-node case): "the disk that took it", one node's disk, this node's when it can
+  hold the copy, else the next in placement order (as Dagda's persisted already was; `AFullPreferredNodeSpills
+  DataButNotControl` stands). Dagda's durable (every available member) stays beside them until the maintainer says otherwise.
+  Every Macha write moves to persisted (the Macha session, 2026-11-15): replicated at replication 2 would be both
+  nodes, the WAN peer on every write.
 - **Small-file CPU against Macha** (the maintainer, 2026-11-15): all three, in order. The advert aggregate (D11) now, agreed
   with Macha because its cache-advert names change; then fewer thread hand-offs and less placement per write; then
   remeasure on Dannan 0.9.0.
