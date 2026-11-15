@@ -621,5 +621,61 @@ TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
   EXPECT_TRUE(told->empty());
 }
 
+// The synchronous wait runs on the caller's thread, as Macha's durability_barrier did
+// (distributed_store.cpp:681 at f0597a4): its barriers there and its answer by a
+// condition, not a timer armed, a worker's job and three posts a ticket on the store's
+// executor (the small-files profile, 2026-11-15: futex wake-ups, a write crossing more
+// threads than Macha's). So it answers with every executor thread busy.
+TEST(StoreDurabilityBarrier, ASynchronousWaitNeedsNoExecutorThread) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  WriteOptions deferred;
+  deferred.deferred = true;
+  deferred.ack_level = Durability::persisted;
+  std::vector<Ticket> tickets;
+  for (uint8_t seed = 40; seed < 44; ++seed) {
+    const auto bytes = pattern(32 * 1024, seed);
+    const auto written = a.store().write(object_id(bytes), bytes, deferred);
+    ASSERT_NE(written.on(a.id()), nullptr);
+    ASSERT_TRUE(written.on(a.id())->durability);
+    tickets.push_back(written.ticket);
+  }
+
+  // Every thread of the io context held until the case lets go, whatever it asserts.
+  std::promise<void> release;
+  const auto released = release.get_future().share();
+  std::atomic<size_t> holding{0};
+  for (size_t i = 0; i < cluster.io().threads.size(); ++i)
+    boost::asio::post(cluster.io().context, [&holding, released] {
+      ++holding;
+      released.wait();
+    });
+  struct LetGo {
+    std::promise<void>& release;
+    ~LetGo() { release.set_value(); }
+  } let_go{release};
+  ASSERT_TRUE(wait_until([&] { return holding.load() == cluster.io().threads.size(); }));
+
+  const auto started = std::chrono::steady_clock::now();
+  const auto evidence = a.store().wait(tickets, 10s);
+  const auto took = std::chrono::steady_clock::now() - started;
+  EXPECT_LT(took, 5s) << "the wait answered only past its deadline";
+  ASSERT_EQ(evidence.size(), tickets.size());
+  for (size_t i = 0; i < tickets.size(); ++i) {
+    EXPECT_EQ(evidence[i].ticket, tickets[i]);
+    EXPECT_TRUE(evidence[i].met);
+    EXPECT_TRUE(evidence[i].settled);
+  }
+
+  // One ticket, the same way; a forgotten one is no evidence.
+  const auto one = a.store().wait(tickets.front(), 10s);
+  ASSERT_TRUE(one);
+  EXPECT_TRUE(one->met);
+  EXPECT_FALSE(a.store().wait(Ticket{987654321}, 10s).has_value());
+  EXPECT_LT(std::chrono::steady_clock::now() - started, 5s);
+}
+
 }  // namespace
 }  // namespace dagda::store
