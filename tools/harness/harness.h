@@ -26,6 +26,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -356,6 +357,129 @@ inline void small_files(Store& store, size_t count, size_t size, size_t publishe
   report.figure("failed", static_cast<double>(failed.load()), "files");
 }
 
+// The page cache emptied, as a cold run starts (root only; false when it could not be).
+inline bool cold_cache() {
+  ::sync();
+  std::ofstream out("/proc/sys/vm/drop_caches");
+  if (!out) return false;
+  out << "3\n";
+  out.flush();
+  return static_cast<bool>(out);
+}
+
+// A file of `bytes` published on node 0 as workload 1 publishes one; its extents' ids in
+// order.
+inline std::vector<Id> publish_file(Store& store, uint64_t bytes, uint64_t seed) {
+  std::vector<Id> ids;
+  auto publishing = store.publication(0, Frame::loader);
+  for (uint64_t at = 0, e = 0; at < bytes; at += extent_bytes, ++e) {
+    const auto data = pattern(static_cast<size_t>(std::min<uint64_t>(extent_bytes, bytes - at)), seed + e);
+    ids.push_back(store.id_of(data));
+    if (!publishing->extent(ids.back(), data)) throw std::runtime_error("a file's extent was not written");
+  }
+  if (!publishing->finish()) throw std::runtime_error("a file's barrier was not met");
+  return ids;
+}
+
+// Every node holds every id, polled each 100 ms for at most `within`.
+inline bool settled(Store& store, const std::vector<Id>& ids, std::chrono::seconds within) {
+  const auto until = Clock::now() + within;
+  for (const auto& id : ids)
+    for (size_t n = 0; n < store.nodes(); ++n)
+      while (!store.holds(n, id)) {
+        if (Clock::now() >= until) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+  return true;
+}
+
+// One file read on `node` as FUSE's ReadHandle reads it: 128 KiB requests copied out of
+// the extent in hand, the next two extents fetched ahead at read_ahead while the reader
+// works through this one; an extent the read-ahead has not brought yet is waited for, and
+// one it never started is read at foreground. Each request's latency is added; false when
+// an extent came back short or not at all.
+inline bool read_file(Store& store, size_t node, const std::vector<Id>& ids, Latencies& requests) {
+  constexpr size_t request_bytes = 128 * 1024;
+  constexpr size_t ahead = 2;
+  constexpr auto deadline = std::chrono::seconds(60);
+  std::map<size_t, std::future<std::optional<Bytes>>> fetching;
+  Bytes out(request_bytes);
+  bool ok = true;
+  for (size_t e = 0; e < ids.size(); ++e) {
+    auto asked = Clock::now();
+    std::optional<Bytes> extent;
+    if (auto found = fetching.find(e); found != fetching.end()) {
+      extent = found->second.get();
+      fetching.erase(found);
+    } else {
+      extent = store.read(node, ids[e], e, Frame::foreground, deadline);
+    }
+    for (size_t next = e + 1; next <= e + ahead && next < ids.size(); ++next)
+      if (!fetching.contains(next))
+        fetching.emplace(next, std::async(std::launch::async,
+                                          [&store, node, id = ids[next], next, deadline] { return store.read(node, id, next, Frame::read_ahead, deadline); }));
+    if (!extent || extent->empty()) {
+      ok = false;
+      requests.add(Clock::now() - asked);
+      continue;
+    }
+    for (size_t at = 0; at < extent->size(); at += request_bytes) {
+      const auto size = std::min(request_bytes, extent->size() - at);
+      std::memcpy(out.data(), extent->data() + at, size);
+      requests.add(Clock::now() - asked);
+      asked = Clock::now();
+    }
+  }
+  return ok;
+}
+
+// 3. Reads, local: one file of 512 MiB and four of 128 MiB published on node 0 and held
+// by both nodes, the page cache dropped, then read back on node 0: the large file by one
+// reader alone, then the four at once, each by its own reader.
+inline void reads_local(Store& store, const Report& report) {
+  constexpr uint64_t mib = 1024 * 1024;
+  const auto large = publish_file(store, 512 * mib, 30000000);
+  std::vector<std::vector<Id>> small;
+  for (uint64_t f = 0; f < 4; ++f) small.push_back(publish_file(store, 128 * mib, 31000000 + f * 1000));
+  std::vector<Id> all = large;
+  for (const auto& file : small) all.insert(all.end(), file.begin(), file.end());
+  if (!settled(store, all, std::chrono::seconds(600))) throw std::runtime_error("the files did not reach both nodes");
+  report.figure("cold", cold_cache() ? 1 : 0, "bool");
+
+  perf_control("enable");
+  Latencies alone;
+  auto before = process_figures();
+  auto started = Clock::now();
+  const bool alone_ok = read_file(store, 0, large, alone);
+  auto took = Clock::now() - started;
+  auto after = process_figures();
+  report.figure("one_reader_seconds", std::chrono::duration<double>(took).count(), "s");
+  report.figure("one_reader_throughput", static_cast<double>(512 * mib) / std::chrono::duration<double>(took).count() / 1e6, "MB/s");
+  report.figure("one_reader_cpu_per_gb", (after.cpu_seconds - before.cpu_seconds) / (static_cast<double>(512 * mib) / 1e9), "s/GB");
+  report.latencies("one_reader_request", alone);
+
+  report.figure("cold_again", cold_cache() ? 1 : 0, "bool");
+  Latencies together;
+  std::atomic<bool> together_ok{true};
+  before = process_figures();
+  started = Clock::now();
+  std::vector<std::thread> readers;
+  for (const auto& file : small)
+    readers.emplace_back([&, &file = file] {
+      if (!read_file(store, 0, file, together)) together_ok = false;
+    });
+  for (auto& reader : readers) reader.join();
+  took = Clock::now() - started;
+  after = process_figures();
+  perf_control("disable");
+  report.figure("four_readers_seconds", std::chrono::duration<double>(took).count(), "s");
+  report.figure("four_readers_throughput", static_cast<double>(4 * 128 * mib) / std::chrono::duration<double>(took).count() / 1e6, "MB/s");
+  report.figure("four_readers_cpu_per_gb", (after.cpu_seconds - before.cpu_seconds) / (static_cast<double>(4 * 128 * mib) / 1e9), "s/GB");
+  report.latencies("four_readers_request", together);
+  report.figure("rss_hwm", static_cast<double>(after.hwm_bytes), "B");
+  report.figure("failed", alone_ok && together_ok ? 0 : 1, "bool");
+}
+
 // 4. A viewer under load: foreground reads of objects already held, timed, while a
 // loader writes as fast as it can for `seconds`. The viewer must not wait.
 inline void viewer_under_load(Store& store, std::chrono::seconds seconds, const Report& report) {
@@ -431,8 +555,10 @@ inline int run(Store& store, const std::string& workload) {
     small_files(store, 200, 64 * 1024, 8, report);
   } else if (workload == "viewer-under-load") {
     viewer_under_load(store, std::chrono::seconds(30), report);
+  } else if (workload == "reads-local") {
+    reads_local(store, report);
   } else {
-    std::fprintf(stderr, "unknown workload %s: idle, publication-one, publication-ten, small-files, viewer-under-load\n", workload.c_str());
+    std::fprintf(stderr, "unknown workload %s: idle, publication-one, publication-ten, small-files, viewer-under-load, reads-local\n", workload.c_str());
     return 2;
   }
   return 0;
