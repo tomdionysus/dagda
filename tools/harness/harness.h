@@ -26,7 +26,6 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
-#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -393,31 +392,25 @@ inline bool settled(Store& store, const std::vector<Id>& ids, std::chrono::secon
   return true;
 }
 
-// One file read on `node` as FUSE's ReadHandle reads it: 128 KiB requests copied out of
-// the extent in hand, the next two extents fetched ahead at read_ahead while the reader
-// works through this one; an extent the read-ahead has not brought yet is waited for, and
-// one it never started is read at foreground. Each request's latency is added; false when
-// an extent came back short or not at all.
-inline bool read_file(Store& store, size_t node, const std::vector<Id>& ids, Latencies& requests) {
-  constexpr size_t request_bytes = 128 * 1024;
-  constexpr size_t ahead = 2;
+// One file read on `node` as Macha's FUSE reader reads it (the Macha session's review,
+// 2026-11-16, from filesystem.cpp:116-210 and fuse_frontend.cpp:6001-6009 at its port
+// branch): 1 MiB requests, as baseline.py's unbuffered reads, copied out of the one
+// extent the handle holds; the extent covering a request read synchronously on the
+// reader's thread at loader class when the reader enters it, the one before dropped
+// first; no read-ahead (a FUSE handle tracks no playback, so the hydrator has none to
+// make). Each request's latency is added and the first one's is `first`; false when an
+// extent came back short or not at all.
+inline bool read_file(Store& store, size_t node, const std::vector<Id>& ids, Latencies& requests, Clock::duration& first) {
+  constexpr size_t request_bytes = 1024 * 1024;
   constexpr auto deadline = std::chrono::seconds(60);
-  std::map<size_t, std::future<std::optional<Bytes>>> fetching;
   Bytes out(request_bytes);
   bool ok = true;
+  std::optional<Bytes> extent;
   for (size_t e = 0; e < ids.size(); ++e) {
     auto asked = Clock::now();
-    std::optional<Bytes> extent;
-    if (auto found = fetching.find(e); found != fetching.end()) {
-      extent = found->second.get();
-      fetching.erase(found);
-    } else {
-      extent = store.read(node, ids[e], e, Frame::foreground, deadline);
-    }
-    for (size_t next = e + 1; next <= e + ahead && next < ids.size(); ++next)
-      if (!fetching.contains(next))
-        fetching.emplace(next, std::async(std::launch::async,
-                                          [&store, node, id = ids[next], next, deadline] { return store.read(node, id, next, Frame::read_ahead, deadline); }));
+    extent.reset();
+    extent = store.read(node, ids[e], e, Frame::loader, deadline);
+    if (e == 0) first = Clock::now() - asked;
     if (!extent || extent->empty()) {
       ok = false;
       requests.add(Clock::now() - asked);
@@ -435,7 +428,9 @@ inline bool read_file(Store& store, size_t node, const std::vector<Id>& ids, Lat
 
 // 3. Reads, local: one file of 512 MiB and four of 128 MiB published on node 0 and held
 // by both nodes, the page cache dropped, then read back on node 0: the large file by one
-// reader alone, then the four at once, each by its own reader.
+// reader alone, then the four at once, each by its own reader, as baseline.py's read
+// phase (which reads existing library files from a random 4 MiB-aligned offset; here
+// from the start of files just written, and cold).
 inline void reads_local(Store& store, const Report& report) {
   constexpr uint64_t mib = 1024 * 1024;
   const auto large = publish_file(store, 512 * mib, 30000000);
@@ -448,11 +443,13 @@ inline void reads_local(Store& store, const Report& report) {
 
   perf_control("enable");
   Latencies alone;
+  Clock::duration alone_first{};
   auto before = process_figures();
   auto started = Clock::now();
-  const bool alone_ok = read_file(store, 0, large, alone);
+  const bool alone_ok = read_file(store, 0, large, alone, alone_first);
   auto took = Clock::now() - started;
   auto after = process_figures();
+  report.figure("one_reader_first_ms", std::chrono::duration<double, std::milli>(alone_first).count(), "ms");
   report.figure("one_reader_seconds", std::chrono::duration<double>(took).count(), "s");
   report.figure("one_reader_throughput", static_cast<double>(512 * mib) / std::chrono::duration<double>(took).count() / 1e6, "MB/s");
   report.figure("one_reader_cpu_per_gb", (after.cpu_seconds - before.cpu_seconds) / (static_cast<double>(512 * mib) / 1e9), "s/GB");
@@ -464,14 +461,16 @@ inline void reads_local(Store& store, const Report& report) {
   before = process_figures();
   started = Clock::now();
   std::vector<std::thread> readers;
-  for (const auto& file : small)
-    readers.emplace_back([&, &file = file] {
-      if (!read_file(store, 0, file, together)) together_ok = false;
+  std::vector<Clock::duration> firsts(small.size());
+  for (size_t f = 0; f < small.size(); ++f)
+    readers.emplace_back([&, f] {
+      if (!read_file(store, 0, small[f], together, firsts[f])) together_ok = false;
     });
   for (auto& reader : readers) reader.join();
   took = Clock::now() - started;
   after = process_figures();
   perf_control("disable");
+  report.figure("four_readers_first_ms_max", std::chrono::duration<double, std::milli>(*std::max_element(firsts.begin(), firsts.end())).count(), "ms");
   report.figure("four_readers_seconds", std::chrono::duration<double>(took).count(), "s");
   report.figure("four_readers_throughput", static_cast<double>(4 * 128 * mib) / std::chrono::duration<double>(took).count() / 1e6, "MB/s");
   report.figure("four_readers_cpu_per_gb", (after.cpu_seconds - before.cpu_seconds) / (static_cast<double>(4 * 128 * mib) / 1e9), "s/GB");
