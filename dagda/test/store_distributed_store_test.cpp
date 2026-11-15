@@ -516,6 +516,30 @@ TEST(DistributedStore, ADeleteOfAClaimedObjectIsClaimedEvenWhenBusy) {
   EXPECT_TRUE(a.data().has(object_id(unclaimed)));
 }
 
+// Each storage refresh advertises how many of the node's disks are online, as Macha's
+// (storage_server.cpp:56-57 at f0597a4, into telemetry and Status), so a peer reads it
+// without asking (the store map, pool gap 5).
+TEST(DistributedStore, ARefreshAdvertisesTheBackendsOnline) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto seen = [&]() -> std::optional<uint64_t> {
+    for (const auto& node : b.context().nodes().active())
+      if (node.id == a.id()) return node.advert_u64(backends_online_advert);
+    return std::nullopt;
+  };
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(1); }));
+  std::filesystem::rename(a.backend(), cluster.dir() / "away");
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(0); }));
+  std::filesystem::rename(cluster.dir() / "away", a.backend());
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(1); }));
+}
+
 // A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
 // (distributed_store.cpp:1345-1346 at f0597a4; the store map, distributed store gap 15).
 TEST(DistributedStore, AForegroundReplicateAllIsForegroundActivity) {
