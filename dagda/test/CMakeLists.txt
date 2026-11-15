@@ -121,3 +121,13 @@ add_dependencies(dagda_tests dagda-migrate)
 if(NOT APPLE)
   target_link_libraries(dagda_tests PRIVATE util)
 endif()
+
+# The side-by-side harness's Dagda half (tools/harness/; TODO/2026-11-15-side-by-side-harness.md):
+# figures recorded, never asserted; not in the gate. Its nodes are the fixture's, so its
+# state is under the build tree's test-tmp.
+add_executable(harness-dagda ${PROJECT_SOURCE_DIR}/tools/harness/harness_dagda.cpp)
+target_include_directories(harness-dagda PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tools/harness)
+target_link_libraries(harness-dagda PRIVATE dagda dagda_test_fixtures dagda_warnings)
+if(NOT APPLE)
+  target_link_libraries(harness-dagda PRIVATE util)
+endif()
