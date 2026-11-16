@@ -7,11 +7,10 @@
 | 0 | Measure and check | Done. Baseline measured; the three checks answered |
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); not yet benchmarked |
-| 3 | Each copy once (the offer) | Designed, not built. **Next** |
-| 4 | A window of transfers; the call count gone | Not started; its shape goes to the Macha session first |
+| 3 | Each copy once (the offer) | Built (`d2872de`); gate below; not yet benchmarked |
+| 4 | A window of transfers; the call count gone | Not started; its shape goes to the Macha session first. **Next** |
 
-Last full gate: `2a8d24b`, node-c, 1125 ran, 1122 passed, 3 skipped, 0 failed, 0 warnings. Everything is on
-`feature/macha-store-gaps`, local, nothing pushed.
+Everything is on `feature/macha-store-gaps`, local, nothing pushed.
 
 ## The maintainer's rulings
 
@@ -133,7 +132,30 @@ The checks:
 - **C, multi-object messages:** none exists for fetch or put (`get_object`, `put_object` carry one each);
   `have_objects` asks about many ids at once.
 
-## Stage 3, designed, not built: the offer
+**Stage 3 (`deafb7d` the wire pair, `21013d6` the cases, `d2872de` the code).**
+- *The wire*: `offer_objects` (771) is the ids as a presence names them, at most `max_offer_batch`;
+  `offer_objects_reply` (772) a byte each, `OfferAnswer` wanted, held, fetching or no room. Control lane, any
+  class. Case: `StoreMessages.AnOfferNamesItsIdsAndItsAnswerSaysOfEachWhetherItIsWanted`.
+- *The receiver*: `OfferBook` (`store/offer_book.h`), the store's, handed to the server. An offer is answered
+  held from the index; no room when no disk is online or an extent would not fit; fetching when this node's
+  repair is fetching the id or another peer holds an unexpired promise; otherwise wanted, and the promise is
+  (re)made for `object_transfer_call`. A put that lands ends the promise. Repair's pull asks the book first
+  (`begin_fetch`): a promise from a peer present and unexpired defers the pull to its retry backoff; otherwise
+  the pull is marked in flight until it ends.
+- *The sender* (`push_some`): plans each object's keepers and the owners that lack it from what is known, reads
+  nothing, sends one offer a peer for the batch, then reads and sends only what is wanted, in order, until the
+  credit, the calls, admission or the batch's two extents run out; what was offered past there is offered again
+  next, renewing the promise. Held: a keeper, remembered in `pushed`. Fetching: `deferred`, retried on the
+  backoff. No room: passed. Unanswered: a copy that did not arrive (no backward compatibility is owed). Offers
+  are not counted against the call count; their bytes are `RepairResult::offer_bytes`, which `Repair::transfer`
+  takes from the credit beside the objects' and which settle nothing.
+- Cases, each seen failing at `21013d6`: `StoreRepair.APushToAPeerThatHoldsTheObjectMovesNoObjectBytes` (and no
+  probe), `.APeerFetchingAnObjectDeclinesItsOfferAndIsSentNothing`,
+  `.APeerThatWantedAnOfferedObjectFetchesItOnlyIfTheCopyNeverComes`, `.ARejoiningNodeIsSentEachObjectOnce`.
+- No ported case changed. For Macha's port: the server needs `Stores::offers` (the node passes its store's) or
+  every offer of an absent object is wanted; a node that answers no offer receives no push.
+
+## Stage 3, as designed (built above)
 
 - *The message.* A new pair, `offer_objects` and its reply, not `have_objects`: the cases that hold repair to
   "no probe" count `have_objects` and its kin. The sender names the ids it is about to send a peer; the reply
@@ -153,6 +175,49 @@ The checks:
   wire for a rejoining node are the objects once.
 - *To check when building:* the node's list of registered message types has a case (`node_test.cpp`); the new
   type joins `StorageServer::served()` and `message::register_types`.
+
+## Stage 4, the shape proposed (to the Macha session first; nothing built)
+
+What changes for a caller of `Repair`'s steps, and what does not:
+
+- *Unchanged*: `earn_credit`, `paced_by`, `may_start`, `turn_wait`, `note_gate`, `begin_turn`, `claim_walks`,
+  `lists`, `settle`'s signature, and `transfer(Turn&, const RepairLists&)`'s. The duty share and law 3 stand.
+- *`transfer` no longer waits for what it starts.* It tops up a window of transfers (pushes, pulls, offers),
+  most urgent first from the one queue, until the window's bytes are spent, the credit is, or the share says
+  yield, and returns. The window is the credit's own burst (five seconds of the link, or one extent): no new
+  number. Each transfer completes on the store's executor and is kept whatever the turn is doing (as a pull in
+  flight is kept today); its completion frees its bytes in the window. Completions do not start new transfers
+  by themselves: the next `transfer` does, so pacing stays where it is, in the pass and the share.
+  Recommendation, against a pump that refills from completions: it keeps the owner's pass in charge of when work
+  starts, which is what Macha's maintenance relies on, at the cost of a pass interval's latency between a
+  window draining and refilling (the pass's own interval, 1 s by default, against transfers of seconds).
+- *`RepairResult` reports what completed since the last step*, not what one step moved: `bytes_transferred`
+  and `offer_bytes` as completions landed, and a new `in_flight` (bytes still in the window). `settle` treats
+  anything in flight as `more_work`, so a node never goes quiescent with copies on the wire.
+- *`operation_budget` goes* from `RepairOptions` and from `repair_step`, and the scan budget derived from it.
+  A step is bounded by the window, the credit and the share. Macha's config key for it, if it has one, is read
+  and ignored, or removed: the Macha session's call.
+- *Small objects travel many to a message*: `put_objects` and `get_objects` (Dagda's own numbers after 772),
+  each carrying up to an extent of objects, so the call count no longer sets the small-object rate.
+- *Stopping*: the store's destructor already waits for its calls; a node stopping mid-window loses only what
+  had not landed, which the next survey lists again.
+
+**The Macha session's answer (2026-11-16, from its port at `deceac1`): no objection.** Nothing in Macha relies
+on `transfer` finishing its I/O, nor on `remote_operations` or `operation_budget` (the 16 was a constexpr in
+its old pass and the port has none: it simply goes). Its stop order stops its services, then `dagda::Node`, so
+what is in flight is the node's to finish or cancel before the transport goes. Its Status shows
+`bytes_transferred` a step later, harmlessly. Whether `offer_bytes` and `in_flight` join /status is an API
+change: put to the maintainer by the Macha session. Its question back, the wake: Macha's pass, on `more_work`, refills one
+interval (1 s) later, so a window that drains faster sits empty. Today the node's "storage" event (which Macha's
+pass already wakes on) is raised by a pull that lands and by a put received, not by a push completing on its
+sender. **Answer, to build:** the store raises the storage event when the window drains to half or less, once
+a drain, so a pass parked on `more_work` refills at once; `settle` needs no time. When built, the Macha trace
+fixtures' cases whose order the window changes are named to it, as for stage 2.
+
+Asked of the Macha session: does anything in Macha's pass, its Status or its stop order rely on `transfer`
+having finished its I/O when it returns, or on `remote_operations` or `operation_budget`? Should `offer_bytes`
+and `in_flight` join its /status figures? (It asked about `offer_bytes` on 2026-11-16 and is leaving its
+Status alone until this shape is agreed.)
 
 ## How to measure a stage
 

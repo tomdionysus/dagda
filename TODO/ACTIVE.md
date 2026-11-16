@@ -1,8 +1,8 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-16 (late evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-16
-(evening)", with what left this file on 2026-11-16 archived after it. Nothing is running and no Pi is claimed. The plan for slices is the three-systems design,
-`TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
+Last updated: 2026-11-16 (night). `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (night)",
+with what left this file on 2026-11-16 archived after "2026-11-16 (evening)". The plan for slices is the
+three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
 
 ## Where it stands
 
@@ -11,22 +11,27 @@ Last updated: 2026-11-16 (late evening). `COMPLETED.md` is the record; its newes
   locally only.
 - **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI, so no bump.
   0.8.5 fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
-  teardown hang in Dagda's tests would look there first). **Last full gate: `2a8d24b`**, node-c, Dannan 0.8.0
-  prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1125 ran, 1122 passed, 3
-  skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates before it are in
-  `COMPLETED.md`'s handoff.
+  teardown hang in Dagda's tests would look there first). **Last full gate: `d2872de`**, node-b, Dannan 0.8.2
+  prefix (0.8.0's ABI), GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1131 ran,
+  1128 passed, 3 skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates
+  before it are in `COMPLETED.md`'s handoffs.
+- **The instant delete keeps the copy on a node with no inventory published** (the maintainer's ruling, gc-and-deletion
+  gap 9): done, `5f3c458`.
 - **Repair is being redesigned** (the maintainer, 2026-11-16; `TODO/2026-11-16-repair-redesign.md`, which has the status of
   each stage, the rulings and how to measure). Done and gated: the survey keeps who holds what (stage 1); repair
-  works from one queue, fewest copies first, which ends both ways the pull starved (stage 2); and Dagda's own
-  loop reads a new reference at once, a gap against Macha (`0d048e0`). **Next: stage 3, the offer**, so each
-  copy moves once. Then stage 4, the window and the call count gone.
+  works from one queue, fewest copies first, which ends both ways the pull starved (stage 2); each copy moves
+  once, by an offer before the bytes (stage 3, `d2872de`); and Dagda's own loop reads a new reference at once, a
+  gap against Macha (`0d048e0`). **Next: stage 4, the window and the call count gone**, its shape to the Macha
+  session first.
 - **The repair baseline is measured** (harness plan, "Workload 7, the baseline"): Dagda's repair today is at
   least as fast as Macha's in every scenario; both stores send each object about one and a half to two times;
-  on small objects the 16-call count, not the link, sets the rate. Stages 1 and 2 are not benchmarked yet.
+  on small objects the 16-call count, not the link, sets the rate. Stages 1 to 3 against the baseline's Dagda:
+  the redesign document, "What stage 3 measured".
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
   commit, and retires its own cases against named `dagda_tests` cases, mapped one by one. It has been told of
-  stages 1 and 2 and that no ported case changed.
+  stages 1 to 3 and the instant delete's fix, and that no ported case changed; it confirmed stage 3 needs nothing
+  of its pass (it calls `Repair::transfer`, and `dagda::Node` hands its server the offer book).
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`). Measured:
   publications and the viewer at parity or better; small files about 6% over Macha's CPU (was 11%), all else
   equal; local reads better with one reader and no steady gap with four; recovery at parity within 2%; repair
@@ -46,28 +51,21 @@ Last updated: 2026-11-16 (late evening). `COMPLETED.md` is the record; its newes
 
 ## Next (in order)
 
-1. **The instant delete keeps a copy on a node with no inventory published** (the maintainer, 2026-11-16; gc-and-deletion gap
-   9). Test-first: `StoreRemove.ANodeWithNoInventoryPublishedKeepsItsCopy`, seen failing; then `remove_here`
-   (`dagda/store/remove.cpp:83`) treats a null inventory as it treats an incomplete one. Small.
-2. **Repair, stage 3: the offer** (`2026-11-16-repair-redesign.md`, "Stage 3, designed, not built"). Test-first:
-   the cases named there, seen failing; then the message pair, the receiver's answer and tables, the sender's
-   offer in `push_some`. One whole-suite run on a Pi at its last commit. Then measure old against new in one
-   session ("How to measure a stage" there): the baseline's binaries beside the tip's, which also shows what
-   stages 1 and 2 changed. Tell the Macha session the gated commit and anything its port must pass or bind.
-3. **Repair, stage 4: the window, and the call count gone.** Bring the shape of `Repair`'s steps to the Macha
-   session first. A multi-object message for small values. Measure as above.
-4. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
+1. **Repair, stage 4: the window, and the call count gone.** Bring the shape of `Repair`'s steps to the Macha
+   session first (and whether `offer_bytes` joins Macha's /status figures, which it asked). A multi-object
+   message for small values. Measure old against new as for stage 3.
+2. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
    pressure, cache; strace fsync counts on a separate rerun. **The slow-disk run is approved** (the maintainer,
    2026-11-16): when a Pi is free, a note on the board, then the device-mapper delay target over a loop file on
    that one Pi (no real disk touched), removed afterwards. None of these workloads is written yet, and the Macha
    session reviews each before it runs.
-5. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-6. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
+3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
+4. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes
    an adapter over it.
-7. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
-   are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is item 1 above).
+5. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
+   are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is done).
 
 A defect Macha's port finds comes before any of these.
 
