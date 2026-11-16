@@ -111,11 +111,12 @@ fresh() {
   if [ $store = macha ]; then on $A "head -c 48 /dev/urandom | base64 > $W/a/cluster.key"; copy cluster.key; fi
   sleep ${REST:-30}
 }
-# Each line relabelled with the run's workload and, for dagda-old, its store name.
+# Each line relabelled with the run's workload and, for dagda-old, its store name (the
+# binary's own begins "dagda", then its versions).
 collect() {
   label=$1; store=$2
   for n in a b; do
-    on $(host $n) "cat $(dir $n)/out; cat $(dir $n)/err >&2" 2>> "$OUT/repair-err.txt" | sed -e "s/\"workload\":\"[^\"]*\"/\"workload\":\"$label $n\"/" -e "s/\"store\":\"dagda\"/\"store\":\"$store\"/" >> "$RES"
+    on $(host $n) "cat $(dir $n)/out; cat $(dir $n)/err >&2" 2>> "$OUT/repair-err.txt" | sed -e "s/\"workload\":\"[^\"]*\"/\"workload\":\"$label $n\"/" -e "s/\"store\":\"dagda/\"store\":\"$store/" >> "$RES"
   done
 }
 wirefig() {
@@ -144,7 +145,7 @@ rejoin() {
   cmd a "figures holder"; waitfor a "figures holder"
   wirefig "$label" $store a "$wa" "$(wire a)"; wirefig "$label" $store b "$wb" "$(wire b)"
   stop b; stop a; collect "$label" $store
-  say "$label $store: $(grep "\"store\":\"$store\".*\"workload\":\"$label b\".*rejoin.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
+  say "$label $store: $(grep -E "\"store\":\"$store[ \"].*\"workload\":\"$label b\".*rejoin.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
 }
 
 # b away, then back: both hold the first half; b stops, keeping its disk; a is given the
@@ -171,7 +172,7 @@ away() {
   cmd a "figures holder"; waitfor a "figures holder"
   wirefig "$label" $store a "$wa" "$(wire a)"; wirefig "$label" $store b "$wb" "$(wire b)"
   stop b; stop a; collect "$label" $store
-  say "$label $store: $(grep "\"store\":\"$store\".*\"workload\":\"$label b\".*back.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
+  say "$label $store: $(grep -E "\"store\":\"$store[ \"].*\"workload\":\"$label b\".*back.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
 }
 
 machine() { for h in $A $B; do say "$(on $h 'echo $(hostname) $(uname -r) page $(getconf PAGESIZE) up $(cut -d" " -f1 /proc/uptime)s throttled $(vcgencmd get_throttled | cut -d= -f2)')"; done; }
