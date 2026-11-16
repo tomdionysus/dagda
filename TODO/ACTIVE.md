@@ -8,8 +8,9 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
 - **Macha first; slices paused; `0.2.0` held** (Tom, 2026-11-14, "Macha first", below). Work is on
   `feature/macha-store-gaps` (local, nothing pushed). `0.1.5` (main `c20f88c`, Dannan 0.6) is the last pushed release;
   `0.2.0` (slice 1: node-local spaces, the change notice, the installed fixture, contract v2) is tagged locally only.
-- **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1, 0.8.2 and 0.8.3 are tagged with 0.8.0's
-  ABI, so no bump). Last full gate: `62b4f41` on saturn, Dannan 0.8.0 prefix, GCC Release, warnings as errors, Macha's
+- **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1, 0.8.2, 0.8.3 and 0.8.4 are tagged with
+  0.8.0's ABI, so no bump; 0.8.4, 2026-11-16, adds StartTLS unanswered, a stoppable wait_for_change and a deferred
+  Answer's place given back before its reply, none used by Dagda yet). Last full gate: `62b4f41` on saturn, Dannan 0.8.0 prefix, GCC Release, warnings as errors, Macha's
   fixtures: 1108 ran, 1105 passed, 3 skipped, 0 failed. The rename `6bfb5b2` is gated in `COMPLETED.md`'s handoff.
 - **Macha's port** (the Macha session) builds against this branch: R2 (writes and barriers on tickets, all writes at
   persisted), R3 (metadata and control store) in progress, R4 to R6 after. Macha is given each gated commit.
