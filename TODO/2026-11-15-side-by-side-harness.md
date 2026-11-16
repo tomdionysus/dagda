@@ -588,3 +588,6 @@ the benchmark's traffic slowed every session's ssh and rsync. The baseline's lin
 later run is compared only with the old binaries rerun in the same session, never with the numbers above. The
 page cache is dropped only on a Pi held whole (`NOCOLD=1` otherwise): the baseline's drops cost another
 session's build on jupiter its cache.
+Done by 20:10Z: jupiter (325 Mbit/s) and neptune (292 Mbit/s) are on 5 GHz, same addresses; saturn and uranus
+stay on 2.4 GHz channel 11 (72 Mbit/s at best). A jupiter-to-uranus run now crosses both bands; jupiter to
+neptune is the pair with the fastest link, and neptune would need the harness binaries copied there.
