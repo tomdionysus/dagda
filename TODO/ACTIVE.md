@@ -115,6 +115,8 @@ Asked the same day, two answers. **The offer is allowed**: a holder may ask an o
 sending bytes, as a handshake at the moment of transfer; the diff stays the only way repair finds what to do
 ("repair is diff only" otherwise stands). **The benchmark's link is the real one between two Pis**, both claimed
 whole and their interface shaped, as the harness plan first said, not one Pi's loopback.
+Then, the link measured (WiFi, 0.78 MB/s): **the two Pis on the WiFi as it is, unshaped**, with the sizes cut
+about tenfold so a run takes minutes; the link's rate and round trip recorded before each round.
 
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
@@ -269,9 +271,6 @@ asking:
 
 ## Waiting on Tom
 
-- **The repair benchmark's link** (asked 2026-11-16): the two Pis reach each other only over WiFi, 0.78 MB/s
-  measured, so "two Pis and the real link" cannot carry the plan's 10 MB/s (harness plan, "The raw link"). One
-  Pi's loopback shaped, the WiFi as it is with smaller sizes, or the Pis wired.
 - **The slow disk** (harness workload 9) needs device-mapper set up on a Pi: not done without Tom's word.
 - **A null inventory letting an instant delete go** (gc-and-deletion gap 9): a design question, with Lugh and Lir.
 
