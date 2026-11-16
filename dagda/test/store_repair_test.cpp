@@ -2329,6 +2329,83 @@ TEST(StoreRepair, TheSurveyGoesThroughTheProvider) {
   EXPECT_EQ(probes(b), 0u);
 }
 
+// Macha's test_a_stop_during_the_diff_is_not_a_failed_peer (test_availability.cpp): a
+// stop asked for while a peer's diff runs ends the survey with the stop, not with the
+// peer counted as failed or put on the retry timer; the next survey asks it as any
+// other.
+TEST(StoreRepair, AStopDuringTheDiffIsNotAFailedPeer) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  // Enough on b for the diff to take several rounds, so a pause comes between them.
+  const auto held = local_objects(b, 300, 1024, 7);
+  auto provider = referring_to(held);
+  a.publish_inventory(provider);
+  const auto stop_once_asked = [&] {
+    if (b.calls_of(message::trie_diff) > 0) throw MaintenanceStopping();
+  };
+  EXPECT_THROW((void)a.availability().refresh(stop_once_asked), MaintenanceStopping);
+  EXPECT_GT(b.calls_of(message::trie_diff), 0u);
+  EXPECT_EQ(a.availability().snapshot(), nullptr);
+  EXPECT_FALSE(a.availability().due().has_value()) << "a stopped diff put the peer on the retry timer";
+  ASSERT_TRUE(a.availability().refresh());
+  ASSERT_NE(a.availability().snapshot(), nullptr);
+  EXPECT_EQ(a.availability().snapshot()->survey.peers_failed, 0u);
+  EXPECT_FALSE(a.availability().due().has_value());
+}
+
+// Macha's test_a_failed_diff_is_asked_again_on_a_timer (test_availability.cpp): a peer
+// whose diff failed is asked again after the backoff with no new event, the backoff
+// doubling from its floor while it keeps failing; an answer clears it, so nothing
+// asks the peer again until something changes.
+TEST(StoreRepair, AFailedDiffIsAskedAgainOnATimer) {
+  dannan::test::SteppedTime time;
+  Cluster cluster(std::chrono::hours(24));
+  auto surveyor = options(2, 2);
+  surveyor.time = &time;
+  auto& a = cluster.add("a", surveyor);
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto held = local_objects(b, 20, 1024, 8);
+  auto provider = referring_to(held);
+  a.publish_inventory(provider);
+  std::atomic_bool refusing{true};
+  b.interpose([&](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::trie_diff && refusing.load()) return Handled::failed(500, "unavailable", "injected");
+    return std::nullopt;
+  });
+  const AvailabilityOptions defaults;
+
+  ASSERT_TRUE(a.availability().refresh());
+  EXPECT_EQ(a.availability().snapshot()->survey.peers_failed, 1u);
+  ASSERT_TRUE(a.availability().due().has_value());
+  EXPECT_EQ(*a.availability().due(), time.now() + defaults.retry_floor);
+  // Not before its time: nothing has changed, so nobody is asked.
+  auto asked = b.calls_of(message::trie_diff);
+  EXPECT_FALSE(a.availability().refresh());
+  EXPECT_EQ(b.calls_of(message::trie_diff), asked);
+
+  // Due: asked again, still failing, and the backoff doubles.
+  time.advance(defaults.retry_floor);
+  ASSERT_TRUE(a.availability().refresh());
+  EXPECT_GT(b.calls_of(message::trie_diff), asked);
+  ASSERT_TRUE(a.availability().due().has_value());
+  EXPECT_EQ(*a.availability().due(), time.now() + 2 * defaults.retry_floor);
+
+  // Answered: the backoff is cleared, and with nothing changed nobody is asked again.
+  refusing = false;
+  time.advance(2 * defaults.retry_floor);
+  ASSERT_TRUE(a.availability().refresh());
+  EXPECT_EQ(a.availability().snapshot()->survey.peers_failed, 0u);
+  asked = b.calls_of(message::trie_diff);
+  time.advance(std::chrono::hours(1));
+  EXPECT_FALSE(a.availability().refresh());
+  EXPECT_EQ(b.calls_of(message::trie_diff), asked);
+}
+
 // A trie question names the snapshot its root question pinned; one no longer
 // pinned is refused 410, and a records question past a leaf 413.
 TEST(StoreRepair, ATrieQuestionNamesAPinnedSnapshot) {
