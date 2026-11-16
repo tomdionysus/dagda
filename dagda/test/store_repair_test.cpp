@@ -134,6 +134,15 @@ std::shared_ptr<const ledger::PeerLacks> lacks_of(const std::map<NodeId, std::ve
   return std::make_shared<const ledger::PeerLacks>(std::move(out));
 }
 
+// What a survey would say each peer holds of what this node lacks.
+std::shared_ptr<const ledger::PeerHolds> holds_of(const std::map<NodeId, std::vector<ObjectId>>& holds, bool complete = true, uint64_t generation = 1) {
+  ledger::PeerHolds out;
+  out.generation = generation;
+  out.complete = complete;
+  for (const auto& [peer, ids] : holds) out.holds.emplace(peer, list_of(ids));
+  return std::make_shared<const ledger::PeerHolds>(std::move(out));
+}
+
 size_t probes(ClusterNode& node) {
   return node.calls_of(message::have_valid_objects) + node.calls_of(message::have_object) + node.calls_of(message::have_objects);
 }
@@ -2294,8 +2303,9 @@ TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
 // has one copy, and the one to pull sorts before every one to push, so it is the first
 // transfer due; a step with credit for an extent makes it. Today the push takes the
 // credit first and the pull is skipped while the push is credit-limited, step after step.
-// Disabled until the redesign's stage 2, which makes it pass: seen failing first.
-TEST(StoreRepair, DISABLED_APushOutOfCreditDoesNotHoldBackThePull) {
+// Seen failing first (39fe114, node-a); stage 2's queue makes it pass. The survey
+// says the peer holds the object to pull, so its one copy is known.
+TEST(StoreRepair, APushOutOfCreditDoesNotHoldBackThePull) {
   Cluster cluster;
   auto& node = cluster.add("node", options(2));
   auto& peer = cluster.add("peer", options(2));
@@ -2314,7 +2324,8 @@ TEST(StoreRepair, DISABLED_APushOutOfCreditDoesNotHoldBackThePull) {
   ASSERT_TRUE(node.store().should_own(object_id(wanted)));
   auto everything = pushing;
   everything.push_back(object_id(wanted));
-  const RepairLists lists{inventory_of(everything), list_of({object_id(wanted)}), lacks_of({{peer.id(), pushing}}), {}};
+  const RepairLists lists{
+      inventory_of(everything), list_of({object_id(wanted)}), lacks_of({{peer.id(), pushing}}), {}, holds_of({{peer.id(), {object_id(wanted)}}})};
 
   // Credit for one extent a step, and no limit on calls.
   const auto step = node.store().repair_step(lists, extent, 0);
@@ -2364,6 +2375,48 @@ TEST(StoreRepair, TheSurveyPublishesWhoHoldsWhatThisNodeLacks) {
   // The same questions as before, and no probe.
   EXPECT_GT(b.calls_of(message::trie_diff) + c.calls_of(message::trie_diff), trie_diffs);
   EXPECT_EQ(probes(b) + probes(c), 0u);
+}
+
+// The repair redesign's stage 2: the object with fewest copies goes first, whichever
+// way its bytes travel. Three nodes keep three copies. One object has a single copy,
+// on a peer, and this node should hold it; many others have two copies and lack their
+// third on that same peer. With credit for one extent a step, the first step fetches
+// the one at risk, though it sorts after every object to push.
+TEST(StoreRepair, TheObjectWithFewestCopiesGoesFirst) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(3));
+  auto& other = cluster.add("other", options(3));
+  auto& peer = cluster.add("peer", options(3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] {
+    return record_of(node, peer.id()).advert_u64(capacity_advert).value_or(0) > 0 && record_of(node, other.id()).advert_u64(capacity_advert).value_or(0) > 0;
+  }));
+  // Two copies each, here and on `other`; `peer` lacks them.
+  const auto pushing = local_objects(node, 6, extent, 90);
+  for (const auto& id : pushing) ASSERT_TRUE(other.data().put(id, *node.data().get(id)));
+  // One copy, on `peer` alone, its id after every pushed one's.
+  Bytes at_risk;
+  for (uint8_t salt = 91; salt != 0; ++salt) {
+    at_risk = pattern(64 * 1024, salt);
+    if (pushing.back() < object_id(at_risk)) break;
+  }
+  ASSERT_LT(pushing.back(), object_id(at_risk));
+  ASSERT_TRUE(peer.data().put(object_id(at_risk), at_risk));
+  auto everything = pushing;
+  everything.push_back(object_id(at_risk));
+  const RepairLists lists{inventory_of(everything),
+                          list_of({object_id(at_risk)}),
+                          lacks_of({{peer.id(), pushing}, {other.id(), {}}}),
+                          {},
+                          holds_of({{peer.id(), {object_id(at_risk)}}, {other.id(), {}}})};
+
+  const auto step = node.store().repair_step(lists, extent, 0);
+  EXPECT_EQ(node.data().get(object_id(at_risk)), std::optional<Bytes>{at_risk})
+      << "credit_limited=" << step.credit_limited << " bytes=" << step.bytes_transferred;
+  // And then the rest, a step's credit at a time.
+  for (int more = 0; more < 12; ++more) (void)node.store().repair_step(lists, extent, 0);
+  for (const auto& id : pushing) EXPECT_TRUE(peer.data().has(id));
 }
 
 // The survey through an owner's provider: what is referenced is the

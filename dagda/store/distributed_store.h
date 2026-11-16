@@ -357,6 +357,10 @@ struct RepairLists {
   std::shared_ptr<const ledger::PeerLacks> lacks;
   // Held by no reachable node: passed without asking anyone.
   std::function<bool(const ObjectId&)> unavailable;
+  // Per peer that answered, what it holds of what this node lacks: with `lacks`,
+  // how many copies each object has, so the one with fewest goes first. None: a
+  // pull's copies are not known, and it goes before every object whose are.
+  std::shared_ptr<const ledger::PeerHolds> holds;
 };
 
 // What a repair step did (Macha's RepairResult).
