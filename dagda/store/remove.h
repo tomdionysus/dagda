@@ -40,8 +40,8 @@ enum class RemoveState : uint8_t {
   // each): the copy stays until the collector releases it against the
   // owner's head.
   kept_by_claim = 2,
-  // The node's current inventory refers to it, or is incomplete: the copy
-  // stays and the collector decides.
+  // The node's current inventory refers to it, is incomplete, or has not
+  // been published: the copy stays and the collector decides.
   kept_referenced = 3,
   // The node refused the caller's scope and changed nothing.
   refused = 4,
@@ -99,8 +99,9 @@ struct ReplicaRemoval {
 };
 
 // What a replica works on: this node's DATA pool, its claims, the ledger
-// whose published inventory says what the owner's state refers to (none: no
-// inventory), and the cache, whose copy goes with the pool's.
+// whose published inventory says what the owner's state refers to (none, or
+// none published: every copy is kept), and the cache, whose copy goes with
+// the pool's.
 struct RemoveReplica {
   StoragePool& data;
   contract::ClaimStore& claims;
@@ -110,8 +111,9 @@ struct RemoveReplica {
 
 // The replica's half, after its scope check: under each object's claim guard
 // (StoragePool::claim_locks), releases the DATA claims `observed` dominates,
-// then removes the local copy of each object no claim remains on and the
-// current inventory does not refer to; one entry per distinct id, in id order.
+// then removes the local copy of each object no claim remains on and a
+// complete published inventory does not refer to; one entry per distinct id,
+// in id order.
 // Idempotent. Waits on the state device (the claims' journal) and the DATA
 // device; the caller holds the device's admission. Thread-safe.
 inline constexpr dannan::sched::Waits remove_here_waits = dannan::sched::Waits::state_device | dannan::sched::Waits::data_device;

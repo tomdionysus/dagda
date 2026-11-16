@@ -248,8 +248,8 @@ class Context {
     // checks `writer` as it checks a write, releases on each object only the
     // claims `observed` dominates (a claim written where the caller has not
     // seen survives, partition or not), and deletes its copy at once where no
-    // claim remains and its current inventory does not refer to it; it keeps
-    // it otherwise. The evidence names, node by node and object by object,
+    // claim remains and its current inventory, published and complete, does
+    // not refer to it; it keeps it otherwise. The evidence names, node by node and object by object,
     // what was removed, which claim kept a copy, what the inventory kept,
     // which node refused the scope and why, and which could not be reached
     // (a member of the replication set not present among them). Idempotent:
