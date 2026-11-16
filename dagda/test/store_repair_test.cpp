@@ -2289,6 +2289,39 @@ TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
 }
 
+// The repair redesign's (TODO/2026-11-16-repair-redesign.md, finding 1): a push that
+// ends its step out of credit must not keep the pull from the step. Every object here
+// has one copy, and the one to pull sorts before every one to push, so it is the first
+// transfer due; a step with credit for an extent makes it. Today the push takes the
+// credit first and the pull is skipped while the push is credit-limited, step after step.
+// Disabled until the redesign's stage 2, which makes it pass: seen failing first.
+TEST(StoreRepair, DISABLED_APushOutOfCreditDoesNotHoldBackThePull) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(node, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto pushing = local_objects(node, 8, extent, 80);
+  // One the peer alone holds, its id before every pushed one's.
+  Bytes wanted;
+  for (uint8_t salt = 81; salt != 0; ++salt) {
+    wanted = pattern(64 * 1024, salt);
+    if (object_id(wanted) < pushing.front()) break;
+  }
+  ASSERT_LT(object_id(wanted), pushing.front());
+  ASSERT_TRUE(peer.data().put(object_id(wanted), wanted));
+  ASSERT_TRUE(node.store().should_own(object_id(wanted)));
+  auto everything = pushing;
+  everything.push_back(object_id(wanted));
+  const RepairLists lists{inventory_of(everything), list_of({object_id(wanted)}), lacks_of({{peer.id(), pushing}}), {}};
+
+  // Credit for one extent a step, and no limit on calls.
+  const auto step = node.store().repair_step(lists, extent, 0);
+  EXPECT_EQ(node.data().get(object_id(wanted)), std::optional<Bytes>{wanted})
+      << "credit_limited=" << step.credit_limited << " bytes=" << step.bytes_transferred;
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
