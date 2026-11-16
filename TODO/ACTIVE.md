@@ -106,6 +106,10 @@ who holds what, each copy moved once, a window of transfers against the byte cre
 benchmark first): "yes, I think we can do that." The design and its stages: `TODO/2026-11-16-repair-redesign.md`.
 Macha's live nodes keep today's repair until the cutover; the rule below that a Macha defect is fixed in Macha
 first is set aside for this, as Macha's store is deleted on its port branch.
+Asked the same day, two answers. **The offer is allowed**: a holder may ask an owner which ids it wants before
+sending bytes, as a handshake at the moment of transfer; the diff stays the only way repair finds what to do
+("repair is diff only" otherwise stands). **The benchmark's link is the real one between two Pis**, both claimed
+whole and their interface shaped, as the harness plan first said, not one Pi's loopback.
 
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
@@ -260,15 +264,7 @@ asking:
 
 ## Waiting on Tom
 
-- **Shaping a Pi for the harness.** The repair benchmark and the remote reads need a link with a round-trip time.
-  Proposed: `tc netem` on the loopback of one Pi claimed whole, with a note on the board, removed in the script's
-  trap; that leaves the shared network alone and needs no second Pi. The slow disk (workload 9) needs
-  device-mapper set up on a Pi. Neither is done without Tom's word.
-- **Repair's stage 3 needs an offer to a peer** (`2026-11-16-repair-redesign.md`, design 3 and "Stage 0, as
-  answered"): in Macha a holder must be able to initiate, as an owner may not yet know an object is referenced.
-  The offer is a question to a peer, which "repair is diff only, no probe" does not allow as written. Asked
-  2026-11-16; recommended: allow it as a handshake at the moment of transfer, the diff staying the only way repair
-  finds what to do.
+- **The slow disk** (harness workload 9) needs device-mapper set up on a Pi: not done without Tom's word.
 - **A null inventory letting an instant delete go** (gc-and-deletion gap 9): a design question, with Lugh and Lir.
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
