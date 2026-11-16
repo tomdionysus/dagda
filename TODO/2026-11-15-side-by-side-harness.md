@@ -316,3 +316,17 @@ Findings:
 **The kernel.** Every figure above was taken on node-b's 4K-page kernel (6.18.50+rpt-rpi-v8, up since
 2026-11-14): node-b was already the 4K "TSan Pi" when the other build Pis moved from 16K to 4K pages at 2026-11-16
 00:18Z, so these figures are unaffected by that change and comparable with later ones on node-b.
+
+### Phase 2: recovery (workload 8), as agreed with the Macha session (2026-11-16)
+
+- A fill run: node 0 and its peer, 8 GiB (512 MiB files and about 20,000 small files of a few KiB to 64 KiB, so the
+  object count is tested as well as bytes), then a clean stop, or a `kill -9` by the script. A 1 GiB fill beside it if
+  time allows, to tell bytes from objects. The state directories survive the run.
+- A reopen run: **node 0 alone** (local recovery must not depend on a peer; a run with the peer up is labelled apart and
+  not averaged in), the page cache dropped first, timed from construction to:
+  a. data storage open (Macha: the data_storage plane, after StoragePool's constructor and its pack replay);
+  b. **local state ready** (Macha: RecoveryProgress complete, as /health and the peers see it): the headline;
+  c. the first foreground read of a held extent that completes (a random one of the fill's), read after b;
+  d. every local store's scan complete (background after b on Macha; whichever comes first is recorded).
+  Each against the same point on Dagda's side; no separate "presence warmed" point unless both sides show one.
+- Plus the CPU and disk read until b.
