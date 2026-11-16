@@ -17,8 +17,9 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
   1 failed, the one a new fixture case whose premise the run disproved (two clusters with a CA each do join, on
   the cluster key), removed in `66a0b76`; the harness's repair workload is compiled and smoke-tested there, not
   gated by the suite. Then `0d048e0` (the loop reads a new reference at once, a gap against Macha found by that
-  smoke test): 1120 ran, 1117 passed, 3 skipped, 0 failed. **Last full gate: `502cf57`** (repair redesign stage
-  1, the survey keeps who holds what) on node-c: 1123 ran, 1120 passed, 3 skipped, 0 failed.
+  smoke test): 1120 ran, 1117 passed, 3 skipped, 0 failed. `502cf57` (repair redesign stage 1, the survey keeps who holds
+  what): 1123 ran, 1120 passed, 3 skipped, 0 failed. **Last full gate: `2a8d24b`** (stage 2, repair from one
+  queue, fewest copies first) on node-c: 1125 ran, 1122 passed, 3 skipped, 0 failed.
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
   commit, and retires its own cases against named `dagda_tests` cases, mapped one by one.
@@ -30,7 +31,11 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
   both stores again.
 - **Repair is being redesigned** (the maintainer, 2026-11-16; `TODO/2026-11-16-repair-redesign.md`): one queue of copies to
   make, fewest copies first, a window of transfers against the byte credit, the 16-call count gone. It replaces
-  both patches for the pull starved by a sending push. Nothing is built; stage 0 measures first.
+  both patches for the pull starved by a sending push. Stages 1 and 2 are built and gated (the survey keeps who
+  holds what; one queue by copies left, which ends both starvation paths); the benchmark's driver is built for
+  both stores and smoke-tested across node-b and node-c; **the baseline has not been measured** (it needs both
+  Pis whole; its binaries, at `7d12ca8`, are today's repair). Stage 3 (the offer) and stage 4 (the window, the
+  count gone) are not started.
 - **Acknowledgement levels are the stack's standard** (the maintainer, 2026-11-15): ephemeral, persisted, decided (Dannan's
   agreement, 0.9.0), replicated; the setting is `ack_level`. Done on the branch and in the stack document. Dagda's
   durable stays beside them until the maintainer says otherwise.
