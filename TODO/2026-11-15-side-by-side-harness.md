@@ -330,3 +330,34 @@ Findings:
   d. every local store's scan complete (background after b on Macha; whichever comes first is recorded).
   Each against the same point on Dagda's side; no separate "presence warmed" point unless both sides show one.
 - Plus the CPU and disk read until b.
+
+### Phase 2: recovery, measured (2026-11-16, node-b)
+
+As designed above (`e454ad7`, `1771670` after the Macha session's review; Dagda's store code `1bfde30`'s). Macha's side
+is **develop f0597a4 on Dannan 0.5.3**, not the port branch. Fill: 14 x 512 MiB and 20,000 small files (8.21 GB,
+21,792 objects); fill-small: 1 x 512 MiB and the same small files (about 1.2 GB, 20,128 objects). Three rounds each,
+the order alternating, fstrim and a 30 s rest before each fill, a cold cache before each reopen, node 0 alone,
+get_throttled 0x50000 throughout. `recovery.jsonl` (`build/pi-recovery.sh`). Medians [three runs], milliseconds from
+the node's construction:
+
+| Reopen | Figure | Macha | Dagda |
+|---|---|---|---|
+| fill, after kill -9 | ready (b) | 1714 [1705-1727] | 1725 [1662-1743] |
+| | first read (c) | 1738 | 1750 |
+| fill, after a clean stop | ready (b) | 1729 [1727-1731] | 1756 [1705-1758] |
+| | first read (c) | 1752 | 1780 |
+| fill-small, after kill -9 | ready (b) | 1669 [1639-1683] | 1651 [1650-1698] |
+| fill-small, after a clean stop | ready (b) | 1654 [1651-1665] | 1639 [1616-1670] |
+| every reopen | CPU to ready, disk read to ready | 0.5-0.6 s, 98-100 MB | 0.5-0.6 s, 98-100 MB |
+| the fill itself | fill / fill-small seconds | 148.8 / 113.7 | 177.5 / 87.0 |
+
+Findings:
+1. **Recovery: at parity**, within 2% either way on every reopen, no failure, a kill -9 reopen no slower than a clean
+   one on either. Data open (a) is within a few milliseconds of ready on both (on Macha's side three of twelve fell
+   inside one 1 ms poll of ready and read -1, "not seen"); the store's build after ready (Macha) costs about 1 ms.
+2. **The workload does not yet isolate the store's recovery.** Ready barely moves from 8.2 GB to 1.2 GB at the same
+   object count, and every reopen reads the same 99 MB: about 1.6 s is a fixed cost common to both, most likely the
+   program and its libraries read from the cold cache. Next, if wanted: warm the binaries after dropping the cache
+   (or time from main's first line), and a fill with ten times the objects, to see the stores' own part.
+3. The fills: the large ones vary run to run on both (Macha 135-177 s, Dagda 146-184 s); the small one is Dagda's,
+   87 s against 114 s, in every round.
