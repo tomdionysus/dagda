@@ -2252,13 +2252,20 @@ TEST(StoreRepair, TheStepThatFirstSeesANewListWalksIt) {
 // Macha's test_a_pull_list_new_while_the_push_runs_is_not_passed_over, its fix the
 // library matches: with more to push than a step examines, the first list's pull
 // finishes while the pass is still open; a new pull list arriving then is walked by the
-// step that first sees it, not passed over until the push's pass ends.
+// step that first sees it, not passed over until the push's pass ends. In Macha's shape:
+// its peer holds everything, so the push examines and sends nothing. Dagda's push is
+// diff-only (a listed object is one the peer lacks), so the same is a peer with no room
+// for an extent: examined, never sent. (A push that does send spends the step's
+// operations, which the pull shares, in both stores: sent to the Macha session,
+// 2026-11-16.)
 TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
   Cluster cluster;
   auto& node = cluster.add("node", options(2));
-  auto& peer = cluster.add("peer", options(2));
+  // Room for the object to be pulled from it, none for an extent pushed to it.
+  auto& peer = cluster.add("peer", options(2, 1, 512 * 1024));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(node, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
   const auto first = pattern(64 * 1024, 73);
   const auto second = pattern(64 * 1024, 74);
   ASSERT_TRUE(node.data().put(object_id(first), first));
@@ -2278,6 +2285,8 @@ TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
   (void)node.store().repair_step(next, budget, 16);
   EXPECT_EQ(peer.calls_of(message::get_object), gets + 1);
   EXPECT_EQ(node.data().get(object_id(second)), std::optional<Bytes>{second});
+  // The push sent nothing: it is Macha's shape.
+  EXPECT_EQ(peer.calls_of(message::put_object), 0u);
 }
 
 // The survey through an owner's provider: what is referenced is the
