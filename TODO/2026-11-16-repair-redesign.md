@@ -129,7 +129,11 @@ reference reaches anyone, and its holders are placed apart from the log's replic
 reference only through the claim. A publisher that dies between the write and the append leaves an object held
 and claimed but never referenced, which repair leaves alone. Sizes for the benchmark, none measured: entries 0.3
 to 1.5 KiB, objects 64 KiB to 1 MiB and rare, about 10,000 publishes a second across a cluster (Tom, 2026-11-04).
-Lugh is still to answer.
+
+**Check B, for Lugh (the Lugh session, 2026-11-16, from its P8 plan; Lugh stores nothing in Dagda yet): it does
+not arise.** Lugh keeps everything in head spaces (records of a few hundred bytes, capped at 256 KiB) and writes
+no DATA objects of its own. Its assumption: values stay in the head; if Dagda ever moved large values out into
+objects of its own accord, the window would be Dagda's to close.
 
 **Check C: there is no multi-object fetch or put.** `get_object` (516) and `put_object` (517) carry one object
 each (`dagda/store/messages.h:39-41`), so small values need one added at stage 4. `have_objects` (552) already
