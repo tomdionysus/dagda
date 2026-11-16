@@ -213,5 +213,34 @@ TEST(LedgerAvailability, WhatThisNodeLacksIsTheReferencedSetLessEveryDisk) {
   }
 }
 
+// Macha's test_what_is_not_held_pauses_over_the_ids_beside_the_view
+// (test_availability.cpp): the join pauses between pages over the ids beside the
+// held view too, so a stop asked for there ends it at the next page, not after
+// every id.
+TEST(LedgerAvailability, WhatIsNotHeldPausesOverTheIdsBesideTheView) {
+  const std::set<ObjectId> viewed{numbered_id(1), numbered_id(2)};
+  std::vector<ObjectId> others;
+  for (uint32_t i = 0; i < 10000; ++i) others.push_back(numbered_id(1000 + i));
+  std::sort(others.begin(), others.end());
+  dannan::test::TempDir dir;
+  auto view = held_trie(dir.path() / "view", viewed);
+  const contract::ReferencedSets sets(contract::ReferencedSets::Views{view->snapshot(), std::nullopt}, others, {});
+  const std::vector<ObjectTrie::Snapshot> parts;
+
+  size_t pauses = 0;
+  const auto all = sets.not_held(contract::RetentionClass::data, parts, [&] { ++pauses; });
+  EXPECT_EQ(all.size(), viewed.size() + others.size());
+  EXPECT_GE(pauses, others.size() / 4096);
+
+  size_t before_stop = 0;
+  EXPECT_THROW((void)sets.not_held(contract::RetentionClass::data, parts,
+                                   [&] {
+                                     ++before_stop;
+                                     throw MaintenanceStopping();
+                                   }),
+               MaintenanceStopping);
+  EXPECT_EQ(before_stop, 1u);
+}
+
 }  // namespace
 }  // namespace dagda::ledger
