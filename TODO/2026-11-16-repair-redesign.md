@@ -150,6 +150,25 @@ its result and its callers:
 
 **3. Each copy once.** As check B decides; to Tom first if it needs the offer.
 
+**Stage 3, designed (2026-11-16), not built.** Allowed by Tom as a handshake at the moment of transfer; the diff
+stays the only way repair finds what to do.
+- *The message.* A new pair, `offer_objects` and its reply, not `have_objects`: the cases that hold repair to
+  "no probe" count `have_objects` and its kin, and an offer is not a question about what a peer holds for its
+  own sake. The sender names the ids it is about to send a peer; the reply says of each: wanted, held, being
+  fetched, or no room.
+- *The sender.* In the push's planning, after it knows which owners lack an object and before it reads the bytes:
+  one offer a peer a batch. Held: the peer is a keeper, remembered as a pushed copy is. Being fetched: nothing
+  sent, tried again on the retry's backoff. No room: passed, as a peer with no room is now. Only what is wanted
+  is read and sent. The offer's own bytes come out of the credit.
+- *The receiver.* It answers from its index and from two small tables: what its own repair is fetching now, and
+  what it has said it wants from a peer. An id it wants from a peer is not pulled by its own repair meanwhile
+  (met again on the pull's retry backoff). An entry goes when the copy arrives, when the offering peer is no
+  longer active, or after the transfer deadline the store already has (`object_transfer_call`): no new number.
+- *The cases, from the design:* a push to a peer that already holds the object moves no object bytes; a peer
+  fetching an object declines its offer and is sent nothing; a peer that wanted an offered object does not fetch
+  it too, and fetches it after all if the copy never comes; an offer is not counted as a probe; the bytes on the
+  wire for a rejoining node are the objects once, not once each way.
+
 **4. The window, and the count gone.** Concurrent transfers both ways against the byte limit; small objects
 batched; `operation_budget` removed. The shape of `Repair`'s steps agreed with the Macha session first.
 
