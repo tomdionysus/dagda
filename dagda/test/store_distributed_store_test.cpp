@@ -1727,7 +1727,8 @@ TEST(StoreClaimLocks, ADeleteMarksItsObjectAndHoldsNoStripe) {
   const auto refused = locks.deletion(id, [] { return true; });
   EXPECT_TRUE(refused.claimed());
   EXPECT_FALSE(locks.deleting(id));
-  // Two deletes at once: the first to finish does not end the second's mark.
+  // Two deletes at once (Macha's test_a_delete_mark_lasts_until_the_last_delete_of_the_id_
+  // ends): the first to finish does not end the other's mark, whichever began first.
   {
     auto first = locks.deletion(id, [] { return false; });
     {
@@ -1736,6 +1737,14 @@ TEST(StoreClaimLocks, ADeleteMarksItsObjectAndHoldsNoStripe) {
     EXPECT_TRUE(locks.deleting(id));
   }
   EXPECT_FALSE(locks.deleting(id));
+  {
+    std::optional<ClaimDeletion> first(locks.deletion(id, [] { return false; }));
+    std::optional<ClaimDeletion> second(locks.deletion(id, [] { return false; }));
+    first.reset();
+    EXPECT_TRUE(locks.deleting(id));
+    second.reset();
+    EXPECT_FALSE(locks.deleting(id));
+  }
 }
 
 // A claim, local or from a peer, finds a marked object not present.
