@@ -37,6 +37,8 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
    with the synchronous wait (`616df37`) and one ranking (`3df3b8d`) 0.738 s: **about 6% over Macha's CPU, was 11%**;
    wall time, latency, bytes and memory equal or better. Left alone as like for like: the peer re-advertising on
    every put (Macha's server does the same), the events counter, prompt replication's probe-then-put.
+2b. **Four concurrent local readers are about 6% slower than Macha's at 7% less CPU** (harness plan, "Phase 2:
+   reads, local"): an off-CPU profile of that span on both, the cause named, then the fix test-first.
 3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
 4. **Harness phase 2**: reads-local written and reviewed by the Macha session (`ce37fe5`: its FUSE reader, one
    synchronous loader read an extent, no read-ahead, 1 MiB requests; compares the two stores, not baseline.py's
@@ -57,7 +59,9 @@ figures, then slices 2 to 5 as the design orders them.
 
 How work runs: no builds, tests or benches on the Mac; Linux gates on the shared Pis (jupiter .169 with NVMe for
 measurement, saturn .170 and neptune .202 hold the Dannan 0.8.0 prefix and Macha's fixtures under `/root/dagda-080`),
-claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan and TSan only for releases.
+claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan only for releases (on the Pis). TSan
+cannot run on the Pi 5s (g++ 14 refuses their 47-bit address space); on the Mac only to hunt one named bug, never as a
+gate or routine check (Tom, 2026-11-16).
 
 ## Open
 
