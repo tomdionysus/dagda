@@ -62,10 +62,10 @@ figures, then slices 2 to 5 as the design orders them.
 How work runs: no builds, tests or benches on the Mac; Linux gates on the shared Pis (node-b .169 with NVMe for
 measurement, node-c .170 and node-a .202 hold the Dannan 0.8.0 prefix and Macha's fixtures under `/root/dagda-080`),
 claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan only for releases (on the Pis). TSan
-only to hunt one named bug, never as a gate or routine check (the maintainer, 2026-11-16): every build Pi runs it since 00:18Z
-that day (4K-page kernels); sanitizer builds on node-c or node-a, never node-d (4 GB), `free -m` first; the Mac only
-when hunting. node-c, node-a and node-d went from 16K to 4K pages at 2026-11-16 00:18Z; node-b, where every
-harness figure is taken, was on its 4K kernel already (up since 2026-11-14), so the harness figures are unaffected.
+only to hunt one named bug, never as a gate or routine check (the maintainer, 2026-11-16); the Mac only when hunting. Since
+2026-11-16 (morning) all four build Pis run a 4K-page, 48-bit-VA kernel (6.18.62-v8-va48+) with ASan, UBSan and TSan
+working on each (clang 19 on all but node-d); node-d has 4 GB, so `free -m` first. **Every harness figure so far is on
+node-b's previous kernel (6.18.50, 4K pages)**: a comparison with later figures runs both stores again.
 
 ## Open
 
