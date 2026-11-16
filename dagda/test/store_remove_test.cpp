@@ -95,6 +95,15 @@ void refer_to_nothing(test::TestProvider& provider, contract::RetentionClock clo
   provider.heads[head] = release;
 }
 
+// The inventory a node publishes when its owner's state refers to nothing.
+// A node with none published keeps every copy (the case below), so a case
+// that expects a copy to go publishes this first.
+void publish_nothing_referenced(ClusterNode& node) {
+  test::TestProvider provider;
+  provider.answer.complete = true;
+  node.publish_inventory(provider);
+}
+
 // On three nodes, a delete whose clock covers every claim on the object
 // releases them all and removes every copy at once, in this call.
 TEST(StoreRemove, ADeleteCoveringEveryClaimRemovesEveryCopyAtOnce) {
@@ -104,6 +113,7 @@ TEST(StoreRemove, ADeleteCoveringEveryClaimRemovesEveryCopyAtOnce) {
   auto& c = cluster.add("c", options(3));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  for (auto* node : {&a, &b, &c}) publish_nothing_referenced(*node);
   const auto id = write_everywhere(a, 1, 3);
   const RetentionDot by_a{a.id(), 1}, by_b{b.id(), 1};
   claim(a, id, by_a);
@@ -136,6 +146,7 @@ TEST(StoreRemove, AClaimTheCallersClockHasNotSeenKeepsThatNodesCopyAndIsNamed) {
   auto& b = cluster.add("b", options(2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  for (auto* node : {&a, &b}) publish_nothing_referenced(*node);
   const auto id = write_everywhere(a, 2, 2);
   claim(a, id, {a.id(), 1});
   // Written on b while a could not see it.
@@ -209,13 +220,14 @@ TEST(StoreRemove, TheCollectorFreesWhatTheDeleteLeftOnceItsClaimsGo) {
 }
 
 // An object the node's current inventory refers to is kept there, and said
-// to be; a node with no inventory published removes its copy.
+// to be; a node whose inventory refers to nothing removes its copy.
 TEST(StoreRemove, AnObjectTheInventoryRefersToIsKept) {
   Cluster cluster;
   auto& a = cluster.add("a", options(2));
   auto& b = cluster.add("b", options(2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  publish_nothing_referenced(a);
   const auto id = write_everywhere(a, 4, 2);
   test::TestProvider provider;
   provider.answer.data = {id};
@@ -230,6 +242,38 @@ TEST(StoreRemove, AnObjectTheInventoryRefersToIsKept) {
   EXPECT_TRUE(b.data().has(id));
 }
 
+// A node with no inventory published keeps its copy, as one whose inventory is
+// incomplete does: it cannot say its owner's state does not refer to the object
+// (the maintainer, 2026-11-16; gc-and-deletion gap 9). The claims the clock dominates are
+// still released there. Once it publishes an inventory referring to nothing,
+// the same delete removes the copy.
+TEST(StoreRemove, ANodeWithNoInventoryPublishedKeepsItsCopy) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  publish_nothing_referenced(b);
+  ASSERT_EQ(a.ledger().inventory(), nullptr);
+  const auto id = write_everywhere(a, 8, 2);
+  claim(a, id, {a.id(), 1});
+
+  const auto evidence = a.api().objects().remove({id}, {{a.id(), 1}}, {}, deadline);
+  EXPECT_TRUE(evidence.finished) << evidence.why;
+  EXPECT_EQ(evidence.state(a.id(), id), RemoveState::kept_referenced);
+  EXPECT_EQ(evidence.state(b.id(), id), RemoveState::removed);
+  EXPECT_EQ(evidence.removed(), 1u);
+  EXPECT_TRUE(a.data().has(id));
+  EXPECT_FALSE(b.data().has(id));
+  EXPECT_FALSE(a.claims().retained(RetentionClass::data, id));
+
+  publish_nothing_referenced(a);
+  const auto again = a.api().objects().remove({id}, {{a.id(), 1}}, {}, deadline);
+  EXPECT_EQ(again.state(a.id(), id), RemoveState::removed);
+  EXPECT_EQ(again.state(b.id(), id), RemoveState::absent);
+  EXPECT_FALSE(a.data().has(id));
+}
+
 // A scope refused on every replica removes nothing anywhere and releases no
 // claim; each node says why, at the generation of the scope data it read.
 TEST(StoreRemove, ARefusedScopeRemovesNothing) {
@@ -238,6 +282,7 @@ TEST(StoreRemove, ARefusedScopeRemovesNothing) {
   auto& b = cluster.add("b", options(2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  for (auto* node : {&a, &b}) publish_nothing_referenced(*node);
   const auto id = write_everywhere(a, 5, 2);
   claim(a, id, {a.id(), 1});
   for (auto* node : {&a, &b}) node->context().identity().install_scope_source(std::make_shared<OnePrefixRefused>("private/"));
@@ -271,6 +316,7 @@ TEST(StoreRemove, TheDeleteIsIdempotent) {
   auto& b = cluster.add("b", options(2));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  for (auto* node : {&a, &b}) publish_nothing_referenced(*node);
   const auto id = write_everywhere(a, 6, 2);
   const auto never = object_id(test::numbered(600));
   claim(a, id, {a.id(), 3});
@@ -298,6 +344,7 @@ TEST(StoreRemove, AMemberAwayIsNamedUnreachable) {
   auto& c = cluster.add("c", options(3));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
+  for (auto* node : {&a, &b, &c}) publish_nothing_referenced(*node);
   const auto id = write_everywhere(a, 7, 3);
   const auto away = c.id();
   c.stop();
