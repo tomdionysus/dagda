@@ -1092,6 +1092,32 @@ void Node::maintenance_loop(std::stop_token stop) {
         }
       }
       if (!hold_pass && now >= next_repair) {
+        // The inventory the survey and repair read follows the owner's generation in the
+        // pass that sees it move, whether or not the collector's sweep is due (Macha's
+        // maintenance.cpp:611-627 at f0597a4): a new reference must not wait out the
+        // collector's rest. Held back while metadata is not ready for it, never the first.
+        if (auto* provider = registered_provider()) {
+          ensure_collector_locked(*provider);
+          try {
+            const auto step = _collector->inventory_step(
+                [&stop] {
+                  if (stop.stop_requested()) throw contract::MaintenanceStopping{};
+                },
+                !metadata_dirty);
+            if (step.rebuilt) {
+              // Never swept in the pass that built it, and the sweep is due again after
+              // its quiet window: what is referenced has changed.
+              if (_gates) _gates->rebuilt_inventory(time.now());
+              next_gc = std::min(next_gc, now + interval);
+              dannan::contract::Lock figures(_gc_figures_mutex);
+              ++_gc_figures.inventories;
+            }
+          } catch (const contract::MaintenanceStopping&) {
+            return;
+          } catch (const std::exception& error) {
+            _logger.debug(std::string("inventory: the reachability provider could not answer: ") + error.what());
+          }
+        }
         try {
           (void)_repair->pass(stop);
         } catch (const store::MaintenanceStopping&) {
