@@ -256,3 +256,55 @@ files 0.741 s [0.741-0.744] against 0.767 s [0.700-0.790] with 10, three alterna
 (`experiment-advert-count.jsonl`). About 3%. Folding Dagda's figures into one advert would take that much, and leave
 about 6% against Macha's 0.70 s. It also changes the advert names Macha's port reads for its cache figures, so it is
 Macha's to agree as well as Tom's to order.
+
+### Small files: the figures advert and the synchronous wait, measured (2026-11-15 night, corvus-jupiter)
+
+Built and gated before measuring: the figures advert (`a103c86`, 4 adverts, about 659 bytes a record); the
+synchronous waits on the caller's thread with no timer, worker job or post (`616df37`); one ranking a write when
+every node is live (`3df3b8d`). Three stores, three rounds, the order rotating each round (Macha, the advert, the
+tip; then advert, tip, Macha; then tip, Macha, advert), fstrim, a 30 s rest and a cold cache before each run,
+get_throttled 0x50000 throughout (nothing during the runs). Both Dagda builds on Dannan 0.8.2, RelWithDebInfo -O2.
+`advert-and-wait.jsonl` (`build/pi-advert.sh`). Medians [range]:
+
+| Figure | Macha | Dagda `e9e93f0` (advert) | Dagda `461bed3` (and the wait) |
+|---|---|---|---|
+| CPU | 0.698 s [0.647-0.712] | 0.745 s [0.740-0.753] | 0.738 s [0.737-0.741] |
+| file p50 / p99 | 501.7 / 503.2 ms | 501.9 / 504.0 ms | 501.7 / 503.5 ms |
+| publish / GC and compaction | 12.55 s / 215 ms | 12.55 s / 222 ms | 12.55 s / 221 ms |
+| disk written, RSS high-water | 30.76 MB, 25.2 MB | 30.76 MB, 24.6 MB | 30.76 MB, 24.7 MB |
+
+- The advert: 0.775 s (rerun 6, the same Pi and Dannan) to 0.745 s, about 4% (the experiment said 3%).
+- The wait and the one ranking: a further 1% at most (0.745 to 0.738; the ranges barely part). The hand-offs were not
+  where the CPU goes; their gain is latency under a busy executor, which the case `ASynchronousWaitNeedsNoExecutor
+  Thread` pins (15 s before, at once after).
+- **Where it stands: about 6% over Macha's CPU** (0.04 s for 200 files, 0.2 ms a file), was 11%. Wall time, latency,
+  bytes and memory equal or better. Not profiled since: the earlier in-span profile put the rest in record copies
+  through Dannan's net layer (its 0.9.0 list) and libc, so the next measure is on 0.9.0 (ACTIVE.md, Next 3), with a
+  fresh in-span profile beside it.
+
+### Phase 2: reads, local (2026-11-16, corvus-jupiter)
+
+The workload as the Macha session reviewed it (`ce37fe5`): files published on node 0 and held by both, the page cache
+dropped, then read on node 0 as Macha's FUSE reader reads (one synchronous loader-class read an extent as the reader
+enters it, the extent before dropped first, no read-ahead, 1 MiB requests): 512 MiB by one reader, then 4 x 128 MiB
+by four at once. **These compare the two stores under one harness, not with baseline.py's numbers**: baseline.py reads
+library files from a random aligned offset with a warm page cache; here fresh files from offset 0, cold (the Macha
+session's caveat). Three rounds alternating, the same method as above; both harnesses built from `ce37fe5` (Dagda's
+store code is `6adc5ed`'s). `reads-local.jsonl` (`build/pi-reads.sh`). Medians [range]:
+
+| Figure | Macha | Dagda |
+|---|---|---|
+| one reader: MB/s | 230.2 [227.6-233.5] | 240.8 [240.7-241.3] |
+| one reader: CPU s/GB | 2.34 | 2.16 |
+| one reader: first byte, request p50 / p99 / max | 18.0 ms, 0.20 / 18.1 / 22.0 ms | 17.4 ms, 0.18 / 17.4 / 17.7 ms |
+| four readers: MB/s | 387.0 [380.1-388.3] | 363.0 [343.1-376.5] |
+| four readers: CPU s/GB | 3.51 | 3.26 |
+| four readers: first byte (max), request p99 / max | 63.6 ms, 62.9 / 84.8 ms | 63.2 ms, 63.2 / 81.7 ms |
+| RSS high-water | 238 MB | 209 MB |
+
+Findings:
+1. One reader: Dagda better on every figure.
+2. **Four readers: Dagda about 6% slower** (the ranges do not meet) while spending 7% less CPU: the readers wait on
+   something Macha's do not. Not yet known what; next, an off-CPU profile of the four-reader span on both, then the
+   fix test-first. Candidates from reading, unproven: the device reserve's slots or DATA admission on a local read, the
+   cache's insertion on the read path.

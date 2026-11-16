@@ -32,19 +32,15 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
 
 ## Next (in order, Tom's rulings of 2026-11-15)
 
-1. **Measure the figures advert** (`a103c86`, one advert for the store's figures, records 10 adverts to 4): small files
-   on jupiter, three alternating rounds against Macha, with the protocol in the harness plan. The experiment predicted
-   about 3%.
-2. **Fewer thread hand-offs and less placement per write** (the small-file profile: placement 125 samples against
-   Macha's 78, more sealing, futex wake-ups), test-first, then remeasure. **Built and gated, not yet measured**
-   (2026-11-15 night): the synchronous waits run their barriers on the caller's thread with no timer, worker job or
-   post (`616df37`, test `a019e2f` failed first at 15 s against 5); the barrier round reads the roster only for a peer
-   place (same commit); a write ranks once when every node is live (`3df3b8d`). Gates: `3df3b8d` saturn 1109 ran /
-   1106 passed / 3 skipped; the measurement script is `build/pi-advert.sh` (Macha, `e9e93f0`, the tip; rotating).
-   What stays like for like and is not changed: the peer's re-advertising on every put (Macha's storage server does
-   the same), the events counter, prompt replication's probe-then-put (Macha's design).
+1. ~~Measure the figures advert~~ and 2. ~~fewer hand-offs and less placement a write~~: **done and measured**
+   (2026-11-15 night, the harness plan's last section). Small files: Macha 0.698 s, the advert 0.745 s (was 0.775),
+   with the synchronous wait (`616df37`) and one ranking (`3df3b8d`) 0.738 s: **about 6% over Macha's CPU, was 11%**;
+   wall time, latency, bytes and memory equal or better. Left alone as like for like: the peer re-advertising on
+   every put (Macha's server does the same), the events counter, prompt replication's probe-then-put.
 3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-4. **Harness phase 2**: reads (local and over a shaped link: a note on the claim board first), CONTROL graphs, deletes
+4. **Harness phase 2**: reads-local written and reviewed by the Macha session (`ce37fe5`: its FUSE reader, one
+   synchronous loader read an extent, no read-ahead, 1 MiB requests; compares the two stores, not baseline.py's
+   numbers, being cold and at offset 0 of fresh files); then reads over a shaped link (a note on the claim board first), CONTROL graphs, deletes
    and GC, repair, recovery (kill -9), disk pressure (dm-delay), cache; strace fsync counts on a separate rerun.
 5. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
