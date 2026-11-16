@@ -492,3 +492,12 @@ two Pis, the WiFi as it is**, unshaped: so no netem, the sizes a tenth of the pl
 the raw rate and round trip recorded before each round, and what each Pi sends the other counted by a tc filter
 that only passes. The link's variance is in every figure: small differences between stages will not show. Both harness halves and their libraries are on both Pis under `/root/harness`
 (jupiter's builds at `7d12ca8`, copied), nothing claimed.
+
+### Smoke across the two Pis (2026-11-16 17:10Z, the WiFi as it is, others' jobs on both Pis)
+
+The controller's `smoke`: 20 x 64 KiB, b on saturn rejoining empty, a on jupiter. Not figures: one run each, not
+cold, shared machines. Both stores complete: Macha's b 3.56 s for the 17 objects still missing when its
+reference returned (0.29 s), Dagda's b 2.71 s for 20. It is the first sight of the double transfer in Dagda: 20
+objects needed, the holder pushed 20 and the joiner pulled 2, and a sent 1.60 MB on the wire for 1.31 MB of
+objects. Macha's a sent 2.37 MB for the same objects, metadata for 20 files included. The counting filters and
+the nodes were checked gone from both Pis afterwards.
