@@ -1000,10 +1000,22 @@ TEST(StoreStoragePool, AReadErrorKeepsTheObject) {
   std::filesystem::remove(file);
   std::filesystem::rename(aside, file);
   EXPECT_EQ(pool->get(id), std::optional<Bytes>(data));
-  // Bytes that read and do not open still go.
+  // Bytes that read and do not open still go, and are no read failure: by a reader,
+  // and by the scrub (Macha's test_a_failed_read_keeps_the_object_and_a_bad_record_is_
+  // removed, its other half).
   corrupt_object(disk, id);
+  const auto before_corrupt = failures();
   EXPECT_FALSE(pool->get(id).has_value());
   EXPECT_FALSE(pool->has(id));
+  EXPECT_EQ(failures(), before_corrupt);
+  const auto other = pattern(64 * 1024, 5);
+  const auto other_id = object_id(other);
+  ASSERT_TRUE(pool->put(other_id, other));
+  corrupt_object(disk, other_id);
+  bool complete = false;
+  for (int slices = 0; slices < 16 && !complete; ++slices) complete = pool->scrub_step(0, 16).complete;
+  ASSERT_TRUE(complete);
+  EXPECT_FALSE(pool->has(other_id));
 }
 
 }  // namespace
