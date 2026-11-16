@@ -156,8 +156,8 @@ The checks:
 
 ## How to measure a stage
 
-`build/pi-repair-run.sh` (on the Mac, not in the repository) drives one node a Pi over ssh: `smoke`, `link`,
-`run`. `B=<address>` chooses the joining Pi; `NOCOLD=1` skips the page-cache drop and must be set on any Pi not
+`tools/harness/pi-repair-run.sh` (in the repository since 2026-11-16, on Tom's word) drives one node a Pi over
+ssh: `smoke`, `link`, `run`. `B=<address>` chooses the joining Pi; `NOCOLD=1` skips the page-cache drop and must be set on any Pi not
 held whole. The binaries are built on jupiter under `/root/harness` (`macha-build/harness-macha`,
 `build-tip/harness-dagda`) and copied with their libraries to the other Pi at the same paths.
 
