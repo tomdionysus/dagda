@@ -94,7 +94,12 @@ against the stage before, on the same Pi and kernel, both stores rerun where Mac
   both stores.** With nobody pacing the holder it sends 1.5 to 2.05 times the bytes the joiner needed; Dagda
   made 43 transfers for 26 objects. Under a viewer, which holds the holder's push to its share, each object
   moves once and the rejoin is no slower: about 40% of the link's time in an unpaced rejoin goes on copies
-  nobody needed. Today's repair in Dagda is otherwise at least as fast as Macha's in every scenario.
+  nobody needed. Today's repair in Dagda is otherwise at least as fast as Macha's in every scenario. And the
+  small-object times are the 16-call count exactly (410 objects, 16 a step, a step a second: 25.6 s against the
+  25.8 s measured), so on small values the count, not the link, sets repair's rate: stage 4's to remove.
+  Expected from the figures, to be checked by the same run: stage 3 roughly halves an unpaced large rejoin
+  (about 80 s towards the 38 s the link allows for the bytes once), and stage 4 takes the small rejoin from 26 s
+  towards the 9 s the link allows.
 - Check B: whether every owner knows an object is referenced, for Macha's domain and for Lugh's and Lir's (read
   the inventory's source, the owner's ReachabilityProvider, and ask the three sessions).
 - Check C: whether a multi-object fetch or put exists, or must be added.

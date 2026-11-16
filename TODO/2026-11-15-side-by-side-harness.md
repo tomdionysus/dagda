@@ -566,3 +566,18 @@ Findings:
 
 Said with the figures (the Macha session's review): Macha's CPU and memory are a whole node's; the transport
 differs (Dannan 0.5.3 and 0.8.2); the link is WiFi and varies; small differences between runs mean nothing.
+
+**The Macha session's reading of Macha's side (2026-11-16), from the same file:**
+- The duplication is not an inference for Macha: its own `repair_bytes` on a (pushed) plus on b (pulled) account
+  for a's wire bytes in every rejoin run (large, round 1: 109.1 MB pushed and 62.9 MB pulled, 172.0 against 187.6
+  on the wire; small, round 1: 26.9 and 24.7, 51.6 against 54.4), leaving 6 to 8% for framing, sealing and
+  metadata. It knows of nothing else in Macha that would put those bytes there.
+- **The small-object times are the 16-call budget in both stores, not the link:** 410 objects at 16 a step and
+  a step a second is 25.6 s (Dagda's 25.8 s); 205 is 12.8 s (13.0 s). That is what stage 4 should move most.
+- On the large rejoin the link sets the time: 109 MB at 2.9 MB/s is about 38 s sent once; both took about 80 s,
+  the bytes crossing nearly twice.
+- Its warning that Macha might run many times longer under the viewer was wrong: the joiner's pull does the
+  work and is not on the holder's share.
+- Macha's gaps to Dagda here it reads as real for today's Macha, cause not looked for, in code the port deletes.
+- Not in these figures: the cost of serial pulls over a link with a real round trip (the WiFi added none), and
+  the plan's full sizes.
