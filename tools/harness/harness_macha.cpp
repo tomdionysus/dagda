@@ -301,9 +301,13 @@ void recovery_open(const std::filesystem::path& root, const harness::Report& rep
     out.disk_read_to_ready = harness::io_field("read_bytes") - read_before;
     std::random_device random;
     const auto& id = ids[random() % ids.size()];
-    const auto shared = node->store().get_shared(object_of(id), 0, FrameType::foreground, Clock::now() + 60s);
+    auto& store = node->store();
+    out.store_built = harness::Clock::now() - started;
+    const auto shared = store.get_shared(object_of(id), 0, FrameType::foreground, Clock::now() + 60s);
     out.read_ok = shared != nullptr;
     out.first_read = harness::Clock::now() - started;
+  } else {
+    out.failure = node->progress.failed() ? "recovery failed: " + node->progress.error() : "not ready within 10 minutes";
   }
   node->stop();
   harness::report_reopen(out, report);
