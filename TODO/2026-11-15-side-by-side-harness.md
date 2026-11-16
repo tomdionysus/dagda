@@ -309,6 +309,6 @@ Findings:
    fix test-first. Candidates from reading, unproven: the device reserve's slots or DATA admission on a local read, the
    cache's insertion on the read path.
 
-**The kernel changed after these runs.** Every figure above was taken on the Pis' 16K-page kernel; at 2026-11-16 00:18Z
-the build Pis moved to a 4K-page kernel (for TSan). Later figures are not like for like with these: any comparison
-across the change runs both stores again on the new kernel, side by side.
+**The kernel.** Every figure above was taken on corvus-jupiter's 4K-page kernel (6.18.50+rpt-rpi-v8, up since
+2026-11-14): jupiter was already the 4K "TSan Pi" when the other build Pis moved from 16K to 4K pages at 2026-11-16
+00:18Z, so these figures are unaffected by that change and comparable with later ones on jupiter.

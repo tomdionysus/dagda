@@ -62,8 +62,8 @@ measurement, saturn .170 and neptune .202 hold the Dannan 0.8.0 prefix and Macha
 claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan only for releases (on the Pis). TSan
 only to hunt one named bug, never as a gate or routine check (Tom, 2026-11-16): every build Pi runs it since 00:18Z
 that day (4K-page kernels); sanitizer builds on saturn or neptune, never uranus (4 GB), `free -m` first; the Mac only
-when hunting. **The Pis went from 16K to 4K pages at 2026-11-16 00:18Z**: figures from before it are not like for
-like with later ones, so the four-reader profile measures both stores again beside it.
+when hunting. saturn, neptune and uranus went from 16K to 4K pages at 2026-11-16 00:18Z; jupiter, where every
+harness figure is taken, was on its 4K kernel already (up since 2026-11-14), so the harness figures are unaffected.
 
 ## Open
 
