@@ -17,6 +17,8 @@
 //   harness-macha <state directory> <workload>
 //   (recovery-fill and recovery-fill-small keep the state directory; recovery-open
 //   reopens node "a" of it alone)
+//   harness-macha <directory> repair-node <name> <host> <port> [<seed host> <seed port>]
+//   (workload 7's node: a whole Service, the cluster key read from <directory>/cluster.key)
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -40,7 +42,9 @@
 #include "cluster/node_resources.hpp"
 #include "config.hpp"
 #include "crypto.hpp"
+#include "filesystem/filesystem.hpp"
 #include "harness.h"
+#include "service/service.hpp"
 #include "supervised.hpp"
 
 namespace {
@@ -313,9 +317,136 @@ void recovery_open(const std::filesystem::path& root, const harness::Report& rep
   harness::report_reopen(out, report);
 }
 
+// Workload 7's node (the Macha session's review, 2026-11-16): Macha's repair lives in
+// its maintenance pass, which takes what is referenced from the node's own metadata, so
+// the node is a whole Service as the extract's TestService builds one
+// (tests/test_support.hpp:347-405) on the real clock, each object a file of one extent
+// written through its filesystem. Its values are the live nodes' (macnessa and inverbeg,
+// read by the Macha session the same day): replicas 2, write_copies 1,
+// metadata_write_copies 1, 4 MiB extents, a 5 s heartbeat, 30 s dead_after, a 2.5 s
+// connect timeout, 10 s telemetry, repair's idle_bandwidth_fraction 0.5 and every other
+// maintenance value its default. The isolated profile's switches keep the rest quiet:
+// no catalogue scanner or API, no ingest, torrent, hydration or plugins. Packing is the
+// harness's, as Dagda's side: 1 MiB into 64 MiB packs.
+class MachaRepairNode final : public harness::RepairNode {
+ public:
+  MachaRepairNode(const std::filesystem::path& dir, const std::string& name, const std::string& host, uint16_t port, std::vector<Endpoint> seeds) {
+    const auto key = dir / "cluster.key";
+    if (!std::filesystem::exists(key)) throw std::runtime_error("no cluster key at " + key.string() + ": the script writes one and copies it to both machines");
+    auto config = config_for(dir / name, key, port, std::move(seeds));
+    config.listen_host = host;
+    config.advertise_host = host;
+    config.metadata_write_copies = 1;
+    config.heartbeat = 5s;
+    config.telemetry_interval = 10s;
+    config.maintenance.idle_bandwidth_fraction = 0.5;
+    config.catalogue.scanner.enabled = false;
+    config.catalogue.api.enabled = false;
+    config.ingest.enabled = false;
+    config.torrent.enabled = false;
+    _service = std::make_unique<Service>(config, load_cluster_keys(key), 500ms);
+    _service->start();
+    auto& files = _service->filesystem();
+    try {
+      files.mkdir(directory, 0755, getuid(), getgid());
+    } catch (const FsError& error) {
+      if (error.code() != EEXIST) throw;
+    }
+  }
+  ~MachaRepairNode() override { _service->stop(); }
+
+  std::string describe() const override { return "macha f0597a4 on dannan 0.5.3"; }
+  // As the extract's write_file (tests/test_support.hpp:825-835): created, written whole
+  // and committed; its one extent's id read back from the entry.
+  std::optional<harness::Id> put(uint64_t seed, std::span<const uint8_t> data) override {
+    auto& files = _service->filesystem();
+    const auto path = path_of(seed);
+    try {
+      files.create_file(path, 0644, getuid(), getgid());
+    } catch (const FsError& error) {
+      if (error.code() != EEXIST) throw;
+    }
+    auto writer = files.open_write(path, true);
+    if (writer->write(0, data) != data.size()) return std::nullopt;
+    writer->commit();
+    const auto entry = files.getattr(path);
+    if (entry.extents.size() != 1) throw std::runtime_error(path + " has " + std::to_string(entry.extents.size()) + " extents, not one");
+    harness::Id out;
+    std::copy(entry.extents.front().id.bytes.begin(), entry.extents.front().id.bytes.end(), out.bytes.begin());
+    return out;
+  }
+  bool holds(const harness::Id& id) override { return _service->local_state().data().has(object_of(id)); }
+  // Through the filesystem, as a viewer reads: what Macha's pacing notes as foreground.
+  std::optional<harness::Bytes> read(const harness::Listed& object, std::chrono::milliseconds deadline) override {
+    auto& files = _service->filesystem();
+    const auto path = path_of(object.seed);
+    const auto reader = files.open_read(files.getattr(path), path, false, FrameType::foreground);
+    harness::Bytes out(object.size);
+    const auto got = reader->read(0, out, Clock::now() + deadline);
+    if (got != object.size) return std::nullopt;
+    return out;
+  }
+  // The node's own metadata names every one: its head has each file with the extent
+  // listed. Nothing hands a Macha node a referenced set.
+  void reference(const std::vector<harness::Listed>& objects) override {
+    auto& files = _service->filesystem();
+    const auto until = harness::Clock::now() + 30min;
+    size_t next = 0;
+    while (next < objects.size()) {
+      bool named = false;
+      try {
+        const auto entry = files.getattr(path_of(objects[next].seed));
+        named = entry.extents.size() == 1 &&
+                std::equal(entry.extents.front().id.bytes.begin(), entry.extents.front().id.bytes.end(), objects[next].id.bytes.begin());
+      } catch (const FsError&) {
+      }
+      if (named) {
+        ++next;
+        continue;
+      }
+      if (harness::Clock::now() > until) throw std::runtime_error("the node's metadata never named " + path_of(objects[next].seed));
+      std::this_thread::sleep_for(50ms);
+    }
+  }
+  size_t peers() override {
+    const auto active = _service->node().membership().active();
+    return active.empty() ? 0 : active.size() - 1;
+  }
+  std::map<std::string, double> counters() override {
+    std::map<std::string, double> out;
+    const auto repair = _service->repair_diagnostics();
+    out["copies_pushed"] = static_cast<double>(repair.copies_pushed);
+    out["copies_pulled"] = static_cast<double>(repair.copies_pulled);
+    out["repair_bytes"] = static_cast<double>(repair.bytes_transferred);
+    out["push_examined"] = static_cast<double>(repair.push_examined);
+    out["pull_examined"] = static_cast<double>(repair.pull_examined);
+    out["passes_completed"] = static_cast<double>(repair.passes_completed);
+    out["maintenance_wakeups"] = static_cast<double>(_service->maintenance_wakeups());
+    return out;
+  }
+
+ private:
+  static constexpr const char* directory = "/repair";
+  static std::string path_of(uint64_t seed) { return std::string(directory) + "/" + std::to_string(seed); }
+
+  std::unique_ptr<Service> _service;
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc >= 3 && std::string(argv[2]) == "repair-node" && (argc == 6 || argc == 8)) {
+    try {
+      const std::filesystem::path dir = argv[1];
+      std::vector<Endpoint> seeds;
+      if (argc == 8) seeds.push_back(Endpoint{argv[6], static_cast<uint16_t>(std::stoul(argv[7]))});
+      MachaRepairNode node(dir, argv[3], argv[4], static_cast<uint16_t>(std::stoul(argv[5])), std::move(seeds));
+      return harness::repair_node(node, dir, harness::Report(node.describe(), "repair"));
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "harness-macha: %s\n", error.what());
+      return 1;
+    }
+  }
   if (argc != 3) {
     std::fprintf(stderr, "harness-macha <state directory> <workload>\n");
     return 2;
