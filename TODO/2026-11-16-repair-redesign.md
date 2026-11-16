@@ -83,10 +83,10 @@ against the stage before, on the same Pi and kernel, both stores rerun where Mac
   reviewed by the Macha session. A node away while objects are written, then back; and a node rejoining empty.
   Figures: time to full replication, MB/s, bytes sent against bytes needed (the double transfer shows here), round
   trips, the foreground reader's latency while repair runs. Large extents and small values, each.
-- Latency matters to it: serial pulls only show on a link with a round-trip time. Proposed: `tc netem` on the
-  loopback of one Pi claimed whole (delay and rate as the plan's live-b to live-a figures), with a note on the
-  board, removed in the script's trap. That shapes one Pi's loopback, not the shared network, so it needs no
-  second Pi.
+- Latency matters to it: serial pulls only show on a link with a round-trip time. **The maintainer, 2026-11-16: two Pis and
+  the real link between them**, as the harness plan says (60 ms RTT, about 10 MB/s, `tc netem` on both Pis'
+  interface): a note on the board first, both claimed whole, the shaping removed in the script's trap. So the
+  harness must run a cluster across two processes on two machines, which it does not yet.
 - Check A: how often the same copy is pushed and pulled (from the benchmark's bytes).
 - Check B: whether every owner knows an object is referenced, for Macha's domain and for Lugh's and Lir's (read
   the inventory's source, the owner's ReachabilityProvider, and ask the three sessions).
@@ -115,13 +115,13 @@ finish (an unreadable tree node or catalogue root keeps the older inventory); di
 pull alone converges in all three once the owner learns. A holder that initiates closes the window sooner, and only
 it can act while an owner's build is stuck; on the degraded cluster (single-copy writes accepted, the maintainer 2026-09-28)
 the holder is often the only copy in exactly that window. So a holder must be able to initiate, and design 3 takes
-its second form: **the offer is put to the maintainer.** Lugh and Lir are still to be asked.
+its second form. **The maintainer, 2026-11-16: the offer is allowed**, as a handshake at the moment of transfer; the diff
+stays the only way repair finds what to do. Lugh and Lir are still to be asked.
 
 The second starvation path is in Macha's develop too (its `distributed_store.cpp:2939`, the same guard), untested
 there as here.
 
 ## Not decided
 
-- The offer (stage 3), if check B needs it.
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue. It
   restores claimed objects through the same credit; it is left as it is until stage 2 shows whether it should.
