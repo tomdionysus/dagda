@@ -373,3 +373,46 @@ Findings:
 **The kernel changed again after the recovery runs.** On 2026-11-16 (morning) node-b and the other build Pis moved to a
 4K-page, 48-bit-VA kernel (6.18.62-v8-va48+). Every figure in this file was taken on node-b's 6.18.50 kernel: figures
 taken later are not like for like with these, and a comparison across the change runs both stores again.
+
+## Workload 7: repair, across two Pis (designed 2026-11-16, not yet reviewed or built)
+
+The benchmark of the repair redesign (`2026-11-16-repair-redesign.md`, stage 0): today's repair in both stores first,
+then each of Dagda's stages against the one before. The maintainer, 2026-11-16: two Pis and the real link between them.
+
+**Machines.** node-b holds (node a), node-c joins (node b), one process a Pi, both claimed whole, a
+note on the board first. Each store's nodes listen on the Pi's own address; b is seeded with a's endpoint.
+
+**The link.** Only the traffic between the two Pis is shaped, so ssh and every other session's traffic stay as they
+are: on each Pi a `prio` qdisc on the interface with a filter on the other Pi's address, and under it `netem delay
+30ms rate 80mbit` (60 ms round trip, about 10 MB/s, the plan's live-b to live-a figures). Removed in the
+script's trap, and checked gone. The shaped class's byte and packet counters (`tc -s`) are the wire figure for both
+stores, read before and after: the same measurement whatever the store.
+
+**What runs in each process.** The store's own maintenance, as a deployed node runs it, at the same interval on
+both stores: the referenced set (the workload's ids, given to each node's reachability source), the survey, and
+repair, at `idle_bandwidth_fraction` 0.5 (the plan's figure) with each store's other repair values at its
+deployed defaults. No reader unless the scenario says.
+
+**Scenarios**, each with large objects (256 x 4 MiB, 1 GiB) and small (4096 x 64 KiB, 256 MiB):
+1. *Rejoin empty.* a alone is filled and references every id. b starts empty with the same referenced set. Run
+   until b holds every id.
+2. *Away, then back.* Both up and holding the first half. b's process stops, keeping its disk; a is given the
+   second half; b starts again. Run until b holds every id.
+3. *Under a viewer* (large only): scenario 1 while a foreground reader on a reads its local objects, one a
+   second. Its latency p50, p99 and max, alone and with repair running: paced, never stopped.
+
+**Figures.** Seconds from b active to b holding everything; MB/s; bytes and packets on the shaped class against
+the bytes needed (the double transfer shows as the excess); each store's own repair counters (copies pushed,
+pulled, bytes, passes run and gated by share, credit and quiescence); CPU seconds and RSS high-water of each
+process. Three rounds, the order of the stores alternating, cold cache, `uname -r` and throttling recorded.
+
+**How the two processes agree.** The script drives them over ssh: a fills, writes its ids to a file and prints a
+line; the script copies the ids to b's Pi and starts b; each prints a line when b holds everything (b by its own
+holdings, a by its survey) and a stops when the script tells it.
+
+**Not like for like, and said with each figure:** the transport (Dannan 0.5.3 under Macha, 0.8.x under Dagda), as
+workload 3; node-c's disk if it is not NVMe as node-b's is (checked before the first run).
+
+**Needs, before it runs:** Dagda's fixture `Cluster` over a given address, port, seeds and a certificate authority
+both processes share (it makes its own in each process now); Macha's side driving its maintenance's repair stage on
+the harness's node (asked of the Macha session); the Macha session's review of the driver.
