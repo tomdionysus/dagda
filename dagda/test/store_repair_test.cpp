@@ -2241,9 +2241,43 @@ TEST(StoreRepair, TheStepThatFirstSeesANewListWalksIt) {
   EXPECT_TRUE(node.store().repair_step(empty, 128ULL * 1024 * 1024, 0).complete);
 
   const RepairLists named{inventory, list_of({object_id(pulled)}), lacks_of({{peer.id(), {object_id(pushed)}}}), {}};
-  (void)node.store().repair_step(named, 128ULL * 1024 * 1024, 0);
+  const auto filled = node.store().repair_step(named, 128ULL * 1024 * 1024, 0);
   EXPECT_EQ(peer.data().get(object_id(pushed)), std::optional<Bytes>{pushed});
   EXPECT_EQ(node.data().get(object_id(pulled)), std::optional<Bytes>{pulled});
+  // Macha's test_the_repair_step_that_first_sees_a_new_pull_list_walks_it: the new
+  // list's one object examined by that step.
+  EXPECT_EQ(filled.pull_examined, 1u);
+}
+
+// Macha's test_a_pull_list_new_while_the_push_runs_is_not_passed_over, its fix the
+// library matches: with more to push than a step examines, the first list's pull
+// finishes while the pass is still open; a new pull list arriving then is walked by the
+// step that first sees it, not passed over until the push's pass ends.
+TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto first = pattern(64 * 1024, 73);
+  const auto second = pattern(64 * 1024, 74);
+  ASSERT_TRUE(node.data().put(object_id(first), first));
+  ASSERT_TRUE(peer.data().put(object_id(second), second));
+  ASSERT_TRUE(node.store().should_own(object_id(second)));
+  auto pushing = local_objects(node, 100, 4 * 1024, 60);
+  auto everything = pushing;
+  everything.push_back(object_id(first));
+  everything.push_back(object_id(second));
+  const auto inventory = inventory_of(everything);
+  constexpr uint64_t budget = 64ULL * 1024 * 1024;
+
+  const RepairLists opening{inventory, list_of({object_id(first)}), lacks_of({{peer.id(), pushing}}), {}};
+  ASSERT_FALSE(node.store().repair_step(opening, budget, 16).complete);
+  const auto gets = peer.calls_of(message::get_object);
+  const RepairLists next{inventory, list_of({object_id(second)}), lacks_of({{peer.id(), pushing}}), {}};
+  (void)node.store().repair_step(next, budget, 16);
+  EXPECT_EQ(peer.calls_of(message::get_object), gets + 1);
+  EXPECT_EQ(node.data().get(object_id(second)), std::optional<Bytes>{second});
 }
 
 // The survey through an owner's provider: what is referenced is the
