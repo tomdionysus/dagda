@@ -581,3 +581,10 @@ differs (Dannan 0.5.3 and 0.8.2); the link is WiFi and varies; small differences
 - Macha's gaps to Dagda here it reads as real for today's Macha, cause not looked for, in code the port deletes.
 - Not in these figures: the cost of serial pulls over a link with a real round trip (the WiFi added none), and
   the plan's full sizes.
+
+**After the baseline (2026-11-16, 20:00Z on): the Pis are moving from one shared 2.4 GHz channel to 5 GHz**
+(the maintainer, through the Lir Development Cluster session: node-a done, 292 Mbit/s against 72; node-b next), because
+the benchmark's traffic slowed every session's ssh and rsync. The baseline's link (about 2.9 MB/s) is gone: a
+later run is compared only with the old binaries rerun in the same session, never with the numbers above. The
+page cache is dropped only on a Pi held whole (`NOCOLD=1` otherwise): the baseline's drops cost another
+session's build on node-b its cache.
