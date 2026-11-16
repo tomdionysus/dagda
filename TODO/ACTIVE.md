@@ -255,6 +255,14 @@ until its pass ends, though both stores' comment says it must not. Live on the 0
 recommendation: Dagda fixes it test-first (a share of the operations kept for the pull while its list is new, at
 least one), Macha records it as a known defect until the cutover. **Held until the maintainer answers.** Dagda's port of
 Macha's case is in Macha's shape (a push that sends nothing, `467a175`).
+The maintainer objected to "an arbitrary 16 slots and bullying" (2026-11-16, to the Macha session). The Macha session's
+alternative, a design argument and not measured: drop the operation count, so a step ends on spent credit, an
+elapsed slice or a yield. Push and pull alternate, charged in bytes, with probes charged in time, and either takes
+the whole step when the other is idle. Checked here, for that: Dannan's `DutyShare::should_yield`
+(`../dannan/dannan/sched/duty_share.cpp:61`) returns false and clears whenever nothing contends. So on an idle
+node the share bounds no step. The byte credit bounds only operations that move bytes. Today, probes and diffs on
+an idle node are bounded only by the operation count and the scan budget derived from it (`repair.cpp:184`).
+Without the count, the step needs a time bound of its own that holds when uncontended.
 
 Nothing open from Dagda's list (answered 2026-11-05, see Decisions). In Macha's list, and Dagda follows: the
 remaining design defects there (the torrent merge, the fence on actions under a claim, the local barrier's
