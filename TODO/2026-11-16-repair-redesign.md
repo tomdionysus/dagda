@@ -150,8 +150,16 @@ owner's provider moves to a new generation: `wake_maintenance` wakes the loop, n
 joining node took 300.2 s to hold 1.3 MB, all of it the rest (61 repair turns ran, 239 were quiescent); with a
 two-minute limit nothing moved at all. Prompt replication covers the ordinary write, so this bites what it
 missed: a write while a peer was away, a node rejoining, a degraded single-copy write. It is in Dagda's loop
-only: Macha's port drives its own pass until stage 8c. What Macha's pass does is asked of the Macha session;
-not fixed yet. The same run showed both ends working at once: the holder pushed 16 of the 20 and the joiner
+only: Macha's port drives its own pass until stage 8c. **A gap against Macha, fixed (`0d048e0`).** Macha's pass
+runs its inventory stage whenever repair is due and rebuilds on a generation change (`maintenance.cpp:611-627`
+at f0597a4, read by the Macha session). The cause here was narrower than the sweep's rest: the loop's first pass
+found no provider registered, which rests the collector as a settled sweep does, so a provider registered once
+the node ran was not read for five minutes. The loop now takes the collector's inventory step before each repair
+turn, held back while metadata is not ready and never the first, and makes the sweep due again when what is
+referenced changed. Two cases, both seen failing on the old loop and passing on the new (saturn):
+`NodeMaintenance.AProviderRegisteredLaterIsReadWhileTheCollectorRests` and
+`.ANewGenerationIsReadWhileTheCollectorRests` (`054b604`, `f77b59d`). Gate at `0d048e0`, saturn, 1 core: 1120
+ran, 1117 passed, 3 skipped, 0 failed; the second case was added after and run on its own. The same run showed both ends working at once: the holder pushed 16 of the 20 and the joiner
 pulled 4.
 
 ## Not decided
