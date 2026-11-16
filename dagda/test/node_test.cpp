@@ -695,5 +695,62 @@ TEST(Node, TheDeviceReserveCanBeOff) {
   a.dagda_node().publish_status();
 }
 
+// The harness's two-machine workloads run one cluster in two processes: each a Cluster
+// over a kept directory, the second given a copy of the first's CA and its node's
+// endpoint as a seed. Shown here with two Clusters in one process.
+TEST(DagdaNode, TwoKeptClustersWithOneCaAreOneCluster) {
+  dannan::test::TempDir temp;
+  Cluster first(temp.path() / "first", 1500ms);
+  auto& a = first.add("a");
+  a.start();
+  std::filesystem::create_directories(temp.path() / "second");
+  for (const auto* file : {"ca.key", "ca.pem"}) std::filesystem::copy_file(temp.path() / "first" / file, temp.path() / "second" / file);
+  Cluster second(temp.path() / "second", 1500ms);
+  ClusterNodeOptions joining;
+  joining.seeds = {{a.host(), a.port()}};
+  auto& b = second.add("b", joining);
+  b.start();
+  const auto sees = [](ClusterNode& observer, ClusterNode& other) {
+    return test::wait_until([&] {
+      for (const auto& record : observer.context().nodes().active())
+        if (record.id == other.id()) return true;
+      return false;
+    });
+  };
+  EXPECT_TRUE(sees(a, b));
+  EXPECT_TRUE(sees(b, a));
+}
+
+// A second kept cluster with a CA of its own is another cluster: its node does not join.
+TEST(DagdaNode, AKeptClusterWithItsOwnCaIsAnotherCluster) {
+  dannan::test::TempDir temp;
+  Cluster first(temp.path() / "first", 1500ms);
+  auto& a = first.add("a");
+  a.start();
+  Cluster second(temp.path() / "second", 1500ms);
+  ClusterNodeOptions joining;
+  joining.seeds = {{a.host(), a.port()}};
+  auto& b = second.add("b", joining);
+  b.start();
+  EXPECT_FALSE(test::wait_until(
+      [&] {
+        for (const auto& record : a.context().nodes().active())
+          if (record.id == b.id()) return true;
+        return false;
+      },
+      2s));
+}
+
+// A node listens where it is told: the port given, not a free one.
+TEST(DagdaNode, ANodeTakesThePortItIsGiven) {
+  Cluster cluster;
+  ClusterNodeOptions fixed;
+  fixed.port = dannan::test::free_port();
+  auto& node = cluster.add("node", fixed);
+  EXPECT_EQ(node.port(), fixed.port);
+  node.start();
+  EXPECT_EQ(node.context().identity().id(), node.id());
+}
+
 }  // namespace
 }  // namespace dagda

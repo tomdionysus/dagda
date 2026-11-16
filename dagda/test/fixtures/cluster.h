@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -59,6 +60,7 @@
 #include "dannan/identity/key_custody.h"
 #include "dannan/identity/node_identity.h"
 #include "dannan/identity/secure_memory.h"
+#include "dannan/identity/signing.h"
 #include "dannan/node.h"
 #include "dannan/supervise/startup.h"
 #include "dannan/test/fixtures/ports.h"
@@ -169,6 +171,12 @@ struct ClusterNodeOptions {
   std::vector<heads::SpaceSpec> spaces;
   // What they exchange under. The dead_after the cluster runs on goes in by itself.
   heads::ExchangeOptions exchange;
+  // A node other machines reach (the harness's two-machine workloads): the address it
+  // listens on and advertises (none: loopback), its port (0: a free one), and nodes of
+  // the same cluster in other processes to bootstrap from, beside this process's.
+  std::string host;
+  uint16_t port = 0;
+  std::vector<dannan::net::Endpoint> seeds;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -212,6 +220,8 @@ class ClusterNode {
   dagda::Context& api() { return _dagda->context(); }
   dannan::identity::NodeId id() const { return _id; }
   uint16_t port() const { return _port; }
+  // The address it listens on and advertises.
+  std::string host() const { return _options.host.empty() ? "127.0.0.1" : _options.host; }
   const std::string& name() const { return _name; }
   store::DistributedStore& store() { return _dagda->store(); }
   store::StorageServer& server() { return _dagda->server(); }
@@ -298,11 +308,10 @@ class Cluster {
   }
   // Over `kept`, made if missing and never removed: what one process wrote, another
   // opens again (the harness's recovery workload). The cluster key and the storage key
-  // are the same in every cluster, so a node reopens what its earlier self wrote.
-  Cluster(std::filesystem::path kept, std::chrono::milliseconds dead_after)
-      : _root(std::move(kept)),
-        _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
-        _dead_after(dead_after) {
+  // are the same in every cluster, so a node reopens what its earlier self wrote. Its CA
+  // is kept there too (`ca.key`, `ca.pem`), so a process given a copy of those two files,
+  // on this machine or another, runs nodes of the same cluster.
+  Cluster(std::filesystem::path kept, std::chrono::milliseconds dead_after) : _root(std::move(kept)), _ca(kept_ca(_root)), _dead_after(dead_after) {
     std::filesystem::create_directories(_root);
     std::ofstream(_root / "cluster.key") << "dagda cluster test";
     _key = dannan::identity::load_cluster_key(_root / "cluster.key");
@@ -399,11 +408,30 @@ class Cluster {
   std::vector<dannan::net::Endpoint> seeds_for(const ClusterNode& node) const {
     std::vector<dannan::net::Endpoint> out;
     for (const auto& other : _nodes)
-      if (other.get() != &node) out.push_back({"127.0.0.1", other->port()});
+      if (other.get() != &node) out.push_back({other->host(), other->port()});
     return out;
   }
 
  private:
+  // The CA under `root`: read if both its files are there, else made and written.
+  static dannan::identity::CertificateAuthority kept_ca(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root);
+    const auto key_path = root / "ca.key";
+    const auto certificate_path = root / "ca.pem";
+    if (std::filesystem::exists(key_path) && std::filesystem::exists(certificate_path)) {
+      std::ifstream key_in(key_path, std::ios::binary);
+      const std::vector<uint8_t> key((std::istreambuf_iterator<char>(key_in)), std::istreambuf_iterator<char>());
+      std::ifstream certificate_in(certificate_path, std::ios::binary);
+      const std::string pem((std::istreambuf_iterator<char>(certificate_in)), std::istreambuf_iterator<char>());
+      return dannan::identity::CertificateAuthority(dannan::identity::SigningKey::from_pkcs8(key), dannan::identity::Certificate::from_pem(pem));
+    }
+    auto ca = dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000);
+    const auto key = ca.key().to_pkcs8();
+    std::ofstream(key_path, std::ios::binary).write(reinterpret_cast<const char*>(key.reveal().data()), static_cast<std::streamsize>(key.size()));
+    std::ofstream(certificate_path, std::ios::binary) << ca.certificate().pem();
+    return ca;
+  }
+
   // The temporary directory, when the cluster made one; `_root` either way.
   std::optional<dannan::test::TempDir> _temp;
   std::filesystem::path _root;
@@ -415,7 +443,11 @@ class Cluster {
 };
 
 inline ClusterNode::ClusterNode(Cluster& cluster, std::string name, ClusterNodeOptions options)
-    : _cluster(cluster), _name(std::move(name)), _options(std::move(options)), _dir(cluster.dir() / _name), _port(dannan::test::free_port()) {
+    : _cluster(cluster),
+      _name(std::move(name)),
+      _options(std::move(options)),
+      _dir(cluster.dir() / _name),
+      _port(_options.port ? _options.port : dannan::test::free_port()) {
   std::filesystem::create_directories(_dir);
 }
 
@@ -500,14 +532,15 @@ inline void ClusterNode::open() {
   dannan::NodeConfig config;
   config.state_path = _dir / "node";
   config.key = _cluster.key();
-  config.listen_host = "127.0.0.1";
-  config.advertise_host = "127.0.0.1";
+  config.listen_host = host();
+  config.advertise_host = host();
   config.port = _port;
   config.node_name = _name;
   // Loopback nodes are independent failure domains, as Macha's test nodes
   // are, unless a case says otherwise.
   config.failure_domain = _options.failure_domain.empty() ? _name : _options.failure_domain;
   config.bootstrap = _cluster.seeds_for(*this);
+  config.bootstrap.insert(config.bootstrap.end(), _options.seeds.begin(), _options.seeds.end());
   config.inbound = dannan::reach::Inbound::yes;
   config.heartbeat = _options.heartbeat;
   config.dead_after = _cluster.dead_after();
