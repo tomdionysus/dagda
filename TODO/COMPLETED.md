@@ -2864,6 +2864,32 @@ from the merged code; the Macha session will say exactly what changed.
 Steps 5 and the parts of 6 that need no heads go first.
 
 
+## Handoff, 2026-11-16 (small hours): hand-offs, Macha's log lines, measured; local reads; two retirement cases
+
+Branch `feature/macha-store-gaps`, nothing pushed. Gates on the Pis, Dannan 0.8.0 prefix, GCC Release, warnings as
+errors, Macha's fixtures: `3df3b8d` 1109 ran / 1106 passed / 3 skipped (node-c); `6adc5ed` 1112 / 1109 / 3 (node-a);
+`156fea2` 1113 / 1109 / 3 / 1 failed (node-c: the silent-peer read race, below). 0 warnings in each. Seen failing
+first at their own commits: `a019e2f` (the synchronous wait, 15 s against 5), `b54784a` (three log-line cases).
+
+- **The synchronous waits** run their barriers on the caller's thread, told under a condition, with no timer,
+  worker job or executor post a ticket, as Macha's durability_barrier (`616df37`); the barrier round reads the roster
+  only for a peer place. **One ranking a write** when every node is live (`3df3b8d`).
+- **DS gap 14** (`6adc5ed`): the barrier round writes Macha's re-derived line (one a round, local copies and every
+  peer probed counted) and its unmet line, before telling its settle-waits; the quorum line's result= as Macha's.
+- **Measured on node-b** (harness plan): small files Macha 0.698 s, the advert 0.745 s (was 0.775), the tip 0.738 s,
+  about 6% over Macha's CPU (was 11%), all else equal or better. **Local reads** (phase 2's first workload,
+  `461bed3` then `ce37fe5` after the Macha session's review of its FUSE reader): one reader Dagda better on every
+  figure (241 against 230 MB/s); four readers no steady gap after an off-CPU profile and a second set, Dagda bimodal.
+- **The silent-peer read race** (`1bfde30`): two StoreRepair cases moved the stepped clock before the client had
+  recorded its request's progress (Dannan's session.cpp:337-350); now they wait for the node's sent bytes to rise.
+  20 repeats each: 38 of 40 passed before, 40 of 40 after.
+- **For Macha's retirements** (`156fea2`): `StoreLocalStore.AStoreTellsABadRecordFromAFailedRead` (new, ported) and
+  the two-deletes block of `StoreClaimLocks.ADeleteMarksItsObjectAndHoldsNoStripe` (both orders now).
+- Rules recorded: TSan only to hunt a named bug (every build Pi runs it since 2026-11-16 00:18Z; never node-d; the Mac
+  only when hunting); node-b was on 4K pages throughout, so the harness figures stand across that change.
+
+Next is ACTIVE.md's "Next": remeasure on Dannan 0.9.0 when tagged, harness phase 2's other workloads.
+
 ## Handoff, 2026-11-15 (night): the side-by-side harness, Macha's gaps, the acknowledgement standard
 
 Branch `feature/macha-store-gaps`, nothing pushed. Gates on the Pis, Dannan 0.8.0 prefix, GCC Release, warnings as

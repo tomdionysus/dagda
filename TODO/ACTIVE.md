@@ -1,6 +1,6 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-15 (night). `COMPLETED.md` is the record (its last entry is this session's handoff). The plan
+Last updated: 2026-11-16 (small hours). `COMPLETED.md` is the record (its last entry is this session's handoff). The plan
 for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
 
 ## Where it stands
@@ -37,8 +37,8 @@ for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md
    with the synchronous wait (`616df37`) and one ranking (`3df3b8d`) 0.738 s: **about 6% over Macha's CPU, was 11%**;
    wall time, latency, bytes and memory equal or better. Left alone as like for like: the peer re-advertising on
    every put (Macha's server does the same), the events counter, prompt replication's probe-then-put.
-2b. **Four concurrent local readers are about 6% slower than Macha's at 7% less CPU** (harness plan, "Phase 2:
-   reads, local"): an off-CPU profile of that span on both, the cause named, then the fix test-first.
+2b. ~~Four concurrent local readers about 6% slower~~: profiled and remeasured the same night, no steady gap (harness
+   plan, "Phase 2: reads, local", finding 2); Dagda's four-reader runs are bimodal (about 344 or 363-407 MB/s), in Open.
 3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
 4. **Harness phase 2**: reads-local written and reviewed by the Macha session (`ce37fe5`: its FUSE reader, one
    synchronous loader read an extent, no read-ahead, 1 MiB requests; compares the two stores, not baseline.py's
@@ -71,9 +71,8 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 - The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, the maintainer 2026-11-09). Macha is
   chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
-- `StoreRepair.AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow` failed once (node-c, 2026-11-15, `616df37`, Lir's
-  build beside it): the read did not move on within 30 s of the stepped clock's 301 s advance. Suspected the case's
-  race (a call's progress noted after the advance restarts its window); passed in the next whole run. Not looked into.
+- Dagda's four-reader local reads come out in two clusters (about 344 MB/s twice in six runs, else 363-407), where
+  Macha's sit at 379-388 bar one outlier; the off-CPU profile shows no wait of Dagda's own (harness plan, phase 2).
 - The pool's `get` stopping at the first backend's empty answer: Macha's, kept.
 - The trie pins aged on the node's time source where Macha reads the real clock (the same on live nodes).
 - The Pis' under-voltage under heavy builds: their supplies are the maintainer's to look at; journals are persistent now.

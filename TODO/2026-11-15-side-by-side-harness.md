@@ -304,10 +304,14 @@ store code is `6adc5ed`'s). `reads-local.jsonl` (`build/pi-reads.sh`). Medians [
 
 Findings:
 1. One reader: Dagda better on every figure.
-2. **Four readers: Dagda about 6% slower** (the ranges do not meet) while spending 7% less CPU: the readers wait on
-   something Macha's do not. Not yet known what; next, an off-CPU profile of the four-reader span on both, then the
-   fix test-first. Candidates from reading, unproven: the device reserve's slots or DATA admission on a local read, the
-   cache's insertion on the read path.
+2. ~~Four readers: Dagda about 6% slower~~ **Superseded the same night: no steady gap, a bimodal Dagda.** An
+   off-CPU profile of the read span on each (sched_switch, dwarf stacks, reader threads only; `offcpu-reads-*.txt`)
+   found no wait of Dagda's own: the readers are off the CPU in the file read (4.98 s Macha, 4.99 s Dagda) and in
+   the DATA arbiter's acquire (Macha's design, kept; 255 and 251 switches), nothing else above 4%. A second set of
+   three rounds (`reads-local-2.jsonl`), named for Dagda's 10% spread against Macha's 2%: four readers Macha 379.3
+   [226.2-385.7], Dagda 400.1 [344.1-407.2]. Over six rounds each, Macha 379-388 MB/s bar one run at 226; Dagda in two
+   clusters, about 344 (twice) or 363-407. One reader stayed Dagda's, 240.8 against 230 MB/s, in every run. Not
+   chased further: what puts a Dagda run in the lower cluster is unexplained, recorded here and in ACTIVE.md's Open.
 
 **The kernel.** Every figure above was taken on node-b's 4K-page kernel (6.18.50+rpt-rpi-v8, up since
 2026-11-14): node-b was already the 4K "TSan Pi" when the other build Pis moved from 16K to 4K pages at 2026-11-16
