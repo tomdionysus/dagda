@@ -142,6 +142,18 @@ each (`dagda/store/messages.h:39-41`), so small values need one added at stage 4
 asks a peer about many ids in one message and is answered per id: it is the offer's shape, though it answers only
 "held", not "being fetched" or "no room", so stage 3 extends it or adds a sibling.
 
+**Found by the benchmark's smoke test (saturn, 2026-11-16, two processes on loopback, 20 x 64 KiB): Dagda's own
+maintenance loop learns a new reference only when its collector next runs.** The inventory the survey and repair
+work from is rebuilt only inside the GC pass (`Node::maintenance_loop`, `dagda/node.cpp:1086-1093`), which rests
+`gc_interval` (5 minutes) after a sweep that completed with nothing deferred. Nothing pulls that forward when the
+owner's provider moves to a new generation: `wake_maintenance` wakes the loop, not the collector. Seen: the
+joining node took 300.2 s to hold 1.3 MB, all of it the rest (61 repair turns ran, 239 were quiescent); with a
+two-minute limit nothing moved at all. Prompt replication covers the ordinary write, so this bites what it
+missed: a write while a peer was away, a node rejoining, a degraded single-copy write. It is in Dagda's loop
+only: Macha's port drives its own pass until stage 8c. What Macha's pass does is asked of the Macha session;
+not fixed yet. The same run showed both ends working at once: the holder pushed 16 of the 20 and the joiner
+pulled 4.
+
 ## Not decided
 
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue. It
