@@ -510,3 +510,59 @@ jupiter's builds at `7d12ca8`, today's repair before stages 1 and 2, copied to u
 note on the board. The controller's smoke across the two first: Macha's b 0.60 s, Dagda's b 1.41 s for 20 x 64
 KiB (not figures); in Dagda's the holder pushed 20 and the joiner pulled 5 of the same 20, and a sent 1.73 MB
 for 1.31 MB of objects. Results: `build/harness/results/2026-11-16/repair-baseline/`.
+
+### Workload 7, the baseline: today's repair in both stores (2026-11-16 18:53 to 19:54Z)
+
+corvus-jupiter (node a) and corvus-uranus (node b), kernel 6.18.62-v8-va48+, 4K pages, NVMe on both, over the
+WiFi between them as it is. "macha f0597a4 on dannan 0.5.3" against "dagda 0.2.0 on dannan 0.8.2" at `7d12ca8`
+(repair before stages 1 and 2). Three rounds, the stores' order alternating, cold cache and a 30 s rest before
+each run. The raw link before each round and after: 2.93, 2.90, 2.86, 3.18 MB/s; round trip about 7 ms average
+(1.3 to 19). Both Pis were claimed whole until 19:05Z, then two cores each with another session's build on
+jupiter (the runs are bound by the link; throttling flags unchanged, 0x50000 on both throughout).
+`build/harness/results/2026-11-16/repair-baseline/repair.jsonl`. Medians of three, the range in brackets.
+
+| Scenario | Figure | Macha | Dagda |
+|---|---|---|---|
+| b rejoins empty, 26 x 4 MiB (109 MB) | seconds | 81.3 [72.4-86.3] | 78.4 [76.6-90.3] |
+| | MB/s of what was needed | 1.34 | 1.39 |
+| | a sent on the wire / needed | 187.6 MB, 1.72 | 191.8 MB, 1.76 |
+| b rejoins empty, 410 x 64 KiB (27 MB) | seconds | 38.9 [38.7-39.1] (two runs) | 25.8 [25.7-26.1] |
+| | MB/s of what was needed | 0.67 | 1.04 |
+| | a sent on the wire / needed | 53.6 MB, 2.05 | 40.3 MB, 1.50 |
+| b away then back, 13 x 4 MiB (55 MB) | seconds | 42.8 [40.1-44.3] | 34.1 [31.2-35.0] |
+| | a sent on the wire / needed | 98.1 MB, 1.80 | 84.9 MB, 1.56 |
+| b away then back, 205 x 64 KiB (13 MB) | seconds | 18.9 [18.5-19.6] | 13.0 [12.6-13.3] |
+| | a sent on the wire / needed | 25.2 MB, 1.90 | 20.4 MB, 1.52 |
+| b rejoins empty under a viewer on a, 26 x 4 MiB | seconds | 88.6 [68.3-98.1] | 75.2 [68.0-75.9] |
+| | a sent on the wire / needed | 119.5 MB, 1.10 | 119.0 MB, 1.09 |
+| | viewer p50 alone / with repair | 10.5 / 10.5 ms | 8.4 / 8.6 ms |
+| | viewer p99 alone / with repair | 15.5 / 15.8 ms | 11.3 / 12.5 ms |
+
+Dagda's own counts, each run: rejoin large, the holder pushed 25 and the joiner pulled 17 or 18 of the 26
+needed; rejoin small, pushed 410 and pulled 160 to 229 of 410; away-back large, pushed 10 to 12 and pulled 13
+of 13; under the viewer, pushed 2 and pulled 25. Macha at f0597a4 counts no copies. b's `reference` returned in
+under a second on Macha's side in every run (0.6 s for the small objects, 0.01 to 0.05 s otherwise), so adding it
+changes nothing above.
+
+Findings:
+1. **Dagda's repair today is at least as fast as Macha's in every scenario**: level on large objects rejoining
+   (inside the spread), a third faster on small ones (25.8 s against 38.9 s) and on a node coming back.
+2. **Both stores send each object about one and a half to two times.** With nobody pacing the holder, a sends
+   1.5 to 2.05 times the bytes b needed: the holder pushes while the joiner pulls the same objects, and nothing
+   coordinates them. Dagda's counts show it directly (43 transfers for 26 objects; 570 to 640 for 410). This is
+   check A of the redesign, measured: it is not rare, it is the normal case.
+3. **Under a viewer the duplication goes, and the rejoin is no slower.** The viewer keeps the holder's push on
+   its 5% share, so the joiner pulls nearly everything once (1.09 on the wire) and finishes in the same time or
+   less than the unpaced run (Dagda 75.2 s against 78.4 s). So today about 40% of the link's time in an unpaced
+   rejoin is spent on copies nobody needed: that is what stage 3 (each copy once) should give back.
+4. The link carried about 2.9 MB/s raw; an unpaced rejoin moved 1.3 to 1.4 MB/s of needed bytes but about
+   2.4 MB/s on the wire, so repair was running at the link, not at half of it, whatever
+   `idle_bandwidth_fraction` 0.5 intends. Not looked into.
+5. The viewer's reads were not slowed by repair in either store.
+6. One run lost, a fault of the driver and not of either store: in round 2 Macha's joining node made its
+   directory before its metadata was writable ("metadata replica set forming: waiting for bootstrap peer") and
+   the process exited. Fixed in the driver (only the first node makes the directory); the two other rounds
+   stand.
+
+Said with the figures (the Macha session's review): Macha's CPU and memory are a whole node's; the transport
+differs (Dannan 0.5.3 and 0.8.2); the link is WiFi and varies; small differences between runs mean nothing.
