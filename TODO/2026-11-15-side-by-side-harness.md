@@ -367,3 +367,7 @@ Findings:
    the cache drop.
 3. The fills: the large ones vary run to run on both (Macha 135-177 s, Dagda 146-184 s); the small one is Dagda's,
    87 s against 114 s, in every round.
+
+**The kernel changed again after the recovery runs.** On 2026-11-16 (morning) jupiter and the other build Pis moved to a
+4K-page, 48-bit-VA kernel (6.18.62-v8-va48+). Every figure in this file was taken on jupiter's 6.18.50 kernel: figures
+taken later are not like for like with these, and a comparison across the change runs both stores again.
