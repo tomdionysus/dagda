@@ -107,6 +107,29 @@ skipped, 0 failed, 0 warnings. Repair does not read it yet: that is stage 2. Bui
 **2. One queue by copies left.** Repair's two walks and their cursors become one ordered walk over transfers.
 Both starvation tests pass here. Retries keep their backoff.
 
+**Stage 2, designed (2026-11-16), not built.** Inside `DistributedStore::repair_step`, keeping its signature,
+its result and its callers:
+
+- *The queue.* Built once for each set of lists (they are immutable and compared by identity, as `push_source`
+  is now) by one ordered merge across the peers' sorted lists. A push candidate is an id in some peer's lacks:
+  its copies are this node's plus every answering peer that does not lack it. A pull candidate is an id in some
+  peer's holds: its copies are the peers that hold it. Each goes into the bucket of its copy count, in id
+  order, marked push or pull (an id is never both). What this node lacks and no answering peer holds goes last:
+  the unavailable passed over and traced as now, the unknown tried as now. Memory is the sum of the lists.
+- *The walk.* Buckets in order of copies, a cursor in each; what needs nothing is passed without spending the
+  scan budget, as now (a pushed pair remembered, a pulled object held). A push item is planned as now (the first
+  owners with room, what each is known to hold, the local read, the drop of a copy this node should not keep);
+  a pull item is fetched as now, through `get_remote` (a known source is stage 4's). Retries keep their backoff,
+  one map for both kinds, those due going first as now.
+- *The budgets.* The credit is spent in queue order, so whatever is most at risk gets it, whichever way it
+  travels; the pull is no longer skipped when a push ends the step out of credit. The call count and the scan
+  budget stay until stage 4 and only end a step: they can no longer hold one direction behind the other.
+- *What a step reports.* `push_examined`, `pull_examined`, `complete`, the pass count and the phase figures keep
+  their meaning; `complete` is every bucket walked with nothing stopped.
+- *What changes for the cases.* The traces ported from Macha that show a step's pushes before its pulls show
+  queue order instead. Each such case is named to the Macha session as it changes; none is deleted.
+  `StoreRepair.DISABLED_APushOutOfCreditDoesNotHoldBackThePull` is enabled here.
+
 **3. Each copy once.** As check B decides; to Tom first if it needs the offer.
 
 **4. The window, and the count gone.** Concurrent transfers both ways against the byte limit; small objects
