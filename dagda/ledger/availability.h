@@ -55,11 +55,13 @@ struct AvailabilitySurvey {
 
 // One peer's part in a survey. `answered`: the diff ran to the end, and
 // `root` is the held trie it was of. `lacks`: what is referenced, held here
-// and not by the peer, sorted. `why`: why a peer did not answer.
+// and not by the peer, sorted. `holds`: what is referenced, lacking here and
+// held by the peer, sorted. `why`: why a peer did not answer.
 struct PeerDiff {
   bool answered = false;
   Hash256 root{};
   std::vector<ObjectId> lacks;
+  std::vector<ObjectId> holds;
   std::string why;
 };
 
@@ -70,6 +72,18 @@ struct PeerLacks {
   // referenced since.
   uint64_t generation = 0;
   std::map<dannan::identity::NodeId, std::shared_ptr<const std::vector<ObjectId>>> lacks;
+  // Every extent-hosting peer answered.
+  bool complete = false;
+};
+
+// Per peer, what is referenced, lacking here and held by that peer, as of a
+// survey; a peer missing from the map could not say. With PeerLacks it gives
+// each object short of its copies the peers that hold it: how many copies it
+// has, and where repair fetches one.
+struct PeerHolds {
+  // The inventory's generation, as PeerLacks'.
+  uint64_t generation = 0;
+  std::map<dannan::identity::NodeId, std::shared_ptr<const std::vector<ObjectId>>> holds;
   // Every extent-hosting peer answered.
   bool complete = false;
 };

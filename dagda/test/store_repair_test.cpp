@@ -2322,6 +2322,50 @@ TEST(StoreRepair, DISABLED_APushOutOfCreditDoesNotHoldBackThePull) {
       << "credit_limited=" << step.credit_limited << " bytes=" << step.bytes_transferred;
 }
 
+// The repair redesign's stage 1: the survey publishes, per peer that answered, what it
+// holds of what is referenced and this node lacks, so repair can count an object's
+// copies and knows a source for each. Asked of nobody new: it comes from the same diffs.
+TEST(StoreRepair, TheSurveyPublishesWhoHoldsWhatThisNodeLacks) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(3, 3));
+  auto& b = cluster.add("b", options(3, 3));
+  auto& c = cluster.add("c", options(3, 3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_EQ(a.availability().peer_holds(), nullptr);
+
+  const auto only_b = local_objects(b, 6, 4096, 11);
+  const auto only_c = local_objects(c, 4, 4096, 12);
+  const auto both = local_objects(b, 5, 4096, 13);
+  for (const auto& id : both) ASSERT_TRUE(c.data().put(id, *b.data().get(id)));
+  const auto here = local_objects(a, 3, 4096, 14);
+  // What b holds that nothing refers to.
+  (void)local_objects(b, 2, 4096, 15);
+
+  std::vector<ObjectId> referenced;
+  for (const auto* part : std::initializer_list<const std::vector<ObjectId>*>{&only_b, &only_c, &both, &here})
+    referenced.insert(referenced.end(), part->begin(), part->end());
+  auto provider = referring_to(referenced);
+  a.publish_inventory(provider);
+  const auto trie_diffs = b.calls_of(message::trie_diff) + c.calls_of(message::trie_diff);
+  ASSERT_TRUE(a.availability().refresh());
+  const auto holds = a.availability().peer_holds();
+  ASSERT_NE(holds, nullptr);
+  EXPECT_TRUE(holds->complete);
+  EXPECT_EQ(holds->generation, provider.current_generation);
+  ASSERT_EQ(holds->holds.size(), 2u);
+  const auto merged = [](std::vector<ObjectId> one, const std::vector<ObjectId>& other) {
+    one.insert(one.end(), other.begin(), other.end());
+    std::sort(one.begin(), one.end());
+    return one;
+  };
+  EXPECT_EQ(*holds->holds.at(b.id()), merged(only_b, both));
+  EXPECT_EQ(*holds->holds.at(c.id()), merged(only_c, both));
+  // The same questions as before, and no probe.
+  EXPECT_GT(b.calls_of(message::trie_diff) + c.calls_of(message::trie_diff), trie_diffs);
+  EXPECT_EQ(probes(b) + probes(c), 0u);
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
