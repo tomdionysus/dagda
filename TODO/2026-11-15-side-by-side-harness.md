@@ -446,3 +446,16 @@ Read from Macha at f0597a4 (identical in src, tests and CMake to the live 0.94.2
   scenario 2 while b is away.
 - The one key is written once by the script and copied to both Pis; a listens and advertises on its own address
   with no bootstrap, b bootstraps from a.
+
+### Built and smoke-tested (2026-11-16, node-b, kernel 6.18.62-v8-va48+)
+
+Both halves build at `274053c` (Macha's half needed one correction: its RepairDiagnostics counts gates, not
+copies pushed or pulled, so Macha's copy counts come only from the wire). Each store, two processes on loopback,
+20 x 64 KiB, b rejoining empty, unshaped: **Macha 1.00 s, Dagda 1.00 s** (Dagda 300.2 s before `0d048e0`). In
+Dagda's run the holder pushed 16 and the joiner pulled 4; Macha's holder examined 36 to push and its joiner 20 to
+pull. These are a check that the driver works, not figures. node-b's Dagda side runs on Dannan 0.8.2, node-c's
+gate prefix is 0.8.0: the benchmark's binaries are node-b's, copied to node-c, so both nodes run the same.
+Both Pis are on WiFi (`wlan0`; `eth0` down): the "real link" is wireless, so its raw round trip and rate are
+measured and recorded before it is shaped, and the shaped rate must sit under what it can carry.
+
+The controller is `build/pi-repair-run.sh` (smoke, link, run, unshape), run from the Mac over ssh.
