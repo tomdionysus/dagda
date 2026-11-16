@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "dagda/test/fixtures/cluster.h"
+#include "dagda/test/fixtures/reachability.h"
 
 namespace dagda {
 namespace {
@@ -161,7 +162,12 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
 
   // The instant delete (step 7b): a's claim, observed, goes, and with it
   // every copy, the answer on the caller's strand; the blocking form waits
-  // on the same completion.
+  // on the same completion. Each node has published an inventory referring to
+  // nothing; one with none published keeps its copy.
+  test::TestProvider nothing;
+  nothing.answer.complete = true;
+  a.publish_inventory(nothing);
+  b.publish_inventory(nothing);
   const auto removed = on_strand<RemoveEvidence>(strand, [&](boost::asio::any_io_executor executor, Context::Objects::RemoveDone done) {
     a.api().objects().remove({id}, {{a.id(), 1}}, {}, deadline, executor, std::move(done));
   });
