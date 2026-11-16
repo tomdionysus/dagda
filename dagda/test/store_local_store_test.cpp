@@ -846,6 +846,70 @@ void corrupt_last_byte(const std::filesystem::path& path) {
   ASSERT_TRUE(file.good());
 }
 
+// Macha (tests/test_storage_v18.cpp): test_a_store_tells_a_bad_record_from_a_failed_read,
+// its 0.93.4 fix that the library matches (local_store.h, ObjectCorrupt). What a read
+// throws says which it was: ObjectCorrupt for a record that was read whole and did not
+// open, so the bytes on the disk are not the object; anything else for a read that did
+// not finish, which says nothing about the object. Packed and loose alike.
+TEST(StoreLocalStore, AStoreTellsABadRecordFromAFailedRead) {
+  StoreBed bed;
+  enum class Threw { nothing, corrupt, other };
+  const auto threw = [](LocalStore& store, const ObjectId& id) {
+    try {
+      (void)store.get(id);
+    } catch (const ObjectCorrupt&) {
+      return Threw::corrupt;
+    } catch (const std::exception&) {
+      return Threw::other;
+    }
+    return Threw::nothing;
+  };
+  {
+    const auto root = bed.dir.path() / "packed";
+    auto store = bed.open(root, packed_options(64ULL * 1024 * 1024, 16ULL * 1024 * 1024));
+    const auto first = pattern(16 * 1024, 1);
+    const auto last = pattern(16 * 1024, 2);
+    ASSERT_TRUE(store->put(object_id(first), first));
+    ASSERT_TRUE(store->put(object_id(last), last));
+    ASSERT_TRUE(store->is_packed(object_id(first)));
+    ASSERT_TRUE(store->is_packed(object_id(last)));
+    const auto pack = only_pack(root);
+    // A byte in the middle of the first record's payload flipped; the last record's
+    // tail cut off.
+    {
+      std::fstream file(pack, std::ios::in | std::ios::out | std::ios::binary);
+      file.seekg(8 * 1024);
+      char byte{};
+      file.read(&byte, 1);
+      byte ^= 0x5a;
+      file.seekp(8 * 1024);
+      file.write(&byte, 1);
+      ASSERT_TRUE(file.good());
+    }
+    std::filesystem::resize_file(pack, std::filesystem::file_size(pack) - 1024);
+    EXPECT_EQ(threw(*store, object_id(first)), Threw::corrupt);
+    EXPECT_EQ(threw(*store, object_id(last)), Threw::other);
+  }
+  {
+    const auto root = bed.dir.path() / "loose";
+    auto store = bed.open(root, LocalStoreOptions::loose_only(64ULL * 1024 * 1024));
+    const auto corrupt = pattern(16 * 1024, 3);
+    const auto torn = pattern(16 * 1024, 4);
+    const auto unreadable = pattern(16 * 1024, 5);
+    for (const auto* bytes : {&corrupt, &torn, &unreadable}) ASSERT_TRUE(store->put(object_id(*bytes), *bytes));
+    corrupt_last_byte(store->object_path(object_id(corrupt)));
+    // A file cut short is read whole at the length it has, and does not open.
+    std::filesystem::resize_file(store->object_path(object_id(torn)), 8);
+    // A read that cannot happen: a directory where the file was.
+    const auto path = store->object_path(object_id(unreadable));
+    ASSERT_TRUE(std::filesystem::remove(path));
+    ASSERT_TRUE(std::filesystem::create_directory(path));
+    EXPECT_EQ(threw(*store, object_id(corrupt)), Threw::corrupt);
+    EXPECT_EQ(threw(*store, object_id(torn)), Threw::corrupt);
+    EXPECT_EQ(threw(*store, object_id(unreadable)), Threw::other);
+  }
+}
+
 // Macha (tests/test_storage_metadata.cpp): test_local_store. A loose object
 // is sealed on disk; a re-put of an unchanged file takes the fast path and of
 // a corrupted one the full validation, which repairs it; a clean restart
