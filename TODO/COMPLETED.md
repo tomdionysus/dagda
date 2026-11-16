@@ -2868,7 +2868,8 @@ Steps 5 and the parts of 6 that need no heads go first.
 
 Branch `feature/macha-store-gaps`, nothing pushed. Gates on the Pis, Dannan 0.8.0 prefix, GCC Release, warnings as
 errors, Macha's fixtures: `3df3b8d` 1109 ran / 1106 passed / 3 skipped (node-c); `6adc5ed` 1112 / 1109 / 3 (node-a);
-`156fea2` 1113 / 1109 / 3 / 1 failed (node-c: the silent-peer read race, below). 0 warnings in each. Seen failing
+`156fea2` 1113 / 1109 / 3 / 1 failed (node-c: the silent-peer read race, below); **`1bfde30` (the tip's code)
+1113 ran / 1110 passed / 3 skipped / 0 failed** (node-c). 0 warnings in each. Seen failing
 first at their own commits: `a019e2f` (the synchronous wait, 15 s against 5), `b54784a` (three log-line cases).
 
 - **The synchronous waits** run their barriers on the caller's thread, told under a condition, with no timer,
