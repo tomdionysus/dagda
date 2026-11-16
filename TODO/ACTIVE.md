@@ -60,8 +60,10 @@ figures, then slices 2 to 5 as the design orders them.
 How work runs: no builds, tests or benches on the Mac; Linux gates on the shared Pis (jupiter .169 with NVMe for
 measurement, saturn .170 and neptune .202 hold the Dannan 0.8.0 prefix and Macha's fixtures under `/root/dagda-080`),
 claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan only for releases (on the Pis). TSan
-only to hunt one named bug, never as a gate or routine check (Tom, 2026-11-16): on corvus-jupiter first, the one Pi
-where it runs (39-bit VA; CC=clang-19 CXX=clang++-19, Makefiles), else on the Mac; g++ 14's TSan fails on the others for now (Tom: all the cluster Pis will run it soon).
+only to hunt one named bug, never as a gate or routine check (Tom, 2026-11-16): every build Pi runs it since 00:18Z
+that day (4K-page kernels); sanitizer builds on saturn or neptune, never uranus (4 GB), `free -m` first; the Mac only
+when hunting. **The Pis went from 16K to 4K pages at 2026-11-16 00:18Z**: figures from before it are not like for
+like with later ones, so the four-reader profile measures both stores again beside it.
 
 ## Open
 
