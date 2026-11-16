@@ -2937,9 +2937,10 @@ passed / 3 skipped / 0 failed**. Every new case was seen failing on the code bef
 
 Asked of Tom at the end, interactively: `0.2.0` stays held; the slow-disk run is wanted, when a Pi is free; the
 benchmark's controller is in the repository (`tools/harness/pi-repair-run.sh`); the instant delete on a node with
-no inventory goes to Lugh and Lir first (asked, unanswered).
+no inventory went to Lugh and Lir first, both answered, and Tom ruled that such a node keeps the copy (not built:
+first in ACTIVE.md's "Next"). Lir's shared-payload point was closed in Lir: it never shares an object.
 
-Next: stage 3 (the offer), designed and not built, then old against new measured in one session; stage 4 (the
+Next: the instant delete's fix, small; then stage 3 (the offer), designed and not built, then old against new measured in one session; stage 4 (the
 window, the count gone), its shape to the Macha session first. Nothing running, no Pi claimed.
 
 ## Archived from ACTIVE.md, 2026-11-16

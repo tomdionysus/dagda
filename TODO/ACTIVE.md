@@ -46,25 +46,28 @@ Last updated: 2026-11-16 (late evening). `COMPLETED.md` is the record; its newes
 
 ## Next (in order)
 
-1. **Repair, stage 3: the offer** (`2026-11-16-repair-redesign.md`, "Stage 3, designed, not built"). Test-first:
+1. **The instant delete keeps a copy on a node with no inventory published** (Tom, 2026-11-16; gc-and-deletion gap
+   9). Test-first: `StoreRemove.ANodeWithNoInventoryPublishedKeepsItsCopy`, seen failing; then `remove_here`
+   (`dagda/store/remove.cpp:83`) treats a null inventory as it treats an incomplete one. Small.
+2. **Repair, stage 3: the offer** (`2026-11-16-repair-redesign.md`, "Stage 3, designed, not built"). Test-first:
    the cases named there, seen failing; then the message pair, the receiver's answer and tables, the sender's
    offer in `push_some`. One whole-suite run on a Pi at its last commit. Then measure old against new in one
    session ("How to measure a stage" there): the baseline's binaries beside the tip's, which also shows what
    stages 1 and 2 changed. Tell the Macha session the gated commit and anything its port must pass or bind.
-2. **Repair, stage 4: the window, and the call count gone.** Bring the shape of `Repair`'s steps to the Macha
+3. **Repair, stage 4: the window, and the call count gone.** Bring the shape of `Repair`'s steps to the Macha
    session first. A multi-object message for small values. Measure as above.
-3. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
+4. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
    pressure, cache; strace fsync counts on a separate rerun. **The slow-disk run is approved** (Tom,
    2026-11-16): when a Pi is free, a note on the board, then the device-mapper delay target over a loop file on
    that one Pi (no real disk touched), removed afterwards. None of these workloads is written yet, and the Macha
    session reviews each before it runs.
-4. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-5. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
+5. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
+6. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes
    an adapter over it.
-6. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
-   are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is under "Waiting on Tom").
+7. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
+   are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is item 1 above).
 
 A defect Macha's port finds comes before any of these.
 
@@ -136,6 +139,11 @@ Asked again that evening, four answers. **`0.2.0` stays held**: Lugh waits; noth
 **The slow-disk run is wanted**: set up the device-mapper delay target on one Pi when one is free, over a loop
 file, with a note on the board. **The benchmark's controller goes in the repository**, under `tools/harness`.
 **The instant delete on a node with no inventory: ask Lugh and Lir first**, then it comes back to him.
+Both answered (Lugh: it does not arise, it writes no DATA objects; Lir: keep the copy, it needs no space back at
+once), and Tom ruled: **a node with no inventory published keeps the copy**, as one with an incomplete inventory
+does; a test-first fix ahead of repair's stage 3. Raised by Lir on the way and closed in Lir by Tom the same
+evening: two messages never share a large payload's object (each object begins with its message's dot), so the
+instant delete releasing every claim its clock dominates costs Lir nothing, and Dagda's contract is unchanged.
 
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
@@ -290,10 +298,7 @@ asking:
 
 ## Waiting on Tom
 
-- **An instant delete on a node with no inventory published** (gc-and-deletion gap 9;
-  `StoreRemove.ANodeWithNoInventoryPublishedKeepsItsCopy`): today it deletes an unclaimed copy, where a node
-  with an incomplete inventory keeps it. Proposed: keep it there too. Tom: ask Lugh and Lir first. Asked
-  2026-11-16; when both have answered, their answers go to Tom with a recommendation.
+Nothing of Dagda's is waiting on Tom (everything asked on 2026-11-16 is answered, under Decisions).
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
 under a claim, the local barrier's deadline, wall versus steady ages, the policy disagreement loop, O(state) per
