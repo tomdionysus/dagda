@@ -2891,6 +2891,18 @@ first at their own commits: `a019e2f` (the synchronous wait, 15 s against 5), `b
 
 Next is ACTIVE.md's "Next": remeasure on Dannan 0.9.0 when tagged, harness phase 2's other workloads.
 
+Later the same morning (gate `ab76b43`, saturn on its 16K kernel: **1117 ran / 1114 passed / 3 skipped / 0 failed**,
+0 warnings):
+- **Recovery measured** (harness phase 2, workload 8, designed with the Macha session; `e454ad7`, `1771670`; the
+  fixture's `Cluster` over a kept directory): at parity within 2%, after kill -9 and after a clean stop; the time to
+  ready is mostly a fixed cost common to both, recorded, not pursued (the real-state rehearsal is a gate, Tom 2026-11-14).
+- **For Macha's retirements:** its three survey cases (`StoreRepair.AStopDuringTheDiffIsNotAFailedPeer`,
+  `.AFailedDiffIsAskedAgainOnATimer`, `LedgerAvailability.WhatIsNotHeldPausesOverTheIdsBesideTheView`), its pull-list
+  pair (`.TheStepThatFirstSeesANewListWalksIt` with pull_examined, `.APullListNewWhileThePushRunsIsNotPassedOver` in
+  Macha's shape), the bad record by the scrub (`StoreStoragePool.AReadErrorKeepsTheObject`).
+- **Fixed, failing first:** the survey's due() named a passed retry after a second failure (`ab76b43`).
+- **Found, waiting on Tom:** repair's pull starved by a sending push, in both stores (ACTIVE.md).
+
 ## Handoff, 2026-11-15 (night): the side-by-side harness, Macha's gaps, the acknowledgement standard
 
 Branch `feature/macha-store-gaps`, nothing pushed. Gates on the Pis, Dannan 0.8.0 prefix, GCC Release, warnings as
