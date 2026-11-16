@@ -2419,6 +2419,147 @@ TEST(StoreRepair, TheObjectWithFewestCopiesGoesFirst) {
   for (const auto& id : pushing) EXPECT_TRUE(peer.data().has(id));
 }
 
+// The repair redesign's stage 3, the offer: a holder asks an owner which ids it wants
+// before it reads or sends a byte. An owner that holds the object already (the survey
+// that said it lacked it is out of date) is sent nothing and counted a keeper, so the
+// next step offers it nothing either. The offer is not a probe.
+TEST(StoreRepair, APushToAPeerThatHoldsTheObjectMovesNoObjectBytes) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 4, 64 * 1024, 100);
+  for (const auto& id : live) ASSERT_TRUE(peer.data().put(id, *writer.data().get(id)));
+  const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
+
+  const auto step = writer.store().repair_step(lists, 8ULL * 1024 * 1024, 16);
+  EXPECT_EQ(peer.calls_of(message::put_object), 0u);
+  EXPECT_EQ(step.bytes_transferred, 0u);
+  EXPECT_EQ(step.push_examined, live.size());
+  EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
+  EXPECT_EQ(probes(peer), 0u);
+  (void)writer.store().repair_step(lists, 8ULL * 1024 * 1024, 16);
+  EXPECT_EQ(peer.calls_of(message::offer_objects), 1u) << "a keeper is remembered as a pushed copy is";
+  EXPECT_EQ(peer.calls_of(message::put_object), 0u);
+  for (const auto& id : live) EXPECT_TRUE(writer.data().has(id));
+}
+
+// A peer whose own repair is fetching the object declines the offer and is sent
+// nothing; the holder offers it again on the retry's backoff, by when the peer holds it.
+TEST(StoreRepair, APeerFetchingAnObjectDeclinesItsOfferAndIsSentNothing) {
+  dannan::test::Gate gate;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto bytes = pattern(256 * 1024, 101);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(writer.data().put(id, bytes));
+  ASSERT_TRUE(peer.store().should_own(id));
+  const RepairLists pull{inventory_of({id}), list_of({id}), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), {id}}})};
+  const RepairLists push{inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}};
+
+  dannan::test::GateOpener opener(gate);
+  writer.interpose(hold(message::get_object, gate));
+  auto pulling = std::async(std::launch::async, [&] { return peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16); });
+  // Opens the gate before the future waits on its thread, so a failure ends the test.
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  const auto step = writer.store().repair_step(push, 8ULL * 1024 * 1024, 16);
+  EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
+  EXPECT_EQ(peer.calls_of(message::put_object), 0u);
+  EXPECT_EQ(step.bytes_transferred, 0u);
+  gate.open();
+  ASSERT_EQ(pulling.wait_for(30s), std::future_status::ready);
+  ASSERT_TRUE(peer.data().has(id));
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        (void)writer.store().repair_step(push, 8ULL * 1024 * 1024, 16);
+        return peer.calls_of(message::offer_objects) >= 2;
+      },
+      15s));
+  EXPECT_EQ(peer.calls_of(message::put_object), 0u);
+  EXPECT_TRUE(writer.data().has(id));
+}
+
+// A peer that has said it wants an offered object does not fetch it too while the copy
+// is on its way. If the copy never comes, it fetches it after all, once the transfer's
+// deadline has passed.
+TEST(StoreRepair, APeerThatWantedAnOfferedObjectFetchesItOnlyIfTheCopyNeverComes) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto receiving = options(2);
+  receiving.store.object_transfer_call = 2s;
+  auto& peer = cluster.add("peer", receiving);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto bytes = pattern(256 * 1024, 102);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(writer.data().put(id, bytes));
+  ASSERT_TRUE(peer.store().should_own(id));
+  // The copy is lost on its way.
+  peer.interpose([](MessageType type, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (type == message::put_object) return Handled::failed(503, "storage_busy", "lost by the case");
+    return std::nullopt;
+  });
+  (void)writer.store().repair_step({inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024, 16);
+  EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
+  EXPECT_FALSE(peer.data().has(id));
+
+  const RepairLists pull{inventory_of({id}), list_of({id}), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), {id}}})};
+  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  EXPECT_EQ(writer.calls_of(message::get_object), 0u) << "the copy promised is not fetched too";
+  EXPECT_FALSE(peer.data().has(id));
+  ASSERT_TRUE(wait_until(
+      [&] {
+        (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+        return peer.data().has(id);
+      },
+      15s));
+  EXPECT_EQ(writer.calls_of(message::get_object), 1u);
+}
+
+// Both ends at once, as a node rejoins: its pull of one object is in flight while the
+// holder pushes everything it lacks. Each object crosses the link once (the baseline
+// measured one and a half to two times).
+TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
+  dannan::test::Gate gate;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& rejoining = cluster.add("rejoining", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, rejoining.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 6, 128 * 1024, 103);
+  for (const auto& id : live) ASSERT_TRUE(rejoining.store().should_own(id));
+  const RepairLists pull{inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})};
+  const RepairLists push{inventory_of(live), {}, lacks_of({{rejoining.id(), live}}), {}};
+
+  // The pull is serial: one fetch is held at the holder while the holder pushes.
+  dannan::test::GateOpener opener(gate);
+  writer.interpose(hold(message::get_object, gate));
+  auto pulling = std::async(std::launch::async, [&] { return rejoining.store().repair_step(pull, 64ULL * 1024 * 1024, 0); });
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1));
+  (void)writer.store().repair_step(push, 64ULL * 1024 * 1024, 0);
+  gate.open();
+  ASSERT_EQ(pulling.wait_for(30s), std::future_status::ready);
+  ASSERT_TRUE(wait_until(
+      [&] {
+        (void)writer.store().repair_step(push, 64ULL * 1024 * 1024, 0);
+        (void)rejoining.store().repair_step(pull, 64ULL * 1024 * 1024, 0);
+        return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return rejoining.data().has(id); });
+      },
+      15s));
+  EXPECT_EQ(rejoining.calls_of(message::put_object) + writer.calls_of(message::get_object), live.size());
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
