@@ -59,6 +59,11 @@ inline constexpr MessageType durability_covered{768};
 // the writer; the reply is remove_objects_reply.
 inline constexpr MessageType remove_objects{769};
 inline constexpr MessageType remove_objects_reply{770};
+// Repair's offer (the repair redesign, stage 3): the ids a holder is about to
+// send this node, asked before any byte moves; the reply says of each whether
+// it is wanted. Not a probe: repair still finds its work by diff alone.
+inline constexpr MessageType offer_objects{771};
+inline constexpr MessageType offer_objects_reply{772};
 
 // Replies.
 inline constexpr MessageType bool_reply{615};
@@ -79,6 +84,8 @@ inline constexpr uint32_t max_retain_batch = 1000000;
 inline constexpr uint32_t max_valid_batch = 16;
 // The ids one remove_objects carries; a larger delete is sent in parts.
 inline constexpr uint32_t max_remove_batch = 4096;
+// The ids one offer_objects carries.
+inline constexpr uint32_t max_offer_batch = 4096;
 
 // Registers every store type's wire rules (not their handlers) on `routes`.
 // Before the node starts: Dannan refuses registration after. Throws as
@@ -196,5 +203,24 @@ Bytes encode_removal(const ReplicaRemoval& removal);
 // Throws dannan::net::DecodeError for a state out of range or past the
 // bounds.
 ReplicaRemoval decode_removal(std::span<const uint8_t> payload);
+
+// offer_objects: encode_ids, at most max_offer_batch. offer_objects_reply: u32
+// count, then a byte each: what the receiver says of the copy offered.
+enum class OfferAnswer : uint8_t {
+  // Send it: the receiver has said it wants it from this sender, and will not
+  // fetch it meanwhile.
+  wanted = 0,
+  // It holds a copy already: the sender counts it a keeper.
+  held = 1,
+  // Its own repair is fetching it, or another sender has been told it is
+  // wanted: nothing is sent, and the sender asks again later.
+  fetching = 2,
+  // It could not store it: no disk online, or no room for an extent.
+  no_room = 3,
+};
+Bytes encode_offer_answers(const std::vector<OfferAnswer>& answers);
+// Throws dannan::net::DecodeError unless it answers `expected` ids, each with
+// one of the four answers.
+std::vector<OfferAnswer> decode_offer_answers(std::span<const uint8_t> payload, size_t expected);
 
 }  // namespace dagda::store::message

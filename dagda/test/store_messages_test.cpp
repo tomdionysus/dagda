@@ -181,6 +181,33 @@ TEST(StoreMessages, RepairsMessagesAreProtocol23s) {
   EXPECT_EQ(hex(ledger::encode_trie_question(root)), "0000" + std::string(64, '0') + "00000000");
 }
 
+// Records the wire rules registered on `table`, as Dannan's node registers them.
+struct RecordingRoutes final : dannan::Routes {
+  explicit RecordingRoutes(dannan::net::RouteTable& t) : table(t) {}
+  dannan::net::RouteTable& table;
+  void add(dannan::net::MessageType type, dannan::net::Registration registration, dannan::net::RequestHandler) override { table.add(type, registration); }
+  void retire(dannan::net::MessageType) override {}
+  void bind(dannan::net::MessageType, dannan::net::RequestHandler) override {}
+  void bind_deferred(dannan::net::MessageType, dannan::net::DeferringHandler) override {}
+  void unbind(dannan::net::MessageType) override {}
+  std::shared_ptr<dannan::net::CallHandle> call(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
+                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
+    return {};
+  }
+  std::shared_ptr<dannan::net::CallHandle> call(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
+                                                std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
+    return {};
+  }
+  dannan::net::CallOutcome call_and_wait(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
+                                         std::chrono::milliseconds, dannan::net::CallWatch) override {
+    return {};
+  }
+  dannan::net::CallOutcome call_and_wait(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
+                                         std::chrono::milliseconds, dannan::net::CallWatch) override {
+    return {};
+  }
+};
+
 // Dagda's numbers: 512 plus protocol 23's, all of them user types, none of
 // them two things.
 TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
@@ -208,31 +235,7 @@ TEST(StoreMessages, TheNumbersAre512PlusProtocol23s) {
   // Registered on a table as Dannan's node registers them, with the lanes
   // protocol 23 gave each.
   auto table = dannan::net::RouteTable::with_dannan_types();
-  struct Recorder final : dannan::Routes {
-    explicit Recorder(dannan::net::RouteTable& t) : table(t) {}
-    dannan::net::RouteTable& table;
-    void add(dannan::net::MessageType type, dannan::net::Registration registration, dannan::net::RequestHandler) override { table.add(type, registration); }
-    void retire(dannan::net::MessageType) override {}
-    void bind(dannan::net::MessageType, dannan::net::RequestHandler) override {}
-    void bind_deferred(dannan::net::MessageType, dannan::net::DeferringHandler) override {}
-    void unbind(dannan::net::MessageType) override {}
-    std::shared_ptr<dannan::net::CallHandle> call(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
-                                                  std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
-      return {};
-    }
-    std::shared_ptr<dannan::net::CallHandle> call(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
-                                                  std::chrono::milliseconds, boost::asio::any_io_executor, Done, dannan::net::CallWatch) override {
-      return {};
-    }
-    dannan::net::CallOutcome call_and_wait(const dannan::membership::NodeRecord&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
-                                           std::chrono::milliseconds, dannan::net::CallWatch) override {
-      return {};
-    }
-    dannan::net::CallOutcome call_and_wait(const dannan::net::Endpoint&, dannan::net::MessageType, dannan::net::Bytes, dannan::sched::FrameType,
-                                           std::chrono::milliseconds, dannan::net::CallWatch) override {
-      return {};
-    }
-  } routes(table);
+  RecordingRoutes routes(table);
   register_types(routes);
   using dannan::net::Lane;
   using dannan::sched::FrameType;
@@ -361,6 +364,41 @@ TEST(StoreMessages, ADeleteCarriesItsClockIdsAndWriterAndItsAnswerEachObjectsSta
   auto bad_state = reply;
   bad_state[1 + 4 + 32] = static_cast<uint8_t>(RemoveState::refused);
   EXPECT_THROW(decode_removal(bad_state), dannan::net::DecodeError);
+}
+
+// The repair redesign's stage 3, the offer: Dagda's own types after the delete's. The
+// request is the ids as a presence names them; the reply a byte each, one of four
+// answers, on the control lane in any class.
+TEST(StoreMessages, AnOfferNamesItsIdsAndItsAnswerSaysOfEachWhetherItIsWanted) {
+  EXPECT_EQ(static_cast<uint16_t>(offer_objects), 771);
+  EXPECT_EQ(static_cast<uint16_t>(offer_objects_reply), 772);
+  const std::vector<ObjectId> ids{id_a, id_b};
+  const auto request = encode_ids(ids);
+  EXPECT_EQ(hex(request), "00000002" + to_string(id_a) + to_string(id_b));
+  EXPECT_EQ(decode_ids(request, max_offer_batch), ids);
+  EXPECT_THROW(decode_ids(encode_ids(std::vector<ObjectId>(max_offer_batch + 1, id_a)), max_offer_batch), dannan::net::DecodeError);
+
+  const std::vector<OfferAnswer> answers{OfferAnswer::wanted, OfferAnswer::held, OfferAnswer::fetching, OfferAnswer::no_room};
+  const auto reply = encode_offer_answers(answers);
+  EXPECT_EQ(hex(reply), "0000000400010203");
+  EXPECT_EQ(decode_offer_answers(reply, 4), answers);
+  EXPECT_THROW(decode_offer_answers(reply, 3), dannan::net::DecodeError);
+  auto unknown = reply;
+  unknown.back() = 4;
+  EXPECT_THROW(decode_offer_answers(unknown, 4), dannan::net::DecodeError);
+  auto truncated = reply;
+  truncated.pop_back();
+  EXPECT_THROW(decode_offer_answers(truncated, 4), dannan::net::DecodeError);
+
+  auto table = dannan::net::RouteTable::with_dannan_types();
+  RecordingRoutes routes(table);
+  register_types(routes);
+  using dannan::net::Lane;
+  using dannan::sched::FrameType;
+  for (const auto type : {offer_objects, offer_objects_reply}) {
+    EXPECT_TRUE(table.allowed(type, Lane::control, FrameType::speculative)) << table.name(type);
+    EXPECT_FALSE(table.allowed(type, Lane::data, FrameType::speculative)) << table.name(type);
+  }
 }
 
 }  // namespace
