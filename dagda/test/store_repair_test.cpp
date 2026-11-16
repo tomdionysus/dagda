@@ -1632,10 +1632,17 @@ TEST(StoreRepair, AReadWithNoDeadlineMovesPastAPeerSilentForTheWindow) {
   c.interpose(first_is_silent);
   ReadOptions read;
   read.frame = FrameType::foreground;
+  const auto sent = [&] { return a.node().traffic().out_bytes[static_cast<size_t>(FrameType::foreground)]; };
+  const auto sent_before = sent();
   auto result = std::async(std::launch::async, [&] { return a.store().get(id, read); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
+  // The clock moves only once a has counted its request sent. Dannan records a call's
+  // progress as its bytes leave, then counts them (session.cpp:337-350 at 0.8.0); the
+  // peer can enter the gate before that, and progress noted after the move restarted
+  // the window, so the read never moved on (failed twice on node-c, 2026-11-15/16).
+  ASSERT_TRUE(wait_until([&] { return sent() > sent_before; }));
   time.advance(301s);
   ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
   EXPECT_EQ(result.get(), bytes);
@@ -1661,10 +1668,14 @@ TEST(StoreRepair, AReadWithNoDeadlineEndsWhenItsOnlyPeerIsSilentForTheWindow) {
   b.interpose(hold(message::get_object, gate));
   ReadOptions read;
   read.frame = FrameType::foreground;
+  const auto sent = [&] { return a.node().traffic().out_bytes[static_cast<size_t>(FrameType::foreground)]; };
+  const auto sent_before = sent();
   auto result = std::async(std::launch::async, [&] { return a.store().read(id, read); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
+  // As the case above: moved only once the request's progress is recorded.
+  ASSERT_TRUE(wait_until([&] { return sent() > sent_before; }));
   time.advance(301s);
   ASSERT_EQ(result.wait_for(30s), std::future_status::ready);
   const auto answer = result.get();
