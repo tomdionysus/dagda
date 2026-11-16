@@ -51,6 +51,9 @@ void register_types(dannan::Routes& routes) {
   // control lane, any class but control.
   routes.add(remove_objects, {"dagda.remove_objects", Lanes::control, Frames::not_control});
   routes.add(remove_objects_reply, {"dagda.remove_objects_reply", Lanes::control, Frames::any});
+  // An offer is answered from the index, as a presence is: the control lane.
+  routes.add(offer_objects, {"dagda.offer_objects", Lanes::control, Frames::any});
+  routes.add(offer_objects_reply, {"dagda.offer_objects_reply", Lanes::control, Frames::any});
   routes.add(bool_reply, {"dagda.bool_reply", Lanes::both, Frames::any});
   routes.add(object_reply, {"dagda.object_reply", Lanes::data, Frames::any});
   routes.add(control_object_reply, {"dagda.control_object_reply", Lanes::control, Frames::any});
@@ -368,6 +371,27 @@ ReplicaRemoval decode_removal(std::span<const uint8_t> payload) {
       object.claims.push_back(dot);
     }
     out.objects.push_back(std::move(object));
+  }
+  reader.finish();
+  return out;
+}
+
+Bytes encode_offer_answers(const std::vector<OfferAnswer>& answers) {
+  Writer writer;
+  writer.u32(static_cast<uint32_t>(answers.size()));
+  for (const auto answer : answers) writer.u8(static_cast<uint8_t>(answer));
+  return writer.take();
+}
+
+std::vector<OfferAnswer> decode_offer_answers(std::span<const uint8_t> payload, size_t expected) {
+  Reader reader(payload);
+  if (reader.u32() != expected) throw DecodeError("offer reply count mismatch");
+  std::vector<OfferAnswer> out;
+  out.reserve(expected);
+  for (size_t i = 0; i < expected; ++i) {
+    const auto answer = reader.u8();
+    if (answer > static_cast<uint8_t>(OfferAnswer::no_room)) throw DecodeError("invalid offer answer");
+    out.push_back(static_cast<OfferAnswer>(answer));
   }
   reader.finish();
   return out;
