@@ -16,9 +16,9 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
   `09921be` (the fixture's cluster across processes) on node-c, the va48 kernel: 1120 ran, 1116 passed, 3 skipped,
   1 failed, the one a new fixture case whose premise the run disproved (two clusters with a CA each do join, on
   the cluster key), removed in `66a0b76`; the harness's repair workload is compiled and smoke-tested there, not
-  gated by the suite. **Last full gate: `0d048e0`** (the loop reads a new reference at once, a gap against
-  Macha found by that smoke test) on node-c: 1120 ran, 1117 passed, 3 skipped, 0 failed; `f77b59d` adds one case,
-  run on its own.
+  gated by the suite. Then `0d048e0` (the loop reads a new reference at once, a gap against Macha found by that
+  smoke test): 1120 ran, 1117 passed, 3 skipped, 0 failed. **Last full gate: `502cf57`** (repair redesign stage
+  1, the survey keeps who holds what) on node-c: 1123 ran, 1120 passed, 3 skipped, 0 failed.
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
   commit, and retires its own cases against named `dagda_tests` cases, mapped one by one.

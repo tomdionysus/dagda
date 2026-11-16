@@ -97,6 +97,12 @@ against the stage before, on the same Pi and kernel, both stores rerun where Mac
 
 **1. The survey keeps holders.** `AvailabilitySurvey` and the service publish, per peer, what it holds of what
 this node lacks. Memory is the sum of the lists, as `PeerLacks`.
+**Done (`2f8bda1` the cases, `502cf57` the code).** `ledger::PeerDiff::holds` and `ledger::PeerHolds`, published
+by `AvailabilityService::peer_holds()` beside `peer_lacks()`, from the same diffs and nothing more asked: what a
+peer holds that nothing refers to is left out. A survey that asks nobody (a gain alone) leaves the last one
+standing. Both cases seen failing before the code; gate at `502cf57`, node-c, 1 core: 1123 ran, 1120 passed, 3
+skipped, 0 failed, 0 warnings. Repair does not read it yet: that is stage 2. Built after the baseline's binaries
+(`7d12ca8`), so the baseline is still today's repair.
 
 **2. One queue by copies left.** Repair's two walks and their cursors become one ordered walk over transfers.
 Both starvation tests pass here. Retries keep their backoff.
