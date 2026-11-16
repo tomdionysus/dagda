@@ -14,17 +14,22 @@
 // Macha session asked: replicas 2, write_copies 1, 4 MiB extents, packing at 1 MiB
 // into 64 MiB packs, a 500 ms durability window; Macha's defaults otherwise.
 //
-//   harness-macha <workload>
+//   harness-macha <state directory> <workload>
+//   (recovery-fill and recovery-fill-small keep the state directory; recovery-open
+//   reopens node "a" of it alone)
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <string>
 #include <thread>
@@ -175,7 +180,8 @@ class HarnessNode : public NodeParts, public NodeRuntime {
 
 class MachaStore final : public harness::Store {
  public:
-  explicit MachaStore(const std::filesystem::path& root) : _root(root) {
+  // `keep`: the root outlives the run (recovery's fill), for a later run to reopen.
+  explicit MachaStore(const std::filesystem::path& root, bool keep = false) : _root(root), _keep(keep) {
     std::filesystem::remove_all(_root);
     std::filesystem::create_directories(_root);
     const auto key = _root / "cluster.key";
@@ -203,6 +209,7 @@ class MachaStore final : public harness::Store {
   ~MachaStore() override {
     for (auto& node : _nodes) node->stop();
     _nodes.clear();
+    if (_keep) return;
     std::error_code ignored;
     std::filesystem::remove_all(_root, ignored);
   }
@@ -252,8 +259,55 @@ class MachaStore final : public harness::Store {
   DistributedStore& store(size_t node) { return _nodes.at(node)->store(); }
 
   std::filesystem::path _root;
+  bool _keep = false;
   std::vector<std::unique_ptr<HarnessNode>> _nodes;
 };
+
+// Recovery's reopen: node "a" alone over what the fill left under `root`, its key and
+// config as the fill's, timed from its construction (the Macha session's points,
+// 2026-11-16): data open is RecoveryProgress's data_storage plane, marked after
+// StoragePool's constructor and its pack replay; ready is RecoveryProgress complete
+// (local_state_ready), as /health and the peers see it; then one foreground read of a
+// random extent of the fill's, the store built as distributed_store_for builds it.
+void recovery_open(const std::filesystem::path& root, const harness::Report& report) {
+  const auto ids = harness::read_ids(root / "ids");
+  const auto key = root / "cluster.key";
+  const auto keys = load_cluster_keys(key);
+  harness::Reopened out;
+  const auto before = harness::process_figures();
+  const auto read_before = harness::io_field("read_bytes");
+  const auto wall_started =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+  const auto started = harness::Clock::now();
+  auto node = std::make_unique<HarnessNode>(config_for(root / "a", key, free_port(), {}), keys);
+  std::atomic<bool> stop{false};
+  std::thread watch([&] {
+    while (!stop.load()) {
+      if (node->progress.has(RecoveryProgress::data_storage)) {
+        out.data_open = harness::Clock::now() - started;
+        return;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  node->start();
+  const bool ready = node->progress.wait_complete(10min);
+  stop = true;
+  watch.join();
+  if (ready) {
+    out.ready = std::chrono::milliseconds(node->progress.ready_unix_ms() - wall_started);
+    const auto at_ready = harness::process_figures();
+    out.cpu_to_ready = at_ready.cpu_seconds - before.cpu_seconds;
+    out.disk_read_to_ready = harness::io_field("read_bytes") - read_before;
+    std::random_device random;
+    const auto& id = ids[random() % ids.size()];
+    const auto shared = node->store().get_shared(object_of(id), 0, FrameType::foreground, Clock::now() + 60s);
+    out.read_ok = shared != nullptr;
+    out.first_read = harness::Clock::now() - started;
+  }
+  node->stop();
+  harness::report_reopen(out, report);
+}
 
 }  // namespace
 
@@ -263,6 +317,17 @@ int main(int argc, char** argv) {
     return 2;
   }
   try {
+    const std::string workload = argv[2];
+    if (workload == "recovery-open") {
+      recovery_open(argv[1], harness::Report("macha f0597a4 on dannan 0.5.3", workload));
+      return 0;
+    }
+    if (workload == "recovery-fill" || workload == "recovery-fill-small") {
+      MachaStore store(argv[1], true);
+      const harness::Report report(store.describe(), workload);
+      harness::recovery_fill(store, workload == "recovery-fill" ? 14 : 1, 20000, std::filesystem::path(argv[1]) / "ids", report);
+      return 0;
+    }
     MachaStore store(argv[1]);
     return harness::run(store, argv[2]);
   } catch (const std::exception& error) {

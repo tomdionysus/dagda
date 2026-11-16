@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -477,6 +478,104 @@ inline void reads_local(Store& store, const Report& report) {
   report.latencies("four_readers_request", together);
   report.figure("rss_hwm", static_cast<double>(after.hwm_bytes), "B");
   report.figure("failed", alone_ok && together_ok ? 0 : 1, "bool");
+}
+
+// 8. Recovery (as agreed with the Macha session, 2026-11-16): a fill, then node 0
+// reopened alone over what it left, by a second run of the driver, timed from its
+// construction. The fill is here; each driver opens its own node for the reopen and
+// reports what it timed with report_reopen.
+
+// The extents a fill leaves, one hex id a line, for the reopen's first read.
+inline void write_ids(const std::filesystem::path& path, const std::vector<Id>& ids) {
+  std::ofstream out(path, std::ios::trunc);
+  for (const auto& id : ids) {
+    for (const auto byte : id.bytes) out << "0123456789abcdef"[byte >> 4] << "0123456789abcdef"[byte & 15];
+    out << '\n';
+  }
+  if (!out) throw std::runtime_error("the fill's ids could not be written");
+}
+
+inline std::vector<Id> read_ids(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::vector<Id> out;
+  std::string line;
+  const auto nibble = [](char c) { return static_cast<uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10); };
+  while (std::getline(in, line)) {
+    if (line.size() != 64) continue;
+    Id id;
+    for (size_t i = 0; i < 32; ++i) id.bytes[i] = static_cast<uint8_t>(nibble(line[2 * i]) << 4 | nibble(line[2 * i + 1]));
+    out.push_back(id);
+  }
+  if (out.empty()) throw std::runtime_error("the fill left no ids at " + path.string());
+  return out;
+}
+
+// The fill: `large` files of 512 MiB and `small` files of 4 to 64 KiB on node 0, every
+// one made durable, the small ones a hundred to a publication by eight publishers (the
+// layout on disk is what is tested here, not how it was written). The large files'
+// extents go to `ids`. Its last figure, "filled", says the state is down: a script
+// that kills the driver -9 waits for that line.
+inline void recovery_fill(Store& store, size_t large, size_t small, const std::filesystem::path& ids, const Report& report) {
+  constexpr uint64_t mib = 1024 * 1024;
+  const auto started = Clock::now();
+  const auto before = process_figures();
+  std::vector<Id> extents;
+  for (size_t f = 0; f < large; ++f) {
+    const auto file = publish_file(store, 512 * mib, 40000000 + f * 1000);
+    extents.insert(extents.end(), file.begin(), file.end());
+  }
+  std::atomic<size_t> next{0};
+  std::atomic<bool> failed{false};
+  std::atomic<uint64_t> small_bytes{0};
+  constexpr size_t batch = 100;
+  std::vector<std::thread> publishers;
+  for (size_t p = 0; p < 8; ++p)
+    publishers.emplace_back([&] {
+      for (size_t first = next.fetch_add(batch); first < small; first = next.fetch_add(batch)) {
+        auto publishing = store.publication(0, Frame::loader);
+        for (size_t i = first; i < std::min(small, first + batch); ++i) {
+          // 4 KiB to 64 KiB, the same sizes on both stores.
+          const auto data = pattern(4096 + (i * 7919) % (60 * 1024), 50000000 + i);
+          small_bytes += data.size();
+          if (!publishing->extent(store.id_of(data), data)) failed = true;
+        }
+        if (!publishing->finish()) failed = true;
+      }
+    });
+  for (auto& publisher : publishers) publisher.join();
+  write_ids(ids, extents);
+  const auto after = process_figures();
+  report.figure("fill_seconds", std::chrono::duration<double>(Clock::now() - started).count(), "s");
+  report.figure("fill_objects", static_cast<double>(extents.size() + small), "objects");
+  report.figure("fill_bytes", static_cast<double>(large * 512 * mib + small_bytes.load()), "B");
+  report.figure("fill_disk_write", static_cast<double>(after.write_bytes - before.write_bytes), "B");
+  report.figure("failed", failed ? 1 : 0, "bool");
+  report.figure("filled", 1, "bool");
+  // For the kill -9 case: the process waits here, its nodes running, until the script
+  // kills it, so no clean stop can come first.
+  if (const char* hold = std::getenv("HARNESS_HOLD_AFTER_FILL"); hold && *hold)
+    while (true) std::this_thread::sleep_for(std::chrono::hours(1));
+}
+
+// What a driver timed in its reopen, from node 0's construction; nothing for a point
+// it never reached.
+struct Reopened {
+  std::optional<Clock::duration> data_open;
+  std::optional<Clock::duration> ready;
+  std::optional<Clock::duration> first_read;
+  bool read_ok = false;
+  double cpu_to_ready = 0;
+  uint64_t disk_read_to_ready = 0;
+};
+
+inline void report_reopen(const Reopened& reopened, const Report& report) {
+  const auto ms = [](const std::optional<Clock::duration>& at) { return at ? std::chrono::duration<double, std::milli>(*at).count() : -1.0; };
+  report.figure("data_open_ms", ms(reopened.data_open), "ms");
+  report.figure("ready_ms", ms(reopened.ready), "ms");
+  report.figure("first_read_ms", ms(reopened.first_read), "ms");
+  report.figure("cpu_to_ready", reopened.cpu_to_ready, "s");
+  report.figure("disk_read_to_ready", static_cast<double>(reopened.disk_read_to_ready), "B");
+  report.figure("failed", reopened.ready && reopened.read_ok ? 0 : 1, "bool");
 }
 
 // 4. A viewer under load: foreground reads of objects already held, timed, while a
