@@ -9,7 +9,10 @@
 # machine over ssh. It only drives: nothing is built or measured here. Node a runs on $A
 # and holds; node b runs on $B and joins. Both stores' harness binaries and their
 # libraries are under /root/harness on both Pis at the same paths (built on one, copied to
-# the other): macha-build/harness-macha and build-tip/harness-dagda.
+# the other): macha-build/harness-macha and build-tip/harness-dagda. A second Dagda,
+# store name dagda-old, runs from build-old/ (its harness-dagda and dagda/libdagda.so.*,
+# kept from an earlier build-tip), so a repair stage is measured old against new in one
+# session; its figures carry the store name dagda-old.
 #
 #   pi-repair-run.sh smoke        one tiny rejoin a store: does the driver work across the Pis
 #   pi-repair-run.sh link         the raw link's rate and round trip now
@@ -18,9 +21,10 @@
 #
 # Settings, from the environment: A and B, the two Pis' addresses; DEV, their interface;
 # OUT, where the figures go (build/harness/results/<date> in this repository by default);
-# STORES, for smoke; REST, the seconds between runs; NOCOLD=1, which skips the fstrim and
-# the page-cache drop before each run and must be set on any Pi not held whole (the drop
-# costs every other job there its cache).
+# STORES, the stores smoke and run compare (macha dagda by default); REST, the seconds
+# between runs; NOCOLD=1, which skips the fstrim and the page-cache drop before each run
+# and must be set on any Pi not held whole (the drop costs every other job there its
+# cache).
 #
 # Before a run: claim on the board the cores it uses on both Pis (a node needs about one;
 # the runs are bound by the link), with an honest end time, and post a note: the traffic
@@ -86,7 +90,11 @@ start() {
   store=$1; n=$2
   d=$(dir $n); h=$(host $n)
   if [ $n = a ]; then p=$PA; seed=""; else p=$PB; seed="$A $PA"; fi
-  if [ $store = macha ]; then bin="$R/macha-build/harness-macha $d repair-node $n $h $p $seed"; else bin="$R/build-tip/harness-dagda repair-node $d $n $h $p $seed"; fi
+  case $store in
+    macha) bin="$R/macha-build/harness-macha $d repair-node $n $h $p $seed" ;;
+    dagda-old) bin="env LD_LIBRARY_PATH=$R/build-old/dagda $R/build-old/harness-dagda repair-node $d $n $h $p $seed" ;;
+    *) bin="$R/build-tip/harness-dagda repair-node $d $n $h $p $seed" ;;
+  esac
   on $h "cd $d && (setsid nohup $bin >> $d/out 2>> $d/err < /dev/null &)"
 }
 stop() { cmd $1 stop; on $(host $1) "t=0; while pgrep -f '[h]arness-.* repair-node' > /dev/null; do sleep 1; t=\$((t+1)); [ \$t -gt 120 ] && { pkill -9 -f '[h]arness-.* repair-node'; break; }; done; true"; }
@@ -94,7 +102,7 @@ copy() { on $A "cat $W/a/$1" | on $B "mkdir -p \$(dirname $W/b/$1) && cat > $W/b
 # What b needs of a's to be the same cluster, and the objects the run is about.
 share() {
   store=$1
-  if [ $store = dagda ]; then on $A "until [ -f $W/a/cluster/ca.pem ]; do sleep 0.2; done"; copy cluster/ca.key; copy cluster/ca.pem; fi
+  if [ $store != macha ]; then on $A "until [ -f $W/a/cluster/ca.pem ]; do sleep 0.2; done"; copy cluster/ca.key; copy cluster/ca.pem; fi
   copy ids
 }
 fresh() {
@@ -103,10 +111,11 @@ fresh() {
   if [ $store = macha ]; then on $A "head -c 48 /dev/urandom | base64 > $W/a/cluster.key"; copy cluster.key; fi
   sleep ${REST:-30}
 }
+# Each line relabelled with the run's workload and, for dagda-old, its store name.
 collect() {
-  label=$1
+  label=$1; store=$2
   for n in a b; do
-    on $(host $n) "cat $(dir $n)/out; cat $(dir $n)/err >&2" 2>> "$OUT/repair-err.txt" | sed "s/\"workload\":\"[^\"]*\"/\"workload\":\"$label $n\"/" >> "$RES"
+    on $(host $n) "cat $(dir $n)/out; cat $(dir $n)/err >&2" 2>> "$OUT/repair-err.txt" | sed -e "s/\"workload\":\"[^\"]*\"/\"workload\":\"$label $n\"/" -e "s/\"store\":\"dagda\"/\"store\":\"$store\"/" >> "$RES"
   done
 }
 wirefig() {
@@ -130,12 +139,12 @@ rejoin() {
   if [ -n "$viewer" ]; then cmd a viewer-start; sleep 30; cmd a "viewer-stop viewer_alone"; waitfor a "viewer-stop"; cmd a viewer-start; fi
   wa=$(wire a); wb=$(wire b)
   cmd b peer reference "measure rejoin $bound"; start $store b
-  waitfor b "measure rejoin" $((bound + 600)) || { collect "$label FAILED"; stop a; stop b; return 1; }
+  waitfor b "measure rejoin" $((bound + 600)) || { collect "$label FAILED" $store; stop a; stop b; return 1; }
   if [ -n "$viewer" ]; then cmd a "viewer-stop viewer_loaded"; waitfor a "viewer-stop viewer_loaded"; fi
   cmd a "figures holder"; waitfor a "figures holder"
   wirefig "$label" $store a "$wa" "$(wire a)"; wirefig "$label" $store b "$wb" "$(wire b)"
-  stop b; stop a; collect "$label"
-  say "$label $store: $(grep "\"workload\":\"$label b\".*rejoin.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
+  stop b; stop a; collect "$label" $store
+  say "$label $store: $(grep "\"store\":\"$store\".*\"workload\":\"$label b\".*rejoin.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
 }
 
 # b away, then back: both hold the first half; b stops, keeping its disk; a is given the
@@ -150,7 +159,7 @@ away() {
   on $A "rm -f $W/a/ids"
   cmd a "fill 2000 $half $size" && waitfor a "fill 2000" && cmd a reference && waitfor a reference || return 1
   copy ids
-  cmd b reference "measure first"; waitfor b "measure first" 7200 || { collect "$label FAILED"; stop a; stop b; return 1; }
+  cmd b reference "measure first"; waitfor b "measure first" 7200 || { collect "$label FAILED" $store; stop a; stop b; return 1; }
   stop b
   # Until a counts b dead (dead_after 30 s), so its writes are not waiting on it.
   sleep 40
@@ -158,11 +167,11 @@ away() {
   copy ids
   wa=$(wire a); wb=$(wire b)
   cmd b peer reference "measure back"; start $store b
-  waitfor b "measure back" 7200 || { collect "$label FAILED"; stop a; stop b; return 1; }
+  waitfor b "measure back" 7200 || { collect "$label FAILED" $store; stop a; stop b; return 1; }
   cmd a "figures holder"; waitfor a "figures holder"
   wirefig "$label" $store a "$wa" "$(wire a)"; wirefig "$label" $store b "$wb" "$(wire b)"
-  stop b; stop a; collect "$label"
-  say "$label $store: $(grep "\"workload\":\"$label b\".*back.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
+  stop b; stop a; collect "$label" $store
+  say "$label $store: $(grep "\"store\":\"$store\".*\"workload\":\"$label b\".*back.seconds" "$RES" | tail -1 | sed 's/.*"value":\([^,]*\).*/\1/') s"
 }
 
 machine() { for h in $A $B; do say "$(on $h 'echo $(hostname) $(uname -r) page $(getconf PAGESIZE) up $(cut -d" " -f1 /proc/uptime)s throttled $(vcgencmd get_throttled | cut -d= -f2)')"; done; }
@@ -182,7 +191,8 @@ case ${1:-} in
     machine; count_on || exit 1
     for round in 1 2 3; do
       link "round$round"
-      if [ $((round % 2)) -eq 1 ]; then order="macha dagda"; else order="dagda macha"; fi
+      set -- ${STORES:-macha dagda}
+      if [ $((round % 2)) -eq 1 ]; then order="$1 $2"; else order="$2 $1"; fi
       for store in $order; do rejoin $store large 26 4194304 $round; done
       for store in $order; do rejoin $store small 410 65536 $round; done
       for store in $order; do away $store large 26 4194304 $round; done
