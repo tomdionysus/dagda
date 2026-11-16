@@ -752,8 +752,9 @@ inline void append_listed(const std::filesystem::path& path, const std::vector<L
 //   reference                     returns once the node refers to everything in <dir>/ids,
 //                                 and reports how long that took
 //   peer                          waits until another node is active
-//   measure <label>               waits until this node holds everything in <dir>/ids,
-//                                 and reports the span's figures as <label>.*
+//   measure <label> [<seconds>]   waits until this node holds everything in <dir>/ids, or
+//                                 for the bound (two hours unless given), and reports the
+//                                 span's figures as <label>.*, with what had arrived
 //   figures <label>               reports the counters and process figures now
 //   viewer-start                  a foreground read of a random listed object each second
 //   viewer-stop <label>           ends it and reports its latencies as <label>.*
@@ -823,7 +824,8 @@ inline int repair_node(RepairNode& node, const std::filesystem::path& dir, const
           }
         } else if (command == "measure") {
           std::string label;
-          words >> label;
+          uint64_t limit_seconds = 7200;
+          words >> label >> limit_seconds;
           const auto listed = read_listed(ids_path);
           const auto since = node.counters();
           const auto before = process_figures();
@@ -836,17 +838,28 @@ inline int repair_node(RepairNode& node, const std::filesystem::path& dir, const
               missing_bytes += one.size;
             }
           const size_t needed = missing.size();
-          const auto until = started + std::chrono::hours(2);
-          while (!missing.empty()) {
-            if (Clock::now() > until) throw std::runtime_error(std::to_string(missing.size()) + " objects never arrived");
+          // A run that reaches its bound is a figure, not a failure: what had arrived by
+          // then is reported, with `complete` 0 (repair under a constant viewer is on its
+          // weighted share by design, and may take many times the idle run).
+          const auto until = started + std::chrono::seconds(limit_seconds);
+          uint64_t left_bytes = missing_bytes;
+          while (!missing.empty() && Clock::now() <= until) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            std::erase_if(missing, [&](const Listed& one) { return node.holds(one.id); });
+            std::erase_if(missing, [&](const Listed& one) {
+              if (!node.holds(one.id)) return false;
+              left_bytes -= one.size;
+              return true;
+            });
           }
           const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+          const uint64_t arrived_bytes = missing_bytes - left_bytes;
           report.figure(label + ".seconds", seconds, "s");
+          report.figure(label + ".complete", missing.empty() ? 1 : 0, "bool");
           report.figure(label + ".objects_needed", static_cast<double>(needed), "objects");
           report.figure(label + ".bytes_needed", static_cast<double>(missing_bytes), "B");
-          report.figure(label + ".throughput", seconds > 0 ? static_cast<double>(missing_bytes) / seconds / 1e6 : 0.0, "MB/s");
+          report.figure(label + ".objects_arrived", static_cast<double>(needed - missing.size()), "objects");
+          report.figure(label + ".bytes_arrived", static_cast<double>(arrived_bytes), "B");
+          report.figure(label + ".throughput", seconds > 0 ? static_cast<double>(arrived_bytes) / seconds / 1e6 : 0.0, "MB/s");
           now_figures(label, since, before);
         } else if (command == "figures") {
           std::string label;

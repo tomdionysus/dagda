@@ -459,3 +459,23 @@ Both Pis are on WiFi (`wlan0`; `eth0` down): the "real link" is wireless, so its
 measured and recorded before it is shaped, and the shaped rate must sit under what it can carry.
 
 The controller is `build/pi-repair-run.sh` (smoke, link, run, unshape), run from the Mac over ssh.
+
+### The Macha session's review of the driver (2026-11-16, at `274053c`, read not run)
+
+Accepted: "it drives Macha's repair as a deployed node runs it, and I accept its figures as Macha's." The live
+packing is the harness's (1 MiB into 64 MiB). Changed for it: a `measure` that reaches its bound reports what
+had arrived, with `complete` 0, so repair under a constant viewer (on its 95:5 share by design, never quiet with
+a read a second, and b paced as a peer viewer for 30 s after each telemetry) is a figure and not a failure.
+
+To say with the figures:
+- Macha's b starts pulling as soon as its head arrives, while `reference` is still waiting, and `measure` counts
+  only what is missing at its start: compare elapsed time as `reference.seconds` plus the measured seconds, or
+  compare throughput.
+- Macha also moves copies outside repair, by prompt replication at write time: away-back's "first" measure, both
+  nodes up, is largely that and is not a repair figure. Whether prompt replication keeps anything for a peer
+  that was away is not read; each store's prompt replication figures go beside repair's.
+- The raw link is recorded before each round, not once: Macha's credit follows its own bandwidth estimate, so
+  the link's variance reaches its pacing as well as its transfers.
+- Not verified: what durability batch window production passes to Service (500 ms here, as the extract's tests
+  and the harness's other Macha workloads); whether a 4096-byte file is one extent at f0597a4 (the driver throws
+  if not).
