@@ -198,11 +198,34 @@ TEST(NodeMaintenance, TheNodesThreadRunsThePassesOnItsOwn) {
   a.stop();
 }
 
+// A provider registered once the node runs is read at once, not when the collector's
+// rest ends: the loop's first pass found no provider, which rests the collector as a
+// settled sweep does. Until it is read nothing is referenced, so repair has nothing to
+// work towards (seen as five minutes on the harness's repair workload, 2026-11-16).
+TEST(NodeMaintenance, AProviderRegisteredLaterIsReadWhileTheCollectorRests) {
+  test::TestProvider owner;
+  refer_to_nothing(owner);
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  options.maintenance.interval = 20ms;
+  options.maintenance.gc_interval = 1h;
+  auto& a = cluster.add("a", options);
+  a.start();
+  // The loop has passed with no provider.
+  ASSERT_TRUE(test::wait_until([&] { return figure(a, "dagda.gc.skipped") >= 1; }));
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  EXPECT_TRUE(test::wait_until([&] { return a.ledger().inventory() != nullptr; }, 10s));
+  a.dagda_node().unregister_reachability(domain::domain_v1);
+  a.stop();
+}
+
 // A new reference reaches the inventory in the pass that sees the owner's generation
 // move, not when the collector's rest ends: the survey and repair work from it, so a
 // copy a write could not make would otherwise wait out the rest. Macha's pass runs its
 // inventory stage whenever repair is due and rebuilds on a generation change
-// (maintenance.cpp:611-627 at f0597a4). Here the collector rests an hour.
+// (maintenance.cpp:611-627 at f0597a4). Here the collector rests an hour. (Before the
+// fix this case stopped in its setup, the case above's defect: no GC pass ever ran.)
 TEST(NodeMaintenance, ANewGenerationIsReadWhileTheCollectorRests) {
   test::TestProvider owner;
   refer_to_nothing(owner);
