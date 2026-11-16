@@ -246,6 +246,14 @@ asking:
 
 ## Waiting on the maintainer
 
+**Repair's pull starved by a sending push (found 2026-11-16, in both stores; put to the maintainer by the Macha session).** Push and
+pull share one operation budget a step (Macha's `distributed_store.cpp:2530-2538`; Dagda's `repair_step`'s
+`reserve_operation`); only the scan budget is the pull's own. A push that sends every step holds a new pull list
+until its pass ends, though both stores' comment says it must not. Live on the 0.94.2 nodes. The Macha session's
+recommendation: Dagda fixes it test-first (a share of the operations kept for the pull while its list is new, at
+least one), Macha records it as a known defect until the cutover. **Held until the maintainer answers.** Dagda's port of
+Macha's case is in Macha's shape (a push that sends nothing, `467a175`).
+
 Nothing open from Dagda's list (answered 2026-11-05, see Decisions). In Macha's list, and Dagda follows: the
 remaining design defects there (the torrent merge, the fence on actions under a claim, the local barrier's
 deadline, wall versus steady ages, the policy disagreement loop, O(state) per delta, wire-sized allocations,
