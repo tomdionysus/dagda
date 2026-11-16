@@ -16,10 +16,17 @@
 // or local stage carries load the Macha side does not. Prompt replication runs on both.
 //
 //   harness-dagda <workload>
+//   harness-dagda recovery-fill|recovery-fill-small|recovery-open <kept directory>
 
+#include <atomic>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <random>
 #include <string>
+#include <thread>
 
 #include "dagda/context.h"
 #include "dagda/test/fixtures/cluster.h"
@@ -81,11 +88,13 @@ dagda::test::ClusterNodeOptions node_options() {
 
 class DagdaStore final : public harness::Store {
  public:
-  DagdaStore() : _cluster(10min) {
-    _nodes.push_back(&_cluster.add("a", node_options()));
-    _nodes.push_back(&_cluster.add("b", node_options()));
-    _cluster.start_all();
-    if (!_cluster.converged()) throw std::runtime_error("the two nodes did not converge");
+  // Under a temporary directory, or over `kept`, which outlives the run (recovery's fill).
+  explicit DagdaStore(std::optional<std::filesystem::path> kept = std::nullopt)
+      : _cluster(kept ? std::make_unique<dagda::test::Cluster>(*kept, 10min) : std::make_unique<dagda::test::Cluster>(10min)) {
+    _nodes.push_back(&_cluster->add("a", node_options()));
+    _nodes.push_back(&_cluster->add("b", node_options()));
+    _cluster->start_all();
+    if (!_cluster->converged()) throw std::runtime_error("the two nodes did not converge");
     // What each roster record carries, which every copy of it copies: to stderr, beside
     // the figures.
     for (const auto& record : _nodes[0]->context().nodes().roster()) {
@@ -159,18 +168,86 @@ class DagdaStore final : public harness::Store {
  private:
   dagda::Context& api(size_t node) { return _nodes.at(node)->api(); }
 
-  dagda::test::Cluster _cluster;
+  std::unique_ptr<dagda::test::Cluster> _cluster;
   std::vector<dagda::test::ClusterNode*> _nodes;
 };
+
+// Recovery's reopen: node "a" alone over what the fill left in `kept`, timed from its
+// opening. Data open is the pool's line, "node data storage ready", as the node logs it
+// once the pool's constructor (its pack replay) returns; ready is Dannan's readiness
+// complete, every plane marked, as the peers and Status see it; then one foreground
+// read of a random extent of the fill's.
+void recovery_open(const std::filesystem::path& kept, const harness::Report& report) {
+  const auto ids = harness::read_ids(kept / "ids");
+  dagda::test::Cluster cluster(kept, 10min);
+  auto& a = cluster.add("a", node_options());
+  harness::Reopened out;
+  const auto before = harness::process_figures();
+  const auto read_before = harness::io_field("read_bytes");
+  const auto wall_started = dannan::contract::system_wall_clock().unix_ms();
+  const auto started = harness::Clock::now();
+  std::atomic<bool> stop{false};
+  std::thread watch([&] {
+    while (!stop.load()) {
+      if (a.log().saw("node data storage ready")) {
+        out.data_open = harness::Clock::now() - started;
+        return;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  try {
+    a.start();
+  } catch (...) {
+    stop = true;
+    watch.join();
+    throw;
+  }
+  const bool ready = a.context().readiness().wait_complete(10min);
+  stop = true;
+  watch.join();
+  if (ready) {
+    out.ready = std::chrono::milliseconds(a.context().readiness().ready_unix_ms() - wall_started);
+    const auto at_ready = harness::process_figures();
+    out.cpu_to_ready = at_ready.cpu_seconds - before.cpu_seconds;
+    out.disk_read_to_ready = harness::io_field("read_bytes") - read_before;
+    std::random_device random;
+    const auto& id = ids[random() % ids.size()];
+    dagda::ReadOptions read;
+    read.frame = dannan::sched::FrameType::foreground;
+    read.deadline = 60s;
+    dagda::store::ObjectId object;
+    std::copy(id.bytes.begin(), id.bytes.end(), object.bytes.begin());
+    out.read_ok = a.api().objects().read(object, read).object != nullptr;
+    out.first_read = harness::Clock::now() - started;
+  }
+  harness::report_reopen(out, report);
+}
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 2) {
-    std::fprintf(stderr, "harness-dagda <workload>\n");
+  const std::string workload = argc > 1 ? argv[1] : "";
+  const bool recovery = workload.rfind("recovery-", 0) == 0;
+  if (argc != (recovery ? 3 : 2)) {
+    std::fprintf(stderr, "harness-dagda <workload>\nharness-dagda recovery-fill|recovery-fill-small|recovery-open <kept directory>\n");
     return 2;
   }
   try {
+    if (recovery) {
+      const std::filesystem::path kept = argv[2];
+      if (workload == "recovery-open") {
+        const harness::Report report(std::string("dagda ") + dagda::library_version() + " on dannan " + dannan::library_version(), workload);
+        recovery_open(kept, report);
+        return 0;
+      }
+      if (workload != "recovery-fill" && workload != "recovery-fill-small") throw std::runtime_error("unknown workload " + workload);
+      std::filesystem::remove_all(kept);
+      DagdaStore store(kept);
+      const harness::Report report(store.describe(), workload);
+      harness::recovery_fill(store, workload == "recovery-fill" ? 14 : 1, 20000, kept / "ids", report);
+      return 0;
+    }
     DagdaStore store;
     return harness::run(store, argv[1]);
   } catch (const std::exception& error) {

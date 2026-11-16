@@ -289,10 +289,23 @@ class ClusterNode {
 class Cluster {
  public:
   explicit Cluster(std::chrono::milliseconds dead_after = std::chrono::milliseconds(1500))
-      : _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
+      : _temp(std::in_place),
+        _root(_temp->path()),
+        _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
         _dead_after(dead_after) {
-    std::ofstream(_dir.path() / "cluster.key") << "dagda cluster test";
-    _key = dannan::identity::load_cluster_key(_dir.path() / "cluster.key");
+    std::ofstream(_root / "cluster.key") << "dagda cluster test";
+    _key = dannan::identity::load_cluster_key(_root / "cluster.key");
+  }
+  // Over `kept`, made if missing and never removed: what one process wrote, another
+  // opens again (the harness's recovery workload). The cluster key and the storage key
+  // are the same in every cluster, so a node reopens what its earlier self wrote.
+  Cluster(std::filesystem::path kept, std::chrono::milliseconds dead_after)
+      : _root(std::move(kept)),
+        _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
+        _dead_after(dead_after) {
+    std::filesystem::create_directories(_root);
+    std::ofstream(_root / "cluster.key") << "dagda cluster test";
+    _key = dannan::identity::load_cluster_key(_root / "cluster.key");
   }
   ~Cluster() {
     // Every node stops before the io context it runs on.
@@ -370,7 +383,7 @@ class Cluster {
   }
 
   ClusterIo& io() { return _io; }
-  const std::filesystem::path& dir() const { return _dir.path(); }
+  const std::filesystem::path& dir() const { return _root; }
   const dannan::identity::ClusterKey& key() const { return _key; }
   const dannan::identity::CertificateAuthority& ca() const { return _ca; }
   // Every node's custody source: a passphrase, light costs.
@@ -391,7 +404,9 @@ class Cluster {
   }
 
  private:
-  dannan::test::TempDir _dir;
+  // The temporary directory, when the cluster made one; `_root` either way.
+  std::optional<dannan::test::TempDir> _temp;
+  std::filesystem::path _root;
   dannan::identity::ClusterKey _key;
   dannan::identity::CertificateAuthority _ca;
   const std::chrono::milliseconds _dead_after;
