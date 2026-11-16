@@ -107,7 +107,25 @@ skipped, 0 failed, 0 warnings. Repair does not read it yet: that is stage 2. Bui
 **2. One queue by copies left.** Repair's two walks and their cursors become one ordered walk over transfers.
 Both starvation tests pass here. Retries keep their backoff.
 
-**Stage 2, designed (2026-11-16), not built.** Inside `DistributedStore::repair_step`, keeping its signature,
+**Stage 2, done (`cf2ee55` the cases, `1eed251` the rewrite, `bb912f2`, `2a8d24b`).** Gate at `2a8d24b`, saturn,
+1 core: 1125 ran, 1122 passed, 3 skipped, 0 failed, 0 warnings. `StoreRepair.APushOutOfCreditDoesNotHoldBackThePull`
+(enabled) and `.TheObjectWithFewestCopiesGoesFirst` both seen failing on the old step and passing on the new.
+No existing case was changed or removed: the one trace fixture with repair lines keeps its order. What the suite
+caught on the way, and how it was settled:
+- `StoreRepair.APushKeepsItsPlaceAcrossANewList` failed on the first rewrite: a new survey's lists rebuilt the
+  queue and the pass began again, sending again what it had sent. Now a pass remembers what it had passed when a
+  list changes under it and leaves that out of the rebuilt queue, so nothing passed is passed again, while what
+  is new to the pass is met in its order (a new pull list is still walked by the step that first sees it); the
+  pass after it is over everything listed.
+- A copy that did not arrive no longer ends the step: the rest goes on, and the pass comes back to the first such
+  object next step and is not complete while there is one, as before.
+- A pull whose holders are not known (no peer holds it, a peer could not say, or lists made without `holds`)
+  sorts before every object whose copies are known.
+Not measured yet, and to watch on the benchmark: pushes and pulls now alternate in one walk, so a run of pushes
+is sent together only while no pull sits between them (stage 4's window removes that), and the queue is rebuilt
+and sorted whenever a list changes.
+
+As designed: Inside `DistributedStore::repair_step`, keeping its signature,
 its result and its callers:
 
 - *The queue.* Built once for each set of lists (they are immutable and compared by identity, as `push_source`
