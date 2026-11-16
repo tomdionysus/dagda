@@ -12,8 +12,11 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
 - **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI, so no bump.
   0.8.5 fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
   teardown hang in Dagda's tests would look there first). **Last full gate: `ab76b43`** on node-c, Dannan 0.8.0
-  prefix, GCC Release, warnings as errors, Macha's fixtures: 1117 ran, 1114 passed, 3 skipped, 0 failed. Every
-  commit since is notes only.
+  prefix, GCC Release, warnings as errors, Macha's fixtures: 1117 ran, 1114 passed, 3 skipped, 0 failed. Then
+  `09921be` (the fixture's cluster across processes) on node-c, the va48 kernel: 1120 ran, 1116 passed, 3 skipped,
+  1 failed, the one a new fixture case whose premise the run disproved (two clusters with a CA each do join, on
+  the cluster key), removed in `66a0b76`; the harness's repair workload is compiled and smoke-tested there, not
+  gated by the suite.
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
   commit, and retires its own cases against named `dagda_tests` cases, mapped one by one.
@@ -77,6 +80,9 @@ From the report's "Open and unexplained" and "What I could not show without a ru
 - The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, the maintainer 2026-11-09). Macha is
   chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
+- **Dagda's own loop learns a new reference only at the collector's next run, up to 5 minutes later** (found
+  2026-11-16 by the repair benchmark's smoke test; `2026-11-16-repair-redesign.md`, "Stage 0, as answered"). Not
+  fixed; Macha's behaviour asked of its session.
 - Dagda's four-reader local reads come out in two clusters (about 344 MB/s twice in six runs, else 363-407), where
   Macha's sit at 379-388 bar one outlier; the off-CPU profile shows no wait of Dagda's own (harness plan, phase 2).
 - The pool's `get` stopping at the first backend's empty answer: Macha's, kept.
