@@ -501,3 +501,12 @@ reference returned (0.29 s), Dagda's b 2.71 s for 20. It is the first sight of t
 objects needed, the holder pushed 20 and the joiner pulled 2, and a sent 1.60 MB on the wire for 1.31 MB of
 objects. Macha's a sent 2.37 MB for the same objects, metadata for 20 files included. The counting filters and
 the nodes were checked gone from both Pis afterwards.
+
+### The baseline run (started 2026-11-16 18:55Z): node-b and node-d, not node-c
+
+node-c was held by another session until 23:05Z, so node b runs on **node-d** (free, the same kernel and
+NVMe, 4 GB, its WiFi at -58 dBm and 58 to 72 Mbit/s when looked at, better than node-c's). The binaries are
+node-b's builds at `7d12ca8`, today's repair before stages 1 and 2, copied to node-d. Both Pis claimed whole, a
+note on the board. The controller's smoke across the two first: Macha's b 0.60 s, Dagda's b 1.41 s for 20 x 64
+KiB (not figures); in Dagda's the holder pushed 20 and the joiner pulled 5 of the same 20, and a sent 1.73 MB
+for 1.31 MB of objects. Results: `build/harness/results/2026-11-16/repair-baseline/`.
