@@ -169,7 +169,8 @@ against the head and the sweep after the grace, on Dagda as on Macha.
    read whole may refer to anything" (:73-74). Test:
    `StoreRemove.ANodeWithNoInventoryPublishedKeepsItsCopy`. Severity: cosmetic for Macha's port
    (Macha does not call `Objects::remove`); a safety question for Lugh and Lir. **Ruled (Tom, 2026-11-16, after
-   Lugh and Lir answered): the node keeps the copy.** Not built yet.
+   Lugh and Lir answered): the node keeps the copy.** Built: `750cad3` the case (seen failing), `5f3c458` the
+   fix (`remove_here` treats a null inventory as an incomplete one).
 
 ## 4. Not mapped
 
