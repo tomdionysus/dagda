@@ -415,12 +415,15 @@ class MachaRepairNode final : public harness::RepairNode {
   std::map<std::string, double> counters() override {
     std::map<std::string, double> out;
     const auto repair = _service->repair_diagnostics();
-    out["copies_pushed"] = static_cast<double>(repair.copies_pushed);
-    out["copies_pulled"] = static_cast<double>(repair.copies_pulled);
+    // Macha at f0597a4 counts no copies pushed or pulled; the wire figures say what moved.
     out["repair_bytes"] = static_cast<double>(repair.bytes_transferred);
     out["push_examined"] = static_cast<double>(repair.push_examined);
     out["pull_examined"] = static_cast<double>(repair.pull_examined);
     out["passes_completed"] = static_cast<double>(repair.passes_completed);
+    out["gate_ran"] = static_cast<double>(repair.gate_ran);
+    out["gate_share"] = static_cast<double>(repair.gate_share);
+    out["gate_quiescent"] = static_cast<double>(repair.gate_quiescent);
+    out["gate_credit"] = static_cast<double>(repair.gate_credit);
     out["maintenance_wakeups"] = static_cast<double>(_service->maintenance_wakeups());
     return out;
   }
