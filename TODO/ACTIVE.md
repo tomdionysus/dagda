@@ -269,6 +269,9 @@ asking:
 
 ## Waiting on the maintainer
 
+- **The repair benchmark's link** (asked 2026-11-16): the two Pis reach each other only over WiFi, 0.78 MB/s
+  measured, so "two Pis and the real link" cannot carry the plan's 10 MB/s (harness plan, "The raw link"). One
+  Pi's loopback shaped, the WiFi as it is with smaller sizes, or the Pis wired.
 - **The slow disk** (harness workload 9) needs device-mapper set up on a Pi: not done without the maintainer's word.
 - **A null inventory letting an instant delete go** (gc-and-deletion gap 9): a design question, with Lugh and Lir.
 

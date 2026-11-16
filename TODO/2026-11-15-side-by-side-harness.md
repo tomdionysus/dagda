@@ -479,3 +479,14 @@ To say with the figures:
 - Not verified: what durability batch window production passes to Service (500 ms here, as the extract's tests
   and the harness's other Macha workloads); whether a 4096-byte file is one extent at f0597a4 (the driver throws
   if not).
+
+### The raw link between node-b and node-c (2026-11-16, measured before any shaping)
+
+Both Pis reach each other only over 2.4 GHz WiFi through the access point (`wlan0`; `eth0` down on
+both), with power save on. Ten seconds of one TCP stream node-b to node-c: **0.78 MB/s** (8.1 MB in 10.4 s).
+node-c's link at the time: -62 dBm, 14.4 / 19.5 Mbit/s; node-b's -46 dBm, 72 Mbit/s. Round trip: 53 ms average
+when idle (28 to 76, power save), 6.3 ms straight after traffic (1.5 to 8.6). So the link carries less than a
+tenth of the plan's 10 MB/s and its latency depends on whether it was just used: it cannot be shaped up to the
+plan's figures, and 1 GiB across it is over twenty minutes a run before repair's own pacing. **Put to the maintainer**; no
+measured run until he answers. Both harness halves and their libraries are on both Pis under `/root/harness`
+(node-b's builds at `7d12ca8`, copied), nothing claimed.
