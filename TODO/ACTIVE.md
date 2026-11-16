@@ -1,7 +1,7 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-16. `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (small hours)", with what
-left this file on 2026-11-16 archived after it. The plan for slices is the three-systems design,
+Last updated: 2026-11-16 (evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (evening)", with
+what left this file on 2026-11-16 archived after it. The plan for slices is the three-systems design,
 `TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
 
 ## Where it stands
@@ -47,11 +47,11 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
 
 ## Next (in order)
 
-1. **Repair, stage 0** (`2026-11-16-repair-redesign.md`, "Stages"): the repair benchmark as the harness's workload
-   7 for both stores, reviewed by the Macha session; the three checks (the double transfer, whether every owner
-   knows what is referenced, a multi-object message); a failing test for the credit path of the starvation. Then
-   its stages 1 to 4, each test-first, gated and measured against the one before. Stage 3 goes to the maintainer first if it
-   needs an offer to a peer; stage 4's shape is agreed with the Macha session first.
+1. **Repair** (`2026-11-16-repair-redesign.md`, "Stages"). First the baseline: `build/pi-repair-run.sh run` with
+   node-b and node-c both claimed whole and a note on the board (about three hours; the binaries on the Pis are
+   today's repair, `7d12ca8`), then the same with the tip's build, for what stages 1 and 2 changed. Then stage 3
+   (the offer, allowed by the maintainer) and stage 4 (the window, the call count gone), its shape agreed with the Macha
+   session first. Each test-first, gated, and measured against the one before.
 2. **The rest of harness phase 2**, both stores rerun on the new kernel: reads over a shaped link, CONTROL graphs,
    deletes and GC, disk pressure (dm-delay, not installed), cache; strace fsync counts on a separate rerun. The
    CONTROL, delete and cache workloads are not written, and the Macha session reviews each before it runs.

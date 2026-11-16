@@ -2903,6 +2903,34 @@ Later the same morning (gate `ab76b43`, node-c on its 16K kernel: **1117 ran / 1
 - **Fixed, failing first:** the survey's due() named a passed retry after a second failure (`ab76b43`).
 - **Found, waiting on the maintainer:** repair's pull starved by a sending push, in both stores (ACTIVE.md).
 
+## Handoff, 2026-11-16 (evening): repair redesigned, stages 1 and 2; the two-Pi benchmark built
+
+Branch `feature/macha-store-gaps`, nothing pushed. The maintainer ruled that repair is redesigned, not patched
+(`TODO/2026-11-16-repair-redesign.md`: his words, the design, the stages, what each check found); the offer is
+allowed; the benchmark runs on two Pis over the WiFi between them as it is. Gates on node-c, Dannan 0.8.0 prefix,
+GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+, 0 warnings in each:
+`09921be` 1120 ran / 1116 passed / 3 skipped / 1 failed (a new fixture case whose premise the run disproved,
+removed in `66a0b76`); `0d048e0` 1120 / 1117 / 3 / 0; `502cf57` 1123 / 1120 / 3 / 0; **`2a8d24b` 1125 ran / 1122
+passed / 3 skipped / 0 failed**. Every new case was seen failing on the code before it.
+
+- **The plan rationalised** (`877585c`): ACTIVE.md brought up to date, what was done or settled archived below.
+- **Stage 0's checks.** The credit path of the pull's starvation proven (`39fe114`). Who knows a reference: an
+  owner may not yet, in Macha and in Lir (payloads over 64 KiB); never in Lugh. No multi-object fetch or put
+  exists; `have_objects` is the offer's shape.
+- **A gap against Macha found and fixed** (`0d048e0`): Dagda's own loop read a provider registered after the node
+  started, or a new generation, only when the collector's rest ended (five minutes). Two cases.
+- **The fixture's cluster spans processes** (`09921be`): a kept CA, a given address, port and seeds.
+- **The benchmark** (harness workload 7): `tools/harness` has a repair node for both stores (Macha's a whole
+  Service, as its session required and then accepted), driven by `build/pi-repair-run.sh` from the Mac. Built on
+  node-b at `7d12ca8` and copied to node-c; smoke-tested on one Pi and across the two. The raw link is 0.78
+  MB/s WiFi. **The baseline is not measured**: it needs both Pis whole, and node-c is held until 23:05Z.
+- **Stage 1** (`502cf57`): the survey keeps, per peer, what it holds of what this node lacks.
+- **Stage 2** (`2a8d24b`): repair from one queue, fewest known copies first; both starvation paths have passing
+  cases; no ported case changed.
+
+Next: the baseline on today's repair (the binaries on the Pis), then the same on the tip; stage 3 (the offer);
+stage 4 (the window, the count gone), its shape to the Macha session first.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (the maintainer, 2026-11-16). The repair item was answered by the redesign
