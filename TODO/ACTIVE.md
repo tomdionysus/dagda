@@ -61,7 +61,7 @@ How work runs: no builds, tests or benches on the Mac; Linux gates on the shared
 measurement, node-c .170 and node-a .202 hold the Dannan 0.8.0 prefix and Macha's fixtures under `/root/dagda-080`),
 claimed on the board first, -j2, nice 19. No reruns without a named reason; ASan only for releases (on the Pis). TSan
 only to hunt one named bug, never as a gate or routine check (the maintainer, 2026-11-16): on node-b first, the one Pi
-where it runs (39-bit VA; CC=clang-19 CXX=clang++-19, Makefiles), else on the Mac; g++ 14's TSan fails on the others.
+where it runs (39-bit VA; CC=clang-19 CXX=clang++-19, Makefiles), else on the Mac; g++ 14's TSan fails on the others for now (the maintainer: all the cluster Pis will run it soon).
 
 ## Open
 
