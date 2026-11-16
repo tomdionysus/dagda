@@ -588,3 +588,6 @@ the benchmark's traffic slowed every session's ssh and rsync. The baseline's lin
 later run is compared only with the old binaries rerun in the same session, never with the numbers above. The
 page cache is dropped only on a Pi held whole (`NOCOLD=1` otherwise): the baseline's drops cost another
 session's build on node-b its cache.
+Done by 20:10Z: node-b (325 Mbit/s) and node-a (292 Mbit/s) are on 5 GHz, same addresses; node-c and node-d
+stay on 2.4 GHz WiFi(72 Mbit/s at best). A node-b-to-node-d run now crosses both bands; node-b to
+node-a is the pair with the fastest link, and node-a would need the harness binaries copied there.
