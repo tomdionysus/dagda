@@ -54,7 +54,9 @@ handling DHT storage AT LEAST AS WELL as Macha"), after the call-by-call map.
 6. Deletes and GC: a tree deleted, the collector under the garbage grace on a stepped clock, sightings, the CONTROL
    collection; nothing referenced removed (checked, not assumed).
 7. Repair: one node away, then back; the repair rate in MB/s at idle_bandwidth_fraction 0.5 (Macha measured about 3.6
-   to 6 MB/s on the live pair); repair while a viewer reads (paced, never stopped).
+   to 6 MB/s on the live pair); repair while a viewer reads (paced, never stopped). **Pulled first (Tom,
+   2026-11-16):** it is the benchmark of the repair redesign, with a node rejoining empty, small values, bytes sent
+   against bytes needed and round trips added (`2026-11-16-repair-redesign.md`, stage 0).
 8. Recovery: the time to ready with a large store (pack replay, ledger seeding, presence warm-up), clean and after a
    `kill -9`.
 9. Disk pressure: a slow device (`dm-delay` over a loop file, so no real disk is touched) and the pressure onset and
