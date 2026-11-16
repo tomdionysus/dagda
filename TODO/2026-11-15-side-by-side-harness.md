@@ -357,7 +357,10 @@ Findings:
    inside one 1 ms poll of ready and read -1, "not seen"); the store's build after ready (Macha) costs about 1 ms.
 2. **The workload does not yet isolate the store's recovery.** Ready barely moves from 8.2 GB to 1.2 GB at the same
    object count, and every reopen reads the same 99 MB: about 1.6 s is a fixed cost common to both, most likely the
-   program and its libraries read from the cold cache. Next, if wanted: warm the binaries after dropping the cache
-   (or time from main's first line), and a fill with ten times the objects, to see the stores' own part.
+   program and its libraries read from the cold cache. **Not pursued** (the Macha session, 2026-11-16: parity is what
+   Macha needed here; a synthetic ten-times fill would still sit far below the live nodes' millions of extents and
+   cost hours of silicon without a reason). Recovery at live scale is the real-state migration rehearsal's to show,
+   and that rehearsal is dropped for now (Tom, 2026-11-05, ACTIVE.md's Decisions): so nothing scheduled measures it.
+   If one shows recovery diverging, it is isolated then, the binaries warmed after the cache drop.
 3. The fills: the large ones vary run to run on both (Macha 135-177 s, Dagda 146-184 s); the small one is Dagda's,
    87 s against 114 s, in every round.
