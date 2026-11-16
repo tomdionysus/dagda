@@ -198,6 +198,60 @@ TEST(NodeMaintenance, TheNodesThreadRunsThePassesOnItsOwn) {
   a.stop();
 }
 
+// A new reference reaches the inventory in the pass that sees the owner's generation
+// move, not when the collector's rest ends: the survey and repair work from it, so a
+// copy a write could not make would otherwise wait out the rest. Macha's pass runs its
+// inventory stage whenever repair is due and rebuilds on a generation change
+// (maintenance.cpp:611-627 at f0597a4). Here the collector rests an hour.
+TEST(NodeMaintenance, ANewGenerationIsReadWhileTheCollectorRests) {
+  test::TestProvider owner;
+  refer_to_nothing(owner);
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  options.maintenance.interval = 20ms;
+  options.maintenance.gc_interval = 1h;
+  options.maintenance.collector.retry_window = 0ms;
+  auto& a = cluster.add("a", options);
+  a.start();
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  // The sweep settles and the collector rests: repair's turns go by with no GC pass.
+  uint64_t passes = 0;
+  uint64_t turns_then = 0;
+  ASSERT_TRUE(test::wait_until(
+      [&] {
+        const auto now = figure(a, "dagda.gc.passes");
+        const auto gates = a.repair().gates();
+        const auto turns = gates.ran + gates.share + gates.quiescent + gates.credit;
+        if (now != passes) {
+          passes = now;
+          turns_then = turns;
+          return false;
+        }
+        return passes >= 2 && turns >= turns_then + 10;
+      },
+      30s));
+  ASSERT_NE(a.ledger().inventory(), nullptr);
+  ASSERT_EQ(a.ledger().inventory()->generation(), 1u);
+
+  // The owner's state moves on: it refers to one object more. Re-registered, so the
+  // provider is never changed under a pass.
+  a.dagda_node().unregister_reachability(domain::domain_v1);
+  owner.answer.data = {store::object_id(test::numbered(30))};
+  owner.current_generation = 2;
+  owner.known = 2;
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  EXPECT_TRUE(test::wait_until(
+      [&] {
+        const auto inventory = a.ledger().inventory();
+        return inventory && inventory->generation() == 2;
+      },
+      10s))
+      << "gc passes " << figure(a, "dagda.gc.passes");
+  a.dagda_node().unregister_reachability(domain::domain_v1);
+  a.stop();
+}
+
 // A stop during the owner's inventory walk ends it, rather than waiting for the walk
 // (Macha 0.93.4). The walk here never finishes on its own, within the bound.
 TEST(NodeMaintenance, AStopEndsTheOwnersInventoryWalk) {
