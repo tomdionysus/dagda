@@ -116,10 +116,20 @@ pull alone converges in all three once the owner learns. A holder that initiates
 it can act while an owner's build is stuck; on the degraded cluster (single-copy writes accepted, the maintainer 2026-09-28)
 the holder is often the only copy in exactly that window. So a holder must be able to initiate, and design 3 takes
 its second form. **The maintainer, 2026-11-16: the offer is allowed**, as a handshake at the moment of transfer; the diff
-stays the only way repair finds what to do. Lugh and Lir are still to be asked.
+stays the only way repair finds what to do.
 
 The second starvation path is in Macha's develop too (its `distributed_store.cpp:2939`, the same guard), untested
 there as here.
+
+**Check B, for Lir (the Lir session, 2026-11-16, from its approved step 5 design; Lir writes nothing to Dagda
+yet): the same window, for payloads over 64 KiB only.** Messages and retained values are inline in log, queue and
+register-map entries and need no objects. A payload over 64 KiB (up to 1 MiB by default) is written as an object
+at Replicated and claimed, then the log entry naming it is appended: so the object is on its replicas before the
+reference reaches anyone, and its holders are placed apart from the log's replicas, so a holder may learn of the
+reference only through the claim. A publisher that dies between the write and the append leaves an object held
+and claimed but never referenced, which repair leaves alone. Sizes for the benchmark, none measured: entries 0.3
+to 1.5 KiB, objects 64 KiB to 1 MiB and rare, about 10,000 publishes a second across a cluster (the maintainer, 2026-11-04).
+Lugh is still to answer.
 
 **Check C: there is no multi-object fetch or put.** `get_object` (516) and `put_object` (517) carry one object
 each (`dagda/store/messages.h:39-41`), so small values need one added at stage 4. `have_objects` (552) already
