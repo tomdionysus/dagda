@@ -332,6 +332,7 @@ class MachaRepairNode final : public harness::RepairNode {
  public:
   MachaRepairNode(const std::filesystem::path& dir, const std::string& name, const std::string& host, uint16_t port, std::vector<Endpoint> seeds) {
     const auto key = dir / "cluster.key";
+    const bool joining = !seeds.empty();
     if (!std::filesystem::exists(key)) throw std::runtime_error("no cluster key at " + key.string() + ": the script writes one and copies it to both machines");
     auto config = config_for(dir / name, key, port, std::move(seeds));
     config.listen_host = host;
@@ -347,10 +348,15 @@ class MachaRepairNode final : public harness::RepairNode {
     _service = std::make_unique<Service>(config, load_cluster_keys(key), 500ms);
     _service->start();
     auto& files = _service->filesystem();
-    try {
-      files.mkdir(directory, 0755, getuid(), getgid());
-    } catch (const FsError& error) {
-      if (error.code() != EEXIST) throw;
+    // Only the node that starts the cluster makes the directory: a joining node's
+    // metadata is not writable until it has met its bootstrap peer, and it gets the
+    // directory with everything else (a baseline run was lost to this, 2026-11-16).
+    if (!joining) {
+      try {
+        files.mkdir(directory, 0755, getuid(), getgid());
+      } catch (const FsError& error) {
+        if (error.code() != EEXIST) throw;
+      }
     }
   }
   ~MachaRepairNode() override { _service->stop(); }

@@ -33,9 +33,10 @@ what left this file on 2026-11-16 archived after it. The plan for slices is the 
   make, fewest copies first, a window of transfers against the byte credit, the 16-call count gone. It replaces
   both patches for the pull starved by a sending push. Stages 1 and 2 are built and gated (the survey keeps who
   holds what; one queue by copies left, which ends both starvation paths); the benchmark's driver is built for
-  both stores and smoke-tested across node-b and node-c; **the baseline has not been measured** (it needs both
-  Pis whole; its binaries, at `7d12ca8`, are today's repair). Stage 3 (the offer) and stage 4 (the window, the
-  count gone) are not started.
+  both stores. **The baseline is measured** (node-b and node-d over WiFi, 2026-11-16; harness plan): today's
+  repair in Dagda is at least as fast as Macha's in every scenario, and both stores send each object about one
+  and a half to two times, the holder pushing while the joiner pulls. The tip (stages 1 and 2) is not measured
+  yet. Stage 3 (the offer, designed) and stage 4 (the window, the count gone) are not built.
 - **Acknowledgement levels are the stack's standard** (the maintainer, 2026-11-15): ephemeral, persisted, decided (Dannan's
   agreement, 0.9.0), replicated; the setting is `ack_level`. Done on the branch and in the stack document. Dagda's
   durable stays beside them until the maintainer says otherwise.
@@ -47,9 +48,9 @@ what left this file on 2026-11-16 archived after it. The plan for slices is the 
 
 ## Next (in order)
 
-1. **Repair** (`2026-11-16-repair-redesign.md`, "Stages"). First the baseline: `build/pi-repair-run.sh run` with
-   node-b and node-c both claimed whole and a note on the board (about three hours; the binaries on the Pis are
-   today's repair, `7d12ca8`), then the same with the tip's build, for what stages 1 and 2 changed. Then stage 3
+1. **Repair** (`2026-11-16-repair-redesign.md`, "Stages"). The baseline is in. Next the same run on the tip's
+   build, for what stages 1 and 2 changed (`build/pi-repair-run.sh run`, about an hour, two cores on each of two
+   Pis, a note on the board; the claim honest about cores and time). Then stage 3
    (the offer, allowed by the maintainer) and stage 4 (the window, the call count gone), its shape agreed with the Macha
    session first. Each test-first, gated, and measured against the one before.
 2. **The rest of harness phase 2**, both stores rerun on the new kernel: reads over a shaped link, CONTROL graphs,

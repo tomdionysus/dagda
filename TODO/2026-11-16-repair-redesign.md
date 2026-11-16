@@ -90,6 +90,11 @@ against the stage before, on the same Pi and kernel, both stores rerun where Mac
   interface): a note on the board first, both claimed whole, the shaping removed in the script's trap. So the
   harness must run a cluster across two processes on two machines, which it does not yet.
 - Check A: how often the same copy is pushed and pulled (from the benchmark's bytes).
+  **Measured (the baseline, 2026-11-16; harness plan, "Workload 7, the baseline"): it is the normal case, in
+  both stores.** With nobody pacing the holder it sends 1.5 to 2.05 times the bytes the joiner needed; Dagda
+  made 43 transfers for 26 objects. Under a viewer, which holds the holder's push to its share, each object
+  moves once and the rejoin is no slower: about 40% of the link's time in an unpaced rejoin goes on copies
+  nobody needed. Today's repair in Dagda is otherwise at least as fast as Macha's in every scenario.
 - Check B: whether every owner knows an object is referenced, for Macha's domain and for Lugh's and Lir's (read
   the inventory's source, the owner's ReachabilityProvider, and ask the three sessions).
 - Check C: whether a multi-object fetch or put exists, or must be added.
