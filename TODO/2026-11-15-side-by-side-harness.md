@@ -487,6 +487,8 @@ both), with power save on. Ten seconds of one TCP stream node-b to node-c: **0.7
 node-c's link at the time: -62 dBm, 14.4 / 19.5 Mbit/s; node-b's -46 dBm, 72 Mbit/s. Round trip: 53 ms average
 when idle (28 to 76, power save), 6.3 ms straight after traffic (1.5 to 8.6). So the link carries less than a
 tenth of the plan's 10 MB/s and its latency depends on whether it was just used: it cannot be shaped up to the
-plan's figures, and 1 GiB across it is over twenty minutes a run before repair's own pacing. **Put to the maintainer**; no
-measured run until he answers. Both harness halves and their libraries are on both Pis under `/root/harness`
+plan's figures, and 1 GiB across it is over twenty minutes a run before repair's own pacing. **The maintainer, 2026-11-16:
+two Pis, the WiFi as it is**, unshaped: so no netem, the sizes a tenth of the plan's (26 x 4 MiB, 410 x 64 KiB),
+the raw rate and round trip recorded before each round, and what each Pi sends the other counted by a tc filter
+that only passes. The link's variance is in every figure: small differences between stages will not show. Both harness halves and their libraries are on both Pis under `/root/harness`
 (node-b's builds at `7d12ca8`, copied), nothing claimed.
