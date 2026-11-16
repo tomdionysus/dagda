@@ -458,7 +458,7 @@ gate prefix is 0.8.0: the benchmark's binaries are node-b's, copied to node-c, s
 Both Pis are on WiFi (`wlan0`; `eth0` down): the "real link" is wireless, so its raw round trip and rate are
 measured and recorded before it is shaped, and the shaped rate must sit under what it can carry.
 
-The controller is `build/pi-repair-run.sh` (smoke, link, run, unshape), run from the Mac over ssh.
+The controller is `tools/harness/pi-repair-run.sh` (smoke, link, run, unshape), run from the Mac over ssh.
 
 ### The Macha session's review of the driver (2026-11-16, at `274053c`, read not run)
 
