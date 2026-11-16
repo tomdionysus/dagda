@@ -562,20 +562,31 @@ inline void recovery_fill(Store& store, size_t large, size_t small, const std::f
 struct Reopened {
   std::optional<Clock::duration> data_open;
   std::optional<Clock::duration> ready;
+  // When the store a read goes through exists: built lazily after ready on Macha's
+  // side, as its NodeServices builds it; inside the node, before ready, on Dagda's.
+  std::optional<Clock::duration> store_built;
   std::optional<Clock::duration> first_read;
   bool read_ok = false;
   double cpu_to_ready = 0;
   uint64_t disk_read_to_ready = 0;
+  // Why the reopen failed, when it did: a store that never comes ready is a failure
+  // with its reason, never a missing figure (the Macha session's review).
+  std::string failure;
 };
 
 inline void report_reopen(const Reopened& reopened, const Report& report) {
   const auto ms = [](const std::optional<Clock::duration>& at) { return at ? std::chrono::duration<double, std::milli>(*at).count() : -1.0; };
   report.figure("data_open_ms", ms(reopened.data_open), "ms");
   report.figure("ready_ms", ms(reopened.ready), "ms");
+  report.figure("store_built_ms", ms(reopened.store_built), "ms");
   report.figure("first_read_ms", ms(reopened.first_read), "ms");
   report.figure("cpu_to_ready", reopened.cpu_to_ready, "s");
   report.figure("disk_read_to_ready", static_cast<double>(reopened.disk_read_to_ready), "B");
-  report.figure("failed", reopened.ready && reopened.read_ok ? 0 : 1, "bool");
+  auto failure = reopened.failure;
+  if (failure.empty() && !reopened.ready) failure = "never ready";
+  if (failure.empty() && !reopened.read_ok) failure = "the first read brought nothing";
+  report.figure("failed", failure.empty() ? 0 : 1, "bool");
+  if (!failure.empty()) std::fprintf(stderr, "reopen failed: %s\n", failure.c_str());
 }
 
 // 4. A viewer under load: foreground reads of objects already held, timed, while a

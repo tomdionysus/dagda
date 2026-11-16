@@ -198,16 +198,22 @@ void recovery_open(const std::filesystem::path& kept, const harness::Report& rep
   });
   try {
     a.start();
-  } catch (...) {
+  } catch (const std::exception& error) {
     stop = true;
     watch.join();
-    throw;
+    out.failure = std::string("the node refused to open: ") + error.what();
+    harness::report_reopen(out, report);
+    return;
   }
   const bool ready = a.context().readiness().wait_complete(10min);
   stop = true;
   watch.join();
-  if (ready) {
+  if (!ready) {
+    out.failure = a.context().readiness().failed() ? "recovery failed: " + a.context().readiness().error() : "not ready within 10 minutes";
+  } else {
     out.ready = std::chrono::milliseconds(a.context().readiness().ready_unix_ms() - wall_started);
+    // Dagda builds its store inside the node, before ready.
+    out.store_built = out.ready;
     const auto at_ready = harness::process_figures();
     out.cpu_to_ready = at_ready.cpu_seconds - before.cpu_seconds;
     out.disk_read_to_ready = harness::io_field("read_bytes") - read_before;
