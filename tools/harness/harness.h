@@ -162,6 +162,10 @@ class Latencies {
     std::lock_guard lock(_mutex);
     return _us.size();
   }
+  void clear() {
+    std::lock_guard lock(_mutex);
+    _us.clear();
+  }
 
  private:
   mutable std::mutex _mutex;
@@ -671,6 +675,221 @@ inline int run(Store& store, const std::string& workload) {
     return 2;
   }
   return 0;
+}
+
+// ---- 7. Repair, across two machines (the harness plan, "Workload 7") ------------
+
+// One object of a repair run: its seed (its bytes are pattern(size, seed) on both
+// stores), its size and the store's own id for it.
+struct Listed {
+  uint64_t seed = 0;
+  uint64_t size = 0;
+  Id id;
+};
+
+// One node of a cluster whose other node runs in another process on another machine,
+// running as a deployed node does: its own maintenance, the survey and repair working
+// towards what its state refers to. On Macha's side that is a whole Service, each object
+// a file of one extent written through its filesystem, since Macha's repair lives in its
+// maintenance pass and takes what is referenced from the node's own metadata (the Macha
+// session's review, 2026-11-16); on Dagda's it is a node told what is referenced.
+class RepairNode {
+ public:
+  virtual ~RepairNode() = default;
+  virtual std::string describe() const = 0;
+  // Writes the object as a loader would and says the store's id for it; nothing when it
+  // landed nowhere.
+  virtual std::optional<Id> put(uint64_t seed, std::span<const uint8_t> data) = 0;
+  // Whether this node's own store holds it.
+  virtual bool holds(const Id& id) = 0;
+  // A foreground read, as a viewer's: noted as foreground activity by the store's pacing.
+  virtual std::optional<Bytes> read(const Listed& object, std::chrono::milliseconds deadline) = 0;
+  // Returns once this node's state refers to every one of `objects`: at once where the
+  // node is told (Dagda), when its own metadata names them all where it learns (Macha).
+  virtual void reference(const std::vector<Listed>& objects) = 0;
+  // The other nodes this one sees active.
+  virtual size_t peers() = 0;
+  // The store's own repair counters so far, by name; every one only grows.
+  virtual std::map<std::string, double> counters() = 0;
+};
+
+// The objects a repair run is about, one a line as id in hex, size and seed: written by
+// the node that fills, copied by the script to the other.
+inline std::vector<Listed> read_listed(const std::filesystem::path& path) {
+  std::vector<Listed> out;
+  std::ifstream in(path);
+  std::string hex;
+  uint64_t size = 0;
+  uint64_t seed = 0;
+  while (in >> hex >> size >> seed) {
+    if (hex.size() != 64) throw std::runtime_error("a line of " + path.string() + " is not an id");
+    Listed one;
+    for (size_t i = 0; i < 32; ++i) one.id.bytes[i] = static_cast<uint8_t>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+    one.size = size;
+    one.seed = seed;
+    out.push_back(one);
+  }
+  return out;
+}
+
+inline void append_listed(const std::filesystem::path& path, const std::vector<Listed>& listed) {
+  std::ofstream out(path, std::ios::app);
+  char hex[3];
+  for (const auto& one : listed) {
+    for (const auto byte : one.id.bytes) {
+      std::snprintf(hex, sizeof(hex), "%02x", byte);
+      out << hex;
+    }
+    out << ' ' << one.size << ' ' << one.seed << '\n';
+  }
+}
+
+// The node does what the script tells it, a line at a time from `<dir>/cmd` (written
+// whole and renamed into place; several lines run in order), and answers each with a
+// line in `<dir>/log`: "done <line>" or "failed <line>: <why>". The commands:
+//   fill <first> <count> <size>   puts `count` objects of `size` bytes, seeds from `first`,
+//                                 and appends them to <dir>/ids
+//   reference                     returns once the node refers to everything in <dir>/ids,
+//                                 and reports how long that took
+//   peer                          waits until another node is active
+//   measure <label>               waits until this node holds everything in <dir>/ids,
+//                                 and reports the span's figures as <label>.*
+//   figures <label>               reports the counters and process figures now
+//   viewer-start                  a foreground read of a random listed object each second
+//   viewer-stop <label>           ends it and reports its latencies as <label>.*
+//   stop                          ends the process
+inline int repair_node(RepairNode& node, const std::filesystem::path& dir, const Report& report) {
+  const auto ids_path = dir / "ids";
+  const auto answer = [&](const std::string& line) { std::ofstream(dir / "log", std::ios::app) << line << '\n'; };
+  const auto now_figures = [&](const std::string& label, const std::map<std::string, double>& since, const ProcessFigures& before) {
+    for (const auto& [name, value] : node.counters()) {
+      const auto found = since.find(name);
+      report.figure(label + "." + name, value - (found == since.end() ? 0.0 : found->second), "count");
+    }
+    const auto after = process_figures();
+    report.figure(label + ".cpu", after.cpu_seconds - before.cpu_seconds, "s");
+    report.figure(label + ".rss_hwm", static_cast<double>(after.hwm_bytes), "B");
+    report.figure(label + ".disk_write", static_cast<double>(after.write_bytes - before.write_bytes), "B");
+  };
+  std::atomic<bool> viewing{false};
+  std::thread viewer;
+  Latencies views;
+  std::atomic<size_t> view_misses{0};
+  const auto stop_viewer = [&] {
+    viewing = false;
+    if (viewer.joinable()) viewer.join();
+  };
+  const ProcessFigures at_start = process_figures();
+  while (true) {
+    std::vector<std::string> lines;
+    {
+      std::ifstream in(dir / "cmd");
+      std::string line;
+      while (std::getline(in, line))
+        if (!line.empty()) lines.push_back(line);
+    }
+    if (lines.empty()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+    std::filesystem::remove(dir / "cmd");
+    for (const auto& line : lines) {
+      std::istringstream words(line);
+      std::string command;
+      words >> command;
+      try {
+        if (command == "fill") {
+          uint64_t first = 0;
+          size_t count = 0;
+          size_t size = 0;
+          words >> first >> count >> size;
+          std::vector<Listed> listed;
+          for (size_t i = 0; i < count; ++i) {
+            const auto data = pattern(size, first + i);
+            const auto id = node.put(first + i, data);
+            if (!id) throw std::runtime_error("a put landed nowhere");
+            listed.push_back({first + i, size, *id});
+          }
+          append_listed(ids_path, listed);
+        } else if (command == "reference") {
+          const auto started = Clock::now();
+          node.reference(read_listed(ids_path));
+          report.figure("reference.seconds", std::chrono::duration<double>(Clock::now() - started).count(), "s");
+        } else if (command == "peer") {
+          const auto until = Clock::now() + std::chrono::minutes(10);
+          while (node.peers() == 0) {
+            if (Clock::now() > until) throw std::runtime_error("no other node became active");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          }
+        } else if (command == "measure") {
+          std::string label;
+          words >> label;
+          const auto listed = read_listed(ids_path);
+          const auto since = node.counters();
+          const auto before = process_figures();
+          const auto started = Clock::now();
+          uint64_t missing_bytes = 0;
+          std::vector<Listed> missing;
+          for (const auto& one : listed)
+            if (!node.holds(one.id)) {
+              missing.push_back(one);
+              missing_bytes += one.size;
+            }
+          const size_t needed = missing.size();
+          const auto until = started + std::chrono::hours(2);
+          while (!missing.empty()) {
+            if (Clock::now() > until) throw std::runtime_error(std::to_string(missing.size()) + " objects never arrived");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::erase_if(missing, [&](const Listed& one) { return node.holds(one.id); });
+          }
+          const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+          report.figure(label + ".seconds", seconds, "s");
+          report.figure(label + ".objects_needed", static_cast<double>(needed), "objects");
+          report.figure(label + ".bytes_needed", static_cast<double>(missing_bytes), "B");
+          report.figure(label + ".throughput", seconds > 0 ? static_cast<double>(missing_bytes) / seconds / 1e6 : 0.0, "MB/s");
+          now_figures(label, since, before);
+        } else if (command == "figures") {
+          std::string label;
+          words >> label;
+          now_figures(label, {}, at_start);
+        } else if (command == "viewer-start") {
+          stop_viewer();
+          const auto listed = read_listed(ids_path);
+          if (listed.empty()) throw std::runtime_error("nothing is listed to view");
+          views.clear();
+          view_misses = 0;
+          viewing = true;
+          viewer = std::thread([&, listed] {
+            uint64_t x = 88172645463325252ULL;
+            while (viewing.load()) {
+              x ^= x << 13;
+              x ^= x >> 7;
+              x ^= x << 17;
+              const auto started = Clock::now();
+              if (!node.read(listed[x % listed.size()], std::chrono::seconds(30))) ++view_misses;
+              views.add(Clock::now() - started);
+              for (int tenth = 0; tenth < 10 && viewing.load(); ++tenth) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+          });
+        } else if (command == "viewer-stop") {
+          std::string label;
+          words >> label;
+          stop_viewer();
+          report.latencies(label, views);
+          report.figure(label + ".misses", static_cast<double>(view_misses.load()), "reads");
+        } else if (command == "stop") {
+          stop_viewer();
+          answer("done " + line);
+          return 0;
+        } else {
+          throw std::runtime_error("unknown command");
+        }
+        answer("done " + line);
+      } catch (const std::exception& error) {
+        answer("failed " + line + ": " + error.what());
+      }
+    }
+  }
 }
 
 }  // namespace harness

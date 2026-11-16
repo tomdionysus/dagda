@@ -14,9 +14,9 @@ left this file on 2026-11-16 archived after it. The plan for slices is the three
   teardown hang in Dagda's tests would look there first). **Last full gate: `ab76b43`** on node-c, Dannan 0.8.0
   prefix, GCC Release, warnings as errors, Macha's fixtures: 1117 ran, 1114 passed, 3 skipped, 0 failed. Every
   commit since is notes only.
-- **Macha's port** (the Macha session) builds against this branch: R2 (writes and barriers on tickets, all writes at
-  persisted), R3 (metadata and control store) in progress, R4 to R6 after. Macha is given each gated commit, and
-  retires its own cases against named `dagda_tests` cases, mapped one by one.
+- **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
+  on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
+  commit, and retires its own cases against named `dagda_tests` cases, mapped one by one.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`, node-b).
   Measured: publications and the viewer at parity or better; small files about 6% over Macha's CPU (was 11%), all
   else equal; local reads better with one reader and no steady gap with four; recovery at parity within 2%, clean

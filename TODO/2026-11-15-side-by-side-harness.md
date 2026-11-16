@@ -374,7 +374,7 @@ Findings:
 4K-page, 48-bit-VA kernel (6.18.62-v8-va48+). Every figure in this file was taken on node-b's 6.18.50 kernel: figures
 taken later are not like for like with these, and a comparison across the change runs both stores again.
 
-## Workload 7: repair, across two Pis (designed 2026-11-16, not yet reviewed or built)
+## Workload 7: repair, across two Pis (designed 2026-11-16; the design reviewed by the Macha session, the driver not yet)
 
 The benchmark of the repair redesign (`2026-11-16-repair-redesign.md`, stage 0): today's repair in both stores first,
 then each of Dagda's stages against the one before. The maintainer, 2026-11-16: two Pis and the real link between them.
@@ -416,3 +416,33 @@ workload 3; node-c's disk if it is not NVMe as node-b's is (checked before the f
 **Needs, before it runs:** Dagda's fixture `Cluster` over a given address, port, seeds and a certificate authority
 both processes share (it makes its own in each process now); Macha's side driving its maintenance's repair stage on
 the harness's node (asked of the Macha session); the Macha session's review of the driver.
+
+### The Macha session's review of the design (2026-11-16), and what changed
+
+Read from Macha at f0597a4 (identical in src, tests and CMake to the live 0.94.2) and both live nodes' configs.
+
+- **Macha's side is a whole Service in each process**, not the harness's bare node. Repair is not a store call:
+  the gate, credit, share, survey and both lists live in `Maintenance::run` (`service/maintenance.cpp:560-857`),
+  which takes thirteen collaborators, and what is referenced comes only from the node's own metadata head. So
+  each object is a file of one extent written through `service.filesystem()`, as the extract's `write_file`
+  does; nothing hands a Macha node a referenced set. Driving `repair_step` with built lists would measure the
+  transfer loop, not Macha's repair, and its figures would not be accepted as Macha's.
+- **The clock.** Macha's b learns what is referenced only when a's metadata reaches it. The driver's `reference`
+  returns when the node's state names every object (at once on Dagda's side, when its head has every file on
+  Macha's) and reports that time apart; `measure` starts after it. Macha's inventory build over the files is
+  inside the measured window.
+- **The viewer** reads through the filesystem on Macha's side, which is what its pacing notes as foreground; b
+  sees a's viewer through telemetry for up to 30 s after it stops.
+- **The live nodes' values, set on both sides:** repair's idle_bandwidth_fraction 0.5 and every other
+  maintenance value default (interval 1 s, foreground quiet 2 s, 95:5, cpu_target 0.10, 32 MiB/s initial
+  bandwidth); replicas 2, write_copies 1, metadata_write_copies 1, 4 MiB extents; heartbeat 5 s, dead_after 30 s,
+  connect 2.5 s, telemetry 10 s, and so a peer's viewer window of 30 s (Dagda's `peer_window` set to it). The
+  16-call budget is a constant in Macha's pass.
+- **Said with every figure:** Macha's CPU and RSS are a whole node's (metadata and catalogue convergence, claim
+  walks and GC gates each pass) against Dagda's store node's; 4096 small objects are 4096 namespace entries on
+  Macha's side; the transport differs.
+- **Not checked by either session:** whether repair's own puts wake Macha's pass at once; how 64 KiB objects pack
+  at the live packing values (the harness sets 1 MiB into 64 MiB on both); whether a's file writes proceed in
+  scenario 2 while b is away.
+- The one key is written once by the script and copied to both Pis; a listens and advertises on its own address
+  with no bootstrap, b bootstraps from a.
