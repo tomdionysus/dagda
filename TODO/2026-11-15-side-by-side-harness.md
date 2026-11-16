@@ -359,8 +359,11 @@ Findings:
    object count, and every reopen reads the same 99 MB: about 1.6 s is a fixed cost common to both, most likely the
    program and its libraries read from the cold cache. **Not pursued** (the Macha session, 2026-11-16: parity is what
    Macha needed here; a synthetic ten-times fill would still sit far below the live nodes' millions of extents and
-   cost hours of silicon without a reason). Recovery at live scale is the real-state migration rehearsal's to show,
-   and that rehearsal is dropped for now (Tom, 2026-11-05, ACTIVE.md's Decisions): so nothing scheduled measures it.
-   If one shows recovery diverging, it is isolated then, the binaries warmed after the cache drop.
+   cost hours of silicon without a reason). Recovery at live scale is the real-state migration rehearsal's to show:
+   dropped for now on 2026-11-05, but Tom had one run on 2026-11-12 (COMPLETED.md) and made it a gate before the flag
+   day on 2026-11-14 ("Macha's suites on Dagda; the side-by-side harness on the Pis; the migration rehearsal on copies
+   of real state; reliability under crash, restart and partition; then the port against the live baselines", Macha's
+   `TODO/2026-11-14-port-rewrites.md`). If it shows recovery diverging, it is isolated then, the binaries warmed after
+   the cache drop.
 3. The fills: the large ones vary run to run on both (Macha 135-177 s, Dagda 146-184 s); the small one is Dagda's,
    87 s against 114 s, in every round.

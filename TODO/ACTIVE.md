@@ -96,7 +96,9 @@ supersede them.
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
 - The real migration on a second copy, the there-and-back and the inverbeg rehearsal are dropped for now: "No drop
-  that, I'll decide later." Nothing in the plan may wait on them.
+  that, I'll decide later." Nothing in the plan may wait on them. **Decided later:** Tom had a rehearsal run on a copy
+  of macnessa's state on 2026-11-12 (COMPLETED.md), and on 2026-11-14 made "the migration rehearsal on copies of real
+  state" one of the gates before the flag day (Macha's `TODO/2026-11-14-port-rewrites.md`, "The gates").
 - Old-code removal in Macha comes first, "right now, before anything else": found as a tree, `mutate()` and the
   migration tool out, genesis no longer decoded inline, inline encoders and decoders out, legacy authority out.
   Then 0.92.6 (the four exceptions, the `followed` table fix, predicates retired), then baselines, then Dagda's work
