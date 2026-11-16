@@ -121,6 +121,11 @@ stays the only way repair finds what to do. Lugh and Lir are still to be asked.
 The second starvation path is in Macha's develop too (its `distributed_store.cpp:2939`, the same guard), untested
 there as here.
 
+**Check C: there is no multi-object fetch or put.** `get_object` (516) and `put_object` (517) carry one object
+each (`dagda/store/messages.h:39-41`), so small values need one added at stage 4. `have_objects` (552) already
+asks a peer about many ids in one message and is answered per id: it is the offer's shape, though it answers only
+"held", not "being fetched" or "no room", so stage 3 extends it or adds a sibling.
+
 ## Not decided
 
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue. It
