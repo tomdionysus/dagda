@@ -308,3 +308,7 @@ Findings:
    something Macha's do not. Not yet known what; next, an off-CPU profile of the four-reader span on both, then the
    fix test-first. Candidates from reading, unproven: the device reserve's slots or DATA admission on a local read, the
    cache's insertion on the read path.
+
+**The kernel changed after these runs.** Every figure above was taken on the Pis' 16K-page kernel; at 2026-11-16 00:18Z
+the build Pis moved to a 4K-page kernel (for TSan). Later figures are not like for like with these: any comparison
+across the change runs both stores again on the new kernel, side by side.
