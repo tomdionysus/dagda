@@ -2922,14 +2922,21 @@ passed / 3 skipped / 0 failed**. Every new case was seen failing on the code bef
 - **The fixture's cluster spans processes** (`09921be`): a kept CA, a given address, port and seeds.
 - **The benchmark** (harness workload 7): `tools/harness` has a repair node for both stores (Macha's a whole
   Service, as its session required and then accepted), driven by `build/pi-repair-run.sh` from the Mac. Built on
-  jupiter at `7d12ca8` and copied to saturn; smoke-tested on one Pi and across the two. The raw link is 0.78
-  MB/s WiFi. **The baseline is not measured**: it needs both Pis whole, and saturn is held until 23:05Z.
+  jupiter at `7d12ca8` and copied to saturn and uranus; smoke-tested on one Pi and across two.
+- **The baseline measured** (jupiter and uranus, 2.4 GHz WiFi at about 2.9 MB/s, 18:53 to 19:54Z; harness plan):
+  Dagda's repair today at least as fast as Macha's in every scenario (large rejoin 78.4 s against 81.3 s, small
+  25.8 s against 38.9 s); both stores send each object 1.5 to 2.05 times, the holder pushing while the joiner
+  pulls; on small objects the 16-call count sets the rate. One Macha run lost to the driver, fixed (`250ac68`).
+- **The cluster, for the record:** I held jupiter and uranus whole for a run bound by the link, and dropped the
+  page cache under another session's build; corrected the same hour on Tom's word (claim what the job uses; no
+  cache drop on a shared Pi). jupiter and neptune then moved to 5 GHz, so tonight's times compare with nothing
+  later.
 - **Stage 1** (`502cf57`): the survey keeps, per peer, what it holds of what this node lacks.
 - **Stage 2** (`2a8d24b`): repair from one queue, fewest known copies first; both starvation paths have passing
   cases; no ported case changed.
 
-Next: the baseline on today's repair (the binaries on the Pis), then the same on the tip; stage 3 (the offer);
-stage 4 (the window, the count gone), its shape to the Macha session first.
+Next: stage 3 (the offer), designed and not built, then old against new measured in one session; stage 4 (the
+window, the count gone), its shape to the Macha session first. Nothing running, no Pi claimed.
 
 ## Archived from ACTIVE.md, 2026-11-16
 

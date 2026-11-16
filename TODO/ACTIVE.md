@@ -1,7 +1,7 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-16 (evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (evening)", with
-what left this file on 2026-11-16 archived after it. The plan for slices is the three-systems design,
+Last updated: 2026-11-16 (late evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-16
+(evening)", with what left this file on 2026-11-16 archived after it. Nothing is running and no Pi is claimed. The plan for slices is the three-systems design,
 `TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
 
 ## Where it stands
@@ -11,32 +11,28 @@ what left this file on 2026-11-16 archived after it. The plan for slices is the 
   locally only.
 - **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI, so no bump.
   0.8.5 fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
-  teardown hang in Dagda's tests would look there first). Full gates: `ab76b43` on saturn, Dannan 0.8.0
-  prefix, GCC Release, warnings as errors, Macha's fixtures: 1117 ran, 1114 passed, 3 skipped, 0 failed. Then
-  `09921be` (the fixture's cluster across processes) on saturn, the va48 kernel: 1120 ran, 1116 passed, 3 skipped,
-  1 failed, the one a new fixture case whose premise the run disproved (two clusters with a CA each do join, on
-  the cluster key), removed in `66a0b76`; the harness's repair workload is compiled and smoke-tested there, not
-  gated by the suite. Then `0d048e0` (the loop reads a new reference at once, a gap against Macha found by that
-  smoke test): 1120 ran, 1117 passed, 3 skipped, 0 failed. `502cf57` (repair redesign stage 1, the survey keeps who holds
-  what): 1123 ran, 1120 passed, 3 skipped, 0 failed. **Last full gate: `2a8d24b`** (stage 2, repair from one
-  queue, fewest copies first) on saturn: 1125 ran, 1122 passed, 3 skipped, 0 failed.
+  teardown hang in Dagda's tests would look there first). **Last full gate: `2a8d24b`**, saturn, Dannan 0.8.0
+  prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1125 ran, 1122 passed, 3
+  skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates before it are in
+  `COMPLETED.md`'s handoff.
+- **Repair is being redesigned** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md`, which has the status of
+  each stage, the rulings and how to measure). Done and gated: the survey keeps who holds what (stage 1); repair
+  works from one queue, fewest copies first, which ends both ways the pull starved (stage 2); and Dagda's own
+  loop reads a new reference at once, a gap against Macha (`0d048e0`). **Next: stage 3, the offer**, so each
+  copy moves once. Then stage 4, the window and the call count gone.
+- **The repair baseline is measured** (harness plan, "Workload 7, the baseline"): Dagda's repair today is at
+  least as fast as Macha's in every scenario; both stores send each object about one and a half to two times;
+  on small objects the 16-call count, not the link, sets the rate. Stages 1 and 2 are not benchmarked yet.
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
-  commit, and retires its own cases against named `dagda_tests` cases, mapped one by one.
-- **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`, corvus-jupiter).
-  Measured: publications and the viewer at parity or better; small files about 6% over Macha's CPU (was 11%), all
-  else equal; local reads better with one reader and no steady gap with four; recovery at parity within 2%, clean
-  and after kill -9. Not run: reads over a shaped link, CONTROL graphs, deletes and GC, repair, disk pressure,
-  cache. **Every figure so far is on jupiter's previous kernel (6.18.50)**: a comparison with later figures runs
-  both stores again.
-- **Repair is being redesigned** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md`): one queue of copies to
-  make, fewest copies first, a window of transfers against the byte credit, the 16-call count gone. It replaces
-  both patches for the pull starved by a sending push. Stages 1 and 2 are built and gated (the survey keeps who
-  holds what; one queue by copies left, which ends both starvation paths); the benchmark's driver is built for
-  both stores. **The baseline is measured** (jupiter and uranus over WiFi, 2026-11-16; harness plan): today's
-  repair in Dagda is at least as fast as Macha's in every scenario, and both stores send each object about one
-  and a half to two times, the holder pushing while the joiner pulls. The tip (stages 1 and 2) is not measured
-  yet. Stage 3 (the offer, designed) and stage 4 (the window, the count gone) are not built.
+  commit, and retires its own cases against named `dagda_tests` cases, mapped one by one. It has been told of
+  stages 1 and 2 and that no ported case changed.
+- **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`). Measured:
+  publications and the viewer at parity or better; small files about 6% over Macha's CPU (was 11%), all else
+  equal; local reads better with one reader and no steady gap with four; recovery at parity within 2%; repair
+  (above). Not run: reads over a shaped link, CONTROL graphs, deletes and GC, disk pressure, cache. The figures
+  before repair's are on jupiter's previous kernel (6.18.50); repair's are on a WiFi link that has since
+  changed. A comparison with later figures runs both sides again.
 - **Acknowledgement levels are the stack's standard** (Tom, 2026-11-15): ephemeral, persisted, decided (Dannan's
   agreement, 0.9.0), replicated; the setting is `ack_level`. Done on the branch and in the stack document. Dagda's
   durable stays beside them until Tom says otherwise.
@@ -45,23 +41,27 @@ what left this file on 2026-11-16 archived after it. The plan for slices is the 
 - **New consumers, nothing asked of Dagda now:** Louhi, Mimir and Kvasir, each answered from the design.
 - **Dannan 0.9.0** (not tagged) will carry agreement, the hybrid clock, the file-system interface for the
   simulation harness and the net layer's per-message record copies.
+- **Lugh asked** (2026-11-16) when slice 1 can carry its spaces so P8.0 can start: told the date is Tom's
+  (`0.2.0` is held), and that the repair redesign changes nothing Lugh relies on.
 
 ## Next (in order)
 
-1. **Repair** (`2026-11-16-repair-redesign.md`, "Stages"). The baseline is in. Next the same run on the tip's
-   build, for what stages 1 and 2 changed (`build/pi-repair-run.sh run`, about an hour, two cores on each of two
-   Pis, a note on the board; the claim honest about cores and time). Then stage 3
-   (the offer, allowed by Tom) and stage 4 (the window, the call count gone), its shape agreed with the Macha
-   session first. Each test-first, gated, and measured against the one before.
-2. **The rest of harness phase 2**, both stores rerun on the new kernel: reads over a shaped link, CONTROL graphs,
-   deletes and GC, disk pressure (dm-delay, not installed), cache; strace fsync counts on a separate rerun. The
-   CONTROL, delete and cache workloads are not written, and the Macha session reviews each before it runs.
-3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-4. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
+1. **Repair, stage 3: the offer** (`2026-11-16-repair-redesign.md`, "Stage 3, designed, not built"). Test-first:
+   the cases named there, seen failing; then the message pair, the receiver's answer and tables, the sender's
+   offer in `push_some`. One whole-suite run on a Pi at its last commit. Then measure old against new in one
+   session ("How to measure a stage" there): the baseline's binaries beside the tip's, which also shows what
+   stages 1 and 2 changed. Tell the Macha session the gated commit and anything its port must pass or bind.
+2. **Repair, stage 4: the window, and the call count gone.** Bring the shape of `Repair`'s steps to the Macha
+   session first. A multi-object message for small values. Measure as above.
+3. **The rest of harness phase 2**, both stores rerun: reads over a shaped link, CONTROL graphs, deletes and GC,
+   disk pressure (dm-delay, not installed), cache; strace fsync counts on a separate rerun. The CONTROL, delete
+   and cache workloads are not written, and the Macha session reviews each before it runs.
+4. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
+5. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes
    an adapter over it.
-5. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
+6. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
    are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9, a null inventory letting an instant
    delete go, is a design question for Tom with Lugh and Lir).
 
@@ -73,14 +73,22 @@ figures, then slices 2 to 5 as the design orders them.
 
 ## How work runs
 
-- No builds, tests or benches on the Mac. Linux gates run on the shared Pis: jupiter (.169, NVMe) for measurement,
-  saturn (.170) and neptune (.202) hold the Dannan 0.8.0 prefix and Macha's fixtures under `/root/dagda-080`,
-  uranus (.228) has 4 GB. Claimed on the board first, -j2, nice 19, released at once.
+- No builds, tests or benches on the Mac. Linux gates run on the shared Pis, claimed on the board first, nice 19,
+  released at once: saturn (.170) and neptune (.202) hold the Dannan 0.8.0 prefix and Macha's fixtures under
+  `/root/dagda-080`; jupiter (.169) builds the harness under `/root/harness`; uranus (.228) has 4 GB.
+- **Claim what the job uses** (Tom, 2026-11-16): the cores of its `-j`, an end time from a measured rate. A run
+  bound by the network or a disk needs a core or two, not a whole Pi for hours. Drop the page cache or fstrim
+  only on a Pi held whole. A heavy transfer between Pis slows every session's ssh and rsync: a note on the board
+  first.
 - One whole-suite run at a step's last commit. No rerun without a named reason. ASan only for releases. TSan only
   to hunt one named bug (Tom, 2026-11-16), on any Pi; on the Mac only when hunting.
 - All four Pis run a 4K-page, 48-bit-VA kernel (6.18.62-v8-va48+) since 2026-11-16, with ASan, UBSan and TSan
-  working on each (clang 19 on all but uranus; `free -m` first there).
-- Measurements are like for like: `uname -r`, page size and uptime checked before each, both stores in one session.
+  working on each (clang 19 on all but uranus; `free -m` first there). All are on WiFi (`eth0` down): jupiter and
+  neptune on 5 GHz since 2026-11-16 20:10Z, saturn and uranus on 2.4 GHz.
+- Measurements are like for like: `uname -r`, page size, uptime and the link checked before each, both sides in
+  one session.
+- The local hook blocks grep, sed, awk, head, tail and cat over local files: basemind and the Read tool instead;
+  a remote grep over ssh is fine.
 
 ## Open
 
