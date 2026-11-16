@@ -17,7 +17,9 @@ moved from Macha and the same on its live nodes.
    16-call count (`reserve_operation`, :3170), which is the defect found on 2026-11-16. It can also run out of byte
    credit, and then the pull is skipped for the step (`!result.credit_limited`, :3418). On a real link sending
    16 MiB extents the credit ends a step before the count does, so a reserved call would not have fixed the common
-   case. The second path has no test yet.
+   case. The second path is proven: `StoreRepair.DISABLED_APushOutOfCreditDoesNotHoldBackThePull` (`39fe114`),
+   run once on node-a and seen failing as predicted (the object not pulled, `credit_limited=true`, one extent
+   pushed); disabled until stage 2 makes it pass.
 2. **Urgency is ignored.** Both walks go in id order. An object down to one copy waits behind objects with two.
 3. **Both ends do the same work.** A holder pushes an object to an owner that lacks it while that owner pulls it.
    Nothing coordinates them. How often the bytes cross twice is not measured (stage 0).
