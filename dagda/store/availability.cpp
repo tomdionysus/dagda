@@ -117,7 +117,12 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   const auto inventory = _ledger.inventory();
   auto view = _ledger.held_view(contract::RetentionClass::data);
   const auto later = [&](TimePoint at) { _due = _due ? std::min(*_due, at) : at; };
-  _due = _retry_at;
+  // A retry still ahead stays due; one whose time has come is this refresh's to make,
+  // and what it leads to (a new retry, or none) is set below. Kept from a passed
+  // retry, due() would name a time already gone after a second failure or an answer,
+  // and wake the owner at once for nothing.
+  _due.reset();
+  if (_retry_at && *_retry_at > now) _due = _retry_at;
   // A disk being seeded: what this node holds cannot be named yet. Before
   // the first inventory there is nothing referenced to join.
   if (!view.identity.complete || !view.trie || !inventory) {
