@@ -175,6 +175,7 @@ RepairLists Repair::lists() const {
   out.pull = _availability.missing_here();
   out.lacks = _availability.peer_lacks();
   out.unavailable = [this](const ObjectId& id) { return _availability.unavailable(id); };
+  out.holds = _availability.peer_holds();
   return out;
 }
 
