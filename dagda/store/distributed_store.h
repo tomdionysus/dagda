@@ -38,6 +38,7 @@
 #include "dagda/store/local_store.h"
 #include "dagda/store/messages.h"
 #include "dagda/store/object_id.h"
+#include "dagda/store/offer_book.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/store/remove.h"
 #include "dagda/store/replica_selector.h"
@@ -365,7 +366,11 @@ struct RepairLists {
 
 // What a repair step did (Macha's RepairResult).
 struct RepairResult {
+  // Object bytes moved, either way.
   uint64_t bytes_transferred = 0;
+  // The offers' own bytes (offer_objects), which the credit pays for beside the
+  // objects' but which settle nothing (the repair redesign, stage 3).
+  uint64_t offer_bytes = 0;
   size_t push_examined = 0;
   size_t pull_examined = 0;
   size_t remote_operations = 0;
@@ -611,6 +616,9 @@ class DistributedStore final : public ControlObjectSource {
   // `byte_budget` bytes moved. Single owner.
   RepairResult repair_step(const RepairLists& lists, uint64_t byte_budget, size_t operation_budget, const std::function<bool()>& should_yield = {});
   RepairDiagnostics repair_diagnostics() const;
+  // What this node's repair is about to receive: the server answers a peer's
+  // offer from it (offer_book.h). Outlives the server that holds it.
+  OfferBook& offers() noexcept { return _offers; }
   // The link's estimated rate, from transfers of half an extent or more.
   double estimated_network_bps() const { return _network_bps.load(std::memory_order_relaxed); }
 
@@ -757,6 +765,7 @@ class DistributedStore final : public ControlObjectSource {
   ControlObjectFetch _control_fetch;
   ReplicaSelector _selector;
   std::atomic<double> _network_bps{0.0};
+  OfferBook _offers;
   // Repair's cursors and counters: the step's single owner's, the counters
   // read by anyone.
   std::unique_ptr<RepairState> _repair;

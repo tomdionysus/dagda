@@ -386,9 +386,9 @@ void Node::open() {
   auto server = _options.server;
   server.extent_size = store_options.extent_size;
   server.domain = _options.domain;
-  _server =
-      std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get(), _activity.get()},
-                                             server, store::StorageServerAdmission{_credit.get(), _io.get()});
+  _server = std::make_unique<store::StorageServer>(
+      _context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get(), _activity.get(), &_store->offers()}, server,
+      store::StorageServerAdmission{_credit.get(), _io.get()});
   if (_options.front) {
     // The server outlives its routes: its destructor unbinds them, waiting
     // for the calls in flight, before it goes.

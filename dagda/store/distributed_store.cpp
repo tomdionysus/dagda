@@ -56,6 +56,21 @@ std::string outcome_text(const CallOutcome& outcome) {
   return "reply type " + std::to_string(static_cast<uint16_t>(outcome.reply->type));
 }
 
+// What repair's trace says an owner answered an offer.
+const char* offer_answer_name(message::OfferAnswer answer) {
+  switch (answer) {
+    case message::OfferAnswer::wanted:
+      return "wanted";
+    case message::OfferAnswer::held:
+      return "held";
+    case message::OfferAnswer::fetching:
+      return "fetching";
+    case message::OfferAnswer::no_room:
+      return "no-room";
+  }
+  return "unknown";
+}
+
 // A refusal that stands: the node answered and asking again will not change
 // it now. Anything else (no reply, a busy peer) is a call that came to
 // nothing this time.
@@ -496,7 +511,8 @@ struct DistributedStore::RepairState {
   // A list changed under a pass: what it passed may have changed, so the
   // pass is followed by another rather than reported settled.
   bool spans_change = false;
-  // Copies pushed since the lacks were surveyed: known held since.
+  // Copies pushed, or an offer answered held, since the lacks were surveyed:
+  // known held since.
   std::set<std::pair<NodeId, ObjectId>> pushed;
   // Objects a peer could not settle now, each asked again after its own
   // delay, doubling from a second to ten minutes; every one is due at once
@@ -558,6 +574,7 @@ DistributedStore::DistributedStore(dannan::Context& context, Stores stores, Dist
       _credit(stores.credit),
       _io(stores.io),
       _control_fetch(context, stores.control, options.metadata_call, dannan::net::CallWatch{options.control_no_progress, std::nullopt}),
+      _offers(_time, options.object_transfer_call),
       _repair(std::make_unique<RepairState>()),
       _shared(std::make_shared<Shared>()) {
   if (!_options.replication) throw std::invalid_argument("the store needs at least one replica");
@@ -3281,31 +3298,38 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     std::set<NodeId> keepers;
     // A peer could not say whether it holds a copy.
     bool undecided = false;
+    // An owner declined the offer: its own repair is fetching the object, or
+    // another holder's copy is on its way. Offered again on the retry's backoff.
+    bool deferred = false;
     bool unreadable = false;
   };
+  // An owner that lacks a planned object, and what it said of the offer: none
+  // when it could not answer.
+  struct Offer {
+    size_t plan = 0;
+    NodeRecord peer;
+    std::optional<message::OfferAnswer> answer;
+  };
   const uint64_t batch_bytes_cap = 2 * extent;
-  // Plans the leading objects of `ids`, sends what they need together and settles
-  // them: `done` of them were planned, `failed` is the first whose copy did not
-  // arrive, and the return says the step must stop (credit, calls or admission ran
-  // out at the object after those). A retried object moves no position and counts
-  // for nothing examined.
+  // Plans the leading objects of `ids`, offers each owner that lacks one what it is
+  // about to be sent (the repair redesign, stage 3: each copy moves once), reads and
+  // sends only what is wanted, together, and settles them: `done` of them were
+  // planned, `failed` is the first whose copy did not arrive, and the return says the
+  // step must stop (credit, calls or admission ran out at the object after those). A
+  // retried object moves no position and counts for nothing examined.
   const auto push_some = [&](std::span<const ObjectId> ids, bool retrying, size_t& done, std::optional<size_t>& failed_at) {
+    // What is known decides each object's keepers and the owners that lack it; no
+    // byte is read yet.
     std::vector<Plan> plans;
-    std::vector<Send> sends;
-    uint64_t batch_bytes = 0;
-    bool stop_all = false;
-    for (size_t i = 0; i < ids.size(); ++i) {
-      if (sends.size() >= RepairState::sends_in_flight || (!sends.empty() && batch_bytes >= batch_bytes_cap)) break;
+    std::vector<Offer> offers;
+    for (size_t i = 0; i < ids.size() && offers.size() < RepairState::sends_in_flight; ++i) {
       Plan plan;
       plan.id = ids[i];
       const auto nodes = ranked(plan.id);
       plan.target = std::min(_options.replication, nodes.size());
-      std::shared_ptr<const Bytes> source;
-      std::vector<Send> object_sends;
-      uint64_t object_bytes = 0;
-      bool stop = false;
+      size_t lacking = 0;
       for (const auto& peer : nodes) {
-        if (plan.keepers.size() + object_sends.size() >= plan.target) break;
+        if (plan.keepers.size() + lacking >= plan.target) break;
         if (!has_room(peer)) continue;
         bool present = false;
         if (peer.id == _self) {
@@ -3324,45 +3348,116 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           continue;
         }
         if (peer.id == _self) continue;
-        if (!source) {
-          std::optional<Bytes> read;
-          {
-            const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-            if (!admitted) {
-              stop = true;
-              break;
-            }
-            read = _data.get(plan.id);
-          }
-          if (!read) {
-            note_local_unreadable(plan.id);
-            plan.unreadable = true;
-            break;
-          }
-          source = std::make_shared<const Bytes>(std::move(*read));
-        }
-        // Credit pays for bytes put on the wire, never for finding out
-        // which are needed.
-        if (transferred + batch_bytes + object_bytes + source->size() > byte_budget) {
-          result.credit_limited = true;
-          stop = true;
-          break;
-        }
-        if (!reserve_operation()) {
-          stop = true;
-          break;
-        }
-        object_sends.push_back({plan.id, peer, source});
-        object_bytes += source->size();
+        offers.push_back({plans.size(), peer, std::nullopt});
+        ++lacking;
       }
-      if (stop) {
-        stop_all = true;
-        break;
-      }
-      batch_bytes += object_bytes;
-      for (auto& send : object_sends) sends.push_back(std::move(send));
       plans.push_back(std::move(plan));
     }
+
+    // One offer a peer for the batch, all at once. Their bytes come out of the
+    // credit; a peer that could not answer is a copy that did not arrive.
+    {
+      std::map<NodeId, std::vector<size_t>> by_peer;
+      for (size_t k = 0; k < offers.size(); ++k) by_peer[offers[k].peer.id].push_back(k);
+      std::vector<Request> requests;
+      std::vector<const std::vector<size_t>*> asked;
+      for (const auto& [peer, which] : by_peer) {
+        std::vector<ObjectId> offered;
+        offered.reserve(which.size());
+        for (const auto k : which) offered.push_back(plans[offers[k].plan].id);
+        auto payload = message::encode_ids(offered);
+        result.offer_bytes += payload.size();
+        requests.push_back({offers[which.front()].peer, message::offer_objects, std::move(payload), FrameType::speculative});
+        asked.push_back(&which);
+      }
+      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), asked.size(), _options.presence_call, control_call_watch());
+      for (size_t r = 0; r < asked.size(); ++r) {
+        const auto& which = *asked[r];
+        const auto& host = offers[which.front()].peer.host;
+        std::vector<message::OfferAnswer> answers;
+        if (outcomes[r].reply && outcomes[r].reply->type == message::offer_objects_reply) {
+          try {
+            answers = message::decode_offer_answers(outcomes[r].reply->payload, which.size());
+          } catch (const std::exception& error) {
+            _logger.debug("repair offer peer=" + host + " error=" + error.what());
+          }
+        } else {
+          _logger.debug("repair offer peer=" + host + " error=" + outcome_text(outcomes[r]));
+        }
+        for (size_t j = 0; j < answers.size(); ++j) offers[which[j]].answer = answers[j];
+      }
+    }
+    std::set<ObjectId> failed;
+    for (const auto& offer : offers) {
+      auto& plan = plans[offer.plan];
+      const auto said = offer.answer ? offer_answer_name(*offer.answer) : "unanswered";
+      trace_repair("offer " + to_string(plan.id) + " to " + dannan::identity::to_string(offer.peer.id) + " " + said);
+      if (!offer.answer) {
+        failed.insert(plan.id);
+      } else if (*offer.answer == message::OfferAnswer::held) {
+        // A keeper, remembered as a pushed copy is.
+        plan.keepers.insert(offer.peer.id);
+        state.pushed.insert({offer.peer.id, plan.id});
+      } else if (*offer.answer == message::OfferAnswer::fetching) {
+        plan.deferred = true;
+      }
+      // No room: passed, and the copy stays short, as for a peer advertising none.
+    }
+
+    // Only what is wanted is read and sent, an object at a time in order, until the
+    // credit, the calls, admission or the batch's bytes run out.
+    std::vector<Send> sends;
+    uint64_t batch_bytes = 0;
+    bool stop_all = false;
+    size_t planned = plans.size();
+    for (size_t p = 0; p < plans.size(); ++p) {
+      auto& plan = plans[p];
+      std::vector<const NodeRecord*> wanted;
+      for (const auto& offer : offers)
+        if (offer.plan == p && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
+      if (wanted.empty()) continue;
+      if (!sends.empty() && batch_bytes >= batch_bytes_cap) {
+        planned = p;
+        break;
+      }
+      std::optional<Bytes> read;
+      {
+        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+        if (!admitted) {
+          stop_all = true;
+          planned = p;
+          break;
+        }
+        read = _data.get(plan.id);
+      }
+      if (!read) {
+        note_local_unreadable(plan.id);
+        plan.unreadable = true;
+        continue;
+      }
+      const auto source = std::make_shared<const Bytes>(std::move(*read));
+      // Credit pays for bytes put on the wire, never for finding out which are
+      // needed.
+      const uint64_t object_bytes = source->size() * wanted.size();
+      if (transferred + batch_bytes + object_bytes > byte_budget) {
+        result.credit_limited = true;
+        stop_all = true;
+        planned = p;
+        break;
+      }
+      bool reserved = true;
+      for (size_t w = 0; w < wanted.size() && reserved; ++w) reserved = reserve_operation();
+      if (!reserved) {
+        stop_all = true;
+        planned = p;
+        break;
+      }
+      for (const auto* peer : wanted) sends.push_back({plan.id, *peer, source});
+      batch_bytes += object_bytes;
+    }
+    // What was offered past here is offered again from here, and the peer's
+    // promise renewed.
+    plans.resize(planned);
 
     // Every send goes out before any answer is awaited; each completes and
     // is kept even if repair's turn ends meanwhile.
@@ -3370,7 +3465,6 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
     const auto dispatched = Clock::now();
     const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.object_transfer_call, peer_call_watch());
-    std::set<ObjectId> failed;
     uint64_t delivered = 0;
     for (size_t i = 0; i < sends.size(); ++i) {
       const auto& send = sends[i];
@@ -3402,7 +3496,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         if (!failed_at) failed_at = i;
         continue;
       }
-      if (plan.undecided && plan.keepers.size() < plan.target)
+      if ((plan.undecided || plan.deferred) && plan.keepers.size() < plan.target)
         RepairState::retry_later(state.push_retries, plan.id, now);
       else
         state.push_retries.erase(plan.id);
@@ -3474,6 +3568,16 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   };
   // Nothing is pulled while no local backend could store it.
   const bool can_store = _data.online_backends() > 0;
+  // Whether a peer is present, read once a step and only when a pull asks: a
+  // promise from a peer gone is not waited on.
+  std::optional<std::set<NodeId>> present_peers;
+  const auto present = [&](const NodeId& peer) {
+    if (!present_peers) {
+      present_peers.emplace();
+      for (const auto& node : _context.nodes().active()) present_peers->insert(node.id);
+    }
+    return present_peers->contains(peer);
+  };
 
   // ---- The retries whose time has come go first, at most half of what a step
   // examines for the pushes.
@@ -3500,6 +3604,13 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       }
       if (!should_own(id) || _data.has(id) || (lists.unavailable && lists.unavailable(id))) {
         retry = state.pull_retries.erase(retry);
+        continue;
+      }
+      const auto fetch = _offers.begin_fetch(id, present);
+      if (!fetch) {
+        trace_repair("pull " + to_string(id) + " promised");
+        RepairState::retry_later(state.pull_retries, id, now);
+        ++retry;
         continue;
       }
       if (transferred + extent > byte_budget) {
@@ -3609,6 +3720,15 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       // membership or storage could change the answer.
       if (lists.unavailable && lists.unavailable(id)) {
         trace_repair("pull " + to_string(id) + " unavailable");
+        pass();
+        ++skipped;
+        continue;
+      }
+      // A holder has said it is sending it: met again on the retry's backoff.
+      const auto fetch = _offers.begin_fetch(id, present);
+      if (!fetch) {
+        trace_repair("pull " + to_string(id) + " promised");
+        RepairState::retry_later(state.pull_retries, id, _time.now());
         pass();
         ++skipped;
         continue;

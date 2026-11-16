@@ -69,6 +69,7 @@ add_library(dagda SHARED
   store/local_store_files.cpp
   store/messages.cpp
   store/object_id.cpp
+  store/offer_book.cpp
   store/persistent_cache.cpp
   store/placement.cpp
   store/presence_index.cpp

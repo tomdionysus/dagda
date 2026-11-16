@@ -42,7 +42,7 @@ const std::vector<dannan::net::MessageType>& StorageServer::served() {
       message::have_object,        message::get_object,         message::put_object,           message::delete_object,
       message::get_control_object, message::put_control_object, message::put_object_deferred,  message::object_durability_barrier,
       message::retain_objects,     message::have_objects,       message::have_control_objects, message::have_valid_objects,
-      message::trie_diff,          message::durability_covered, message::remove_objects,
+      message::trie_diff,          message::durability_covered, message::remove_objects,       message::offer_objects,
   };
   return types;
 }
@@ -54,6 +54,7 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _claims(stores.claims),
       _cache(stores.cache),
       _ledger(stores.ledger),
+      _offers(stores.offers),
       _options(options),
       _admission(admission),
       _logger(context.logger("dagda.server")),
@@ -213,6 +214,31 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       for (const auto& id : ids) present.push_back(_data.has(id));
       return reply(message::have_objects_reply, message::encode_presence(present));
     }
+    if (type == message::offer_objects) {
+      // Repair's offer: what is held from the index, then whether a copy could be
+      // stored, then the book's say. One admission for the batch, as a presence.
+      const auto ids = message::decode_ids(request.payload, message::max_offer_batch);
+      std::optional<DataAdmission> admitted;
+      if (!control_frame) {
+        admitted = admit_data(frame, extent, false);
+        if (!admitted) return busy();
+      }
+      const auto limit = _data.limit();
+      const bool room = _data.online_backends() > 0 && (!limit || _data.used() + extent <= limit);
+      std::vector<message::OfferAnswer> answers;
+      answers.reserve(ids.size());
+      for (const auto& id : ids) {
+        if (_data.has(id))
+          answers.push_back(message::OfferAnswer::held);
+        else if (!room)
+          answers.push_back(message::OfferAnswer::no_room);
+        else if (_offers && !_offers->want(peer.id, id))
+          answers.push_back(message::OfferAnswer::fetching);
+        else
+          answers.push_back(message::OfferAnswer::wanted);
+      }
+      return reply(message::offer_objects_reply, message::encode_offer_answers(answers));
+    }
     if (type == message::have_valid_objects) {
       const auto ids = message::decode_ids(request.payload, message::max_valid_batch);
       // Per id: absence is an index lookup, final with every disk online; a
@@ -276,10 +302,12 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
         // later barrier for a covered generation waits on nothing.
         const auto ticket = _data.put_deferred(object.id, object.data);
         if (!ticket) return Handled::failed(507, "storage_full", "storage limit reached");
+        if (_offers) _offers->arrived(object.id);
         advertise();
         return reply(dannan::net::message::ok, message::encode_ticket(*ticket));
       }
       if (!_data.put(object.id, object.data)) return Handled::failed(507, "storage_full", "storage limit reached");
+      if (_offers) _offers->arrived(object.id);
       advertise();
       return Handled::processed();
     }

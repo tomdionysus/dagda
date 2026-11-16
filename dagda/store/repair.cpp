@@ -198,7 +198,7 @@ RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
                      " remote_ops=" + std::to_string(out.remote_operations) + " complete=" + std::to_string(out.complete ? 1 : 0) +
                      " yielded=" + std::to_string(out.yielded ? 1 : 0));
   _walks_restored = 0;
-  _credit = std::max(0.0, _credit - static_cast<double>(out.bytes_transferred));
+  _credit = std::max(0.0, _credit - static_cast<double>(out.bytes_transferred + out.offer_bytes));
   return out;
 }
 
