@@ -481,6 +481,11 @@ struct DistributedStore::RepairState {
   // Where the pass is: the first item not yet settled.
   size_t queue_at = 0;
   bool walk_complete = false;
+  // What this pass had passed when a list changed under it, sorted: left out of the
+  // queue rebuilt from the new lists, until the pass ends and `requeue` has the next
+  // built from everything listed.
+  std::vector<ObjectId> passed;
+  bool requeue = false;
   // The lists the positions are in, by identity: held, so a list freed and
   // another made at its address is never taken for it.
   std::shared_ptr<const ledger::PeerLacks> push_source;
@@ -3145,9 +3150,18 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   const auto generation = lists.inventory->generation();
   static const std::vector<ObjectId> nothing;
   const auto& pull_list = lists.pull ? *lists.pull : nothing;
-  if (lists.lacks != state.push_source || generation != state.push_generation || lists.pull != state.pull_source || lists.holds != state.holds_source) {
-    // A list changed under a pass: what it passed may have changed.
-    if (state.queue_at) state.spans_change = true;
+  const bool relisted =
+      lists.lacks != state.push_source || generation != state.push_generation || lists.pull != state.pull_source || lists.holds != state.holds_source;
+  if (relisted || state.requeue) {
+    if (relisted && (state.queue_at || !state.passed.empty())) {
+      // A list changed under a pass: what it passed may have changed, so another pass
+      // follows; and what it passed is not passed again in this one (each object
+      // passed again would be sent again), while what is new to it is met in order.
+      state.spans_change = true;
+      for (size_t i = 0; i < state.queue_at; ++i) state.passed.push_back(state.queue[i].id);
+      std::sort(state.passed.begin(), state.passed.end());
+    }
+    state.requeue = false;
     if (lists.lacks != state.push_source || generation != state.push_generation) state.pushed.clear();
     state.push_source = lists.lacks;
     state.push_generation = generation;
@@ -3183,6 +3197,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       while (holder != holders.end() && holder->first < id) ++holder;
       state.queue.push_back({id, holder != holders.end() && holder->first == id ? holder->second : 0, true});
     }
+    if (!state.passed.empty())
+      std::erase_if(state.queue, [&](const RepairState::Item& item) { return std::binary_search(state.passed.begin(), state.passed.end(), item.id); });
     std::sort(state.queue.begin(), state.queue.end(),
               [](const RepairState::Item& a, const RepairState::Item& b) { return a.copies != b.copies ? a.copies < b.copies : a.id < b.id; });
     state.queue_at = 0;
@@ -3634,7 +3650,15 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     state.spans_change = false;
     state.passes.fetch_add(1, std::memory_order_relaxed);
     state.queue_at = 0;
-    state.walk_complete = state.queue.empty();
+    if (state.passed.empty()) {
+      state.walk_complete = state.queue.empty();
+    } else {
+      // The next pass is over everything listed again, what this one passed before a
+      // list changed included.
+      state.passed.clear();
+      state.requeue = true;
+      state.walk_complete = false;
+    }
   }
   return result;
 }
