@@ -104,6 +104,22 @@ Both starvation tests pass here. Retries keep their backoff.
 **4. The window, and the count gone.** Concurrent transfers both ways against the byte limit; small objects
 batched; `operation_budget` removed. The shape of `Repair`'s steps agreed with the Macha session first.
 
+## Stage 0, as answered
+
+**Check B, for Macha (the Macha session, 2026-11-16, from Macha's develop source; not observed or tested): an
+owner can lack the knowledge while a holder has the object, for a while.** Each node builds its referenced set
+itself from its own metadata head (`NodeHorizonBuilder::inventory`); nothing hands it another node's. In steady
+state every node derives the same inventory. The windows: replication lag (the writer references a new file's
+extents at once, an owner only when the metadata reaches it and its inventory is rebuilt); a build that cannot
+finish (an unreadable tree node or catalogue root keeps the older inventory); divided heads under a partition. A
+pull alone converges in all three once the owner learns. A holder that initiates closes the window sooner, and only
+it can act while an owner's build is stuck; on the degraded cluster (single-copy writes accepted, Tom 2026-09-28)
+the holder is often the only copy in exactly that window. So a holder must be able to initiate, and design 3 takes
+its second form: **the offer is put to Tom.** Lugh and Lir are still to be asked.
+
+The second starvation path is in Macha's develop too (its `distributed_store.cpp:2939`, the same guard), untested
+there as here.
+
 ## Not decided
 
 - The offer (stage 3), if check B needs it.

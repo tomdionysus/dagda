@@ -264,9 +264,11 @@ asking:
   Proposed: `tc netem` on the loopback of one Pi claimed whole, with a note on the board, removed in the script's
   trap; that leaves the shared network alone and needs no second Pi. The slow disk (workload 9) needs
   device-mapper set up on a Pi. Neither is done without Tom's word.
-- **If repair's stage 3 needs an offer to a peer** (`2026-11-16-repair-redesign.md`, design 3): it is a question
-  to a peer, which "repair is diff only, no probe" does not allow as written. Asked only if stage 0's check B says
-  a holder must initiate.
+- **Repair's stage 3 needs an offer to a peer** (`2026-11-16-repair-redesign.md`, design 3 and "Stage 0, as
+  answered"): in Macha a holder must be able to initiate, as an owner may not yet know an object is referenced.
+  The offer is a question to a peer, which "repair is diff only, no probe" does not allow as written. Asked
+  2026-11-16; recommended: allow it as a handshake at the moment of transfer, the diff staying the only way repair
+  finds what to do.
 - **A null inventory letting an instant delete go** (gc-and-deletion gap 9): a design question, with Lugh and Lir.
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
