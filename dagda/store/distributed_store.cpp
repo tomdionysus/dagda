@@ -469,19 +469,25 @@ struct DistributedStore::RepairState {
     TimePoint due{};
     std::chrono::milliseconds delay{};
   };
-  // Where each pass is: the last object settled in its list.
-  std::optional<ObjectId> push_after;
-  std::optional<ObjectId> pull_after;
+  // What repair considers, the object with fewest copies first and within a count
+  // by id: `copies` is this node's and every answering peer's known to hold it (none
+  // known sorts first), `pull` whether this node lacks it. Rebuilt when a list changes.
+  struct Item {
+    ObjectId id;
+    uint32_t copies = 0;
+    bool pull = false;
+  };
+  std::vector<Item> queue;
+  // Where the pass is: the first item not yet settled.
+  size_t queue_at = 0;
+  bool walk_complete = false;
   // The lists the positions are in, by identity: held, so a list freed and
   // another made at its address is never taken for it.
   std::shared_ptr<const ledger::PeerLacks> push_source;
   uint64_t push_generation = 0;
   std::shared_ptr<const std::vector<ObjectId>> pull_source;
-  // Every peer's lacks as one sorted list: what the push considers.
-  std::vector<ObjectId> push_list;
+  std::shared_ptr<const ledger::PeerHolds> holds_source;
   bool listed = false;
-  bool push_complete = false;
-  bool pull_complete = false;
   // A list changed under a pass: what it passed may have changed, so the
   // pass is followed by another rather than reported settled.
   bool spans_change = false;
@@ -3129,36 +3135,60 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   }
   const auto live = lists.inventory->lookup(contract::RetentionClass::data);
 
-  // The push works from the lacks of every peer that answered for this inventory,
-  // whether or not every hosting peer did (the maintainer, 2026-11-14: "push to the peers that
-  // answered"): diff only, no walk, no probe. A peer the survey did not settle is
-  // neither a keeper nor sent a copy, and is asked nothing.
+  // One queue of transfers, the object with fewest copies first, whichever way its
+  // bytes travel (the repair redesign, stage 2: TODO/2026-11-16-repair-redesign.md).
+  // A push is an object this node holds that a peer which answered lacks (the maintainer,
+  // 2026-11-14: "push to the peers that answered"; a peer the survey did not settle is
+  // neither a keeper nor sent a copy); a pull is one this node should own and lacks.
+  // Diff only: the lists are the survey's, nothing walks the store or probes a peer.
   const auto* lacks = lists.lacks.get();
   const auto generation = lists.inventory->generation();
-  if (lists.lacks != state.push_source || generation != state.push_generation) {
-    if (state.push_after) state.spans_change = true;
-    state.push_source = lists.lacks;
-    state.push_generation = generation;
-    // A new list has not been walked, whatever became of the last one.
-    state.push_complete = false;
-    state.listed = lacks && lacks->generation == generation;
-    state.push_list.clear();
-    state.pushed.clear();
-    if (state.listed) {
-      for (const auto& [peer, ids] : lacks->lacks) state.push_list.insert(state.push_list.end(), ids->begin(), ids->end());
-      std::sort(state.push_list.begin(), state.push_list.end());
-      state.push_list.erase(std::unique(state.push_list.begin(), state.push_list.end()), state.push_list.end());
-    }
-  }
   static const std::vector<ObjectId> nothing;
   const auto& pull_list = lists.pull ? *lists.pull : nothing;
-  if (lists.pull != state.pull_source) {
-    if (state.pull_after) state.spans_change = true;
+  if (lists.lacks != state.push_source || generation != state.push_generation || lists.pull != state.pull_source || lists.holds != state.holds_source) {
+    // A list changed under a pass: what it passed may have changed.
+    if (state.queue_at) state.spans_change = true;
+    if (lists.lacks != state.push_source || generation != state.push_generation) state.pushed.clear();
+    state.push_source = lists.lacks;
+    state.push_generation = generation;
     state.pull_source = lists.pull;
-    state.pull_complete = false;
+    state.holds_source = lists.holds;
+    state.listed = lacks && lacks->generation == generation;
+    // Every id of every peer's list, with how many peers list it.
+    const auto counted = [](const std::map<NodeId, std::shared_ptr<const std::vector<ObjectId>>>& by_peer) {
+      std::vector<ObjectId> all;
+      for (const auto& [peer, ids] : by_peer) all.insert(all.end(), ids->begin(), ids->end());
+      std::sort(all.begin(), all.end());
+      std::vector<std::pair<ObjectId, uint32_t>> out;
+      for (const auto& id : all) {
+        if (!out.empty() && out.back().first == id)
+          ++out.back().second;
+        else
+          out.emplace_back(id, 1);
+      }
+      return out;
+    };
+    state.queue.clear();
+    if (state.listed) {
+      // This node's copy and every answering peer's that does not lack it.
+      const auto answered = static_cast<uint32_t>(lacks->lacks.size());
+      for (const auto& [id, lackers] : counted(lacks->lacks)) state.queue.push_back({id, 1 + answered - std::min(answered, lackers), false});
+    }
+    // The peers known to hold it; none known (nobody reachable holds it, or a peer
+    // could not say) sorts first: it may have no copy in reach at all.
+    std::vector<std::pair<ObjectId, uint32_t>> holders;
+    if (lists.holds && lists.holds->generation == generation) holders = counted(lists.holds->holds);
+    auto holder = holders.begin();
+    for (const auto& id : pull_list) {
+      while (holder != holders.end() && holder->first < id) ++holder;
+      state.queue.push_back({id, holder != holders.end() && holder->first == id ? holder->second : 0, true});
+    }
+    std::sort(state.queue.begin(), state.queue.end(),
+              [](const RepairState::Item& a, const RepairState::Item& b) { return a.copies != b.copies ? a.copies < b.copies : a.id < b.id; });
+    state.queue_at = 0;
+    state.walk_complete = false;
   }
-  if (pull_list.empty()) state.pull_complete = true;
-  if (state.push_list.empty() && !state.push_after) state.push_complete = true;
+  if (state.queue.empty()) state.walk_complete = true;
 
   const auto yielded = [&] {
     if (should_yield && should_yield()) {
@@ -3193,266 +3223,260 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     if (state.pushed.contains({peer, id})) return true;
     return !std::binary_search(found->second->begin(), found->second->end(), id);
   };
+  // An object whose first owners all hold it, this node among them, needs
+  // nothing and is passed without spending the scan budget.
+  const auto settled_by_holdings = [&](const ObjectId& id) {
+    const auto nodes = ranked(id);
+    const size_t target = std::min(_options.replication, nodes.size());
+    size_t keepers = 0;
+    bool kept_here = false;
+    for (const auto& peer : nodes) {
+      if (keepers >= target) break;
+      if (!has_room(peer)) continue;
+      bool present = false;
+      if (peer.id == _self) {
+        present = _data.has(id);
+        kept_here = present;
+      } else if (const auto known = known_present(peer.id, id)) {
+        present = *known;
+      } else {
+        return false;
+      }
+      if (!present) return false;
+      ++keepers;
+    }
+    return keepers >= target && kept_here;
+  };
 
-  // ---- Push: copies to the owners that lack them.
-  if (!state.push_complete) {
-    // An object whose first owners all hold it, this node among them, needs
-    // nothing and is passed without spending the scan budget.
-    const auto settled_by_holdings = [&](const ObjectId& id) {
-      const auto nodes = ranked(id);
-      const size_t target = std::min(_options.replication, nodes.size());
-      size_t keepers = 0;
-      bool kept_here = false;
+  // What the step examined against its scan budget, and whether it stopped short of
+  // the queue's end for want of credit, calls, admission or a backend.
+  size_t scanned = 0;
+  bool stopped = false;
+
+  // ---- Pushing: copies to the owners that lack them.
+  struct Send {
+    ObjectId id;
+    NodeRecord peer;
+    std::shared_ptr<const Bytes> data;
+  };
+  struct Plan {
+    ObjectId id;
+    size_t target = 0;
+    std::set<NodeId> keepers;
+    // A peer could not say whether it holds a copy.
+    bool undecided = false;
+    bool unreadable = false;
+  };
+  const uint64_t batch_bytes_cap = 2 * extent;
+  // Plans the leading objects of `ids`, sends what they need together and settles
+  // them: `done` of them were planned, `failed` is the first whose copy did not
+  // arrive, and the return says the step must stop (credit, calls or admission ran
+  // out at the object after those). A retried object moves no position and counts
+  // for nothing examined.
+  const auto push_some = [&](std::span<const ObjectId> ids, bool retrying, size_t& done, std::optional<size_t>& failed_at) {
+    std::vector<Plan> plans;
+    std::vector<Send> sends;
+    uint64_t batch_bytes = 0;
+    bool stop_all = false;
+    for (size_t i = 0; i < ids.size(); ++i) {
+      if (sends.size() >= RepairState::sends_in_flight || (!sends.empty() && batch_bytes >= batch_bytes_cap)) break;
+      Plan plan;
+      plan.id = ids[i];
+      const auto nodes = ranked(plan.id);
+      plan.target = std::min(_options.replication, nodes.size());
+      std::shared_ptr<const Bytes> source;
+      std::vector<Send> object_sends;
+      uint64_t object_bytes = 0;
+      bool stop = false;
       for (const auto& peer : nodes) {
-        if (keepers >= target) break;
+        if (plan.keepers.size() + object_sends.size() >= plan.target) break;
         if (!has_room(peer)) continue;
         bool present = false;
         if (peer.id == _self) {
-          present = _data.has(id);
-          kept_here = present;
-        } else if (const auto known = known_present(peer.id, id)) {
+          // Index presence: a corrupt local copy is found and removed by
+          // scrub and reads, after which repair sees it absent.
+          present = _data.has(plan.id);
+        } else if (const auto known = known_present(peer.id, plan.id)) {
           present = *known;
         } else {
-          return false;
+          // Neither a keeper nor sent a copy until a survey says.
+          plan.undecided = true;
+          continue;
         }
-        if (!present) return false;
-        ++keepers;
+        if (present) {
+          plan.keepers.insert(peer.id);
+          continue;
+        }
+        if (peer.id == _self) continue;
+        if (!source) {
+          std::optional<Bytes> read;
+          {
+            const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+            if (!admitted) {
+              stop = true;
+              break;
+            }
+            read = _data.get(plan.id);
+          }
+          if (!read) {
+            note_local_unreadable(plan.id);
+            plan.unreadable = true;
+            break;
+          }
+          source = std::make_shared<const Bytes>(std::move(*read));
+        }
+        // Credit pays for bytes put on the wire, never for finding out
+        // which are needed.
+        if (transferred + batch_bytes + object_bytes + source->size() > byte_budget) {
+          result.credit_limited = true;
+          stop = true;
+          break;
+        }
+        if (!reserve_operation()) {
+          stop = true;
+          break;
+        }
+        object_sends.push_back({plan.id, peer, source});
+        object_bytes += source->size();
       }
-      return keepers >= target && kept_here;
-    };
-    // Retried objects whose time has come go first, at most half the window.
-    std::vector<ObjectId> window;
-    std::set<ObjectId> retrying;
-    for (auto retry = state.push_retries.begin(); retry != state.push_retries.end() && window.size() < std::max<size_t>(1, scan_budget / 2);) {
+      if (stop) {
+        stop_all = true;
+        break;
+      }
+      batch_bytes += object_bytes;
+      for (auto& send : object_sends) sends.push_back(std::move(send));
+      plans.push_back(std::move(plan));
+    }
+
+    // Every send goes out before any answer is awaited; each completes and
+    // is kept even if repair's turn ends meanwhile.
+    std::vector<Request> requests;
+    for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
+    const auto dispatched = Clock::now();
+    const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.object_transfer_call, peer_call_watch());
+    std::set<ObjectId> failed;
+    uint64_t delivered = 0;
+    for (size_t i = 0; i < sends.size(); ++i) {
+      const auto& send = sends[i];
+      const bool ok = outcomes[i].reply && outcomes[i].reply->type == dannan::net::message::ok;
+      trace_repair("push " + to_string(send.id) + " to " + dannan::identity::to_string(send.peer.id) + (ok ? " delivered" : " failed"));
+      if (!ok) {
+        _logger.debug("repair push peer=" + send.peer.host + " error=" + outcome_text(outcomes[i]));
+        failed.insert(send.id);
+        continue;
+      }
+      delivered += send.data->size();
+      state.pushed.insert({send.peer.id, send.id});
+      state.pushed_copies.fetch_add(1, std::memory_order_relaxed);
+      for (auto& plan : plans)
+        if (plan.id == send.id) plan.keepers.insert(send.peer.id);
+      // The copy reaches every ticket that names the peer pending.
+      note_acknowledged(send.id, send.peer.id);
+    }
+    if (delivered) {
+      transferred += delivered;
+      // One sample for the batch: its sends shared the link.
+      note_network(delivered, Clock::now() - dispatched);
+    }
+
+    for (size_t i = 0; i < plans.size(); ++i) {
+      const auto& plan = plans[i];
+      if (failed.contains(plan.id)) {
+        // Tried again from here next step.
+        if (!failed_at) failed_at = i;
+        continue;
+      }
+      if (plan.undecided && plan.keepers.size() < plan.target)
+        RepairState::retry_later(state.push_retries, plan.id, now);
+      else
+        state.push_retries.erase(plan.id);
+      // No owner known means nowhere it is kept, not every owner keeping
+      // it: the copy stays until a host is known.
+      if (!plan.unreadable && plan.target > 0 && plan.keepers.size() >= plan.target && !plan.keepers.contains(_self) &&
+          !_claims.retained(contract::RetentionClass::data, plan.id)) {
+        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+        if (admitted && _data.remove(plan.id)) {
+          state.local_drops.fetch_add(1, std::memory_order_relaxed);
+          trace_repair("drop-local " + to_string(plan.id));
+        }
+      }
+      if (!retrying) ++result.push_examined;
+    }
+    done = plans.size();
+    return stop_all;
+  };
+  // Every one of `ids`, a batch at a time; how many leading ones were planned. A copy
+  // that did not arrive does not stop the rest: `held`, if given, is the first such
+  // object's place in `ids`, which the pass comes back to next step.
+  const auto push_all = [&](const std::vector<ObjectId>& ids, bool retrying, std::optional<size_t>* held = nullptr) {
+    size_t offset = 0;
+    while (offset < ids.size() && !stopped) {
+      if (yielded()) {
+        stopped = true;
+        break;
+      }
+      size_t done = 0;
+      std::optional<size_t> failed_at;
+      const bool stop = push_some(std::span(ids).subspan(offset), retrying, done, failed_at);
+      if (failed_at && held && !*held) *held = offset + *failed_at;
+      offset += done;
+      if (stop || !done) stopped = true;
+    }
+    return offset;
+  };
+
+  // ---- Pulling: fetches one object and keeps it; nothing when this node's device
+  // will not admit it.
+  const auto pull = [&](const ObjectId& id) -> std::optional<FetchAnswer> {
+    ReadOptions options;
+    options.frame = FrameType::speculative;
+    // The fetch runs to completion and is kept even if repair yields, so a
+    // node that is never quiet still pulls.
+    const auto read = get_remote(id, options, false);
+    if (read.object) {
+      {
+        const auto admitted = admit_data(FrameType::speculative, read.object->bytes.size(), no_caller_deadline);
+        if (!admitted) return std::nullopt;
+        if (_data.put(id, read.object->bytes)) {
+          transferred += read.object->bytes.size();
+          state.pulled_copies.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+      _context.events().notify(_storage_event);
+      note_acknowledged(id, _self);
+      trace_repair("pull " + to_string(id) + " fetched");
+    } else if (read.answer == FetchAnswer::not_found) {
+      // Should own it, not here, not cached, and every peer present that
+      // might hold it says it does not.
+      note_unsourceable(id);
+      ++result.pull_unsourceable;
+      trace_repair("pull " + to_string(id) + " unsourceable");
+    } else {
+      trace_repair("pull " + to_string(id) + " try-later");
+    }
+    return read.answer;
+  };
+  // Nothing is pulled while no local backend could store it.
+  const bool can_store = _data.online_backends() > 0;
+
+  // ---- The retries whose time has come go first, at most half of what a step
+  // examines for the pushes.
+  {
+    std::vector<ObjectId> due;
+    for (auto retry = state.push_retries.begin(); retry != state.push_retries.end() && due.size() < std::max<size_t>(1, scan_budget / 2);) {
       const auto id = retry->first;
       if (!_data.has(id) || !live.contains(id)) {
         retry = state.push_retries.erase(retry);
         continue;
       }
-      if (retry->second.due <= now) {
-        window.push_back(id);
-        retrying.insert(id);
-      }
+      if (retry->second.due <= now) due.push_back(id);
       ++retry;
     }
-    auto at = state.push_after ? std::upper_bound(state.push_list.begin(), state.push_list.end(), *state.push_after) : state.push_list.begin();
-    size_t skipped = 0;
-    while (window.size() < scan_budget && at != state.push_list.end() && skipped < RepairState::skip_budget) {
-      const auto id = *at;
-      // Listed, and no longer held here or referenced, or needing nothing:
-      // passed, while nothing unsettled is ahead of it.
-      const bool idle = !_data.has(id) || !live.contains(id) || retrying.contains(id);
-      if (window.size() == retrying.size()) {
-        if (idle || settled_by_holdings(id)) {
-          state.push_after = id;
-          ++at;
-          ++skipped;
-          ++result.push_examined;
-          continue;
-        }
-      } else if (idle) {
-        break;
-      }
-      window.push_back(id);
-      ++at;
-    }
-    const bool list_ended = at == state.push_list.end();
-
-    struct Send {
-      ObjectId id;
-      NodeRecord peer;
-      std::shared_ptr<const Bytes> data;
-    };
-    struct Plan {
-      ObjectId id;
-      size_t target = 0;
-      std::set<NodeId> keepers;
-      // A peer could not say whether it holds a copy.
-      bool undecided = false;
-      bool unreadable = false;
-    };
-    const uint64_t batch_bytes_cap = 2 * extent;
-    size_t next = 0;
-    bool stopped = false;
-    // The list's position moves over what settled in order; an object that
-    // must be tried again holds it.
-    bool in_order = true;
-    while (!stopped && next < window.size()) {
-      if (yielded()) break;
-      std::vector<Plan> plans;
-      std::vector<Send> sends;
-      uint64_t batch_bytes = 0;
-      for (size_t i = next; i < window.size(); ++i) {
-        if (sends.size() >= RepairState::sends_in_flight || (!sends.empty() && batch_bytes >= batch_bytes_cap)) break;
-        Plan plan;
-        plan.id = window[i];
-        const auto nodes = ranked(plan.id);
-        plan.target = std::min(_options.replication, nodes.size());
-        std::shared_ptr<const Bytes> source;
-        std::vector<Send> object_sends;
-        uint64_t object_bytes = 0;
-        bool stop = false;
-        for (const auto& peer : nodes) {
-          if (plan.keepers.size() + object_sends.size() >= plan.target) break;
-          if (!has_room(peer)) continue;
-          bool present = false;
-          if (peer.id == _self) {
-            // Index presence: a corrupt local copy is found and removed by
-            // scrub and reads, after which repair sees it absent.
-            present = _data.has(plan.id);
-          } else if (const auto known = known_present(peer.id, plan.id)) {
-            present = *known;
-          } else {
-            // Neither a keeper nor sent a copy until a survey says.
-            plan.undecided = true;
-            continue;
-          }
-          if (present) {
-            plan.keepers.insert(peer.id);
-            continue;
-          }
-          if (peer.id == _self) continue;
-          if (!source) {
-            std::optional<Bytes> read;
-            {
-              const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-              if (!admitted) {
-                stop = true;
-                break;
-              }
-              read = _data.get(plan.id);
-            }
-            if (!read) {
-              note_local_unreadable(plan.id);
-              plan.unreadable = true;
-              break;
-            }
-            source = std::make_shared<const Bytes>(std::move(*read));
-          }
-          // Credit pays for bytes put on the wire, never for finding out
-          // which are needed.
-          if (transferred + batch_bytes + object_bytes + source->size() > byte_budget) {
-            result.credit_limited = true;
-            stop = true;
-            break;
-          }
-          if (!reserve_operation()) {
-            stop = true;
-            break;
-          }
-          object_sends.push_back({plan.id, peer, source});
-          object_bytes += source->size();
-        }
-        if (stop) {
-          stopped = true;
-          break;
-        }
-        batch_bytes += object_bytes;
-        for (auto& send : object_sends) sends.push_back(std::move(send));
-        plans.push_back(std::move(plan));
-      }
-
-      // Every send goes out before any answer is awaited; each completes and
-      // is kept even if repair's turn ends meanwhile.
-      std::vector<Request> requests;
-      for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
-      const auto dispatched = Clock::now();
-      const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.object_transfer_call, peer_call_watch());
-      std::set<ObjectId> failed;
-      uint64_t delivered = 0;
-      for (size_t i = 0; i < sends.size(); ++i) {
-        const auto& send = sends[i];
-        const bool ok = outcomes[i].reply && outcomes[i].reply->type == dannan::net::message::ok;
-        trace_repair("push " + to_string(send.id) + " to " + dannan::identity::to_string(send.peer.id) + (ok ? " delivered" : " failed"));
-        if (!ok) {
-          _logger.debug("repair push peer=" + send.peer.host + " error=" + outcome_text(outcomes[i]));
-          failed.insert(send.id);
-          continue;
-        }
-        delivered += send.data->size();
-        state.pushed.insert({send.peer.id, send.id});
-        state.pushed_copies.fetch_add(1, std::memory_order_relaxed);
-        for (auto& plan : plans)
-          if (plan.id == send.id) plan.keepers.insert(send.peer.id);
-        // The copy reaches every ticket that names the peer pending.
-        note_acknowledged(send.id, send.peer.id);
-      }
-      if (delivered) {
-        transferred += delivered;
-        // One sample for the batch: its sends shared the link.
-        note_network(delivered, Clock::now() - dispatched);
-      }
-
-      for (const auto& plan : plans) {
-        ++next;
-        if (failed.contains(plan.id)) {
-          // Tried again from here next step.
-          in_order = in_order && retrying.contains(plan.id);
-          continue;
-        }
-        if (plan.undecided && plan.keepers.size() < plan.target)
-          RepairState::retry_later(state.push_retries, plan.id, now);
-        else
-          state.push_retries.erase(plan.id);
-        // No owner known means nowhere it is kept, not every owner keeping
-        // it: the copy stays until a host is known.
-        if (!plan.unreadable && plan.target > 0 && plan.keepers.size() >= plan.target && !plan.keepers.contains(_self) &&
-            !_claims.retained(contract::RetentionClass::data, plan.id)) {
-          const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-          if (admitted && _data.remove(plan.id)) {
-            state.local_drops.fetch_add(1, std::memory_order_relaxed);
-            trace_repair("drop-local " + to_string(plan.id));
-          }
-        }
-        if (retrying.contains(plan.id)) continue;
-        ++result.push_examined;
-        if (in_order) state.push_after = plan.id;
-      }
-      if (!failed.empty() || plans.empty()) break;
-    }
-    if (next >= window.size() && list_ended && in_order && !stopped && !result.yielded) state.push_complete = true;
+    scanned += due.size();
+    (void)push_all(due, true);
   }
-
-  // ---- Pull: what this node should own and lacks, the retries due first.
-  // Nothing is pulled while no local backend could store it.
-  if (_data.online_backends() && !result.credit_limited) {
-    bool stopped = false;
-    // The pull's own share of the step: a push pass that fills every step
-    // must not hold the pull back until it ends.
-    size_t pull_scanned = 0;
-    // Fetches one object and keeps it; nothing when this node's device will
-    // not admit it.
-    const auto pull = [&](const ObjectId& id) -> std::optional<FetchAnswer> {
-      ReadOptions options;
-      options.frame = FrameType::speculative;
-      // The fetch runs to completion and is kept even if repair yields, so a
-      // node that is never quiet still pulls.
-      const auto read = get_remote(id, options, false);
-      if (read.object) {
-        {
-          const auto admitted = admit_data(FrameType::speculative, read.object->bytes.size(), no_caller_deadline);
-          if (!admitted) return std::nullopt;
-          if (_data.put(id, read.object->bytes)) {
-            transferred += read.object->bytes.size();
-            state.pulled_copies.fetch_add(1, std::memory_order_relaxed);
-          }
-        }
-        _context.events().notify(_storage_event);
-        note_acknowledged(id, _self);
-        trace_repair("pull " + to_string(id) + " fetched");
-      } else if (read.answer == FetchAnswer::not_found) {
-        // Should own it, not here, not cached, and every peer present that
-        // might hold it says it does not.
-        note_unsourceable(id);
-        ++result.pull_unsourceable;
-        trace_repair("pull " + to_string(id) + " unsourceable");
-      } else {
-        trace_repair("pull " + to_string(id) + " try-later");
-      }
-      return read.answer;
-    };
-
-    for (auto retry = state.pull_retries.begin(); retry != state.pull_retries.end() && pull_scanned < scan_budget;) {
+  if (can_store && !stopped && !result.credit_limited) {
+    for (auto retry = state.pull_retries.begin(); retry != state.pull_retries.end() && scanned < scan_budget;) {
       const auto id = retry->first;
       if (retry->second.due > now) {
         ++retry;
@@ -3464,15 +3488,19 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       }
       if (transferred + extent > byte_budget) {
         result.credit_limited = true;
+        stopped = true;
         break;
       }
-      if (!reserve_operation()) break;
+      if (!reserve_operation()) {
+        stopped = true;
+        break;
+      }
       const auto answer = pull(id);
       if (!answer) {
         stopped = true;
         break;
       }
-      ++pull_scanned;
+      ++scanned;
       if (*answer != FetchAnswer::try_later) {
         retry = state.pull_retries.erase(retry);
         continue;
@@ -3480,83 +3508,133 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       RepairState::retry_later(state.pull_retries, id, now);
       ++retry;
     }
+  }
 
-    if (!stopped && !result.credit_limited && !state.pull_complete && !pull_list.empty()) {
-      auto it = state.pull_after ? std::upper_bound(pull_list.begin(), pull_list.end(), *state.pull_after) : pull_list.begin();
-      // An object that needs nothing is an index lookup: it counts against
-      // its own, far larger budget, so a settled stretch passes in one step.
-      size_t skipped = 0;
-      const auto skip = [&](const ObjectId& id) {
-        state.pull_after = id;
-        ++it;
-        ++skipped;
+  // ---- The walk, from where the pass stands. Consecutive pushes go out together; a
+  // pull, or an object that needs nothing, sends what is waiting first, so the
+  // position never passes a copy not yet made.
+  if (!state.walk_complete && !stopped) {
+    size_t at = state.queue_at;
+    // An object that needs nothing is an index lookup: it counts against its own,
+    // far larger budget, so a settled stretch passes in one step.
+    size_t skipped = 0;
+    std::vector<ObjectId> run;
+    size_t run_first = at;
+    // The first object whose copy did not arrive: the pass is tried again from it
+    // next step, and is not complete while there is one. The rest of the step goes on.
+    std::optional<size_t> held;
+    // Sends the run and moves the position over what was planned; false when the step
+    // stops there.
+    const auto flush = [&] {
+      if (run.empty()) return true;
+      std::optional<size_t> failed;
+      state.queue_at = run_first + push_all(run, false, &failed);
+      if (failed && !held) held = run_first + *failed;
+      run.clear();
+      return !stopped;
+    };
+    while (at < state.queue.size() && scanned < scan_budget && skipped < RepairState::skip_budget) {
+      if (run.empty() && skipped % 1024 == 0 && yielded()) {
+        stopped = true;
+        break;
+      }
+      const auto& item = state.queue[at];
+      const auto& id = item.id;
+      if (!item.pull) {
+        // Listed, and no longer held here or referenced, or waiting on its retry, or
+        // needing nothing: passed.
+        const bool idle = !_data.has(id) || !live.contains(id) || state.push_retries.contains(id);
+        if (idle || (run.empty() && settled_by_holdings(id))) {
+          if (!flush()) break;
+          state.queue_at = ++at;
+          ++skipped;
+          ++result.push_examined;
+          continue;
+        }
+        if (run.empty()) run_first = at;
+        run.push_back(id);
+        ++scanned;
+        ++at;
+        if (run.size() >= RepairState::sends_in_flight && !flush()) break;
+        continue;
+      }
+      if (!flush()) break;
+      const auto pass = [&] {
+        state.queue_at = ++at;
         ++result.pull_examined;
       };
-      while (it != pull_list.end() && pull_scanned < scan_budget && skipped < RepairState::skip_budget) {
-        if (skipped % 1024 == 0 && yielded()) break;
-        const auto id = *it;
-        if (!should_own(id) || _data.has(id) || state.pull_retries.contains(id)) {
-          skip(id);
-          continue;
-        }
-        // A copy playback already cached is promoted before any network
-        // work, so convergence never downloads twice.
-        if (const auto cached = _cache.get(id)) {
-          {
-            const auto admitted = admit_data(FrameType::speculative, cached->size(), no_caller_deadline);
-            if (!admitted) break;
-            (void)_data.put(id, *cached);
+      if (!should_own(id) || _data.has(id) || state.pull_retries.contains(id)) {
+        pass();
+        ++skipped;
+        continue;
+      }
+      if (!can_store) {
+        stopped = true;
+        break;
+      }
+      // A copy playback already cached is promoted before any network
+      // work, so convergence never downloads twice.
+      if (const auto cached = _cache.get(id)) {
+        {
+          const auto admitted = admit_data(FrameType::speculative, cached->size(), no_caller_deadline);
+          if (!admitted) {
+            stopped = true;
+            break;
           }
-          note_acknowledged(id, _self);
-          trace_repair("pull " + to_string(id) + " from-cache");
-          state.pull_after = id;
-          ++it;
-          ++pull_scanned;
-          ++result.pull_examined;
-          continue;
+          (void)_data.put(id, *cached);
         }
-        // No work that cannot complete: the survey asks again when the
-        // membership or storage could change the answer.
-        if (lists.unavailable && lists.unavailable(id)) {
-          trace_repair("pull " + to_string(id) + " unavailable");
-          skip(id);
-          continue;
-        }
-        if (transferred + extent > byte_budget) {
-          result.credit_limited = true;
-          break;
-        }
-        if (!reserve_operation()) break;
-        const auto answer = pull(id);
-        if (!answer) break;
-        if (*answer == FetchAnswer::try_later) RepairState::retry_later(state.pull_retries, id, _time.now());
-        state.pull_after = id;
-        ++it;
-        ++pull_scanned;
-        ++result.pull_examined;
+        note_acknowledged(id, _self);
+        trace_repair("pull " + to_string(id) + " from-cache");
+        pass();
+        ++scanned;
+        continue;
       }
-      if (it == pull_list.end()) {
-        state.pull_complete = true;
-        state.pull_after.reset();
+      // No work that cannot complete: the survey asks again when the
+      // membership or storage could change the answer.
+      if (lists.unavailable && lists.unavailable(id)) {
+        trace_repair("pull " + to_string(id) + " unavailable");
+        pass();
+        ++skipped;
+        continue;
       }
+      if (transferred + extent > byte_budget) {
+        result.credit_limited = true;
+        stopped = true;
+        break;
+      }
+      if (!reserve_operation()) {
+        stopped = true;
+        break;
+      }
+      const auto answer = pull(id);
+      if (!answer) {
+        stopped = true;
+        break;
+      }
+      if (*answer == FetchAnswer::try_later) RepairState::retry_later(state.pull_retries, id, _time.now());
+      pass();
+      ++scanned;
     }
+    (void)flush();
+    if (held)
+      state.queue_at = *held;
+    else if (state.queue_at >= state.queue.size() && !stopped && !result.yielded && !result.credit_limited)
+      state.walk_complete = true;
   }
 
   result.remote_operations = operations;
   state.push_examined.fetch_add(result.push_examined, std::memory_order_relaxed);
   state.pull_examined.fetch_add(result.pull_examined, std::memory_order_relaxed);
   state.bytes.fetch_add(result.bytes_transferred, std::memory_order_relaxed);
-  state.push_phase_complete.store(state.push_complete, std::memory_order_relaxed);
-  if (state.push_complete && state.pull_complete) {
+  state.push_phase_complete.store(state.walk_complete, std::memory_order_relaxed);
+  if (state.walk_complete) {
     // A pass a list changed under may have passed objects before they were
     // listed: another runs rather than report settled.
     result.complete = !state.spans_change;
     state.spans_change = false;
     state.passes.fetch_add(1, std::memory_order_relaxed);
-    state.push_after.reset();
-    state.pull_after.reset();
-    state.push_complete = state.push_list.empty();
-    state.pull_complete = pull_list.empty();
+    state.queue_at = 0;
+    state.walk_complete = state.queue.empty();
   }
   return result;
 }
