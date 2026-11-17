@@ -795,7 +795,10 @@ TEST(DistributedStore, HealsABadLocalCopyFromAPeer) {
                           std::make_shared<const std::vector<ObjectId>>(live),
                           {},
                           {}};
-  for (int step = 0; step < 4 && !data.has(id); ++step) (void)reader.store().repair_step(lists, 128ULL * 1024 * 1024, 0);
+  for (int step = 0; step < 4 && !data.has(id); ++step) {
+    (void)reader.store().repair_step(lists, 128ULL * 1024 * 1024, RepairWindow{128ULL * 1024 * 1024});
+    (void)reader.store().repair_drain(std::chrono::seconds(30));
+  }
   EXPECT_EQ(data.get(id), bytes);
 }
 

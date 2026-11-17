@@ -474,6 +474,47 @@ struct DistributedStore::SharedFetch {
   std::optional<NodeId> active_peer DANNAN_GUARDED_BY(mutex);
   ReplicaWorkClass active_class DANNAN_GUARDED_BY(mutex) = ReplicaWorkClass::speculative;
   std::shared_ptr<dannan::net::CallHandle> handle DANNAN_GUARDED_BY(mutex);
+  // Told once the fetch is done, outside its lock: a reader that does not wait on it
+  // (repair's pull).
+  std::vector<FetchDone> on_done DANNAN_GUARDED_BY(mutex);
+};
+
+// A push's plan: what is known of an object's owners, and the copies sent to those that
+// wanted it. It outlives the step that made it while a copy is in flight. The owner's:
+// a completion only carries it back in what landed.
+struct DistributedStore::RepairPlan {
+  ObjectId id;
+  size_t target = 0;
+  std::set<NodeId> keepers;
+  // A peer could not say whether it holds a copy.
+  bool undecided = false;
+  // An owner declined the offer: its own repair is fetching the object, or
+  // another holder's copy is on its way. Offered again on the retry's backoff.
+  bool deferred = false;
+  bool unreadable = false;
+  // A copy did not arrive: the object is sent again.
+  bool failed = false;
+  // A retry, which counts for nothing examined.
+  bool retrying = false;
+  // Copies sent and not yet landed.
+  size_t outstanding = 0;
+};
+
+// A transfer that landed, kept for the owner's next step or drain to apply.
+struct DistributedStore::RepairLanded {
+  // The order the transfers started: what landed is applied, and traced, in the
+  // order it was decided.
+  uint64_t seq = 0;
+  ObjectId id;
+  bool pull = false;
+  // The copy is on the peer, or stored here.
+  bool ok = false;
+  uint64_t bytes = 0;
+  // A push's peer and plan.
+  NodeId peer{};
+  std::shared_ptr<RepairPlan> plan;
+  // A pull's answer.
+  FetchAnswer answer = FetchAnswer::try_later;
 };
 
 // Repair's place and counters. The cursors and lists belong to the one
@@ -536,13 +577,64 @@ struct DistributedStore::RepairState {
   std::deque<ObjectId> unsourceable_sample DANNAN_GUARDED_BY(sample_mutex);
   std::chrono::steady_clock::time_point unsourceable_logged DANNAN_GUARDED_BY(sample_mutex){};
   std::chrono::steady_clock::time_point unreadable_logged DANNAN_GUARDED_BY(sample_mutex){};
+  std::atomic<uint64_t> offer_bytes{0};
+
+  // ---- The window (the repair redesign, stage 4): the bytes started and not landed,
+  // against the limit the last step set, and what landed for the owner to apply.
+  // Completions take window_mutex with no other lock held.
+  mutable dannan::contract::Mutex window_mutex;
+  std::condition_variable_any window_changed;
+  uint64_t in_flight DANNAN_GUARDED_BY(window_mutex) = 0;
+  uint64_t window DANNAN_GUARDED_BY(window_mutex) = 1;
+  // Filled past half since it last drained: the storage event is owed when it next
+  // drains to half or less.
+  bool drain_owed DANNAN_GUARDED_BY(window_mutex) = false;
+  std::vector<RepairLanded> landed DANNAN_GUARDED_BY(window_mutex);
+  // The owner's: transfers started, objects with one in flight (not started again
+  // until it lands), and copies that did not arrive (sent again first; the pass is not
+  // complete while there is one).
+  uint64_t started = 0;
+  std::set<ObjectId> moving;
+  std::vector<ObjectId> redo;
+  // The offer book's marks of the pulls in flight, each ended as its pull is applied.
+  // Held here, never by a fetch's completion, which may outlive the store.
+  std::map<ObjectId, OfferBook::Fetch> fetching;
+
+  void enter(uint64_t amount) {
+    Lock lock(window_mutex);
+    in_flight += amount;
+    if (in_flight * 2 > window) drain_owed = true;
+  }
+  // `amount` leaves the window and `arrived`, if any, waits for the owner. Whether the
+  // window has just drained to half or less: the storage event is raised, once a drain.
+  bool land(uint64_t amount, std::optional<RepairLanded> arrived) {
+    bool drained = false;
+    {
+      Lock lock(window_mutex);
+      in_flight -= std::min(in_flight, amount);
+      if (arrived) landed.push_back(std::move(*arrived));
+      if (drain_owed && in_flight * 2 <= window) {
+        drain_owed = false;
+        drained = true;
+      }
+    }
+    window_changed.notify_all();
+    return drained;
+  }
+  uint64_t flying() const {
+    Lock lock(window_mutex);
+    return in_flight;
+  }
+  bool quiet() const {
+    Lock lock(window_mutex);
+    return !in_flight && landed.empty();
+  }
 
   static constexpr std::chrono::milliseconds retry_first{1000};
   static constexpr std::chrono::milliseconds retry_cap{600000};
   static constexpr size_t retries_max = 4096;
   static constexpr size_t sample_size = 32;
-  // Concurrent pushes, and objects needing nothing passed in one step.
-  static constexpr size_t sends_in_flight = 8;
+  // Objects needing nothing passed in one step.
   static constexpr size_t skip_budget = 65536;
 
   // Schedules `id` again: first after retry_first, then each time after
@@ -2148,6 +2240,36 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
   // No deadline is the end of time.
   const auto deadline = until ? *until : options.deadline.count() > 0 ? _time.now() + options.deadline : dannan::contract::TimePoint::max();
   const bool foreground = options.frame == FrameType::foreground;
+  const auto fetch = start_fetch(id, options, opportunistic_persist);
+
+  ReadResult out;
+  std::shared_ptr<dannan::net::CallHandle> abandon;
+  {
+    Lock lock(fetch->mutex);
+    while (!fetch->done && !_stopping.load() && _time.now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
+      fetch->changed.wait_for(lock.native(), deadline == dannan::contract::TimePoint::max()
+                                                 ? std::chrono::nanoseconds(look_at_the_clock)
+                                                 : std::min<std::chrono::nanoseconds>(deadline - _time.now(), look_at_the_clock));
+    --fetch->waiters;
+    if (!fetch->done) {
+      // The transfer belongs to the object, not to any one reader: it is
+      // abandoned only when nobody waits for it.
+      if (!fetch->waiters) abandon = fetch->handle;
+    } else {
+      out.object = fetch->result;
+      out.answer = fetch->answer;
+      out.served_by = fetch->served_by;
+      out.source = out.object ? ReadSource::remote : ReadSource::none;
+    }
+  }
+  if (abandon) abandon->cancel();
+  if (out.object && foreground) _activity.note(options.frame, out.object->bytes.size());
+  return out;
+}
+
+std::shared_ptr<DistributedStore::SharedFetch> DistributedStore::start_fetch(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
+                                                                             FetchDone on_done) {
+  const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;
   std::shared_ptr<dannan::net::CallHandle> promote;
@@ -2173,6 +2295,7 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
           }
         }
         if (opportunistic_persist) fetch->persist = true;
+        if (on_done) fetch->on_done.push_back(std::move(on_done));
       }
     }
     if (!fetch) {
@@ -2183,6 +2306,7 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
       fetch->foreground = foreground;
       fetch->persist = opportunistic_persist;
       fetch->stripe = options.stripe;
+      if (on_done) fetch->on_done.push_back(std::move(on_done));
       _fetches[id] = fetch;
       leader = true;
     }
@@ -2193,11 +2317,14 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
     // (distributed_store.cpp:1694-1700 at 98b816d).
     const auto unscheduled = [&](const std::string& why) {
       _logger.debug("remote object scheduling " + to_string(id) + ": " + why);
+      std::vector<FetchDone> told;
       {
         Lock lock(fetch->mutex);
         fetch->done = true;
+        told.swap(fetch->on_done);
       }
       fetch->changed.notify_all();
+      for (const auto& tell : told) tell({}, FetchAnswer::try_later);
     };
     try {
       auto owners = ranked(id);
@@ -2215,30 +2342,7 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
       unscheduled("unknown error");
     }
   }
-
-  ReadResult out;
-  std::shared_ptr<dannan::net::CallHandle> abandon;
-  {
-    Lock lock(fetch->mutex);
-    while (!fetch->done && !_stopping.load() && _time.now() < deadline && !(options.cancelled && options.cancelled->load(std::memory_order_relaxed)))
-      fetch->changed.wait_for(lock.native(), deadline == dannan::contract::TimePoint::max()
-                                                 ? std::chrono::nanoseconds(look_at_the_clock)
-                                                 : std::min<std::chrono::nanoseconds>(deadline - _time.now(), look_at_the_clock));
-    --fetch->waiters;
-    if (!fetch->done) {
-      // The transfer belongs to the object, not to any one reader: it is
-      // abandoned only when nobody waits for it.
-      if (!fetch->waiters) abandon = fetch->handle;
-    } else {
-      out.object = fetch->result;
-      out.answer = fetch->answer;
-      out.served_by = fetch->served_by;
-      out.source = out.object ? ReadSource::remote : ReadSource::none;
-    }
-  }
-  if (abandon) abandon->cancel();
-  if (out.object && foreground) _activity.note(options.frame, out.object->bytes.size());
-  return out;
+  return fetch;
 }
 
 void DistributedStore::fetch_next(const std::shared_ptr<SharedFetch>& fetch) {
@@ -2348,6 +2452,7 @@ void DistributedStore::finish_fetch(const std::shared_ptr<SharedFetch>& fetch, O
   // The local copy is queued before any reader is told, so a reader that
   // then waits for the copies settled waits for this one too.
   if (persist) enqueue_local_copy(fetch->id, result->bytes, should_own(fetch->id));
+  std::vector<FetchDone> told;
   {
     Lock lock(fetch->mutex);
     if (fetch->done) return;
@@ -2356,12 +2461,14 @@ void DistributedStore::finish_fetch(const std::shared_ptr<SharedFetch>& fetch, O
     fetch->answer = answer;
     fetch->served_by = served_by;
     fetch->handle.reset();
+    told.swap(fetch->on_done);
   }
   fetch->changed.notify_all();
   {
     Lock lock(_fetch_mutex);
     if (const auto found = _fetches.find(fetch->id); found != _fetches.end() && found->second.lock() == fetch) _fetches.erase(found);
   }
+  for (const auto& tell : told) tell(result, answer);
 }
 
 void DistributedStore::enqueue_local_copy(const ObjectId& id, std::span<const uint8_t> data, bool promote) {
@@ -3139,17 +3246,148 @@ RepairDiagnostics DistributedStore::repair_diagnostics() const {
   out.copies_pushed = state.pushed_copies.load(std::memory_order_relaxed);
   out.copies_pulled = state.pulled_copies.load(std::memory_order_relaxed);
   out.local_drops = state.local_drops.load(std::memory_order_relaxed);
+  out.offer_bytes = state.offer_bytes.load(std::memory_order_relaxed);
+  out.in_flight = state.flying();
   Lock lock(state.sample_mutex);
   out.unsourceable_sample.assign(state.unsourceable_sample.begin(), state.unsourceable_sample.end());
   return out;
 }
 
-RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t byte_budget, size_t operation_budget, const std::function<bool()>& should_yield) {
+RepairResult DistributedStore::repair_drain(std::chrono::milliseconds deadline) {
   RepairResult result;
   result.complete = false;
   auto& state = *_repair;
-  auto& transferred = result.bytes_transferred;
-  size_t operations = 0;
+  {
+    Lock lock(state.window_mutex);
+    state.window_changed.wait_for(lock.native(), deadline, [&]() DANNAN_REQUIRES(state.window_mutex) { return state.in_flight == 0; });
+  }
+  settle_repair(result);
+  finish_repair_pass(result);
+  report_repair(result);
+  return result;
+}
+
+void DistributedStore::settle_repair(RepairResult& result) {
+  auto& state = *_repair;
+  std::vector<RepairLanded> landed;
+  {
+    Lock lock(state.window_mutex);
+    landed.swap(state.landed);
+  }
+  std::sort(landed.begin(), landed.end(), [](const RepairLanded& a, const RepairLanded& b) { return a.seq < b.seq; });
+  const auto now = _time.now();
+  for (auto& item : landed) {
+    if (item.pull) {
+      state.moving.erase(item.id);
+      state.fetching.erase(item.id);
+      if (item.ok) {
+        // Paid for as it lands: its size is known only then.
+        result.bytes_transferred += item.bytes;
+        result.credit_spent += item.bytes;
+        state.pull_retries.erase(item.id);
+        trace_repair("pull " + to_string(item.id) + " fetched");
+      } else if (item.answer == FetchAnswer::not_found) {
+        // Should own it, not here, not cached, and every peer present that
+        // might hold it says it does not.
+        note_unsourceable(item.id);
+        ++result.pull_unsourceable;
+        state.pull_retries.erase(item.id);
+        trace_repair("pull " + to_string(item.id) + " unsourceable");
+      } else {
+        RepairState::retry_later(state.pull_retries, item.id, now);
+        trace_repair("pull " + to_string(item.id) + " try-later");
+      }
+      continue;
+    }
+    auto& plan = *item.plan;
+    trace_repair("push " + to_string(plan.id) + " to " + dannan::identity::to_string(item.peer) + (item.ok ? " delivered" : " failed"));
+    if (item.ok) {
+      result.bytes_transferred += item.bytes;
+      state.pushed.insert({item.peer, plan.id});
+      state.pushed_copies.fetch_add(1, std::memory_order_relaxed);
+      plan.keepers.insert(item.peer);
+    } else {
+      plan.failed = true;
+    }
+    if (plan.outstanding) --plan.outstanding;
+    if (!plan.outstanding) {
+      state.moving.erase(plan.id);
+      finish_push(plan, result);
+    }
+  }
+}
+
+void DistributedStore::finish_push(RepairPlan& plan, RepairResult& result) {
+  auto& state = *_repair;
+  if (plan.failed) {
+    // Sent again first, from the next step.
+    if (std::find(state.redo.begin(), state.redo.end(), plan.id) == state.redo.end()) state.redo.push_back(plan.id);
+    return;
+  }
+  if ((plan.undecided || plan.deferred) && plan.keepers.size() < plan.target)
+    RepairState::retry_later(state.push_retries, plan.id, _time.now());
+  else
+    state.push_retries.erase(plan.id);
+  // No owner known means nowhere it is kept, not every owner keeping
+  // it: the copy stays until a host is known.
+  if (!plan.unreadable && plan.target > 0 && plan.keepers.size() >= plan.target && !plan.keepers.contains(_self) &&
+      !_claims.retained(contract::RetentionClass::data, plan.id)) {
+    const uint64_t extent = std::max<uint64_t>(1, _options.extent_size);
+    const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+    if (admitted && _data.remove(plan.id)) {
+      state.local_drops.fetch_add(1, std::memory_order_relaxed);
+      trace_repair("drop-local " + to_string(plan.id));
+    }
+  }
+  if (!plan.retrying) ++result.push_examined;
+}
+
+void DistributedStore::finish_repair_pass(RepairResult& result) {
+  auto& state = *_repair;
+  state.push_phase_complete.store(state.walk_complete, std::memory_order_relaxed);
+  // A pass ends once its walk has, and everything it started has landed and been
+  // applied, and every copy that did not arrive has been sent again.
+  if (!state.walk_complete || !state.redo.empty() || !state.quiet()) return;
+  // A pass a list changed under may have passed objects before they were
+  // listed: another runs rather than report settled.
+  result.complete = !state.spans_change;
+  state.spans_change = false;
+  state.passes.fetch_add(1, std::memory_order_relaxed);
+  state.queue_at = 0;
+  if (state.passed.empty()) {
+    state.walk_complete = state.queue.empty();
+  } else {
+    // The next pass is over everything listed again, what this one passed before a
+    // list changed included.
+    state.passed.clear();
+    state.requeue = true;
+    state.walk_complete = false;
+  }
+}
+
+void DistributedStore::report_repair(RepairResult& result) {
+  auto& state = *_repair;
+  state.push_examined.fetch_add(result.push_examined, std::memory_order_relaxed);
+  state.pull_examined.fetch_add(result.pull_examined, std::memory_order_relaxed);
+  state.bytes.fetch_add(result.bytes_transferred, std::memory_order_relaxed);
+  state.offer_bytes.fetch_add(result.offer_bytes, std::memory_order_relaxed);
+  result.in_flight = state.flying();
+}
+
+RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t byte_budget, RepairWindow window, const std::function<bool()>& should_yield) {
+  RepairResult result;
+  result.complete = false;
+  auto& state = *_repair;
+  // What landed since the last step first; the pulls among it are paid for now.
+  settle_repair(result);
+  // What this step has spent of `byte_budget`, a pull counted at an extent until it
+  // lands.
+  uint64_t spent = result.credit_spent;
+  const uint64_t limit = std::max<uint64_t>(1, window.bytes);
+  {
+    Lock lock(state.window_mutex);
+    state.window = limit;
+  }
   const auto now = _time.now();
   // A peer arriving or leaving, or a disk coming or going, can settle what
   // was waiting: every retry is due at once.
@@ -3160,7 +3398,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   }
   // Nothing referenced is known: there is nothing to repair towards.
   if (!lists.inventory) {
-    result.complete = true;
+    result.complete = state.quiet();
+    report_repair(result);
     return result;
   }
   const auto live = lists.inventory->lookup(contract::RetentionClass::data);
@@ -3238,15 +3477,12 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     }
     return false;
   };
-  const auto reserve_operation = [&] {
-    if (operation_budget && operations >= operation_budget) return false;
-    ++operations;
-    result.remote_operations = operations;
-    return true;
+  // Whether `bytes` more fit the window beside `planned` already counted this batch:
+  // one transfer always starts into an empty window.
+  const auto fits = [&](uint64_t planned, uint64_t bytes) {
+    const auto flying = state.flying();
+    return (!flying && !planned) || flying + planned + bytes <= limit;
   };
-  // A settled object needs no call, so the call budget alone would not bound
-  // a step: what a step examines is bounded too.
-  const size_t scan_budget = operation_budget ? std::clamp<size_t>(operation_budget * 4, 16, 64) : std::numeric_limits<size_t>::max();
   const uint64_t extent = std::max<uint64_t>(1, _options.extent_size);
   // A peer whose advertised room cannot take an extent is not sent one, so a
   // full peer cannot spend the step; the copy stays short, which placement
@@ -3289,55 +3525,48 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     return keepers >= target && kept_here;
   };
 
-  // What the step examined against its scan budget, and whether it stopped short of
-  // the queue's end for want of credit, calls, admission or a backend.
-  size_t scanned = 0;
+  // Whether the step stopped short of the queue's end for want of credit, room in the
+  // window, admission or a backend.
   bool stopped = false;
 
   // ---- Pushing: copies to the owners that lack them.
+  using Plan = RepairPlan;
   struct Send {
-    ObjectId id;
+    std::shared_ptr<Plan> plan;
     NodeRecord peer;
     std::shared_ptr<const Bytes> data;
-  };
-  struct Plan {
-    ObjectId id;
-    size_t target = 0;
-    std::set<NodeId> keepers;
-    // A peer could not say whether it holds a copy.
-    bool undecided = false;
-    // An owner declined the offer: its own repair is fetching the object, or
-    // another holder's copy is on its way. Offered again on the retry's backoff.
-    bool deferred = false;
-    bool unreadable = false;
   };
   // An owner that lacks a planned object, and what it said of the offer: none
   // when it could not answer.
   struct Offer {
-    size_t plan = 0;
+    std::shared_ptr<Plan> plan;
     NodeRecord peer;
     std::optional<message::OfferAnswer> answer;
   };
-  const uint64_t batch_bytes_cap = 2 * extent;
-  // Plans the leading objects of `ids`, offers each owner that lacks one what it is
-  // about to be sent (the repair redesign, stage 3: each copy moves once), reads and
-  // sends only what is wanted, together, and settles them: `done` of them were
-  // planned, `failed` is the first whose copy did not arrive, and the return says the
-  // step must stop (credit, calls or admission ran out at the object after those). A
-  // retried object moves no position and counts for nothing examined.
-  const auto push_some = [&](std::span<const ObjectId> ids, bool retrying, size_t& done, std::optional<size_t>& failed_at) {
+  // Plans the leading objects of `ids` while the credit and the window cover them,
+  // offers each owner that lacks one what it is about to be sent (the repair redesign,
+  // stage 3: each copy moves once), then reads and starts the sends that are wanted,
+  // together, without waiting for them (stage 4). `done` of them were planned; the
+  // return says the step must stop (credit, the window or admission ran out at the
+  // object after those). A retried object moves no position and counts for nothing
+  // examined.
+  const auto push_some = [&](std::span<const ObjectId> ids, bool retrying, size_t& done) {
     // What is known decides each object's keepers and the owners that lack it; no
-    // byte is read yet.
-    std::vector<Plan> plans;
+    // byte is read yet. Each object's size is the index's.
+    std::vector<std::shared_ptr<Plan>> plans;
     std::vector<Offer> offers;
-    for (size_t i = 0; i < ids.size() && offers.size() < RepairState::sends_in_flight; ++i) {
-      Plan plan;
+    bool stop_all = false;
+    uint64_t estimated = 0;
+    for (size_t i = 0; i < ids.size() && offers.size() < message::max_offer_batch; ++i) {
+      auto planning = std::make_shared<Plan>();
+      auto& plan = *planning;
       plan.id = ids[i];
+      plan.retrying = retrying;
       const auto nodes = ranked(plan.id);
       plan.target = std::min(_options.replication, nodes.size());
-      size_t lacking = 0;
+      std::vector<NodeRecord> lacking;
       for (const auto& peer : nodes) {
-        if (plan.keepers.size() + lacking >= plan.target) break;
+        if (plan.keepers.size() + lacking.size() >= plan.target) break;
         if (!has_room(peer)) continue;
         bool present = false;
         if (peer.id == _self) {
@@ -3356,38 +3585,26 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           continue;
         }
         if (peer.id == _self) continue;
-        offers.push_back({plans.size(), peer, std::nullopt});
-        ++lacking;
+        lacking.push_back(peer);
       }
-      plans.push_back(std::move(plan));
-    }
-
-    // Only what this step will send is offered, so a promise covers a copy about to
-    // move, never one a paced holder will send steps later (stage 3's regression under
-    // a viewer): each object's size from the index, not a read, against the credit
-    // and the batch's bytes, in order.
-    bool stop_all = false;
-    {
-      size_t keep = plans.size();
-      uint64_t estimated = 0;
-      for (size_t p = 0; p < plans.size(); ++p) {
-        const auto lacking = static_cast<uint64_t>(std::count_if(offers.begin(), offers.end(), [&](const Offer& offer) { return offer.plan == p; }));
-        if (!lacking) continue;
-        if (estimated >= batch_bytes_cap) {
-          keep = p;
-          break;
-        }
-        const uint64_t bytes = _data.payload_size(plans[p].id) * lacking;
-        if (transferred + estimated + bytes > byte_budget) {
+      // Only what this step will send is offered, so a promise covers a copy about to
+      // move, never one a paced holder will send steps later (stage 3's regression
+      // under a viewer), nor one the window has no room for.
+      if (!lacking.empty()) {
+        const uint64_t bytes = _data.payload_size(plan.id) * lacking.size();
+        if (spent + estimated + bytes > byte_budget) {
           result.credit_limited = true;
           stop_all = true;
-          keep = p;
+          break;
+        }
+        if (!fits(estimated, bytes)) {
+          stop_all = true;
           break;
         }
         estimated += bytes;
+        for (auto& peer : lacking) offers.push_back({planning, std::move(peer), std::nullopt});
       }
-      plans.resize(keep);
-      std::erase_if(offers, [&](const Offer& offer) { return offer.plan >= keep; });
+      plans.push_back(std::move(planning));
     }
 
     // One offer a peer for the batch, all at once. Their bytes come out of the
@@ -3400,9 +3617,12 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       for (const auto& [peer, which] : by_peer) {
         std::vector<ObjectId> offered;
         offered.reserve(which.size());
-        for (const auto k : which) offered.push_back(plans[offers[k].plan].id);
+        for (const auto k : which) offered.push_back(offers[k].plan->id);
         auto payload = message::encode_ids(offered);
+        // Paid for, but never the reason an object waits: what is offered was planned
+        // against the objects' bytes alone.
         result.offer_bytes += payload.size();
+        result.credit_spent += payload.size();
         requests.push_back({offers[which.front()].peer, message::offer_objects, std::move(payload), FrameType::speculative});
         asked.push_back(&which);
       }
@@ -3423,13 +3643,12 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         for (size_t j = 0; j < answers.size(); ++j) offers[which[j]].answer = answers[j];
       }
     }
-    std::set<ObjectId> failed;
     for (const auto& offer : offers) {
-      auto& plan = plans[offer.plan];
+      auto& plan = *offer.plan;
       const auto said = offer.answer ? offer_answer_name(*offer.answer) : "unanswered";
       trace_repair("offer " + to_string(plan.id) + " to " + dannan::identity::to_string(offer.peer.id) + " " + said);
       if (!offer.answer) {
-        failed.insert(plan.id);
+        plan.failed = true;
       } else if (*offer.answer == message::OfferAnswer::held) {
         // A keeper, remembered as a pushed copy is.
         plan.keepers.insert(offer.peer.id);
@@ -3441,20 +3660,15 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     }
 
     // Only what is wanted is read and sent, an object at a time in order, until the
-    // credit, the calls, admission or the batch's bytes run out.
+    // credit or admission runs out.
     std::vector<Send> sends;
-    uint64_t batch_bytes = 0;
     size_t planned = plans.size();
     for (size_t p = 0; p < plans.size(); ++p) {
-      auto& plan = plans[p];
+      auto& plan = *plans[p];
       std::vector<const NodeRecord*> wanted;
       for (const auto& offer : offers)
-        if (offer.plan == p && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
+        if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
       if (wanted.empty()) continue;
-      if (!sends.empty() && batch_bytes >= batch_bytes_cap) {
-        planned = p;
-        break;
-      }
       std::optional<Bytes> read;
       {
         const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
@@ -3474,86 +3688,78 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       // Credit pays for bytes put on the wire, never for finding out which are
       // needed.
       const uint64_t object_bytes = source->size() * wanted.size();
-      if (transferred + batch_bytes + object_bytes > byte_budget) {
+      if (spent + object_bytes > byte_budget) {
         result.credit_limited = true;
         stop_all = true;
         planned = p;
         break;
       }
-      bool reserved = true;
-      for (size_t w = 0; w < wanted.size() && reserved; ++w) reserved = reserve_operation();
-      if (!reserved) {
-        stop_all = true;
-        planned = p;
-        break;
-      }
-      for (const auto* peer : wanted) sends.push_back({plan.id, *peer, source});
-      batch_bytes += object_bytes;
+      for (const auto* peer : wanted) sends.push_back({plans[p], *peer, source});
+      spent += object_bytes;
+      result.credit_spent += object_bytes;
     }
     // What was offered past here is offered again from here, and the peer's
     // promise renewed.
     plans.resize(planned);
 
-    // Every send goes out before any answer is awaited; each completes and
-    // is kept even if repair's turn ends meanwhile.
-    std::vector<Request> requests;
-    for (const auto& send : sends) requests.push_back({send.peer, message::put_object, message::encode_object(send.id, *send.data), FrameType::speculative});
-    const auto dispatched = Clock::now();
-    const auto outcomes = call_all(_context.routes(), _executor, std::move(requests), sends.size(), _options.object_transfer_call, peer_call_watch());
-    uint64_t delivered = 0;
-    for (size_t i = 0; i < sends.size(); ++i) {
-      const auto& send = sends[i];
-      const bool ok = outcomes[i].reply && outcomes[i].reply->type == dannan::net::message::ok;
-      trace_repair("push " + to_string(send.id) + " to " + dannan::identity::to_string(send.peer.id) + (ok ? " delivered" : " failed"));
-      if (!ok) {
-        _logger.debug("repair push peer=" + send.peer.host + " error=" + outcome_text(outcomes[i]));
-        failed.insert(send.id);
-        continue;
-      }
-      delivered += send.data->size();
-      state.pushed.insert({send.peer.id, send.id});
-      state.pushed_copies.fetch_add(1, std::memory_order_relaxed);
-      for (auto& plan : plans)
-        if (plan.id == send.id) plan.keepers.insert(send.peer.id);
-      // The copy reaches every ticket that names the peer pending.
-      note_acknowledged(send.id, send.peer.id);
-    }
-    if (delivered) {
-      transferred += delivered;
-      // One sample for the batch: its sends shared the link.
-      note_network(delivered, Clock::now() - dispatched);
+    // Every send goes out at once and none is waited for: each lands on the store's
+    // executor and is kept whatever repair's turn does meanwhile, and the next step
+    // applies it. One sample of the link for the batch, as its sends share it.
+    struct Batch {
+      explicit Batch(size_t sends) : left(sends) {}
+      std::atomic<size_t> left;
+      std::atomic<uint64_t> delivered{0};
+      const Clock::time_point dispatched = Clock::now();
+    };
+    const auto batch = std::make_shared<Batch>(sends.size());
+    for (const auto& send : sends) {
+      const auto seq = state.started++;
+      const uint64_t bytes = send.data->size();
+      state.enter(bytes);
+      ++send.plan->outstanding;
+      ++result.remote_operations;
+      _context.routes().call(
+          send.peer, message::put_object, message::encode_object(send.plan->id, *send.data), FrameType::speculative, _options.object_transfer_call, _executor,
+          [weak = std::weak_ptr<Shared>(_shared), plan = send.plan, id = send.plan->id, peer = send.peer.id, host = send.peer.host, bytes, seq,
+           batch](CallOutcome outcome) {
+            const auto shared = weak.lock();
+            if (!shared) return;
+            ReadLock alive(shared->alive);
+            auto* store = shared->store;
+            if (!store) return;
+            const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
+            if (ok) {
+              // The copy reaches every ticket that names the peer pending.
+              store->note_acknowledged(id, peer);
+              batch->delivered.fetch_add(bytes, std::memory_order_relaxed);
+            } else {
+              store->_logger.debug("repair push peer=" + host + " error=" + outcome_text(outcome));
+            }
+            if (batch->left.fetch_sub(1, std::memory_order_acq_rel) == 1)
+              store->note_network(batch->delivered.load(std::memory_order_relaxed), Clock::now() - batch->dispatched);
+            RepairLanded landed;
+            landed.seq = seq;
+            landed.id = id;
+            landed.ok = ok;
+            landed.bytes = bytes;
+            landed.peer = peer;
+            landed.plan = plan;
+            if (store->_repair->land(bytes, std::move(landed))) store->_context.events().notify(store->_storage_event);
+          },
+          peer_call_watch());
     }
 
-    for (size_t i = 0; i < plans.size(); ++i) {
-      const auto& plan = plans[i];
-      if (failed.contains(plan.id)) {
-        // Tried again from here next step.
-        if (!failed_at) failed_at = i;
-        continue;
-      }
-      if ((plan.undecided || plan.deferred) && plan.keepers.size() < plan.target)
-        RepairState::retry_later(state.push_retries, plan.id, now);
+    for (const auto& plan : plans) {
+      if (plan->outstanding)
+        state.moving.insert(plan->id);
       else
-        state.push_retries.erase(plan.id);
-      // No owner known means nowhere it is kept, not every owner keeping
-      // it: the copy stays until a host is known.
-      if (!plan.unreadable && plan.target > 0 && plan.keepers.size() >= plan.target && !plan.keepers.contains(_self) &&
-          !_claims.retained(contract::RetentionClass::data, plan.id)) {
-        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-        if (admitted && _data.remove(plan.id)) {
-          state.local_drops.fetch_add(1, std::memory_order_relaxed);
-          trace_repair("drop-local " + to_string(plan.id));
-        }
-      }
-      if (!retrying) ++result.push_examined;
+        finish_push(*plan, result);
     }
     done = plans.size();
     return stop_all;
   };
-  // Every one of `ids`, a batch at a time; how many leading ones were planned. A copy
-  // that did not arrive does not stop the rest: `held`, if given, is the first such
-  // object's place in `ids`, which the pass comes back to next step.
-  const auto push_all = [&](const std::vector<ObjectId>& ids, bool retrying, std::optional<size_t>* held = nullptr) {
+  // Every one of `ids`, a batch at a time; how many leading ones were planned.
+  const auto push_all = [&](const std::vector<ObjectId>& ids, bool retrying) {
     size_t offset = 0;
     while (offset < ids.size() && !stopped) {
       if (yielded()) {
@@ -3561,45 +3767,69 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         break;
       }
       size_t done = 0;
-      std::optional<size_t> failed_at;
-      const bool stop = push_some(std::span(ids).subspan(offset), retrying, done, failed_at);
-      if (failed_at && held && !*held) *held = offset + *failed_at;
+      const bool stop = push_some(std::span(ids).subspan(offset), retrying, done);
       offset += done;
       if (stop || !done) stopped = true;
     }
     return offset;
   };
 
-  // ---- Pulling: fetches one object and keeps it; nothing when this node's device
-  // will not admit it.
-  const auto pull = [&](const ObjectId& id) -> std::optional<FetchAnswer> {
+  // ---- Pulling: starts fetching one object, holding an extent of the window until it
+  // lands, and does not wait. The fetch runs to completion and is kept whatever
+  // repair's turn does meanwhile, so a node that is never quiet still pulls: the
+  // store's workers store it as it lands (nothing stored when this node's device will
+  // not admit it, which the owner then tries again), and the next step applies it.
+  // false when neither the credit nor the window covers an extent.
+  const auto pull = [&](const ObjectId& id, OfferBook::Fetch& marked) {
+    if (spent + extent > byte_budget) {
+      result.credit_limited = true;
+      return false;
+    }
+    if (!fits(0, extent)) return false;
+    spent += extent;
+    const auto seq = state.started++;
+    state.enter(extent);
+    state.moving.insert(id);
+    ++result.remote_operations;
+    // The book's mark that this node is fetching it ends once the pull is applied.
+    state.fetching.erase(id);
+    state.fetching.emplace(id, std::move(marked));
     ReadOptions options;
     options.frame = FrameType::speculative;
-    // The fetch runs to completion and is kept even if repair yields, so a
-    // node that is never quiet still pulls.
-    const auto read = get_remote(id, options, false);
-    if (read.object) {
-      {
-        const auto admitted = admit_data(FrameType::speculative, read.object->bytes.size(), no_caller_deadline);
-        if (!admitted) return std::nullopt;
-        if (_data.put(id, read.object->bytes)) {
-          transferred += read.object->bytes.size();
-          state.pulled_copies.fetch_add(1, std::memory_order_relaxed);
+    (void)start_fetch(id, options, false, [weak = std::weak_ptr<Shared>(_shared), id, seq, extent](ObjectData data, FetchAnswer answer) {
+      const auto shared = weak.lock();
+      if (!shared) return;
+      ReadLock alive(shared->alive);
+      auto* store = shared->store;
+      if (!store) return;
+      auto job = [store, id, seq, extent, data = std::move(data), answer] {
+        RepairLanded landed;
+        landed.seq = seq;
+        landed.id = id;
+        landed.pull = true;
+        landed.answer = answer;
+        if (data) {
+          landed.answer = FetchAnswer::try_later;
+          if (const auto admitted = store->admit_data(FrameType::speculative, data->bytes.size(), no_caller_deadline)) {
+            if (store->_data.put(id, data->bytes)) {
+              landed.ok = true;
+              landed.answer = FetchAnswer::ok;
+              landed.bytes = data->bytes.size();
+              store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
+            }
+          }
+          if (landed.ok) {
+            store->_context.events().notify(store->_storage_event);
+            store->note_acknowledged(id, store->_self);
+          }
         }
-      }
-      _context.events().notify(_storage_event);
-      note_acknowledged(id, _self);
-      trace_repair("pull " + to_string(id) + " fetched");
-    } else if (read.answer == FetchAnswer::not_found) {
-      // Should own it, not here, not cached, and every peer present that
-      // might hold it says it does not.
-      note_unsourceable(id);
-      ++result.pull_unsourceable;
-      trace_repair("pull " + to_string(id) + " unsourceable");
-    } else {
-      trace_repair("pull " + to_string(id) + " try-later");
-    }
-    return read.answer;
+        if (store->_repair->land(extent, std::move(landed))) store->_context.events().notify(store->_storage_event);
+      };
+      // The store going: what has not been stored is lost, and the next survey lists
+      // it again.
+      (void)store->submit(std::move(job));
+    });
+    return true;
   };
   // Nothing is pulled while no local backend could store it.
   const bool can_store = _data.online_backends() > 0;
@@ -3614,26 +3844,32 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     return present_peers->contains(peer);
   };
 
-  // ---- The retries whose time has come go first, at most half of what a step
-  // examines for the pushes.
+  // ---- A copy that did not arrive is sent again first, then the retries whose time
+  // has come. An object in flight is left to land.
   {
+    std::vector<ObjectId> again;
+    for (const auto& id : state.redo)
+      if (_data.has(id) && live.contains(id) && !state.moving.contains(id)) again.push_back(id);
+    const auto sent = push_all(again, false);
+    state.redo.assign(again.begin() + static_cast<std::ptrdiff_t>(sent), again.end());
+  }
+  if (!stopped) {
     std::vector<ObjectId> due;
-    for (auto retry = state.push_retries.begin(); retry != state.push_retries.end() && due.size() < std::max<size_t>(1, scan_budget / 2);) {
+    for (auto retry = state.push_retries.begin(); retry != state.push_retries.end();) {
       const auto id = retry->first;
       if (!_data.has(id) || !live.contains(id)) {
         retry = state.push_retries.erase(retry);
         continue;
       }
-      if (retry->second.due <= now) due.push_back(id);
+      if (retry->second.due <= now && !state.moving.contains(id)) due.push_back(id);
       ++retry;
     }
-    scanned += due.size();
     (void)push_all(due, true);
   }
   if (can_store && !stopped && !result.credit_limited) {
-    for (auto retry = state.pull_retries.begin(); retry != state.pull_retries.end() && scanned < scan_budget;) {
+    for (auto retry = state.pull_retries.begin(); retry != state.pull_retries.end();) {
       const auto id = retry->first;
-      if (retry->second.due > now) {
+      if (retry->second.due > now || state.moving.contains(id)) {
         ++retry;
         continue;
       }
@@ -3641,33 +3877,18 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         retry = state.pull_retries.erase(retry);
         continue;
       }
-      const auto fetch = _offers.begin_fetch(id, present);
+      auto fetch = _offers.begin_fetch(id, present);
       if (!fetch) {
         trace_repair("pull " + to_string(id) + " promised");
         RepairState::retry_soon(state.pull_retries, id, now);
         ++retry;
         continue;
       }
-      if (transferred + extent > byte_budget) {
-        result.credit_limited = true;
+      // Its entry stays until it lands, and is then dropped or tried again later.
+      if (!pull(id, *fetch)) {
         stopped = true;
         break;
       }
-      if (!reserve_operation()) {
-        stopped = true;
-        break;
-      }
-      const auto answer = pull(id);
-      if (!answer) {
-        stopped = true;
-        break;
-      }
-      ++scanned;
-      if (*answer != FetchAnswer::try_later) {
-        retry = state.pull_retries.erase(retry);
-        continue;
-      }
-      RepairState::retry_later(state.pull_retries, id, now);
       ++retry;
     }
   }
@@ -3682,20 +3903,16 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     size_t skipped = 0;
     std::vector<ObjectId> run;
     size_t run_first = at;
-    // The first object whose copy did not arrive: the pass is tried again from it
-    // next step, and is not complete while there is one. The rest of the step goes on.
-    std::optional<size_t> held;
     // Sends the run and moves the position over what was planned; false when the step
-    // stops there.
+    // stops there. A copy that did not arrive is sent again from the next step, and the
+    // pass is not complete while there is one.
     const auto flush = [&] {
       if (run.empty()) return true;
-      std::optional<size_t> failed;
-      state.queue_at = run_first + push_all(run, false, &failed);
-      if (failed && !held) held = run_first + *failed;
+      state.queue_at = run_first + push_all(run, false);
       run.clear();
       return !stopped;
     };
-    while (at < state.queue.size() && scanned < scan_budget && skipped < RepairState::skip_budget) {
+    while (at < state.queue.size() && skipped < RepairState::skip_budget) {
       if (run.empty() && skipped % 1024 == 0 && yielded()) {
         stopped = true;
         break;
@@ -3704,8 +3921,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       const auto& id = item.id;
       if (!item.pull) {
         // Listed, and no longer held here or referenced, or waiting on its retry, or
-        // needing nothing: passed.
-        const bool idle = !_data.has(id) || !live.contains(id) || state.push_retries.contains(id);
+        // in flight already, or needing nothing: passed.
+        const bool idle = !_data.has(id) || !live.contains(id) || state.push_retries.contains(id) || state.moving.contains(id);
         if (idle || (run.empty() && settled_by_holdings(id))) {
           if (!flush()) break;
           state.queue_at = ++at;
@@ -3715,9 +3932,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         }
         if (run.empty()) run_first = at;
         run.push_back(id);
-        ++scanned;
         ++at;
-        if (run.size() >= RepairState::sends_in_flight && !flush()) break;
+        if (run.size() >= message::max_offer_batch && !flush()) break;
         continue;
       }
       if (!flush()) break;
@@ -3725,7 +3941,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         state.queue_at = ++at;
         ++result.pull_examined;
       };
-      if (!should_own(id) || _data.has(id) || state.pull_retries.contains(id)) {
+      if (!should_own(id) || _data.has(id) || state.pull_retries.contains(id) || state.moving.contains(id)) {
         pass();
         ++skipped;
         continue;
@@ -3748,7 +3964,6 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         note_acknowledged(id, _self);
         trace_repair("pull " + to_string(id) + " from-cache");
         pass();
-        ++scanned;
         continue;
       }
       // No work that cannot complete: the survey asks again when the
@@ -3760,7 +3975,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         continue;
       }
       // A holder has said it is sending it: met again on the retry's backoff.
-      const auto fetch = _offers.begin_fetch(id, present);
+      auto fetch = _offers.begin_fetch(id, present);
       if (!fetch) {
         trace_repair("pull " + to_string(id) + " promised");
         RepairState::retry_soon(state.pull_retries, id, _time.now());
@@ -3768,53 +3983,18 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         ++skipped;
         continue;
       }
-      if (transferred + extent > byte_budget) {
-        result.credit_limited = true;
+      if (!pull(id, *fetch)) {
         stopped = true;
         break;
       }
-      if (!reserve_operation()) {
-        stopped = true;
-        break;
-      }
-      const auto answer = pull(id);
-      if (!answer) {
-        stopped = true;
-        break;
-      }
-      if (*answer == FetchAnswer::try_later) RepairState::retry_later(state.pull_retries, id, _time.now());
       pass();
-      ++scanned;
     }
     (void)flush();
-    if (held)
-      state.queue_at = *held;
-    else if (state.queue_at >= state.queue.size() && !stopped && !result.yielded && !result.credit_limited)
-      state.walk_complete = true;
+    if (state.queue_at >= state.queue.size() && !stopped && !result.yielded && !result.credit_limited) state.walk_complete = true;
   }
 
-  result.remote_operations = operations;
-  state.push_examined.fetch_add(result.push_examined, std::memory_order_relaxed);
-  state.pull_examined.fetch_add(result.pull_examined, std::memory_order_relaxed);
-  state.bytes.fetch_add(result.bytes_transferred, std::memory_order_relaxed);
-  state.push_phase_complete.store(state.walk_complete, std::memory_order_relaxed);
-  if (state.walk_complete) {
-    // A pass a list changed under may have passed objects before they were
-    // listed: another runs rather than report settled.
-    result.complete = !state.spans_change;
-    state.spans_change = false;
-    state.passes.fetch_add(1, std::memory_order_relaxed);
-    state.queue_at = 0;
-    if (state.passed.empty()) {
-      state.walk_complete = state.queue.empty();
-    } else {
-      // The next pass is over everything listed again, what this one passed before a
-      // list changed included.
-      state.passed.clear();
-      state.requeue = true;
-      state.walk_complete = false;
-    }
-  }
+  finish_repair_pass(result);
+  report_repair(result);
   return result;
 }
 

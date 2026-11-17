@@ -364,24 +364,40 @@ struct RepairLists {
   std::shared_ptr<const ledger::PeerHolds> holds{};
 };
 
-// What a repair step did (Macha's RepairResult).
+// What a repair step did (Macha's RepairResult). A step starts transfers and does not
+// wait for them (the repair redesign, stage 4): what landed is reported by the step
+// after it, or by a drain.
 struct RepairResult {
-  // Object bytes moved, either way.
+  // Object bytes that landed since the last step, either way.
   uint64_t bytes_transferred = 0;
   // The offers' own bytes (offer_objects), which the credit pays for beside the
   // objects' but which settle nothing (the repair redesign, stage 3).
   uint64_t offer_bytes = 0;
+  // What the credit pays for, from this step: each push's bytes as it is put on the
+  // wire, each pull's as it lands, and the offers'.
+  uint64_t credit_spent = 0;
+  // Bytes still in the window as the step ends: transfers started and not landed.
+  uint64_t in_flight = 0;
   size_t push_examined = 0;
   size_t pull_examined = 0;
+  // Calls this step started.
   size_t remote_operations = 0;
   // Objects this step wanted to pull and no peer would supply.
   size_t pull_unsourceable = 0;
-  // A whole pass ended, and nothing it passed changed under it.
+  // A whole pass ended, everything it started landed, and nothing it passed changed
+  // under it.
   bool complete = true;
   bool yielded = false;
   // The step stopped at an object needing a transfer the byte budget could
   // not cover; that object is the first of the next step.
   bool credit_limited = false;
+};
+
+// The bytes repair keeps in flight at once: the credit's burst (the repair redesign,
+// stage 4), so no number of its own. One transfer always starts into an empty window,
+// however large.
+struct RepairWindow {
+  uint64_t bytes = 0;
 };
 
 // Repair's progress and silent failures since start (Macha's
@@ -400,6 +416,10 @@ struct RepairDiagnostics {
   uint64_t copies_pushed = 0;
   uint64_t copies_pulled = 0;
   uint64_t local_drops = 0;
+  // The offers' bytes since start, and the bytes in repair's window now (the repair
+  // redesign, stage 4; they join Macha's /status repair section at the cutover).
+  uint64_t offer_bytes = 0;
+  uint64_t in_flight = 0;
 };
 
 // The distributed store (requirements S22 to S29; Macha's
@@ -612,9 +632,17 @@ class DistributedStore final : public ControlObjectSource {
   // fetched. The claim walk's restorer.
   bool ensure_local(const ObjectId& id, bool foreground = false);
 
-  // One repair step: at most `operation_budget` calls (zero: no bound) and
-  // `byte_budget` bytes moved. Single owner.
-  RepairResult repair_step(const RepairLists& lists, uint64_t byte_budget, size_t operation_budget, const std::function<bool()>& should_yield = {});
+  // One repair step: reports what landed since the last step, then tops up the window
+  // of transfers, the most urgent first, until `byte_budget` is spent, `window` is
+  // full, `should_yield` says so or nothing is left, and returns without waiting for
+  // what it started. Each transfer completes on the store's executor and is kept
+  // whatever the caller does meanwhile; a pull is stored by the store's workers as it
+  // lands. Single owner.
+  RepairResult repair_step(const RepairLists& lists, uint64_t byte_budget, RepairWindow window, const std::function<bool()>& should_yield = {});
+  // Waits up to `deadline` for what repair has in flight, then reports what landed
+  // since the last step as a step would, starting nothing. For an owner's orderly stop
+  // and for tests. Single owner, as repair_step.
+  RepairResult repair_drain(std::chrono::milliseconds deadline);
   RepairDiagnostics repair_diagnostics() const;
   // What this node's repair is about to receive: the server answers a peer's
   // offer from it (offer_book.h). Outlives the server that holds it.
@@ -671,6 +699,8 @@ class DistributedStore final : public ControlObjectSource {
   struct SharedFetch;
   struct Job;
   struct RepairState;
+  struct RepairPlan;
+  struct RepairLanded;
 
   WriteEvidence run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into = {});
   std::shared_ptr<TicketRecord> new_ticket(const ObjectId& id, Durability level, bool deferred);
@@ -729,6 +759,19 @@ class DistributedStore final : public ControlObjectSource {
   // `until`: the deadline a read's earlier stages already ran on.
   ReadResult get_remote(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
                         std::optional<dannan::contract::TimePoint> until = std::nullopt);
+  // Joins the fetch of `id` in flight, or leads a new one, as one more waiter; `on_done`
+  // is told once it is done, outside its lock.
+  using FetchDone = std::function<void(ObjectData result, FetchAnswer answer)>;
+  std::shared_ptr<SharedFetch> start_fetch(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist, FetchDone on_done = {});
+  // Repair's window: what landed since the last step applied to repair's state and
+  // `result`, then the pass ended if everything it started has landed; and a step's
+  // figures added to the counters.
+  void settle_repair(RepairResult& result);
+  // A push whose copies have all landed, or none was sent: its retries and the local
+  // drop, or sent again when a copy did not arrive.
+  void finish_push(RepairPlan& plan, RepairResult& result);
+  void finish_repair_pass(RepairResult& result);
+  void report_repair(RepairResult& result);
   void fetch_next(const std::shared_ptr<SharedFetch>& fetch);
   void fetched(const std::shared_ptr<SharedFetch>& fetch, const dannan::membership::NodeRecord& target, ReplicaWorkClass work,
                std::chrono::steady_clock::time_point started, dannan::net::CallOutcome outcome);

@@ -59,8 +59,9 @@ struct RepairOptions {
   // shrinks in proportion (Macha's cpu_target). No source: not paced by CPU.
   double cpu_target = 0.10;
   CpuSource cpu = system_cpu_sample;
-  // Calls one step may make.
-  size_t operation_budget = 16;
+  // The credit's burst is the larger of this and five seconds of the link; it is
+  // also the window of transfers a turn keeps in flight (the repair redesign, stage 4,
+  // where the 16-call count a step went).
   size_t extent_size = 16 * 1024 * 1024;
   // The clock repair's credit and share run on. None: the node's. An owner's
   // pass on its own clock gives it, as Macha's trace fixtures move its pass's
@@ -235,19 +236,31 @@ class Repair {
   static constexpr dannan::sched::Waits lists_waits = dannan::sched::Waits::none;
   RepairLists lists() const;
 
-  // One repair step from `lists` on the credit there is, which it spends. Yields
-  // at an operation boundary on the duty share, and otherwise runs to its budget:
-  // nothing here looks at a stop.
+  // One repair step from `lists` on the credit there is, which it spends: it tops up
+  // the window of transfers (the credit's burst) and returns without waiting for what
+  // it started, reporting what landed since the last (DistributedStore::repair_step).
+  // Yields at an operation boundary on the duty share, and otherwise runs until the
+  // credit or the window is spent: nothing here looks at a stop.
   static constexpr dannan::sched::Waits transfer_waits = claim_walks_waits;
   RepairResult transfer(Turn& turn, const RepairLists& lists);
 
-  // What the turn leaves owing; drops the credit when that is nothing.
+  // Waits up to `deadline` for what the transfers have in flight, then reports what
+  // landed since the last step, its pulls paid for from the credit, and starts nothing:
+  // for an owner's orderly stop, before its transport goes.
+  static constexpr dannan::sched::Waits drain_waits = dannan::sched::Waits::network | dannan::sched::Waits::data_device;
+  RepairResult drain(std::chrono::milliseconds deadline);
+
+  // What the turn leaves owing; drops the credit when that is nothing. Anything in
+  // flight is more work: a node never goes quiet with copies on the wire.
   static constexpr dannan::sched::Waits settle_waits = dannan::sched::Waits::none;
   RepairSettled settle(const RepairWalks& walks, const RepairResult& step);
 
  private:
   class Restorer;
   bool higher_class_active(const Turn& turn) const;
+  // The link's rate as the credit takes it, and the credit's burst at that rate.
+  double bandwidth() const;
+  uint64_t burst() const;
   // A peer's telemetry shows foreground traffic now.
   bool peer_foreground_active() const;
 

@@ -373,7 +373,7 @@ TEST(NodeSeams, TheUnsourceableSampleNamesItsObjects) {
       std::make_shared<const contract::InventoryHorizon>(uint64_t{1}, true, live, std::vector<store::ObjectId>{}, std::vector<contract::Garbage>{});
   lists.pull = std::make_shared<const std::vector<store::ObjectId>>(live);
   ASSERT_TRUE(test::wait_until([&] {
-    (void)node.store().repair_step(lists, 1ULL << 30, 16, [] { return false; });
+    (void)node.store().repair_step(lists, 1ULL << 30, store::RepairWindow{1ULL << 30}, [] { return false; });
     return !node.store().repair_diagnostics().unsourceable_sample.empty();
   }));
   const auto text = published(node, "repair.unsourceable_sample");
