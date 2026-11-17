@@ -513,8 +513,9 @@ struct DistributedStore::RepairLanded {
   // A push's peer and plan.
   NodeId peer{};
   std::shared_ptr<RepairPlan> plan;
-  // A pull's answer.
+  // A pull's answer, and whether a fetch of many left it for another.
   FetchAnswer answer = FetchAnswer::try_later;
+  bool again = false;
 };
 
 // Repair's place and counters. The cursors and lists belong to the one
@@ -596,6 +597,8 @@ struct DistributedStore::RepairState {
   uint64_t started = 0;
   std::set<ObjectId> moving;
   std::vector<ObjectId> redo;
+  // Pulls a fetch of many left for another: fetched again first.
+  std::vector<ObjectId> pull_again;
   // The offer book's marks of the pulls in flight, each ended as its pull is applied.
   // Held here, never by a fetch's completion, which may outlive the store.
   std::map<ObjectId, OfferBook::Fetch> fetching;
@@ -608,11 +611,16 @@ struct DistributedStore::RepairState {
   // `amount` leaves the window and `arrived`, if any, waits for the owner. Whether the
   // window has just drained to half or less: the storage event is raised, once a drain.
   bool land(uint64_t amount, std::optional<RepairLanded> arrived) {
+    std::vector<RepairLanded> all;
+    if (arrived) all.push_back(std::move(*arrived));
+    return land_all(amount, std::move(all));
+  }
+  bool land_all(uint64_t amount, std::vector<RepairLanded> arrived) {
     bool drained = false;
     {
       Lock lock(window_mutex);
       in_flight -= std::min(in_flight, amount);
-      if (arrived) landed.push_back(std::move(*arrived));
+      for (auto& item : arrived) landed.push_back(std::move(item));
       if (drain_owed && in_flight * 2 <= window) {
         drain_owed = false;
         drained = true;
@@ -3274,13 +3282,15 @@ void DistributedStore::settle_repair(RepairResult& result) {
     Lock lock(state.window_mutex);
     landed.swap(state.landed);
   }
-  std::sort(landed.begin(), landed.end(), [](const RepairLanded& a, const RepairLanded& b) { return a.seq < b.seq; });
+  std::stable_sort(landed.begin(), landed.end(), [](const RepairLanded& a, const RepairLanded& b) { return a.seq < b.seq; });
   const auto now = _time.now();
   for (auto& item : landed) {
     if (item.pull) {
       state.moving.erase(item.id);
       state.fetching.erase(item.id);
-      if (item.ok) {
+      if (item.again) {
+        state.pull_again.push_back(item.id);
+      } else if (item.ok) {
         // Paid for as it lands: its size is known only then.
         result.bytes_transferred += item.bytes;
         result.credit_spent += item.bytes;
@@ -3347,7 +3357,7 @@ void DistributedStore::finish_repair_pass(RepairResult& result) {
   state.push_phase_complete.store(state.walk_complete, std::memory_order_relaxed);
   // A pass ends once its walk has, and everything it started has landed and been
   // applied, and every copy that did not arrive has been sent again.
-  if (!state.walk_complete || !state.redo.empty() || !state.quiet()) return;
+  if (!state.walk_complete || !state.redo.empty() || !state.pull_again.empty() || !state.quiet()) return;
   // A pass a list changed under may have passed objects before they were
   // listed: another runs rather than report settled.
   result.complete = !state.spans_change;
@@ -3780,20 +3790,28 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   // store's workers store it as it lands (nothing stored when this node's device will
   // not admit it, which the owner then tries again), and the next step applies it.
   // false when neither the credit nor the window covers an extent.
-  const auto pull = [&](const ObjectId& id, OfferBook::Fetch& marked) {
+  // An extent of the credit and the window for a fetch; false when either is spent.
+  const auto hold_extent = [&] {
     if (spent + extent > byte_budget) {
       result.credit_limited = true;
       return false;
     }
     if (!fits(0, extent)) return false;
     spent += extent;
-    const auto seq = state.started++;
     state.enter(extent);
+    return true;
+  };
+  // `id` is in flight: the book's mark that this node is fetching it ends once its
+  // pull is applied.
+  const auto mark_moving = [&](const ObjectId& id, OfferBook::Fetch& marked) {
     state.moving.insert(id);
-    ++result.remote_operations;
-    // The book's mark that this node is fetching it ends once the pull is applied.
     state.fetching.erase(id);
     state.fetching.emplace(id, std::move(marked));
+  };
+  // Starts fetching `id` alone, from whichever owner answers, its extent held.
+  const auto fetch_one = [&](const ObjectId& id) {
+    const auto seq = state.started++;
+    ++result.remote_operations;
     ReadOptions options;
     options.frame = FrameType::speculative;
     (void)start_fetch(id, options, false, [weak = std::weak_ptr<Shared>(_shared), id, seq, extent](ObjectData data, FetchAnswer answer) {
@@ -3829,20 +3847,154 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       // it again.
       (void)store->submit(std::move(job));
     });
+  };
+  const auto pull = [&](const ObjectId& id, OfferBook::Fetch& marked) {
+    if (!hold_extent()) return false;
+    mark_moving(id, marked);
+    fetch_one(id);
     return true;
   };
   // Nothing is pulled while no local backend could store it.
   const bool can_store = _data.online_backends() > 0;
-  // Whether a peer is present, read once a step and only when a pull asks: a
-  // promise from a peer gone is not waited on.
-  std::optional<std::set<NodeId>> present_peers;
-  const auto present = [&](const NodeId& peer) {
-    if (!present_peers) {
-      present_peers.emplace();
-      for (const auto& node : _context.nodes().active()) present_peers->insert(node.id);
+  // The nodes present, read once a step and only when a pull asks: a promise from a
+  // peer gone is not waited on, nor a holder gone asked.
+  std::optional<std::map<NodeId, NodeRecord>> present_nodes;
+  const auto present_node = [&](const NodeId& peer) -> const NodeRecord* {
+    if (!present_nodes) {
+      present_nodes.emplace();
+      for (const auto& node : _context.nodes().active()) present_nodes->emplace(node.id, node);
     }
-    return present_peers->contains(peer);
+    const auto found = present_nodes->find(peer);
+    return found == present_nodes->end() ? nullptr : &found->second;
   };
+  const auto present = [&](const NodeId& peer) { return present_node(peer) != nullptr; };
+
+  // ---- Pulling many (stage 4): what the survey says a present peer holds is fetched
+  // from it many to a message (get_objects), each message an extent of the credit and
+  // the window, an owner asked first. What no holder is known for is fetched alone; so
+  // is what a fetch of many could not bring, on the retry's backoff. A fetch of one id
+  // is get_object's.
+  const auto holder_of = [&](const ObjectId& id) -> const NodeRecord* {
+    if (!lists.holds || lists.holds->generation != generation) return nullptr;
+    const auto holds = [&](const NodeId& peer) {
+      const auto found = lists.holds->holds.find(peer);
+      return found != lists.holds->holds.end() && std::binary_search(found->second->begin(), found->second->end(), id);
+    };
+    for (const auto& owner : ranked(id))
+      if (owner.id != _self && holds(owner.id))
+        if (const auto* node = present_node(owner.id)) return node;
+    for (const auto& [peer, ids] : lists.holds->holds)
+      if (holds(peer))
+        if (const auto* node = present_node(peer)) return node;
+    return nullptr;
+  };
+  struct Many {
+    NodeRecord peer;
+    std::vector<ObjectId> ids;
+  };
+  std::map<NodeId, Many> fetching_many;
+  const auto send_many = [&](Many& many) {
+    if (many.ids.size() == 1) {
+      fetch_one(many.ids.front());
+      return;
+    }
+    const auto seq = state.started++;
+    ++result.remote_operations;
+    const auto started = Clock::now();
+    _context.routes().call(
+        many.peer, message::get_objects, message::encode_ids(many.ids), FrameType::speculative, _options.object_transfer_call, _executor,
+        [weak = std::weak_ptr<Shared>(_shared), ids = many.ids, host = many.peer.host, seq, extent, started](CallOutcome outcome) {
+          const auto shared = weak.lock();
+          if (!shared) return;
+          ReadLock alive(shared->alive);
+          auto* store = shared->store;
+          if (!store) return;
+          std::vector<message::FetchedObject> objects;
+          if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
+            try {
+              objects = message::decode_fetched(outcome.reply->payload, ids.size());
+            } catch (const std::exception& error) {
+              store->_logger.debug("repair fetch peer=" + host + " error=" + error.what());
+            }
+          } else {
+            store->_logger.debug("repair fetch peer=" + host + " error=" + outcome_text(outcome));
+          }
+          uint64_t brought = 0;
+          for (const auto& object : objects) brought += object.data.size();
+          // A fetch teaches the network estimate, as a fetch of one does.
+          store->note_network(brought, Clock::now() - started);
+          auto job = [store, ids, objects = std::move(objects), seq, extent] {
+            std::vector<RepairLanded> landed;
+            bool stored = false;
+            for (size_t i = 0; i < ids.size(); ++i) {
+              RepairLanded item;
+              item.seq = seq;
+              item.id = ids[i];
+              item.pull = true;
+              if (i < objects.size() && objects[i].as == message::Fetched::left) {
+                item.again = true;
+              } else if (i < objects.size() && objects[i].as == message::Fetched::sent && object_id(objects[i].data) == ids[i]) {
+                if (const auto admitted = store->admit_data(FrameType::speculative, objects[i].data.size(), no_caller_deadline)) {
+                  if (store->_data.put(ids[i], objects[i].data)) {
+                    item.ok = true;
+                    item.answer = FetchAnswer::ok;
+                    item.bytes = objects[i].data.size();
+                    store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
+                    store->note_acknowledged(ids[i], store->_self);
+                    stored = true;
+                  }
+                }
+              }
+              // Anything else (absent here, unavailable, damaged, no answer) is tried
+              // again alone, which asks every owner.
+              landed.push_back(std::move(item));
+            }
+            if (stored) store->_context.events().notify(store->_storage_event);
+            if (store->_repair->land_all(extent, std::move(landed))) store->_context.events().notify(store->_storage_event);
+          };
+          (void)store->submit(std::move(job));
+        },
+        peer_call_watch());
+  };
+  const auto pull_many = [&](const ObjectId& id, OfferBook::Fetch& marked) {
+    const auto* holder = holder_of(id);
+    if (!holder) return pull(id, marked);
+    auto open = fetching_many.find(holder->id);
+    if (open != fetching_many.end() && open->second.ids.size() >= message::max_fetch_batch) {
+      send_many(open->second);
+      fetching_many.erase(open);
+      open = fetching_many.end();
+    }
+    if (open == fetching_many.end()) {
+      if (!hold_extent()) return false;
+      open = fetching_many.emplace(holder->id, Many{*holder, {}}).first;
+    }
+    open->second.ids.push_back(id);
+    mark_moving(id, marked);
+    return true;
+  };
+
+  // ---- What a fetch of many left goes first.
+  if (can_store && !state.pull_again.empty()) {
+    std::vector<ObjectId> again;
+    again.swap(state.pull_again);
+    size_t at = 0;
+    for (; at < again.size(); ++at) {
+      const auto& id = again[at];
+      if (!should_own(id) || _data.has(id) || state.moving.contains(id)) continue;
+      auto fetch = _offers.begin_fetch(id, present);
+      if (!fetch) {
+        trace_repair("pull " + to_string(id) + " promised");
+        RepairState::retry_soon(state.pull_retries, id, now);
+        continue;
+      }
+      if (!pull_many(id, *fetch)) {
+        stopped = true;
+        break;
+      }
+    }
+    state.pull_again.insert(state.pull_again.end(), again.begin() + static_cast<std::ptrdiff_t>(at), again.end());
+  }
 
   // ---- A copy that did not arrive is sent again first, then the retries whose time
   // has come. An object in flight is left to land.
@@ -3983,7 +4135,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
         ++skipped;
         continue;
       }
-      if (!pull(id, *fetch)) {
+      if (!pull_many(id, *fetch)) {
         stopped = true;
         break;
       }
@@ -3992,6 +4144,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     (void)flush();
     if (state.queue_at >= state.queue.size() && !stopped && !result.yielded && !result.credit_limited) state.walk_complete = true;
   }
+  // The fetches of many gathered go out together, their extents already held.
+  for (auto& [peer, many] : fetching_many) send_many(many);
 
   finish_repair_pass(result);
   report_repair(result);
