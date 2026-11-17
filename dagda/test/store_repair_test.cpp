@@ -2868,6 +2868,52 @@ TEST(StoreRepair, APullThatLandsIsKeptThoughTheNodeStopsMidWindow) {
   EXPECT_TRUE(joiner.data().has(live[3]));
 }
 
+// Small objects travel many to a message: a pull's size is not known until it lands, so
+// each fetch holds an extent of the window, and one fetch a holder carries up to an
+// extent of objects (get_objects). With a window of one extent, one turn fetches forty
+// small objects in one message; one at a time, it would fetch one a turn.
+TEST(StoreRepair, APullTurnFetchesManySmallObjectsInOneMessage) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", windowed(time));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 40, 8 * 1024, 115);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  auto& repair = joiner.repair();
+  (void)repair.earn_credit(time.now(), 60s);
+  {
+    auto turn = repair.begin_turn(time.now(), 0);
+    (void)repair.transfer(turn, lists);
+  }
+  EXPECT_TRUE(wait_until([&] { return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return joiner.data().has(id); }); }, 10s));
+  EXPECT_EQ(holder.calls_of(message::get_objects), 1u);
+  EXPECT_EQ(holder.calls_of(message::get_object), 0u);
+}
+
+// A fetch of many carries what an extent holds, in order, and says the rest were left;
+// those are fetched by the steps after, many to a message again.
+TEST(StoreRepair, AFetchOfManyStopsAtAnExtentAndTheRestFollow) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 400 * 1024, 116);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  for (int step = 0; step < 10; ++step) {
+    if (std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return joiner.data().has(id); })) break;
+    (void)landed_step(joiner.store(), lists, 64ULL * 1024 * 1024);
+  }
+  for (const auto& id : live) EXPECT_EQ(joiner.data().get(id), holder.data().get(id));
+  // Two of 400 KiB to an extent of 1 MiB: three fetches.
+  EXPECT_EQ(holder.calls_of(message::get_objects), 3u);
+  EXPECT_EQ(holder.calls_of(message::get_object), 0u);
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
