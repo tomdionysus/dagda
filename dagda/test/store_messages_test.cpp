@@ -401,5 +401,55 @@ TEST(StoreMessages, AnOfferNamesItsIdsAndItsAnswerSaysOfEachWhetherItIsWanted) {
   }
 }
 
+// The repair redesign's stage 4, the fetch of many: the ids as a presence names them;
+// the reply a byte each and, for one sent, its bytes. On the DATA lane, never in the
+// control class, as get_object.
+TEST(StoreMessages, AFetchOfManyNamesItsIdsAndItsReplyCarriesEachOrSaysWhyNot) {
+  EXPECT_EQ(static_cast<uint16_t>(get_objects), 773);
+  EXPECT_EQ(static_cast<uint16_t>(get_objects_reply), 774);
+  EXPECT_EQ(max_fetch_batch, max_offer_batch);
+  const std::vector<ObjectId> ids{id_a, id_b};
+  EXPECT_EQ(decode_ids(encode_ids(ids), max_fetch_batch), ids);
+  EXPECT_THROW(decode_ids(encode_ids(std::vector<ObjectId>(max_fetch_batch + 1, id_a)), max_fetch_batch), dannan::net::DecodeError);
+
+  std::vector<FetchedObject> objects(4);
+  objects[0] = {Fetched::sent, Bytes{0xab, 0xcd}};
+  objects[1].as = Fetched::absent;
+  objects[2].as = Fetched::unavailable;
+  objects[3].as = Fetched::left;
+  const auto reply = encode_fetched(objects);
+  EXPECT_EQ(hex(reply),
+            "00000004"
+            "00"
+            "00000002abcd"
+            "01"
+            "02"
+            "03");
+  const auto decoded = decode_fetched(reply, 4);
+  ASSERT_EQ(decoded.size(), 4u);
+  for (size_t i = 0; i < decoded.size(); ++i) {
+    EXPECT_EQ(decoded[i].as, objects[i].as) << i;
+    EXPECT_EQ(decoded[i].data, objects[i].data) << i;
+  }
+  EXPECT_THROW(decode_fetched(reply, 3), dannan::net::DecodeError);
+  auto unknown = reply;
+  unknown.back() = 4;
+  EXPECT_THROW(decode_fetched(unknown, 4), dannan::net::DecodeError);
+  auto truncated = reply;
+  truncated.pop_back();
+  EXPECT_THROW(decode_fetched(truncated, 4), dannan::net::DecodeError);
+
+  auto table = dannan::net::RouteTable::with_dannan_types();
+  RecordingRoutes routes(table);
+  register_types(routes);
+  using dannan::net::Lane;
+  using dannan::sched::FrameType;
+  for (const auto type : {get_objects, get_objects_reply}) {
+    EXPECT_TRUE(table.allowed(type, Lane::data, FrameType::speculative)) << table.name(type);
+    EXPECT_FALSE(table.allowed(type, Lane::control, FrameType::speculative)) << table.name(type);
+  }
+  EXPECT_FALSE(table.allowed(get_objects, Lane::data, FrameType::control));
+}
+
 }  // namespace
 }  // namespace dagda::store::message

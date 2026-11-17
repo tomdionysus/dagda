@@ -54,6 +54,9 @@ void register_types(dannan::Routes& routes) {
   // An offer is answered from the index, as a presence is: the control lane.
   routes.add(offer_objects, {"dagda.offer_objects", Lanes::control, Frames::any});
   routes.add(offer_objects_reply, {"dagda.offer_objects_reply", Lanes::control, Frames::any});
+  // A fetch of many reads DATA, as get_object does.
+  routes.add(get_objects, {"dagda.get_objects", Lanes::data, Frames::not_control});
+  routes.add(get_objects_reply, {"dagda.get_objects_reply", Lanes::data, Frames::any});
   routes.add(bool_reply, {"dagda.bool_reply", Lanes::both, Frames::any});
   routes.add(object_reply, {"dagda.object_reply", Lanes::data, Frames::any});
   routes.add(control_object_reply, {"dagda.control_object_reply", Lanes::control, Frames::any});
@@ -392,6 +395,33 @@ std::vector<OfferAnswer> decode_offer_answers(std::span<const uint8_t> payload, 
     const auto answer = reader.u8();
     if (answer > static_cast<uint8_t>(OfferAnswer::no_room)) throw DecodeError("invalid offer answer");
     out.push_back(static_cast<OfferAnswer>(answer));
+  }
+  reader.finish();
+  return out;
+}
+
+Bytes encode_fetched(const std::vector<FetchedObject>& objects) {
+  Writer writer;
+  writer.u32(static_cast<uint32_t>(objects.size()));
+  for (const auto& object : objects) {
+    writer.u8(static_cast<uint8_t>(object.as));
+    if (object.as == Fetched::sent) writer.bytes(object.data);
+  }
+  return writer.take();
+}
+
+std::vector<FetchedObject> decode_fetched(std::span<const uint8_t> payload, size_t expected) {
+  Reader reader(payload);
+  if (reader.u32() != expected) throw DecodeError("fetch reply count mismatch");
+  std::vector<FetchedObject> out;
+  out.reserve(expected);
+  for (size_t i = 0; i < expected; ++i) {
+    const auto as = reader.u8();
+    if (as > static_cast<uint8_t>(Fetched::left)) throw DecodeError("invalid fetch answer");
+    FetchedObject object;
+    object.as = static_cast<Fetched>(as);
+    if (object.as == Fetched::sent) object.data = reader.bytes(max_object_bytes);
+    out.push_back(std::move(object));
   }
   reader.finish();
   return out;

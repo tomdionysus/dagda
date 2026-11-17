@@ -64,6 +64,11 @@ inline constexpr MessageType remove_objects_reply{770};
 // it is wanted. Not a probe: repair still finds its work by diff alone.
 inline constexpr MessageType offer_objects{771};
 inline constexpr MessageType offer_objects_reply{772};
+// Repair's fetch of many (the repair redesign, stage 4): the ids a puller wants from one
+// holder; the reply carries as many as an extent holds, in order, and says of each of
+// the rest why not. DATA lane.
+inline constexpr MessageType get_objects{773};
+inline constexpr MessageType get_objects_reply{774};
 
 // Replies.
 inline constexpr MessageType bool_reply{615};
@@ -84,8 +89,9 @@ inline constexpr uint32_t max_retain_batch = 1000000;
 inline constexpr uint32_t max_valid_batch = 16;
 // The ids one remove_objects carries; a larger delete is sent in parts.
 inline constexpr uint32_t max_remove_batch = 4096;
-// The ids one offer_objects carries.
+// The ids one offer_objects carries, and one get_objects.
 inline constexpr uint32_t max_offer_batch = 4096;
+inline constexpr uint32_t max_fetch_batch = max_offer_batch;
 
 // Registers every store type's wire rules (not their handlers) on `routes`.
 // Before the node starts: Dannan refuses registration after. Throws as
@@ -222,5 +228,27 @@ Bytes encode_offer_answers(const std::vector<OfferAnswer>& answers);
 // Throws dannan::net::DecodeError unless it answers `expected` ids, each with
 // one of the four answers.
 std::vector<OfferAnswer> decode_offer_answers(std::span<const uint8_t> payload, size_t expected);
+
+// get_objects: encode_ids, at most max_fetch_batch. get_objects_reply: u32 count, then
+// for each id asked, in order, a byte saying what became of it and, for one sent, its
+// bytes as a blob. The holder sends in order until the next would take the reply past
+// an extent, and always sends the first it holds.
+enum class Fetched : uint8_t {
+  sent = 0,
+  // Not held, with every disk online: this holder will not have it.
+  absent = 1,
+  // Not on the disks online, or not readable now: ask again later.
+  unavailable = 2,
+  // Past the reply's extent: ask again.
+  left = 3,
+};
+struct FetchedObject {
+  Fetched as = Fetched::left;
+  Bytes data;
+};
+Bytes encode_fetched(const std::vector<FetchedObject>& objects);
+// Throws dannan::net::DecodeError unless it answers `expected` ids, each with one of
+// the four answers, none past max_object_bytes, and only a sent one with bytes.
+std::vector<FetchedObject> decode_fetched(std::span<const uint8_t> payload, size_t expected);
 
 }  // namespace dagda::store::message
