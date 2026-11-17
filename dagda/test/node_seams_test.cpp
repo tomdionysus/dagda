@@ -49,6 +49,27 @@ using test::Cluster;
 using test::ClusterNode;
 using test::ClusterNodeOptions;
 
+// Macha's shape: NodeOptions::state is the node's one state directory, Dannan's too, so
+// the Dannan node's id and custody are there before the store opens. A fresh node opens,
+// marks its layout beside them, keeps what it is given and opens again. Found by Macha's
+// port (its first full suite, 2026-11-17), where every fresh node was refused.
+TEST(NodeSeams, AStoreOpensInTheStateDirectoryItsHostShares) {
+  Cluster cluster;
+  ClusterNodeOptions shared;
+  shared.state = cluster.dir() / "one" / "node";
+  auto& node = cluster.add("one", shared);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_TRUE(std::filesystem::exists(shared.state / "storage-layout"));
+  EXPECT_TRUE(dannan::identity::KeyCustody::exists(shared.state));
+  const auto bytes = test::pattern(64 * 1024, 7);
+  const auto id = store::object_id(bytes);
+  ASSERT_TRUE(node.store().put(id, bytes));
+  node.restart();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_EQ(node.data().get(id), std::optional<store::Bytes>{bytes});
+}
+
 // Custody and no certificate, as a Macha node under its cluster key has: the
 // advert is signed by a certificate's key, so there is none to publish, and the
 // node opens without it. The cluster fixture always issues a certificate, so this
