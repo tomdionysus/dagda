@@ -3364,8 +3364,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
 
     // Only what this step will send is offered, so a promise covers a copy about to
     // move, never one a paced holder will send steps later (stage 3's regression under
-    // a viewer): each object's size as stored, an upper bound read from the index and
-    // not the object, against the credit and the batch's bytes, in order.
+    // a viewer): each object's size from the index, not a read, against the credit
+    // and the batch's bytes, in order.
     bool stop_all = false;
     {
       size_t keep = plans.size();
@@ -3377,9 +3377,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           keep = p;
           break;
         }
-        // A record is its payload and its seal; a payload is at most an extent, so an
-        // extent's credit always covers one.
-        const uint64_t bytes = std::min(_data.stored_size(plans[p].id), extent) * lacking;
+        const uint64_t bytes = _data.payload_size(plans[p].id) * lacking;
         if (transferred + estimated + bytes > byte_budget) {
           result.credit_limited = true;
           stop_all = true;

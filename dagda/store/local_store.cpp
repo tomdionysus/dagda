@@ -1306,6 +1306,18 @@ uint64_t LocalStore::stored_size(const ObjectId& id) const {
   return error ? 0 : size;
 }
 
+uint64_t LocalStore::payload_size(const ObjectId& id) const {
+  ObjectLock object_guard(_object_locks.mutex(id));
+  {
+    Lock lock(_mutex);
+    if (const auto found = _packed.find(id); found != _packed.end()) return found->second.payload_size;
+  }
+  // A loose file is its header and then the ciphertext, as long as the plaintext.
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path(id), error);
+  return error || size < loose_header_size ? 0 : size - loose_header_size;
+}
+
 std::filesystem::file_time_type LocalStore::last_write(const ObjectId& id) const {
   ObjectLock object_guard(_object_locks.mutex(id));
   {

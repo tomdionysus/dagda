@@ -314,6 +314,9 @@ class LocalStore final : public contract::ObjectStore {
   std::filesystem::path object_path(const ObjectId&) const;
   // Bytes on disk: a packed object's record, a loose object's file.
   uint64_t stored_size(const ObjectId&) const;
+  // The object's plaintext size, from the pack index or the loose file's size,
+  // never a read; 0 when not held.
+  uint64_t payload_size(const ObjectId&) const;
   std::filesystem::file_time_type last_write(const ObjectId&) const;
   // Marks the object used now: a touch record for a packed one, the
   // modification time for a loose one.

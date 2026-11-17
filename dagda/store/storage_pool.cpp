@@ -747,7 +747,7 @@ std::optional<LocalStore::SealedObject> StoragePool::get_sealed(const ObjectId& 
   return std::nullopt;
 }
 
-uint64_t StoragePool::stored_size(const ObjectId& id) const {
+uint64_t StoragePool::payload_size(const ObjectId& id) const {
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
     {
@@ -755,7 +755,7 @@ uint64_t StoragePool::stored_size(const ObjectId& id) const {
       if (!backend->online || !backend->store) continue;
       store = backend->store;
     }
-    if (store->has(id)) return store->stored_size(id);
+    if (store->has(id)) return store->payload_size(id);
   }
   return 0;
 }
