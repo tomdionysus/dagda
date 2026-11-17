@@ -3011,6 +3011,16 @@ Branch `feature/macha-store-gaps`, nothing pushed. Every new case was seen faili
 
 Next: ACTIVE.md's "Next", item 1, the large rejoin. Nothing running, no Pi claimed.
 
+**Then, the same evening, the maintainer asking to push and continue:** `feature/macha-store-gaps` pushed to origin (no tag).
+The large rejoin traced (`9d078eb`, `TRACE=1`): the link's estimate collapsed under the window (0.69 MB/s on an 8
+MB/s link), holding the joiner idle on credit. `6231c98` the case (failing at its commit), `79e055d` the fix (repair
+samples the link from its window). Gate at `79e055d` on node-b (Dannan 0.8.2 prefix): **1146 / 1142 / 3 skipped /
+1 failed**, `ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit`, outside repair, passing three times alone
+straight after; in ACTIVE.md's Open. Remeasured: the large rejoin 16.7-20.9 s against stage 3's 14.1-17.1 (was
+16.6-25.5); small and viewer as before. The remaining 3 s is ACTIVE.md's first item. Also: this session's clangd
+stopped at the maintainer's word (no build of this session's ran on the Mac; the editor's background index did). Nothing
+running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (the maintainer, 2026-11-16). The repair item was answered by the redesign
