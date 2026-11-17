@@ -3021,6 +3021,14 @@ straight after; in ACTIVE.md's Open. Remeasured: the large rejoin 16.7-20.9 s ag
 stopped at the maintainer's word (no build of this session's ran on the Mac; the editor's background index did). Nothing
 running, no Pi claimed.
 
+**Later the same night (the maintainer: push, then continue):** pushed to `8e509cd`. A second trace (`6319a6b`) narrowed the
+large rejoin's gap to its start: the joiner's first four pulls take 6.4 s where the link alone needs about 2.
+node-d went down as the third traced round began (22:37Z), back at 22:54Z under-voltage; the maintainer: try another pair.
+The pulls' stages are now timed (`7a8dd96`). Then a second port defect from the Macha session, first: a failed
+plane was marked on readiness only when both planes had ended. `ac96a5a` the case (failing on the code before),
+`97a5bed` the fix; gate on node-a: **1147 / 1144 / 3 skipped / 0 failed, 0 warnings**; sent to the Macha session.
+Next: the timed trace on a free pair (node-b and node-c were full, node-d left out). Nothing running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (the maintainer, 2026-11-16). The repair item was answered by the redesign

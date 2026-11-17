@@ -24,7 +24,14 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
   passed, 3 skipped, 0 failed, 0 warnings. **Last full gate, `79e055d`**, node-b, Dannan 0.8.2 prefix: 1146 ran,
   1142 passed, 3 skipped, 1 failed (`ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit`, no repair code,
   passed three times alone after; in Open).
-- **The branch is pushed** (the maintainer, 2026-11-17): `feature/macha-store-gaps` on origin. No tag pushed; `0.2.0` held.
+- **The branch is pushed** (the maintainer, 2026-11-17) to `8e509cd`; later commits are local. No tag pushed; `0.2.0` held.
+- **Fixed for Macha's port (2026-11-17, late): a failed plane is marked on readiness as it fails** (`ac96a5a` the
+  case, `97a5bed`): the refusal wrapping the whole open told a plane's failure only when both planes had ended.
+  **Gate at `97a5bed`**, node-a, Dannan 0.8.0 prefix, Macha's fixtures: **1147 ran, 1144 passed, 3 skipped, 0
+  failed, 0 warnings**. The Macha session was sent the commit (it waited on it).
+- **node-d went down at about 22:37Z** during a traced repair round on it, and came back at 22:54Z already
+  showing past under-voltage (`0x50000` at one minute up); it keeps no persistent journal. Left out of benchmarks
+  until the maintainer says.
 - **Fixed for Macha's port (2026-11-17): a store begins in a state directory holding its host's files**
   (`844c557` the cases, `8b544d6`). Macha's first full suite (port at 8b40c4a) refused every fresh node, as its
   state directory is Dannan's too. An unmarked state is refused only when it holds what a store keeps there.
