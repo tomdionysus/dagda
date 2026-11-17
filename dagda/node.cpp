@@ -89,14 +89,22 @@ void Node::open_store() {
   refusing([this] { open(); });
 }
 
+void Node::tell_failure(bool data, const std::string& why) {
+  // Macha's words for the part that failed (local_state.cpp:127, :183 at 98b816d), from
+  // the failing plane's own thread as it fails, so a node with one plane failed and the
+  // other still recovering already says failed, and why. Readiness keeps the first.
+  _logger.error(std::string(data ? "node data storage recovery failed: " : "node local state recovery failed: ") + why);
+  _context.readiness().fail("dagda: " + why);
+  _failure_told.store(true, std::memory_order_release);
+}
+
 void Node::refusing(const std::function<void()>& part) {
   try {
     part();
   } catch (const std::exception& error) {
     const std::string why = error.what();
-    // Macha's words for the part that failed (local_state.cpp:127, :183 at 98b816d).
-    _logger.error(std::string(_opening_data ? "node data storage recovery failed: " : "node local state recovery failed: ") + why);
-    _context.readiness().fail("dagda: " + why);
+    // Unless a plane told it as it failed.
+    if (!_failure_told.load(std::memory_order_acquire)) tell_failure(_opening_data, why);
     stop();
     if (dynamic_cast<const NodeRefused*>(&error)) throw;
     throw NodeRefused(why);
@@ -250,27 +258,35 @@ void Node::open() {
   if (_options.admission && _options.admission->device_pressure.slowdown_percent) pool.service_thresholds = _options.admission->device_pressure;
   auto pool_services = services("dagda.pool");
   auto data_recovery = std::async(std::launch::async, [this, &pool, &pool_services, &self] {
-    startup_stage("data-storage");
-    _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, pool_services);
-    // A pool whose every backend is offline holds nothing it should: ready, but
-    // degraded, and it says so (the maintainer, 2026-11-05), so a node whose only disk is
-    // offline does not crash-loop on its startup timeout.
-    if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
-      const auto& gate = _options.admission->device_pressure;
-      _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
-                   "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
-                   " outlier_percent=" + std::to_string(gate.outlier_percent) +
-                   " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+    try {
+      startup_stage("data-storage");
+      _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, pool_services);
+      // A pool whose every backend is offline holds nothing it should: ready, but
+      // degraded, and it says so (the maintainer, 2026-11-05), so a node whose only disk is
+      // offline does not crash-loop on its startup timeout.
+      if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
+        const auto& gate = _options.admission->device_pressure;
+        _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
+                     "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
+                     " outlier_percent=" + std::to_string(gate.outlier_percent) +
+                     " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+      }
+      // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
+      // empty pool, and says so, or capacity=0 reads like a missing disk.
+      _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
+                   (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
+      if (_data->degraded())
+        _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) +
+                     "; running without one until it returns");
+      ready(plane_data);
+    } catch (const std::exception& error) {
+      // Told from this thread as it fails, not at the join (Macha's, local_state.cpp:127).
+      tell_failure(true, error.what());
+      throw;
     }
-    // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
-    // empty pool, and says so, or capacity=0 reads like a missing disk.
-    _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
-                 (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
-    if (_data->degraded())
-      _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) + "; running without one until it returns");
-    ready(plane_data);
   });
-  // The control chain's failure is the one told when both fail, as Macha's.
+  // The control chain's failure is the one thrown when both fail, as Macha's; each is
+  // told as it happens.
   std::exception_ptr chain_failure;
   try {
     if (_options.admission) {
@@ -311,6 +327,10 @@ void Node::open() {
     step("open reference-counts");
     _references = std::make_unique<ledger::ReferenceCounts>(_options.state / "ledger" / "referenced", _node_local,
                                                             ledger_cache_share(cache_bytes, LedgerShare::references), _context.logger("dagda.references"));
+  } catch (const std::exception& error) {
+    // Told as it fails, while the pool may still be recovering (local_state.cpp:183).
+    tell_failure(false, error.what());
+    chain_failure = std::current_exception();
   } catch (...) {
     chain_failure = std::current_exception();
   }
