@@ -22,7 +22,8 @@
 # Settings, from the environment: A and B, the two Pis' addresses; DEV, their interface;
 # OUT, where the figures go (build/harness/results/<date> in this repository by default);
 # STORES, the stores smoke and run compare (macha dagda by default); REST, the seconds
-# between runs; NOCOLD=1, which skips the fstrim and the page-cache drop before each run
+# between runs; SCENARIOS, which of rejoin-large, rejoin-small, away-large, away-small and
+# viewer a run takes (all by default); NOCOLD=1, which skips the fstrim and the page-cache drop before each run
 # and must be set on any Pi not held whole (the drop costs every other job there its
 # cache).
 #
@@ -194,11 +195,17 @@ case ${1:-} in
       link "round$round"
       set -- ${STORES:-macha dagda}
       if [ $((round % 2)) -eq 1 ]; then order="$1 $2"; else order="$2 $1"; fi
-      for store in $order; do rejoin $store large 26 4194304 $round; done
-      for store in $order; do rejoin $store small 410 65536 $round; done
-      for store in $order; do away $store large 26 4194304 $round; done
-      for store in $order; do away $store small 410 65536 $round; done
-      for store in $order; do rejoin $store large 26 4194304 $round viewer; done
+      for scenario in ${SCENARIOS:-rejoin-large rejoin-small away-large away-small viewer}; do
+        for store in $order; do
+          case $scenario in
+            rejoin-large) rejoin $store large 26 4194304 $round ;;
+            rejoin-small) rejoin $store small 410 65536 $round ;;
+            away-large) away $store large 26 4194304 $round ;;
+            away-small) away $store small 410 65536 $round ;;
+            viewer) rejoin $store large 26 4194304 $round viewer ;;
+          esac
+        done
+      done
     done
     link after; machine; say donerepair ;;
   *) echo "smoke | link | run | uncount"; exit 2 ;;
