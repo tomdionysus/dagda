@@ -22,6 +22,7 @@
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -215,6 +216,47 @@ TEST(Node, MachasUnmovedMetadataRefusesAHeadsNodeNamingTheMigration) {
   EXPECT_NE(why.find("dagda-migrate --heads --state " + b.state().string()), std::string::npos) << why;
   EXPECT_NE(why.find("current.meta"), std::string::npos) << why;
   EXPECT_FALSE(b.running());
+}
+
+// A plane that fails is marked on the node's readiness at once, from its own thread, as
+// Macha's LocalState marked it (local_state.cpp:127, :183 at 98b816d), while the other
+// plane is still held: the node says failed, and why, before the other plane ends. Found
+// by Macha's port (service_root's failed-startup cases, 2026-11-17): the failure was told
+// only when both planes had ended. Both ways: the DATA pool fails on its thread while
+// the control chain is held, and the cache fails on the opening thread while the pool is
+// held, its reason empty.
+TEST(Node, APlaneThatFailsIsMarkedFailedWhileTheOtherIsStillRecovering) {
+  struct Shape {
+    std::string failing;
+    std::string held;
+    std::string why;
+    std::string line;
+  };
+  for (const auto& shape : {Shape{"data-storage", "control-storage", "backend missing", "node data storage recovery failed: backend missing"},
+                            Shape{"cache", "data-storage", "", "node local state recovery failed: "}}) {
+    dannan::test::Gate gate;
+    Cluster cluster;
+    ClusterNodeOptions options;
+    options.startup_stage = [&gate, shape](std::string_view stage) {
+      if (stage == shape.held) gate.enter_and_wait();
+      if (stage == shape.failing) throw std::runtime_error(shape.why);
+    };
+    auto& a = cluster.add("a", options);
+    dannan::test::GateOpener opener(gate);
+    auto starting = std::async(std::launch::async, [&] {
+      try {
+        a.start();
+      } catch (const std::exception&) {
+      }
+    });
+    dannan::test::GateOpener release(gate);
+    ASSERT_TRUE(gate.wait_for_entries(1, 10s)) << shape.failing;
+    EXPECT_TRUE(test::wait_until([&] { return a.context().readiness().failed(); }, 5s)) << shape.failing << " failed with " << shape.held << " still held";
+    EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::error, shape.line)) << shape.failing;
+    gate.open();
+    ASSERT_EQ(starting.wait_for(30s), std::future_status::ready);
+    EXPECT_FALSE(a.running());
+  }
 }
 
 // No custody, no node-local key: the ledgers would have no key, so the
