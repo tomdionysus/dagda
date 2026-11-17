@@ -3238,6 +3238,10 @@ void DistributedStore::trace_repair(const std::string& detail) const {
   if (_options.repair_trace) _options.repair_trace("repair", detail);
 }
 
+void DistributedStore::time_repair(const std::string& event) const {
+  if (_options.repair_timing) _options.repair_timing(event);
+}
+
 void DistributedStore::note_unsourceable(const ObjectId& id) {
   const auto total = _repair->pull_unsourceable.fetch_add(1, std::memory_order_relaxed) + 1;
   bool warn = false;
@@ -3762,6 +3766,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       state.enter(bytes);
       ++send.plan->outstanding;
       ++result.remote_operations;
+      time_repair("push " + to_string(send.plan->id).substr(0, 8) + " asked " + std::to_string(bytes));
       _context.routes().call(
           send.peer, message::put_object, message::encode_object(send.plan->id, *send.data), FrameType::speculative, _options.object_transfer_call, _executor,
           [weak = std::weak_ptr<Shared>(_shared), plan = send.plan, id = send.plan->id, peer = send.peer.id, host = send.peer.host, bytes, seq,
@@ -3772,6 +3777,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
             auto* store = shared->store;
             if (!store) return;
             const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
+            store->time_repair("push " + to_string(id).substr(0, 8) + " answered " + (ok ? "1" : "0"));
             if (ok) {
               // The copy reaches every ticket that names the peer pending, and the
               // figures, as it lands.
@@ -3847,6 +3853,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     ++result.remote_operations;
     ReadOptions options;
     options.frame = FrameType::speculative;
+    time_repair("pull " + to_string(id).substr(0, 8) + " asked");
     // The link is sampled from the window, not from this fetch alone.
     (void)start_fetch(
         id, options, false,
@@ -3856,6 +3863,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           ReadLock alive(shared->alive);
           auto* store = shared->store;
           if (!store) return;
+          store->time_repair("pull " + to_string(id).substr(0, 8) + " answered " + std::to_string(data ? data->bytes.size() : 0));
           auto job = [store, id, seq, extent, data = std::move(data), answer] {
             RepairLanded landed;
             landed.seq = seq;
@@ -3877,6 +3885,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
                 store->note_acknowledged(id, store->_self);
               }
             }
+            store->time_repair("pull " + to_string(id).substr(0, 8) + " stored " + (landed.ok ? "1" : "0"));
             store->repair_landed(store->_repair->land(extent, data ? data->bytes.size() : 0, extent, std::move(landed)));
           };
           // The store going: what has not been stored is lost, and the next survey lists
@@ -3937,6 +3946,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     }
     const auto seq = state.started++;
     ++result.remote_operations;
+    time_repair("fetch " + std::to_string(seq) + " asked " + std::to_string(many.ids.size()));
     _context.routes().call(
         many.peer, message::get_objects, message::encode_ids(many.ids), FrameType::speculative, _options.object_transfer_call, _executor,
         [weak = std::weak_ptr<Shared>(_shared), ids = many.ids, host = many.peer.host, seq, extent](CallOutcome outcome) {
@@ -3945,6 +3955,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           ReadLock alive(shared->alive);
           auto* store = shared->store;
           if (!store) return;
+          store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
           std::vector<message::FetchedObject> objects;
           if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
             try {
@@ -3984,6 +3995,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               landed.push_back(std::move(item));
             }
             if (stored) store->_context.events().notify(store->_storage_event);
+            store->time_repair("fetch " + std::to_string(seq) + " stored");
             store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
           };
           (void)store->submit(std::move(job));
