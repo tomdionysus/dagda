@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -523,6 +524,9 @@ class Node {
   };
 
   void refusing(const std::function<void()>& part);
+  // A plane's failure, logged in Macha's words and marked on readiness, from the
+  // failing plane's own thread as it fails. Thread-safe.
+  void tell_failure(bool data, const std::string& why);
   void prepare();
   void open();
   void step(std::string_view what);
@@ -566,6 +570,8 @@ class Node {
   dannan::Context& _context;
   // The DATA pool is opening: a refusal now is Macha's data storage recovery failing.
   bool _opening_data = false;
+  // A plane has told its failure as it failed: the refusal does not tell it again.
+  std::atomic<bool> _failure_told{false};
   NodeOptions _options;
   const dannan::status::ScopedLogger _logger;
   dannan::supervise::StartupProgress _progress;
