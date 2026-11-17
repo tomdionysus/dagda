@@ -356,7 +356,17 @@ window and link estimate. One traced round of the large rejoin showed:
   (stage 3's pulled 10; before the fix, 1 to 4). The small rejoin 3.9 to 4.5 s against 13.4 to 13.5; under a viewer
   14.1 to 19.3 against 23.6 to 26.4.
 
-**Next: the remaining gap, about 3 s.** Trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
+**Traced again at `79e055d`** (22:34Z, `build/harness/results/2026-11-17-trace2/`, rounds 1 and 2: 18.8 and 20.3 s;
+round 3 lost when node-d went down as it began, before its node joined). Round 1:
+- After about 10 s the rejoin runs near the link: the last 14 objects (56 MiB) land in about 8 s, about 7 MB/s.
+- **The start is slow.** b's first four pulls (16 MiB, four fetches of one) start at 1.1 s and land at 7.5 s. Until
+  4.1 s nothing else is on the link (a's pushes wait for a's survey to see b's lacks), so the link alone would take
+  about 2 s. Not yet known where the 6 s go: the holder's server (its DATA admission for a fetch, its reads), the
+  link, or b's stores (a pull lands after its write). The trace marks decisions, not those stages.
+- b then learns 2.6 MB/s from those four, earns 1.3 MB/s, and pulls about one object every 2 s.
+
+**Next: the remaining gap, about 3 s.** First time a pull's stages (asked, answered, stored) on both nodes, then
+trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
 both nodes' samples as before. Leads, none proven: each node's first pass earns no credit (`earn_credit` with no
 earlier time earns for none), and stage 3's joiner pulled at once on its initial estimate; a promises what its
 window will send, so b's pulls of those wait for copies a sends at a's pace; a span's bytes are counted as a pull is
