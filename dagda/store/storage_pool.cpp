@@ -747,6 +747,19 @@ std::optional<LocalStore::SealedObject> StoragePool::get_sealed(const ObjectId& 
   return std::nullopt;
 }
 
+uint64_t StoragePool::stored_size(const ObjectId& id) const {
+  for (const auto& backend : ranked(id)) {
+    std::shared_ptr<LocalStore> store;
+    {
+      Lock lock(backend->mutex);
+      if (!backend->online || !backend->store) continue;
+      store = backend->store;
+    }
+    if (store->has(id)) return store->stored_size(id);
+  }
+  return 0;
+}
+
 std::optional<dannan::identity::Hash256> StoragePool::held_digest(const ObjectId& id) const {
   const auto sealed = get_sealed(id);
   if (!sealed) return std::nullopt;

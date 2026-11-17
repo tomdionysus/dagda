@@ -555,6 +555,14 @@ struct DistributedStore::RepairState {
       retries.emplace(id, Retry{now + retry_first, retry_first});
     }
   }
+  // Schedules `id` again after retry_first, the delay not doubled: a pull a promise
+  // holds back fetches as soon as the promise lapses.
+  static void retry_soon(std::map<ObjectId, Retry>& retries, const ObjectId& id, TimePoint now) {
+    if (const auto found = retries.find(id); found != retries.end())
+      found->second = {now + retry_first, retry_first};
+    else if (retries.size() < retries_max)
+      retries.emplace(id, Retry{now + retry_first, retry_first});
+  }
 };
 
 DistributedStore::DistributedStore(dannan::Context& context, Stores stores, DistributedStoreOptions options)
@@ -3354,6 +3362,36 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       plans.push_back(std::move(plan));
     }
 
+    // Only what this step will send is offered, so a promise covers a copy about to
+    // move, never one a paced holder will send steps later (stage 3's regression under
+    // a viewer): each object's size as stored, an upper bound read from the index and
+    // not the object, against the credit and the batch's bytes, in order.
+    bool stop_all = false;
+    {
+      size_t keep = plans.size();
+      uint64_t estimated = 0;
+      for (size_t p = 0; p < plans.size(); ++p) {
+        const auto lacking = static_cast<uint64_t>(std::count_if(offers.begin(), offers.end(), [&](const Offer& offer) { return offer.plan == p; }));
+        if (!lacking) continue;
+        if (estimated >= batch_bytes_cap) {
+          keep = p;
+          break;
+        }
+        // A record is its payload and its seal; a payload is at most an extent, so an
+        // extent's credit always covers one.
+        const uint64_t bytes = std::min(_data.stored_size(plans[p].id), extent) * lacking;
+        if (transferred + estimated + bytes > byte_budget) {
+          result.credit_limited = true;
+          stop_all = true;
+          keep = p;
+          break;
+        }
+        estimated += bytes;
+      }
+      plans.resize(keep);
+      std::erase_if(offers, [&](const Offer& offer) { return offer.plan >= keep; });
+    }
+
     // One offer a peer for the batch, all at once. Their bytes come out of the
     // credit; a peer that could not answer is a copy that did not arrive.
     {
@@ -3408,7 +3446,6 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     // credit, the calls, admission or the batch's bytes run out.
     std::vector<Send> sends;
     uint64_t batch_bytes = 0;
-    bool stop_all = false;
     size_t planned = plans.size();
     for (size_t p = 0; p < plans.size(); ++p) {
       auto& plan = plans[p];
@@ -3609,7 +3646,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       const auto fetch = _offers.begin_fetch(id, present);
       if (!fetch) {
         trace_repair("pull " + to_string(id) + " promised");
-        RepairState::retry_later(state.pull_retries, id, now);
+        RepairState::retry_soon(state.pull_retries, id, now);
         ++retry;
         continue;
       }
@@ -3728,7 +3765,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       const auto fetch = _offers.begin_fetch(id, present);
       if (!fetch) {
         trace_repair("pull " + to_string(id) + " promised");
-        RepairState::retry_later(state.pull_retries, id, _time.now());
+        RepairState::retry_soon(state.pull_retries, id, _time.now());
         pass();
         ++skipped;
         continue;
