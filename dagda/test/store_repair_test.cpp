@@ -2600,9 +2600,7 @@ TEST(StoreRepair, AHolderOffersOnlyWhatItsCreditWillSend) {
 
   (void)landed_step(peer.store(), {inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})}, 8ULL * 1024 * 1024);
   for (const auto& id : live) EXPECT_TRUE(peer.data().has(id));
-  // The three it fetched, together in one fetch of many.
-  EXPECT_EQ(peer.store().repair_diagnostics().copies_pulled, live.size() - 1);
-  EXPECT_EQ(writer.calls_of(message::get_objects), 1u);
+  EXPECT_EQ(writer.calls_of(message::get_object), live.size() - 1);
 }
 
 // A pull a promise holds back is looked at again each second, not on the doubling
@@ -2664,10 +2662,9 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
   const RepairLists pull{inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})};
   const RepairLists push{inventory_of(live), {}, lacks_of({{rejoining.id(), live}}), {}};
 
-  // The joiner's fetches are held at the holder while the holder pushes: one of many,
-  // as the survey says the holder has them all.
+  // The joiner's fetches are held at the holder while the holder pushes.
   dannan::test::GateOpener opener(gate);
-  writer.interpose(hold(message::get_objects, gate));
+  writer.interpose(hold(message::get_object, gate));
   auto pulling = std::async(std::launch::async, [&] { return landed_step(rejoining.store(), pull, 64ULL * 1024 * 1024); });
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
@@ -2681,8 +2678,7 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
         return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return rejoining.data().has(id); });
       },
       15s));
-  EXPECT_EQ(writer.store().repair_diagnostics().copies_pushed + rejoining.store().repair_diagnostics().copies_pulled, live.size());
-  EXPECT_EQ(rejoining.calls_of(message::put_object), writer.store().repair_diagnostics().copies_pushed);
+  EXPECT_EQ(rejoining.calls_of(message::put_object) + writer.calls_of(message::get_object), live.size());
 }
 
 // ---- The repair redesign's stage 4: a window of transfers ---------------------
@@ -2911,12 +2907,35 @@ TEST(StoreRepair, AFetchOfManyStopsAtAnExtentAndTheRestFollow) {
   const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
   for (int step = 0; step < 10; ++step) {
     if (std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return joiner.data().has(id); })) break;
-    (void)landed_step(joiner.store(), lists, 64ULL * 1024 * 1024);
+    (void)landed_step(joiner.store(), lists, extent);
   }
   for (const auto& id : live) EXPECT_EQ(joiner.data().get(id), holder.data().get(id));
-  // Two of 400 KiB to an extent of 1 MiB: three fetches.
+  // Two of 400 KiB to an extent of 1 MiB, and the credit and the window cover one
+  // fetch a step here: three fetches.
   EXPECT_EQ(holder.calls_of(message::get_objects), 3u);
   EXPECT_EQ(holder.calls_of(message::get_object), 0u);
+}
+
+// What a holder is asked for goes in as many fetches as the credit and the window cover,
+// each an extent of them, so a step pulls a window's worth of large objects, not one
+// extent's. Measured (the redesign document, "What stage 4 measured"): one fetch a holder
+// a step brought one large object a pass, and the joiner of a large rejoin sat idle
+// while its holder pushed everything on its own credit. Six objects of most of an
+// extent, a window of eight extents: one step brings them all.
+TEST(StoreRepair, AStepFetchesAWindowsWorthOfLargeObjectsFromOneHolder) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 900 * 1024, 117);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  (void)joiner.store().repair_step(lists, 8 * extent, RepairWindow{8 * extent});
+  (void)joiner.store().repair_drain(30s);
+  for (const auto& id : live) EXPECT_TRUE(joiner.data().has(id));
+  // One fetch an object: each part of one id is a fetch of one.
+  EXPECT_EQ(holder.calls_of(message::get_objects) + holder.calls_of(message::get_object), live.size());
 }
 
 // The survey through an owner's provider: what is referenced is the
