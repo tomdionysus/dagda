@@ -43,6 +43,7 @@ const std::vector<dannan::net::MessageType>& StorageServer::served() {
       message::get_control_object, message::put_control_object, message::put_object_deferred,  message::object_durability_barrier,
       message::retain_objects,     message::have_objects,       message::have_control_objects, message::have_valid_objects,
       message::trie_diff,          message::durability_covered, message::remove_objects,       message::offer_objects,
+      message::get_objects,
   };
   return types;
 }
@@ -275,6 +276,41 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
       _activity.note(frame, data->size());
       return reply(message::object_reply, message::encode_object(id, *data));
+    }
+    if (type == message::get_objects) {
+      // Repair's fetch of many: one admission of an extent, then the objects in order
+      // while the reply stays within it, each sized from the index before it is read.
+      const auto ids = message::decode_ids(request.payload, message::max_fetch_batch);
+      auto admitted = admit_data(frame, extent, true);
+      if (!admitted) return gave_up();
+      std::vector<message::FetchedObject> objects(ids.size());
+      uint64_t sent = 0;
+      bool full = false;
+      for (size_t i = 0; i < ids.size(); ++i) {
+        auto& object = objects[i];
+        if (full) continue;
+        // Not found is final only when no offline backend could hold it.
+        const bool every_backend = _data.every_backend_online();
+        if (!_data.has(ids[i])) {
+          object.as = every_backend && _data.every_backend_online() ? message::Fetched::absent : message::Fetched::unavailable;
+          continue;
+        }
+        if (sent && sent + _data.payload_size(ids[i]) > extent) {
+          full = true;
+          continue;
+        }
+        auto data = _data.get(ids[i]);
+        if (!data) {
+          object.as = message::Fetched::unavailable;
+          continue;
+        }
+        sent += data->size();
+        object.as = message::Fetched::sent;
+        object.data = std::move(*data);
+      }
+      admitted.reset();
+      _activity.note(frame, sent);
+      return reply(message::get_objects_reply, message::encode_fetched(objects));
     }
     if (type == message::get_control_object) {
       const auto id = message::decode_id(request.payload);
