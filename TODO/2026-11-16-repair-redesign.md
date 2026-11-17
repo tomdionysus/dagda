@@ -365,8 +365,9 @@ round 3 lost when uranus went down as it began, before its node joined). Round 1
   link, or b's stores (a pull lands after its write). The trace marks decisions, not those stages.
 - b then learns 2.6 MB/s from those four, earns 1.3 MB/s, and pulls about one object every 2 s.
 
-**Next: the remaining gap, about 3 s.** First time a pull's stages (asked, answered, stored) on both nodes, then
-trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
+**Next: the remaining gap, about 3 s.** The stages are now timed (`7a8dd96`: `DistributedStoreOptions::repair_timing`,
+printed by the harness's `TRACE=1` as `repair-time` lines: each push and pull asked, answered, stored); the harness
+needs rebuilding at the tip on both Pis of the pair first. Then trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
 both nodes' samples as before. Leads, none proven: each node's first pass earns no credit (`earn_credit` with no
 earlier time earns for none), and stage 3's joiner pulled at once on its initial estimate; a promises what its
 window will send, so b's pulls of those wait for copies a sends at a's pace; a span's bytes are counted as a pull is
