@@ -2965,7 +2965,15 @@ Branch `feature/macha-store-gaps`, nothing pushed. Every new case was seen faili
   wake on a drained window; Tom ruled, through it, that `offer_bytes` and `in_flight` join Macha's /status at
   the cutover.
 
-Next: Tom's call on the viewer regression's fix, then stage 4, each a session. Nothing running, no Pi claimed.
+**Then, Tom approving the recommended fix (2026-11-17, "Yes"):** `63e76a0` two cases (both seen failing on
+`d2872de`, the first proving the mechanism), `0dfe22a` the fix (a holder offers only what its credit and batch
+will send, sized from the index; a promised pull looked at each second), `d119d14` the size taken from the
+payload, not the sealed record (Macha's `StoreRepair.ATransferWaitsForItsCredit` caught it). The controller runs
+chosen scenarios (`e5cee19`). Gate on jupiter, as above: **1133 ran / 1130 passed / 3 skipped / 0 failed, 0
+warnings**. Remeasured old against new, three rounds: under a viewer 32.5-38.3 s against 34.4-37.9 s, at parity
+with each copy moved once; unpaced 20.6-29.3 s against 36.2-52.5 s.
+
+Next: stage 4, a session of its own. Nothing running, no Pi claimed.
 
 ## Archived from ACTIVE.md, 2026-11-16
 

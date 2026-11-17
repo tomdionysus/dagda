@@ -11,9 +11,9 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
   locally only.
 - **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI, so no bump.
   0.8.5 fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
-  teardown hang in Dagda's tests would look there first). **Last full gate: `d2872de`**, jupiter, Dannan 0.8.2
-  prefix (0.8.0's ABI), GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1131 ran,
-  1128 passed, 3 skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates
+  teardown hang in Dagda's tests would look there first). **Last full gate: `d119d14`**, jupiter, Dannan 0.8.2
+  prefix (0.8.0's ABI), GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1133 ran,
+  1130 passed, 3 skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates
   before it are in `COMPLETED.md`'s handoffs.
 - **The instant delete keeps the copy on a node with no inventory published** (Tom's ruling, gc-and-deletion
   gap 9): done, `5f3c458`.
@@ -21,8 +21,9 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
   each stage, the rulings and how to measure). Done and gated: the survey keeps who holds what (stage 1); repair
   works from one queue, fewest copies first, which ends both ways the pull starved (stage 2); each copy moves
   once, by an offer before the bytes (stage 3, `d2872de`); and Dagda's own loop reads a new reference at once, a
-  gap against Macha (`0d048e0`). Stage 3 measured: each copy once, faster unpaced, three times slower under
-  a viewer (a fix waits on Tom). Then stage 4, the window and the call count gone, its shape agreed.
+  gap against Macha (`0d048e0`). Stage 3 measured: each copy once, the unpaced rejoins a third to a half faster,
+  at parity under a viewer once its regression was fixed (`d119d14`). **Next: stage 4**, the window and the call
+  count gone, its shape agreed.
 - **The repair baseline is measured** (harness plan, "Workload 7, the baseline"): Dagda's repair today is at
   least as fast as Macha's in every scenario; both stores send each object about one and a half to two times;
   on small objects the 16-call count, not the link, sets the rate. Stages 1 to 3 against the baseline's Dagda:
@@ -51,25 +52,20 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
 
 ## Next (in order)
 
-1. **Stage 3's regression under a viewer** (the redesign document, "What stage 3 measured"): a rejoin with a
-   viewer on the holder took about three times as long as before. Mechanism suspected, not proven; the fix
-   recommended there (offer only what the step will send; a promised pull looked at again each second):
-   **approved by Tom, 2026-11-17 ("Yes"), before stage 4**. Test-first, then remeasure the viewer scenario old
-   against new.
-2. **Repair, stage 4: the window, and the call count gone.** Shape agreed with the Macha session (the redesign
+1. **Repair, stage 4: the window, and the call count gone.** Shape agreed with the Macha session (the redesign
    document, "Stage 4, the shape proposed", with its answers and Tom's ruling that `offer_bytes` and `in_flight`
    join Macha's /status at the cutover). A multi-object message for small values. Measure old against new.
-3. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
+2. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
    pressure, cache; strace fsync counts on a separate rerun. **The slow-disk run is approved** (Tom,
    2026-11-16): when a Pi is free, a note on the board, then the device-mapper delay target over a loop file on
    that one Pi (no real disk touched), removed afterwards. None of these workloads is written yet, and the Macha
    session reviews each before it runs.
-4. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-5. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
+3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
+4. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes
    an adapter over it.
-6. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
+5. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
    are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is done).
 
 A defect Macha's port finds comes before any of these.
@@ -301,8 +297,7 @@ asking:
 
 ## Waiting on Tom
 
-**Stage 3's regression under a viewer** (2026-11-17): the fix to take, recommended in the redesign document,
-"What stage 3 measured". Everything asked before is answered, under Decisions.
+Nothing of Dagda's is waiting on Tom (stage 3's viewer regression: his "Yes" of 2026-11-17, built and measured).
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
 under a claim, the local barrier's deadline, wall versus steady ages, the policy disagreement loop, O(state) per
