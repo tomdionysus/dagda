@@ -2943,6 +2943,30 @@ first in ACTIVE.md's "Next"). Lir's shared-payload point was closed in Lir: it n
 Next: the instant delete's fix, small; then stage 3 (the offer), designed and not built, then old against new measured in one session; stage 4 (the
 window, the count gone), its shape to the Macha session first. Nothing running, no Pi claimed.
 
+## Handoff, 2026-11-16 (night): the instant delete's fix; repair stage 3, the offer; stage 4's shape agreed
+
+Branch `feature/macha-store-gaps`, nothing pushed. Every new case was seen failing on the code before it.
+
+- **The instant delete keeps the copy on a node with no inventory published** (Tom's ruling; gc-and-deletion gap
+  9): `750cad3` the case, `5f3c458` the fix. The delete cases that expect a copy to go now publish an empty
+  inventory first. Gate on neptune, Dannan 0.8.0 prefix, GCC Release, warnings as errors, Macha's fixtures,
+  kernel 6.18.62-v8-va48+: **1126 ran / 1123 passed / 3 skipped / 0 failed, 0 warnings**.
+- **Repair stage 3, the offer** (`deafb7d` the wire pair, `21013d6` four cases, `d2872de` the code; the redesign
+  document, "What was built"): a holder offers before reading, sends only what is wanted; the receiver answers
+  from its index and an `OfferBook`, and does not pull a promised copy. Gate on jupiter, Dannan 0.8.2 prefix
+  (0.8.0's ABI), otherwise as above, Macha's fixtures copied there: **1131 ran / 1128 passed / 3 skipped / 0
+  failed, 0 warnings**. No ported case changed.
+- **Measured old against new** (the controller runs a `dagda-old` beside the tip: `e369fd0`, `7d4b5a0`; the
+  baseline's binaries kept in `build-old/` on jupiter and uranus, the tip's in `build-tip/`): each copy once in
+  every scenario, the unpaced rejoins a third to a half faster; **a rejoin under a viewer about three times
+  slower**, in all three rounds. Mechanism suspected, not proven; a fix recommended; waiting on Tom.
+- **The Macha session**: told both gated commits; it needs nothing for stage 3 (its pass calls `transfer`, and
+  `dagda::Node` hands its server the book). **Stage 4's shape agreed** with it (the redesign document), with the
+  wake on a drained window; Tom ruled, through it, that `offer_bytes` and `in_flight` join Macha's /status at
+  the cutover.
+
+Next: Tom's call on the viewer regression's fix, then stage 4, each a session. Nothing running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (Tom, 2026-11-16). The repair item was answered by the redesign

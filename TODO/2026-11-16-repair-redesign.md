@@ -7,8 +7,8 @@
 | 0 | Measure and check | Done. Baseline measured; the three checks answered |
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); not yet benchmarked |
-| 3 | Each copy once (the offer) | Built (`d2872de`); gate below; not yet benchmarked |
-| 4 | A window of transfers; the call count gone | Not started; its shape goes to the Macha session first. **Next** |
+| 3 | Each copy once (the offer) | Built and gated (`d2872de`); measured: each copy once, faster unpaced, **three times slower under a viewer** (below). **Next: that regression's fix, Tom's call** |
+| 4 | A window of transfers; the call count gone | Shape agreed with the Macha session (below); not built |
 
 Everything is on `feature/macha-store-gaps`, local, nothing pushed.
 
@@ -176,6 +176,38 @@ The checks:
 - *To check when building:* the node's list of registered message types has a case (`node_test.cpp`); the new
   type joins `StorageServer::served()` and `message::register_types`.
 
+## What stage 3 measured (2026-11-16 23:21 to 2026-11-17 00:15Z)
+
+Old against new in one session: the baseline's Dagda (`7d12ca8`, `build-old/`, store `dagda-old`) and the tip's
+(`d2872de`), the harness's repair workload, jupiter (a, holding; 5 GHz) and uranus (b, joining; 2.4 GHz) over the
+WiFi as it is, about 4.8 to 5.9 MB/s raw, round trip 6 to 10 ms average; kernel 6.18.62-v8-va48+ on both; two
+cores claimed on each, no page-cache drop (`NOCOLD=1`); three rounds, the order alternating. Figures in
+`build/harness/results/2026-11-16-stage3/` (not in the repository). Seconds for b to hold everything:
+
+| Scenario | Old, rounds 1-3 | New, rounds 1-3 | Bytes a sent, old / new |
+|---|---|---|---|
+| Rejoin, 26 x 4 MiB | 45.1, 44.8, 50.5 | 22.9, 31.9, 34.3 | 163-188 MB / 114.5 MB |
+| Rejoin, 410 x 64 KiB | 25.1, 25.9, 24.8 | 13.5, 16.2, 13.6 | 45-55 MB / 28.2 MB |
+| Away and back, 13 x 4 MiB | 30.5, 24.5, 20.1 | 21.4, 27.7, 20.8 | 79-98 MB / 57.2 MB |
+| Away and back, 205 x 64 KiB | 12.1, 12.1, 13.0 | 7.3, 8.5, 9.7 | 25-26 MB / 14.1 MB |
+| Rejoin under a viewer on a, 26 x 4 MiB | 38.5, 51.1, 64.1 | **127.5, 143.1, 163.2** | 119-127 MB / 114.6 MB |
+
+- **Each copy moves once**: the new store's bytes are the objects' and no more in every scenario (pushed plus
+  pulled equal the objects needed: 216 + 194 = 410), where the old sent 1.4 to 2 times. Unpaced, the large
+  rejoin is about a third faster and the small nearly twice as fast; away and back is faster or level.
+- **A regression under a viewer: about three times slower, in all three rounds.** The holder pushed exactly 8
+  copies in each round (one offered batch) and the joiner pulled the other 18. The suspected mechanism, not yet
+  proven: the paced holder offers a batch of 8, b promises all 8, the holder's small credit sends them one slow
+  step at a time, re-offering (and so renewing) the rest; b does not pull a promised id, as the design says, and
+  each deferral doubles its pull's retry backoff (1 s up to ten minutes), so even a landed or lapsed promise is
+  met late. The baseline's old store moved 1.09 times the bytes here with b pulling nearly everything.
+- **Not yet decided, for Tom**: the fix. The recommendation is in two parts. The holder offers only what this
+  step will send, so a promise covers a copy about to move: its credit is checked against the object's size
+  before the offer, which needs the size from the index without a read. And a pull deferred by a promise is
+  looked at again after `retry_first` each time, not on the doubling backoff, so it fetches as soon as the
+  promise lapses. Test-first: a case where a holder with credit for one object offers a batch and the joiner
+  fetches the rest at once, seen failing on `d2872de`.
+
 ## Stage 4, the shape proposed (to the Macha session first; nothing built)
 
 What changes for a caller of `Repair`'s steps, and what does not:
@@ -212,7 +244,11 @@ interval (1 s) later, so a window that drains faster sits empty. Today the node'
 pass already wakes on) is raised by a pull that lands and by a put received, not by a push completing on its
 sender. **Answer, to build:** the store raises the storage event when the window drains to half or less, once
 a drain, so a pass parked on `more_work` refills at once; `settle` needs no time. When built, the Macha trace
-fixtures' cases whose order the window changes are named to it, as for stage 2.
+fixtures' cases whose order the window changes are named to it, as for stage 2. The Macha session agreed the
+wake works for its pass (it waits on `maintenance_events()`). **Tom ruled (relayed by the Macha session, the same
+night):** `offer_bytes` and `in_flight` join Macha's /status repair section at the cutover, announced with the
+other cutover API changes; so stage 4 exposes both through `repair_diagnostics()` and tells the Macha session
+their names when built.
 
 Asked of the Macha session: does anything in Macha's pass, its Status or its stop order rely on `transfer`
 having finished its I/O when it returns, or on `remote_operations` or `operation_budget`? Should `offer_bytes`
