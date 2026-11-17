@@ -196,7 +196,7 @@ case ${1:-} in
     for round in 1 2 3; do
       link "round$round"
       set -- ${STORES:-macha dagda}
-      if [ $((round % 2)) -eq 1 ]; then order="$1 $2"; else order="$2 $1"; fi
+      if [ $((round % 2)) -eq 1 ]; then order="$1 ${2:-}"; else order="${2:-} $1"; fi
       for scenario in ${SCENARIOS:-rejoin-large rejoin-small away-large away-small viewer}; do
         for store in $order; do
           case $scenario in
