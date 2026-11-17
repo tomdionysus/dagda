@@ -8,7 +8,7 @@
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); measured with stage 3 |
 | 3 | Each copy once (the offer) | Done, gated (`d119d14`), measured: each copy once, unpaced rejoins a third to a half faster, parity under a viewer |
-| 4 | A window of transfers; the call count gone; pulls fetched many to a message | Built and gated (`c12e36d` to `82e5201`); measured against stage 3: small rejoin three times faster, under a viewer faster, **unpaced large rejoin slower: open, next** |
+| 4 | A window of transfers; the call count gone; pulls fetched many to a message | Built and gated (`c12e36d` to `79e055d`); measured against stage 3: small rejoin three times faster, under a viewer faster, **unpaced large rejoin about 3 s slower: one cause fixed (the link's estimate), the rest open, next** |
 
 Last full gate: see `TODO/ACTIVE.md`. Everything is on `feature/macha-store-gaps`, local, nothing pushed.
 
@@ -337,14 +337,30 @@ drop and must be set on any Pi not held whole. As run for stage 3:
 - Claim what the run uses (two cores on each Pi, an honest end time: a full run of five scenarios and three
   rounds took 55 minutes, two scenarios 20), post a note on the board, keep it short.
 
-## Next: the unpaced large rejoin
+## The unpaced large rejoin: what the trace found (2026-11-17 21:37 to 22:24Z)
 
-Find why stage 4's unpaced large rejoin is slower than stage 3's before changing anything more. What to look at:
-each node's credit over the run (`RepairPass::credit` and the rate `earn_credit` returns), its link estimate
-(`estimated_network_bps`, which stage 4's pushes now sample a batch at a time across the window, and its fetches
-of many), the window each turn used (`burst()`), and the offers b promised and when (b's pulls deferred by a's
-promises). A per-turn trace on both nodes for one round answers it; the harness has the figures' names. Then a case
-for the mechanism, the fix, and the three scenarios again against `build-s3`.
+`TRACE=1` (`9d078eb`) has each harness node write repair's decisions and a quarter-second sample of its credit,
+window and link estimate. One traced round of the large rejoin showed:
+
+- **The link's estimate collapsed under the window** (found, proven, fixed). b's four concurrent pulls, sharing the
+  link with a's eight pushes, each taught the estimate its own bytes over its own time: 0.69 MB/s on an 8 MB/s link.
+  b's credit, earned at half that, held it idle from 8 s to 21 s with 22 objects outstanding; a pushed everything on
+  its own credit, its estimate also a share (5.1 MB/s). Stage 3's transfers were serial, so a sample saw the link.
+  `6231c98` the case (seen failing at its commit, jupiter), `79e055d` the fix: repair teaches the estimate from what
+  its window moved, at each drain and each window's worth, and its own transfers no longer sample one by one.
+  Gate at `79e055d`, jupiter, Dannan 0.8.2 prefix, Macha's fixtures: 1146 ran, 1142 passed, 3 skipped, **1 failed**:
+  `ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit`, which touches no repair code, passed three times
+  alone straight after, and is in ACTIVE.md's Open.
+- Remeasured (`build/harness/results/2026-11-17-stage4-estimate/`, link 8.0 to 9.7 MB/s): the large rejoin 17.5,
+  20.9, 16.7 s against stage 3's 14.6, 17.1, 14.1 (it was 16.6 to 25.5); the joiner now pulls 6 or 7 of the 26
+  (stage 3's pulled 10; before the fix, 1 to 4). The small rejoin 3.9 to 4.5 s against 13.4 to 13.5; under a viewer
+  14.1 to 19.3 against 23.6 to 26.4.
+
+**Next: the remaining gap, about 3 s.** Trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
+both nodes' samples as before. Leads, none proven: each node's first pass earns no credit (`earn_credit` with no
+earlier time earns for none), and stage 3's joiner pulled at once on its initial estimate; a promises what its
+window will send, so b's pulls of those wait for copies a sends at a's pace; a span's bytes are counted as a pull is
+stored, after its disk write. Then a case for the mechanism, the fix, the scenarios against `build-s3`.
 
 ## Not decided
 

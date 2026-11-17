@@ -20,8 +20,11 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
   teardown hang in Dagda's tests would look there first). **Last full gate: `6e1f4dd`**, saturn, Dannan 0.8.0
   prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+, not throttled: 1141 ran,
   1138 passed, 3 skipped, 0 failed, 0 warnings (eight cases more than `d119d14`'s 1133, none removed). Then
-  `8b544d6` (the port's state-layout defect): 1144 ran, 1141 passed; and **`82e5201`, the last full gate**,
-  saturn as above: 1145 ran, 1142 passed, 3 skipped, 0 failed, 0 warnings.
+  `8b544d6` (the port's state-layout defect): 1144 ran, 1141 passed; `82e5201`, saturn as above: 1145 ran, 1142
+  passed, 3 skipped, 0 failed, 0 warnings. **Last full gate, `79e055d`**, jupiter, Dannan 0.8.2 prefix: 1146 ran,
+  1142 passed, 3 skipped, 1 failed (`ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit`, no repair code,
+  passed three times alone after; in Open).
+- **The branch is pushed** (Tom, 2026-11-17): `feature/macha-store-gaps` on origin. No tag pushed; `0.2.0` held.
 - **Fixed for Macha's port (2026-11-17): a store begins in a state directory holding its host's files**
   (`844c557` the cases, `8b544d6`). Macha's first full suite (port at 8b40c4a) refused every fresh node, as its
   state directory is Dannan's too. An unmarked state is refused only when it holds what a store keeps there.
@@ -65,10 +68,11 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
 
 ## Next (in order)
 
-1. **Repair stage 4's unpaced large rejoin is slower than stage 3's** (4.3 to 6.6 MB/s against 6.8 to 7.5):
-   find the mechanism first (the redesign document, "What stage 4 measured" and "Next: the unpaced large
-   rejoin"), then a case, the fix, and the scenarios again against `build-s3`. The small rejoin (three times
-   faster) and the rejoin under a viewer (faster) are fine.
+1. **Repair stage 4's unpaced large rejoin is still about 3 s slower than stage 3's** (16.7 to 20.9 s against
+   14.1 to 17.1). One cause found by tracing and fixed (`79e055d`: the link's estimate collapsed under the
+   window); the rest is not yet known. The redesign document, "The unpaced large rejoin: what the trace found",
+   has the trace's method and the leads. The small rejoin (three times faster) and the rejoin under a viewer
+   (faster) are fine.
 2. **Adopt Dannan 0.9.0** (tagged): `DAGDA_DANNAN_MINIMUM` to 0.9.0, a build and one whole-suite run on its
    prefix (a Pi needs the 0.9.0 prefix built first), then item 5 below on it.
 3. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
@@ -116,6 +120,10 @@ figures, then slices 2 to 5 as the design orders them.
 ## Open
 
 From the report's "Open and unexplained" and "What I could not show without a running port", kept there in full:
+- `StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit` failed once (2026-11-17, jupiter, the
+  whole suite at `79e055d`, Dannan 0.8.2 prefix, under-voltage seen that run): a loader request waiting on DATA
+  credit was not let through within 5 s of a release. It touches no repair code, passed in every earlier gate and
+  three times alone straight after. A lost wakeup in the arbiter's wait would look like this: not looked into.
 - The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, Tom 2026-11-09). Macha is
   chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
