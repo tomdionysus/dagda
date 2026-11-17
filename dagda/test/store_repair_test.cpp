@@ -53,11 +53,13 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <map>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -2627,6 +2629,212 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
       },
       15s));
   EXPECT_EQ(rejoining.calls_of(message::put_object) + writer.calls_of(message::get_object), live.size());
+}
+
+// ---- The repair redesign's stage 4: a window of transfers ---------------------
+//
+// Repair's turn tops up a window of transfers and returns: it does not wait for what it
+// starts. What lands is kept whatever the turn is doing, and is reported by the next
+// step; the window is the credit's burst; a drained window raises the storage event once
+// so an owner's pass refills it at once; and no call count bounds a turn.
+
+// The node's repair with a window of one extent: the credit's burst is the larger of an
+// extent and five seconds of the link, and the link is taken at 100 KiB/s until one is
+// measured. Its credit and share run on `time`, and its credit earns the whole rate.
+ClusterNodeOptions windowed(dannan::test::SteppedTime& time) {
+  auto out = options(2);
+  out.repair.extent_size = extent;
+  out.repair.initial_bandwidth = 100 * 1024;
+  out.repair.idle_bandwidth_fraction = 1.0;
+  out.repair.time = &time;
+  return out;
+}
+
+// Holds every request of `type` for one of `ids` at `gate`.
+test::Interpose hold_ids(MessageType type, std::set<ObjectId> ids, dannan::test::Gate& gate) {
+  return [type, ids = std::move(ids), &gate](MessageType seen, const dannan::membership::NodeRecord&,
+                                             const dannan::net::Message& request) -> std::optional<Handled> {
+    if (seen == type && ids.contains(message::decode_id(request.payload))) gate.enter_and_wait();
+    return std::nullopt;
+  };
+}
+
+// A transfer returns with its copies in flight: the turn is not held by the peer's
+// answer. Nothing has landed yet, so its result moves no bytes and is not complete, and
+// what it leaves owing is more work. The copies land with no further turn, and the next
+// turn's result reports them.
+TEST(StoreRepair, ATransferReturnsWithItsCopiesInFlight) {
+  dannan::test::Gate puts;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 2, 64 * 1024, 110);
+  const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
+  auto& repair = writer.repair();
+  auto& time = writer.context().time().source();
+  (void)repair.earn_credit(time.now(), 60s);
+
+  dannan::test::GateOpener opener(puts);
+  peer.interpose(hold(message::put_object, puts));
+  auto transferring = std::async(std::launch::async, [&] {
+    auto turn = repair.begin_turn(time.now(), 0);
+    const auto step = repair.transfer(turn, lists);
+    return std::pair{step, repair.settle({}, step)};
+  });
+  // Opens the gate before the future waits on its thread, so a failure ends the case.
+  dannan::test::GateOpener release(puts);
+  ASSERT_EQ(transferring.wait_for(10s), std::future_status::ready) << "the transfer waited for its copies";
+  const auto [step, settled] = transferring.get();
+  EXPECT_TRUE(puts.wait_for_entries(live.size(), 5s));
+  EXPECT_EQ(step.bytes_transferred, 0u);
+  EXPECT_FALSE(step.complete);
+  EXPECT_EQ(settled, RepairSettled::more_work);
+  for (const auto& id : live) EXPECT_FALSE(peer.data().has(id));
+
+  puts.open();
+  EXPECT_TRUE(wait_until([&] { return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); }); }, 10s));
+  RepairResult next;
+  {
+    auto turn = repair.begin_turn(time.now(), 0);
+    next = repair.transfer(turn, lists);
+  }
+  EXPECT_EQ(next.bytes_transferred, live.size() * 64 * 1024);
+}
+
+// No call count bounds a turn (it was 16 calls a step, which set the rate for small
+// objects: the redesign document, stage 0). A hundred small objects the credit covers
+// all go in one turn and land with no other.
+TEST(StoreRepair, ATransferIsNotBoundedByACallCount) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 100, 4 * 1024, 111);
+  const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
+  auto& repair = writer.repair();
+  auto& time = writer.context().time().source();
+  (void)repair.earn_credit(time.now(), 60s);
+  {
+    auto turn = repair.begin_turn(time.now(), 0);
+    (void)repair.transfer(turn, lists);
+  }
+  EXPECT_TRUE(wait_until([&] { return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); }); }, 10s));
+  const auto held = std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); });
+  EXPECT_EQ(held, static_cast<std::ptrdiff_t>(live.size()));
+}
+
+// The window is the credit's burst, and never holds more. The first turn's credit, a
+// burst, covers two of the objects; while those are in flight a second turn, its credit
+// earned back to a burst, starts nothing, as a third would take the window past it.
+TEST(StoreRepair, TheWindowHoldsNoMoreThanTheCreditsBurst) {
+  dannan::test::SteppedTime time;
+  dannan::test::Gate puts;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", windowed(time));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 6, 400 * 1024, 112);
+  const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
+  auto& repair = writer.repair();
+  (void)repair.earn_credit(time.now(), 60s);
+  ASSERT_EQ(repair.credit(), extent);
+
+  dannan::test::GateOpener opener(puts);
+  peer.interpose(hold(message::put_object, puts));
+  const auto turn_of = [&] {
+    return std::async(std::launch::async, [&] {
+      auto turn = repair.begin_turn(time.now(), 0);
+      return repair.transfer(turn, lists);
+    });
+  };
+  auto first = turn_of();
+  dannan::test::GateOpener release(puts);
+  ASSERT_EQ(first.wait_for(10s), std::future_status::ready) << "the transfer waited for its copies";
+  (void)first.get();
+  ASSERT_TRUE(puts.wait_for_entries(2, 5s));
+
+  time.advance(20s);
+  (void)repair.earn_credit(time.now());
+  ASSERT_EQ(repair.credit(), extent);
+  auto second = turn_of();
+  ASSERT_EQ(second.wait_for(10s), std::future_status::ready);
+  (void)second.get();
+  EXPECT_FALSE(puts.wait_for_entries(3, 1s)) << "the window took a third object";
+  puts.open();
+  EXPECT_TRUE(wait_until([&] { return std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); }) == 2; }, 10s));
+}
+
+// A window drained to half or less raises the node's storage event, once a drain, so an
+// owner's pass that waits on its events refills the window at once rather than an
+// interval later. Two objects fill more than half the window; the first to land drains
+// it to half, the second raises nothing more.
+TEST(StoreRepair, ADrainedWindowRaisesTheStorageEventOnce) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto& writer = cluster.add("writer", windowed(time));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 2, 400 * 1024, 113);
+  const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
+  auto& repair = writer.repair();
+  (void)repair.earn_credit(time.now(), 60s);
+  auto& events = writer.context().events();
+  const auto storage = events.kind("storage");
+  const auto before = events.count(storage);
+  {
+    auto turn = repair.begin_turn(time.now(), 0);
+    (void)repair.transfer(turn, lists);
+  }
+  ASSERT_TRUE(wait_until([&] { return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); }); }, 10s));
+  EXPECT_TRUE(wait_until([&] { return events.count(storage) > before; }, 5s));
+  std::this_thread::sleep_for(200ms);
+  EXPECT_EQ(events.count(storage), before + 1);
+}
+
+// A pull that lands is kept with no further turn, and a node stopped with pulls still in
+// flight keeps every one that landed: two of four are held at the holder while the
+// joiner stops, and the joiner restarts holding the other two.
+TEST(StoreRepair, APullThatLandsIsKeptThoughTheNodeStopsMidWindow) {
+  dannan::test::Gate gets;
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 4, 64 * 1024, 114);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  const std::set<ObjectId> held{live[0], live[2]};
+  auto& repair = joiner.repair();
+  auto& time = joiner.context().time().source();
+  (void)repair.earn_credit(time.now(), 60s);
+
+  dannan::test::GateOpener opener(gets);
+  holder.interpose(hold_ids(message::get_object, held, gets));
+  auto transferring = std::async(std::launch::async, [&] {
+    auto turn = repair.begin_turn(time.now(), 0);
+    return repair.transfer(turn, lists);
+  });
+  dannan::test::GateOpener release(gets);
+  ASSERT_EQ(transferring.wait_for(10s), std::future_status::ready) << "the transfer waited for its pulls";
+  (void)transferring.get();
+  EXPECT_TRUE(wait_until([&] { return joiner.data().has(live[1]) && joiner.data().has(live[3]); }, 10s));
+  ASSERT_TRUE(gets.wait_for_entries(held.size(), 5s));
+
+  joiner.stop();
+  gets.open();
+  joiner.start();
+  EXPECT_TRUE(joiner.data().has(live[1]));
+  EXPECT_TRUE(joiner.data().has(live[3]));
 }
 
 // The survey through an owner's provider: what is referenced is the
