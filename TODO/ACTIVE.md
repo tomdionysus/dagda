@@ -1,14 +1,14 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-17. `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (night) to 2026-11-17".
-Nothing is running and no Pi is claimed. The plan for slices is the three-systems design,
-`TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
+Last updated: 2026-11-17 (evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-17 (evening):
+repair's stage 4". The plan for slices is the three-systems design, `TODO/2026-11-13-three-systems-design.md`; the
+slices are paused (below).
 
 ## Start here (a fresh session)
 
-Read this file, then `TODO/2026-11-16-repair-redesign.md`: its status table, "Stage 4, the shape agreed" (with
-"Where to start") and "How to measure a stage" (where the binaries and builds are on the Pis). The next work is
-item 1 of "Next": repair's stage 4, test-first, a session of its own.
+Read this file, then `TODO/2026-11-16-repair-redesign.md`: its status table, "What stage 4 built", "What stage 4
+measured" and "Next: the unpaced large rejoin". Stage 4 is built and gated; its unpaced large rejoin is slower than
+stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is running and no Pi is claimed.
 
 ## Where it stands
 
@@ -17,15 +17,24 @@ item 1 of "Next": repair's stage 4, test-first, a session of its own.
   locally only.
 - **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI. 0.8.5
   fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
-  teardown hang in Dagda's tests would look there first). **Last full gate: `d119d14`**, jupiter, Dannan 0.8.2
-  prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1133 ran, 1130 passed, 3
-  skipped, 0 failed, 0 warnings. Later commits change the harness's controller and notes only.
-- **Repair is being redesigned in stages** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md` has each
-  stage's state, what was built, the rulings, the figures and how to measure). Stages 1 to 3 are done, gated and
-  measured against the baseline's Dagda: each copy crosses the link once (it was one and a half to two times),
-  the unpaced rejoins are a third to a half faster, a rejoin under a viewer is at parity. **Stage 4 is next**:
-  a window of transfers and the 16-call count gone, which is what still sets the small-object rate. Its shape is
-  agreed with the Macha session.
+  teardown hang in Dagda's tests would look there first). **Last full gate: `6e1f4dd`**, saturn, Dannan 0.8.0
+  prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+, not throttled: 1141 ran,
+  1138 passed, 3 skipped, 0 failed, 0 warnings (eight cases more than `d119d14`'s 1133, none removed). Then
+  `8b544d6` (the port's state-layout defect): 1144 ran, 1141 passed; and **`82e5201`, the last full gate**,
+  saturn as above: 1145 ran, 1142 passed, 3 skipped, 0 failed, 0 warnings.
+- **Fixed for Macha's port (2026-11-17): a store begins in a state directory holding its host's files**
+  (`844c557` the cases, `8b544d6`). Macha's first full suite (port at 8b40c4a) refused every fresh node, as its
+  state directory is Dannan's too. An unmarked state is refused only when it holds what a store keeps there.
+  The Macha session confirmed nothing on the list is written before the store opens, and builds on `8b544d6`.
+- **Repair is redesigned in stages** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md` has each stage's
+  state, what was built, the rulings, the figures and how to measure). Stages 1 to 4 are done and gated: one queue
+  by copies left, each copy crossing the link once, a window of transfers in place of the 16-call count, and
+  pulls fetched many to a message. Stage 4's API changes (`repair_step`'s window, `repair_drain`,
+  `Repair::drain`, `credit_spent`, `in_flight`, `offer_bytes`, `get_objects`) and the cases it changed are listed
+  in the redesign document for the Macha session.
+- **Dannan 0.9.0 is tagged** (main `59b7abc`, 2026-11-17, the Dannan session). The hybrid clock's ceiling on a
+  node without custody stays a durable file (Tom's ruling, Dagda's preference; Dagda refuses to open without
+  custody, so it is unaffected).
 - **The instant delete keeps the copy on a node with no inventory published** (Tom's ruling; `5f3c458`).
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
@@ -44,7 +53,7 @@ item 1 of "Next": repair's stage 4, test-first, a session of its own.
 - **Agreement waits for Dannan** (Tom, 2026-11-15): Dagda builds no consensus or stand-in; its part is a persisting
   acceptor store on a node-local log (slice 4).
 - **New consumers, nothing asked of Dagda now:** Louhi, Mimir and Kvasir, each answered from the design.
-- **Dannan 0.9.0** (develop `df4b2d8`, the tag waiting on Tom's word, 2026-11-17) carries agreement, the hybrid
+- **Dannan 0.9.0** (tagged 2026-11-17, main `59b7abc`; its .debs staged for Tom to publish) carries agreement, the hybrid
   clock, `storage::FileSystem` and peer records shared per session (the net layer's copies gone). SONAME
   `libdannan.so.0.9`: a minor bump, so Dagda raises `DAGDA_DANNAN_MINIMUM` when it adopts it. FileSystem meets
   Dagda's two conditions: `lock(path)` (flock `LOCK_EX|LOCK_NB` for the handle's life, a second holder refused
@@ -56,23 +65,23 @@ item 1 of "Next": repair's stage 4, test-first, a session of its own.
 
 ## Next (in order)
 
-1. **Repair, stage 4: the window, and the call count gone** (the redesign document, "Stage 4, the shape
-   agreed"). `transfer` tops up a window and returns; results report what completed; `operation_budget` goes; a
-   multi-object message for small values; the storage event on a drained window; `offer_bytes` and `in_flight`
-   through `repair_diagnostics()`, their names told to the Macha session with the trace-fixture cases whose
-   order changes. Test-first, one whole-suite run, then old against new on the Pis: keep `build-tip` (stage 3)
-   as a second old side first.
-2. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
+1. **Repair stage 4's unpaced large rejoin is slower than stage 3's** (4.3 to 6.6 MB/s against 6.8 to 7.5):
+   find the mechanism first (the redesign document, "What stage 4 measured" and "Next: the unpaced large
+   rejoin"), then a case, the fix, and the scenarios again against `build-s3`. The small rejoin (three times
+   faster) and the rejoin under a viewer (faster) are fine.
+2. **Adopt Dannan 0.9.0** (tagged): `DAGDA_DANNAN_MINIMUM` to 0.9.0, a build and one whole-suite run on its
+   prefix (a Pi needs the 0.9.0 prefix built first), then item 5 below on it.
+3. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
    pressure, cache; strace fsync counts on a separate rerun. **The slow-disk run is approved** (Tom,
    2026-11-16): when a Pi is free, a note on the board, then the device-mapper delay target over a loop file on
    that one Pi (no real disk touched), removed afterwards. None of these workloads is written yet, and the Macha
    session reviews each before it runs.
-3. **Remeasure on Dannan 0.9.0** when it is tagged (the net-layer copies go).
-4. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
+4. **Remeasure on Dannan 0.9.0** (the net-layer copies go).
+5. **Route Dagda's raw syncs through Dannan's file-system interface** once 0.9.0 has it: `ledger/sealed_journal.cpp`,
    the durability domain and storage pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`,
    `store/local_store.cpp`, `migrate/migrate.cpp`, `migrate/manifest.cpp` (and its flock); `LocalStoreFiles` becomes
    an adapter over it.
-5. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
+6. **Gaps left from the store map:** the pool's gap 9 TimedLock (Dannan); 8c's loop items (gc-and-deletion gaps 1-4
    are the loop's 8c work; 5 is Dagda's own stamp decision, its line kept; 9 is done).
 
 A defect Macha's port finds comes before any of these.

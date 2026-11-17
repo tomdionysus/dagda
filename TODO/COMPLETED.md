@@ -2983,6 +2983,34 @@ Left ACTIVE.md's "Next", both done: the instant delete's fix (was item 1) and re
 
 Next: stage 4, a session of its own. Nothing running, no Pi claimed.
 
+## Handoff, 2026-11-17 (evening): repair's stage 4; the port's state-layout defect
+
+Branch `feature/macha-store-gaps`, nothing pushed. Every new case was seen failing on the code before it (saturn).
+
+- **Repair stage 4** (the redesign document, "What stage 4 built"): `c12e36d` five cases (seen failing on
+  `d119d14`), `ec77dda` the window and the call count gone, `b9aeed7` the fetch of many's wire pair with its case,
+  `79f6f76` two cases (seen failing on `ec77dda`), `690dc9c` the fetch of many, `c0bd7a4` (`copies_pushed` as a copy
+  lands, StoreRepair.ATicketReportsTheCopiesRepairMade), `6e1f4dd` (a drain's observations,
+  StepsBed.APassRecordsMachasObservations), `5e5e7fc` the harness's `dagda-<name>` stores and figures. Gate at
+  `6e1f4dd`, saturn, Dannan 0.8.0 prefix, GCC Release, warnings as errors, Macha's fixtures, kernel
+  6.18.62-v8-va48+: **1141 ran / 1138 passed / 3 skipped / 0 failed, 0 warnings**. Cases changed, none removed, all
+  named in the redesign document for the Macha session.
+- **Measured against stage 3** (`build-s3/` on jupiter and uranus): the small rejoin three times faster (13.1-13.4 s
+  to 4.0-4.3 s), under a viewer faster (23.4-25.6 s to 14.9-17.4 s), **the unpaced large rejoin slower** (14.5-15.8 s
+  to 16.6-19.5 s). One mechanism found and fixed (`6794938` the case, `82e5201`: a holder's pulls split over the
+  fetches the credit and window cover); remeasured, the large rejoin did not move (18.4-25.5 s). **Open, ACTIVE.md's
+  first item.**
+- **The port's defect** (the Macha session, its first full suite on neptune: 173 of 177 failures): a store began
+  only in an empty state directory, and Macha's is Dannan's too. `844c557` three cases, `8b544d6` the fix: an
+  unmarked state is refused only when it holds what a store keeps there. Gate at `8b544d6`: **1144 / 1141 / 3 / 0**.
+  The Macha session confirmed the list against its code and builds on `8b544d6`.
+- **Last gate, `82e5201`**: saturn as above, **1145 ran / 1142 passed / 3 skipped / 0 failed, 0 warnings**.
+- For the other sessions: told Dannan that Dagda adopts 0.9.0 after stage 4; answered its hybrid clock question
+  (keep the durable ceiling without custody; Tom ruled so). Kvasir's sanitizer reminder: no sanitizer in any Dagda
+  gate or plan.
+
+Next: ACTIVE.md's "Next", item 1, the large rejoin. Nothing running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (Tom, 2026-11-16). The repair item was answered by the redesign

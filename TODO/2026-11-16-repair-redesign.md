@@ -8,10 +8,9 @@
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); measured with stage 3 |
 | 3 | Each copy once (the offer) | Done, gated (`d119d14`), measured: each copy once, unpaced rejoins a third to a half faster, parity under a viewer |
-| 4 | A window of transfers; the call count gone | Shape agreed with the Macha session, Tom's ruling on its figures in; not built. **Next** |
+| 4 | A window of transfers; the call count gone; pulls fetched many to a message | Built and gated (`c12e36d` to `82e5201`); measured against stage 3: small rejoin three times faster, under a viewer faster, **unpaced large rejoin slower: open, next** |
 
-Last full gate: `d119d14`, jupiter, Dannan 0.8.2 prefix, Macha's fixtures: 1133 ran, 1130 passed, 3 skipped, 0
-failed, 0 warnings. Everything is on `feature/macha-store-gaps`, local, nothing pushed.
+Last full gate: see `TODO/ACTIVE.md`. Everything is on `feature/macha-store-gaps`, local, nothing pushed.
 
 ## Tom's rulings
 
@@ -206,7 +205,70 @@ expected an unpaced large rejoin to approach what the link allows sent once: at 
 the new store took 21 to 34 s. The small rejoin (13.5 s for 410 objects) is still set by the 16-call count:
 stage 4's.
 
-## Stage 4, the shape agreed (nothing built)
+## What stage 4 built (2026-11-17)
+
+Cases first, each seen failing on the code before it (saturn, Dannan 0.8.0 prefix): `c12e36d` (the window's five)
+and `79f6f76` (the fetch of many's two); the wire pair `b9aeed7` with its own case.
+
+- *The window* (`ec77dda`). `repair_step(lists, byte_budget, RepairWindow, should_yield)` applies what landed since
+  the last step, then tops up the window from the one queue and returns. Pushes are `put_object` calls not waited
+  for; a pull is a fetch whose completion has the store's workers store it as it lands. The owner applies both at
+  its next step or a drain (`repair_drain`, `Repair::drain`), in the order they started, so traces stay in decision
+  order. The window is `Repair`'s credit burst (no new number); one transfer always starts into an empty window. A
+  push holds its bytes, a pull an extent (its size is not known until it lands). The call count and the scan budget
+  derived from it are gone; offers cover what the credit and the window will send (up to `max_offer_batch`). A copy
+  that did not arrive goes again first from the next step (it used to hold the pass's place); a pass is complete
+  only when its walk has ended, everything it started has landed and been applied, and nothing waits to go again.
+  The window drained from past half to half or less raises the storage event, once a drain.
+- *The figures*: `RepairResult` gains `credit_spent` (each push as it starts, each pull as it lands, the offers) and
+  `in_flight`; `repair_diagnostics()` gains `offer_bytes` and `in_flight` (for Macha's /status at the cutover).
+  `copies_pushed` counts as each copy lands (`c0bd7a4`); a drain records what it reports in the pass's observations
+  as a step does (`6e1f4dd`). `settle` says `more_work` while anything is in flight.
+- *The fetch of many* (`b9aeed7` the wire, `690dc9c` the code). `get_objects` (773) names the ids a puller wants
+  from one holder; `get_objects_reply` (774) carries as many as an extent holds, in order, each sized from the index
+  before it is read, and says of each of the rest absent, unavailable or left. Repair fetches what the survey says
+  a present peer holds from it many to a message, an owner asked first, one extent of the window a message; what a
+  reply left goes again first; what it could not bring is tried alone on the retry's backoff, which asks every
+  owner. A fetch of one id stays `get_object`'s. A holder's ids gathered in a step are split over as many fetches
+  as the credit and the window cover, an extent each (`6794938` the case, `82e5201`), so a step brings a window's
+  worth of large objects and not one extent's. Pushes stay one `put_object` a copy: their sizes are known, so many
+  are in the window at once already; `put_objects` waits on the measurement showing it is needed.
+- *Cases changed, for the Macha session*: the store cases that stepped repair synchronously let each step's
+  transfers land first (`landed_step`); `APushKeepsItsPlaceAcrossANewList` bounds a step by credit (sixteen
+  objects' bytes) where the call count did; `APullListNewWhileThePushRunsIsNotPassedOver` holds its pass open with a
+  pull in flight, as no scan budget does now; `AFetchOfManyStopsAtAnExtentAndTheRestFollow` (stage 4's own) takes
+  an extent of credit a step; `MaintenanceStepsPeers.ATurnKeepsThePeerReadingItBeganWithWhenAsked` waits for its copy to
+  land. The trace fixtures' loop (`MachaLoop`) drains after its transfer, as Macha's pass waited for its transfers,
+  so no trace fixture's order changed. Nothing removed.
+
+## What stage 4 measured (2026-11-17 20:31 to 21:16Z)
+
+Stage 3 (`d119d14`, kept as `build-s3/`, store `dagda-s3`) against stage 4, the harness's repair workload, jupiter
+(a, holding) and uranus (b, joining), `NOCOLD=1`, two cores claimed on each, three rounds alternating; the link
+7.1 to 9.5 MB/s raw, round trip 6 to 8 ms; kernel 6.18.62-v8-va48+; both Pis reported past under-voltage
+(`throttled=0x50000`) before and after. Twice: at `6e1f4dd`, then at `82e5201` (the split, below). Figures in
+`build/harness/results/2026-11-17-stage4/` and `-stage4-split/` (not in the repository). Seconds for b to hold
+everything:
+
+| Scenario | Stage 3, six rounds | Stage 4 at `6e1f4dd` | Stage 4 at `82e5201` |
+|---|---|---|---|
+| Rejoin, 410 x 64 KiB | 13.1 to 13.4 | 4.3, 4.1, 4.0 | 3.6, 4.9, 4.9 |
+| Rejoin, 26 x 4 MiB | 14.5 to 16.0 | 17.7, 16.6, 19.5 | 19.3, 18.4, 25.5 |
+| Rejoin under a viewer on a, 26 x 4 MiB | 23.4 to 31.7 | 17.4, 14.9, 15.0 | 19.2, 12.9, 13.2 |
+
+- **The small rejoin is three times faster** and near the link (5.4 to 7.6 MB/s of 7 to 9.5): the call count no
+  longer sets it. Stage 0 expected 9 s at 2.9 MB/s.
+- **Under a viewer, faster** (7.3 to 8.5 MB/s in most rounds, against 4.2 to 4.7).
+- **The unpaced large rejoin is slower, open**: 4.3 to 6.6 MB/s against stage 3's 6.8 to 7.5. Each copy still
+  crosses once (a sends 114 MB in both). What differs: stage 3's joiner pulled 9 or 10 of the 26 while the holder
+  pushed the rest; stage 4's joiner pulls 1 to 4 and the holder pushes the rest, more often stopped on its credit
+  (`gate_credit` 3 to 16 against 1 to 5). The first explanation tried (a holder's pulls in one fetch a step, one
+  large object a pass) was real and is fixed (`6794938`, `82e5201`: a holder's ids split over the fetches the
+  credit and window cover, gated), but did not move this figure. A second, that one node's credit is half its link
+  estimate and stage 3 was faster by spending both nodes' halves, does not fit the viewer runs, where stage 4
+  reaches near the link. **Not yet known; the next step is to find it** (below).
+
+## Stage 4, the shape agreed (built: above)
 
 What changes for a caller of `Repair`'s steps, and what does not:
 
@@ -274,6 +336,15 @@ drop and must be set on any Pi not held whole. As run for stage 3:
   stage is measured as old binaries against new in one session, alternating, never against earlier numbers.
 - Claim what the run uses (two cores on each Pi, an honest end time: a full run of five scenarios and three
   rounds took 55 minutes, two scenarios 20), post a note on the board, keep it short.
+
+## Next: the unpaced large rejoin
+
+Find why stage 4's unpaced large rejoin is slower than stage 3's before changing anything more. What to look at:
+each node's credit over the run (`RepairPass::credit` and the rate `earn_credit` returns), its link estimate
+(`estimated_network_bps`, which stage 4's pushes now sample a batch at a time across the window, and its fetches
+of many), the window each turn used (`burst()`), and the offers b promised and when (b's pulls deferred by a's
+promises). A per-turn trace on both nodes for one round answers it; the harness has the figures' names. Then a case
+for the mechanism, the fix, and the three scenarios again against `build-s3`.
 
 ## Not decided
 
