@@ -25,7 +25,9 @@
 # between runs; SCENARIOS, which of rejoin-large, rejoin-small, away-large, away-small and
 # viewer a run takes (all by default); NOCOLD=1, which skips the fstrim and the page-cache drop before each run
 # and must be set on any Pi not held whole (the drop costs every other job there its
-# cache).
+# cache); TRACE=1, which has a Dagda node write repair's decisions and a sample of its
+# credit every quarter second to its stderr (repair-err.txt here), for finding a
+# mechanism and never in a measured run.
 #
 # Before a run: claim on the board the cores it uses on both Pis (a node needs about one;
 # the runs are bound by the link), with an honest end time, and post a note: the traffic
@@ -96,7 +98,7 @@ start() {
     dagda-*) old=$R/build-${store#dagda-}; bin="env LD_LIBRARY_PATH=$old/dagda $old/harness-dagda repair-node $d $n $h $p $seed" ;;
     *) bin="$R/build-tip/harness-dagda repair-node $d $n $h $p $seed" ;;
   esac
-  on $h "cd $d && (setsid nohup $bin >> $d/out 2>> $d/err < /dev/null &)"
+  on $h "cd $d && (setsid nohup ${TRACE:+env HARNESS_REPAIR_TRACE=1} $bin >> $d/out 2>> $d/err < /dev/null &)"
 }
 stop() { cmd $1 stop; on $(host $1) "t=0; while pgrep -f '[h]arness-.* repair-node' > /dev/null; do sleep 1; t=\$((t+1)); [ \$t -gt 120 ] && { pkill -9 -f '[h]arness-.* repair-node'; break; }; done; true"; }
 copy() { on $A "cat $W/a/$1" | on $B "mkdir -p \$(dirname $W/b/$1) && cat > $W/b/$1"; }

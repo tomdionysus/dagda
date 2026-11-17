@@ -20,16 +20,20 @@
 //   harness-dagda repair-node <directory> <name> <host> <port> [<seed host> <seed port>]
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -296,11 +300,37 @@ class DagdaRepairNode final : public harness::RepairNode {
     options.telemetry_interval = 10s;
     options.status_interval = 10s;
     options.repair.peer_window = 30s;
+    // HARNESS_REPAIR_TRACE set: repair's decisions, and every quarter second its credit,
+    // window and link estimate, on stderr, each line timed from the node's start. For
+    // finding a mechanism, never for a measured run.
+    const bool traced = std::getenv("HARNESS_REPAIR_TRACE") != nullptr;
+    const auto began = std::chrono::steady_clock::now();
+    const auto at = [began] { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count(); };
+    if (traced)
+      options.store.repair_trace = [at](std::string_view kind, std::string_view detail) {
+        static std::mutex lines;
+        std::lock_guard lock(lines);
+        std::cerr << "repair-trace " << at() << " " << kind << " " << detail << "\n";
+      };
     _node = &_cluster.add(name, options);
     _node->start();
     _node->dagda_node().register_reachability(dagda::domain::domain_v1, _provider);
+    if (traced)
+      _sampler = std::jthread([this, at](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+          const auto gates = _node->repair().gates();
+          const auto repair = _node->store().repair_diagnostics();
+          std::cerr << "repair-sample " << at() << " credit=" << gates.last_credit_bytes << " gate=" << (gates.last ? static_cast<int>(*gates.last) : -1)
+                    << " ran=" << gates.ran << " credit_gates=" << gates.credit << " in_flight=" << repair.in_flight << " pushed=" << repair.copies_pushed
+                    << " pulled=" << repair.copies_pulled << " bps=" << static_cast<uint64_t>(_node->store().estimated_network_bps()) << "\n";
+          std::this_thread::sleep_for(250ms);
+        }
+      });
   }
-  ~DagdaRepairNode() override { _node->dagda_node().unregister_reachability(dagda::domain::domain_v1); }
+  ~DagdaRepairNode() override {
+    _sampler = {};
+    _node->dagda_node().unregister_reachability(dagda::domain::domain_v1);
+  }
 
   std::string describe() const override { return std::string("dagda ") + dagda::library_version() + " on dannan " + dannan::library_version(); }
   std::optional<harness::Id> put(uint64_t, std::span<const uint8_t> data) override {
@@ -364,6 +394,7 @@ class DagdaRepairNode final : public harness::RepairNode {
   dagda::test::Cluster _cluster;
   ListedProvider _provider;
   dagda::test::ClusterNode* _node = nullptr;
+  std::jthread _sampler;
 };
 
 }  // namespace
