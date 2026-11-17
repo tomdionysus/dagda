@@ -145,6 +145,26 @@ std::shared_ptr<const ledger::PeerHolds> holds_of(const std::map<NodeId, std::ve
   return std::make_shared<const ledger::PeerHolds>(std::move(out));
 }
 
+// A window wider than anything a case moves.
+constexpr RepairWindow wide{1024ULL * 1024 * 1024};
+
+// One repair step, then what it started landed and reported: the figures of both, as
+// one step that waited for its transfers gave them before the window (the repair
+// redesign, stage 4).
+RepairResult landed_step(DistributedStore& store, const RepairLists& lists, uint64_t budget, const std::function<bool()>& yield = {}) {
+  auto out = store.repair_step(lists, budget, wide, yield);
+  const auto landed = store.repair_drain(std::chrono::seconds(60));
+  out.bytes_transferred += landed.bytes_transferred;
+  out.offer_bytes += landed.offer_bytes;
+  out.credit_spent += landed.credit_spent;
+  out.push_examined += landed.push_examined;
+  out.pull_examined += landed.pull_examined;
+  out.pull_unsourceable += landed.pull_unsourceable;
+  out.complete = out.complete || landed.complete;
+  out.in_flight = landed.in_flight;
+  return out;
+}
+
 size_t probes(ClusterNode& node) {
   return node.calls_of(message::have_valid_objects) + node.calls_of(message::have_object) + node.calls_of(message::have_objects);
 }
@@ -161,6 +181,27 @@ test::Interpose hold(MessageType type, dannan::test::Gate& gate) {
     if (seen == type) gate.enter_and_wait();
     return std::nullopt;
   };
+}
+
+// Holds every request of `type` for one of `ids` at `gate`.
+test::Interpose hold_ids(MessageType type, std::set<ObjectId> ids, dannan::test::Gate& gate) {
+  return [type, ids = std::move(ids), &gate](MessageType seen, const dannan::membership::NodeRecord&,
+                                             const dannan::net::Message& request) -> std::optional<Handled> {
+    if (seen == type && ids.contains(message::decode_id(request.payload))) gate.enter_and_wait();
+    return std::nullopt;
+  };
+}
+
+// A node whose repair has a window of one extent: the credit's burst is the larger of
+// an extent and five seconds of the link, and the link is taken at 100 KiB/s until one
+// is measured. Its credit and share run on `time`, and its credit earns the whole rate.
+ClusterNodeOptions windowed(dannan::test::SteppedTime& time) {
+  auto out = options(2);
+  out.repair.extent_size = extent;
+  out.repair.initial_bandwidth = 100 * 1024;
+  out.repair.idle_bandwidth_fraction = 1.0;
+  out.repair.time = &time;
+  return out;
 }
 
 // An owner's provider that refers to `ids`.
@@ -214,7 +255,7 @@ TEST(StoreRepair, APushSendsItsBatchTogetherAndAsksNothing) {
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
     const auto live = local_objects(writer, 40, 8 * 1024, 30);
-    const auto step = writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024, 16);
+    const auto step = landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024);
     EXPECT_EQ(step.push_examined, 0u);
     EXPECT_TRUE(step.complete);
     EXPECT_EQ(probes(peer), 0u);
@@ -237,7 +278,7 @@ TEST(StoreRepair, APushSendsItsBatchTogetherAndAsksNothing) {
       together = puts.wait_for_entries(concurrent, 5s);
       puts.open();
     });
-    const auto step = writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, 64ULL * 1024 * 1024, 16);
+    const auto step = landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, 64ULL * 1024 * 1024);
     release.join();
     EXPECT_TRUE(together);
     EXPECT_EQ(peer.calls_of(message::put_object), live.size());
@@ -266,7 +307,7 @@ TEST(StoreRepair, ALongPushPassDoesNotHoldBackThePull) {
   live.push_back(missing);
   std::sort(live.begin(), live.end());
   ASSERT_TRUE(writer.store().should_own(missing));
-  const auto step = writer.store().repair_step({inventory_of(live), list_of({missing}), lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024, 16);
+  const auto step = landed_step(writer.store(), {inventory_of(live), list_of({missing}), lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024);
   EXPECT_LT(step.push_examined, 100u);
   EXPECT_GT(step.pull_examined, 0u);
   EXPECT_TRUE(writer.data().has(missing));
@@ -290,7 +331,7 @@ TEST(StoreRepair, APushSendsNothingToAPeerTheSurveyCouldNotSettle) {
     const auto live = local_objects(writer, 4, 8 * 1024, 50);
     // As availability publishes them: only the peers whose diff ran to its end.
     const auto unsettled = lacks_of({{peer.id(), live}}, complete);
-    const auto step = writer.store().repair_step({inventory_of(live), {}, unsettled, {}}, 8ULL * 1024 * 1024, 16);
+    const auto step = landed_step(writer.store(), {inventory_of(live), {}, unsettled, {}}, 8ULL * 1024 * 1024);
     EXPECT_EQ(step.push_examined, live.size());
     EXPECT_EQ(peer.calls_of(message::put_object), live.size());
     EXPECT_EQ(late.calls_of(message::put_object), 0u);
@@ -300,7 +341,7 @@ TEST(StoreRepair, APushSendsNothingToAPeerTheSurveyCouldNotSettle) {
     const auto said = lacks_of({{peer.id(), {}}, {late.id(), live}});
     EXPECT_TRUE(wait_until(
         [&] {
-          (void)writer.store().repair_step({inventory_of(live), {}, said, {}}, 8ULL * 1024 * 1024, 16);
+          (void)landed_step(writer.store(), {inventory_of(live), {}, said, {}}, 8ULL * 1024 * 1024);
           return late.calls_of(message::put_object) == live.size();
         },
         10s));
@@ -339,7 +380,7 @@ TEST(StoreRepair, APushPassesAPeerWithNoRoom) {
   ASSERT_TRUE(writer.data().put(id, bytes));
   const std::vector<ObjectId> live{id};
   const auto lacks = lacks_of({{full.id(), live}, {fallback.id(), live}, {owner.id(), live}});
-  for (int pass = 0; pass < 4; ++pass) (void)writer.store().repair_step({inventory_of(live), {}, lacks, {}}, 8ULL * 1024 * 1024, 16);
+  for (int pass = 0; pass < 4; ++pass) (void)landed_step(writer.store(), {inventory_of(live), {}, lacks, {}}, 8ULL * 1024 * 1024);
   EXPECT_EQ(full.calls_of(message::put_object), 0u);
   EXPECT_EQ(probes(full), 0u);
   EXPECT_GT(fallback.calls_of(message::put_object), 0u);
@@ -351,7 +392,7 @@ TEST(StoreRepair, APushPassesAPeerWithNoRoom) {
   ASSERT_TRUE(wait_until([&] { return used_of(record_of(writer, full.id())) + extent <= 2 * extent; }));
   const auto again = lacks_of({{full.id(), live}, {fallback.id(), {}}, {owner.id(), {}}});
   for (int pass = 0; pass < 4 && full.calls_of(message::put_object) == 0; ++pass)
-    (void)writer.store().repair_step({inventory_of(live), {}, again, {}}, 8ULL * 1024 * 1024, 16);
+    (void)landed_step(writer.store(), {inventory_of(live), {}, again, {}}, 8ULL * 1024 * 1024);
   EXPECT_GT(full.calls_of(message::put_object), 0u);
 }
 
@@ -369,7 +410,7 @@ TEST(StoreRepair, APushWorksFromWhatPeersHoldWithoutAsking) {
   const auto live = local_objects(writer, 3, 64 * 1024, 60);
   constexpr uint64_t budget = 64ULL * 1024 * 1024;
 
-  const auto settled = writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, budget, 16);
+  const auto settled = landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, budget);
   // Nothing listed: nothing to look at.
   EXPECT_EQ(settled.push_examined, 0u);
   EXPECT_TRUE(settled.complete);
@@ -378,11 +419,11 @@ TEST(StoreRepair, APushWorksFromWhatPeersHoldWithoutAsking) {
 
   const auto lacks_one = lacks_of({{peer.id(), {live[1]}}});
   for (int step = 0; step < 8 && peer.calls_of(message::put_object) == 0; ++step)
-    (void)writer.store().repair_step({inventory_of(live), {}, lacks_one, {}}, budget, 16);
+    (void)landed_step(writer.store(), {inventory_of(live), {}, lacks_one, {}}, budget);
   EXPECT_EQ(peer.calls_of(message::put_object), 1u);
   EXPECT_EQ(probes(peer), 0u);
 
-  (void)writer.store().repair_step({inventory_of(live), {}, lacks_of({}), {}}, budget, 16);
+  (void)landed_step(writer.store(), {inventory_of(live), {}, lacks_of({}), {}}, budget);
   EXPECT_EQ(probes(peer), 0u);
   EXPECT_EQ(peer.calls_of(message::put_object), 1u);
 }
@@ -401,7 +442,7 @@ TEST(StoreRepair, APushSendsOnlyWhatTheListNames) {
   constexpr uint64_t budget = 64ULL * 1024 * 1024;
   const auto lacking = live[2];
 
-  const auto idle = writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, budget, 16);
+  const auto idle = landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), {}}}), {}}, budget);
   EXPECT_EQ(idle.push_examined, 0u);
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
 
@@ -413,7 +454,7 @@ TEST(StoreRepair, APushSendsOnlyWhatTheListNames) {
   const auto listed = lacks_of({{peer.id(), {lacking, gone}}});
   size_t examined = 0;
   for (int step = 0; step < 8 && peer.calls_of(message::put_object) == 0; ++step)
-    examined += writer.store().repair_step({inventory_of(referenced), {}, listed, {}}, budget, 16).push_examined;
+    examined += landed_step(writer.store(), {inventory_of(referenced), {}, listed, {}}, budget).push_examined;
   EXPECT_EQ(peer.calls_of(message::put_object), 1u);
   EXPECT_TRUE(peer.data().has(lacking));
   EXPECT_EQ(probes(peer), 0u);
@@ -443,7 +484,7 @@ TEST(StoreRepair, APushOfALocalObjectThatWillNotReadIsWarnedWithItsTotal) {
   }
   ASSERT_TRUE(writer.data().has(id));
   for (int step = 0; step < 8 && writer.store().repair_diagnostics().local_unreadable == 0; ++step)
-    (void)writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), {id}}}), {}}, 64ULL * 1024 * 1024, 16);
+    (void)landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), {id}}}), {}}, 64ULL * 1024 * 1024);
   EXPECT_EQ(writer.store().repair_diagnostics().local_unreadable, 1u);
   EXPECT_TRUE(writer.log().saw(dannan::status::LogLevel::warn, "repair found a local object it cannot read back object=" + to_string(id) +
                                                                    " local_unreadable_total=1; the store listed it but the read failed"));
@@ -468,21 +509,21 @@ TEST(StoreRepair, ATransferWaitsForItsCredit) {
   ASSERT_TRUE(writer.store().should_own(wanted));
 
   const auto push_lacks = lacks_of({{peer.id(), {held}}});
-  auto push = writer.store().repair_step({inventory_of({held}), {}, push_lacks, {}}, held_bytes.size() - 1, 16);
+  auto push = landed_step(writer.store(), {inventory_of({held}), {}, push_lacks, {}}, held_bytes.size() - 1);
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
   EXPECT_TRUE(push.credit_limited);
   EXPECT_FALSE(push.complete);
-  push = writer.store().repair_step({inventory_of({held}), {}, push_lacks, {}}, held_bytes.size(), 16);
+  push = landed_step(writer.store(), {inventory_of({held}), {}, push_lacks, {}}, held_bytes.size());
   EXPECT_EQ(peer.calls_of(message::put_object), 1u);
   EXPECT_FALSE(push.credit_limited);
 
   const RepairLists pull_lists{inventory_of({held, wanted}), list_of({held, wanted}), lacks_of({{peer.id(), {}}}), {}};
   RepairResult pull;
-  for (int step = 0; step < 8 && !pull.credit_limited; ++step) pull = writer.store().repair_step(pull_lists, extent - 1, 16);
+  for (int step = 0; step < 8 && !pull.credit_limited; ++step) pull = landed_step(writer.store(), pull_lists, extent - 1);
   EXPECT_TRUE(pull.credit_limited);
   EXPECT_EQ(peer.calls_of(message::get_object), 0u);
   EXPECT_FALSE(writer.data().has(wanted));
-  for (int step = 0; step < 8 && !writer.data().has(wanted); ++step) (void)writer.store().repair_step(pull_lists, extent, 16);
+  for (int step = 0; step < 8 && !writer.data().has(wanted); ++step) (void)landed_step(writer.store(), pull_lists, extent);
   EXPECT_EQ(peer.calls_of(message::get_object), 1u);
   EXPECT_TRUE(writer.data().has(wanted));
 }
@@ -500,22 +541,24 @@ TEST(StoreRepair, APushKeepsItsPlaceAcrossANewList) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto live = local_objects(writer, 100, 4 * 1024, 50);
-  constexpr uint64_t budget = 64ULL * 1024 * 1024;
-  const auto first = writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, budget, 16);
+  // A step's credit covers sixteen of them (Macha's step made sixteen calls; the
+  // repair redesign's stage 4 took the call count away, and the credit bounds a step).
+  constexpr uint64_t budget = 16 * 4 * 1024;
+  const auto first = landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, budget);
   EXPECT_EQ(first.push_examined, 16u);
   EXPECT_EQ(peer.calls_of(message::put_object), 16u);
 
   // A new survey, taken before those copies landed, saying the same: the
   // pass goes on from where it was, and sends none of the first again.
   const auto second_lists = lacks_of({{peer.id(), live}});
-  const auto second = writer.store().repair_step({inventory_of(live), {}, second_lists, {}}, budget, 16);
+  const auto second = landed_step(writer.store(), {inventory_of(live), {}, second_lists, {}}, budget);
   EXPECT_EQ(second.push_examined, 16u);
   EXPECT_EQ(peer.calls_of(message::put_object), 32u);
   for (size_t i = 0; i < live.size(); ++i) EXPECT_EQ(peer.data().has(live[i]), i < 32) << i;
   std::optional<bool> spanning;
   for (int step = 0; step < 20 && !spanning; ++step) {
     const auto passes = writer.store().repair_diagnostics().passes_completed;
-    const auto result = writer.store().repair_step({inventory_of(live), {}, second_lists, {}}, budget, 16);
+    const auto result = landed_step(writer.store(), {inventory_of(live), {}, second_lists, {}}, budget);
     if (writer.store().repair_diagnostics().passes_completed > passes) spanning = result.complete;
   }
   ASSERT_TRUE(spanning.has_value());
@@ -524,7 +567,7 @@ TEST(StoreRepair, APushKeepsItsPlaceAcrossANewList) {
   // A survey taken now: the peer lacks nothing, and the pass is settled.
   const auto now_lists = lacks_of({{peer.id(), {}}});
   for (int pass = 0; pass < 2; ++pass) {
-    const auto settled = writer.store().repair_step({inventory_of(live), {}, now_lists, {}}, budget, 16);
+    const auto settled = landed_step(writer.store(), {inventory_of(live), {}, now_lists, {}}, budget);
     EXPECT_TRUE(settled.complete);
   }
   EXPECT_EQ(peer.calls_of(message::put_object), live.size());
@@ -540,12 +583,12 @@ TEST(StoreRepair, TheLinkEstimateIgnoresSmallTransfers) {
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto small = local_objects(writer, 1, 16 * 1024, 71);
-  (void)writer.store().repair_step({inventory_of(small), {}, lacks_of({{peer.id(), small}}), {}}, 64ULL * 1024 * 1024, 16);
+  (void)landed_step(writer.store(), {inventory_of(small), {}, lacks_of({{peer.id(), small}}), {}}, 64ULL * 1024 * 1024);
   ASSERT_EQ(peer.calls_of(message::put_object), 1u);
   EXPECT_EQ(writer.store().estimated_network_bps(), 0.0);
 
   const auto large = local_objects(writer, 1, extent / 2, 72);
-  (void)writer.store().repair_step({inventory_of(large), {}, lacks_of({{peer.id(), large}}), {}}, 64ULL * 1024 * 1024, 16);
+  (void)landed_step(writer.store(), {inventory_of(large), {}, lacks_of({{peer.id(), large}}), {}}, 64ULL * 1024 * 1024);
   ASSERT_EQ(peer.calls_of(message::put_object), 2u);
   EXPECT_GT(writer.store().estimated_network_bps(), 0.0);
 }
@@ -562,7 +605,7 @@ TEST(StoreRepair, APullDecidesHeldByIndex) {
   const auto before = node.credit()->stats().speculative_admissions;
   size_t examined = 0;
   for (int pass = 0; pass < 8 && examined < live.size(); ++pass)
-    examined += node.store().repair_step({inventory_of(live), list_of(live), lacks_of({}), {}}, 8ULL * 1024 * 1024, 16).pull_examined;
+    examined += landed_step(node.store(), {inventory_of(live), list_of(live), lacks_of({}), {}}, 8ULL * 1024 * 1024).pull_examined;
   EXPECT_EQ(examined, live.size());
   EXPECT_EQ(node.credit()->stats().speculative_admissions, before);
   EXPECT_EQ(node.store().repair_diagnostics().pull_examined, examined);
@@ -593,7 +636,7 @@ TEST(StoreRepair, APullInFlightWhenItsTurnEndsIsKept) {
     return std::nullopt;
   });
   ASSERT_TRUE(writer.store().should_own(id));
-  const auto result = writer.store().repair_step({inventory_of({id}), list_of({id}), lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024, 8, [&] {
+  const auto result = landed_step(writer.store(), {inventory_of({id}), list_of({id}), lacks_of({{peer.id(), {}}}), {}}, 8ULL * 1024 * 1024, [&] {
     if (fetching.load()) ++polls_in_flight;
     return fetches.load() > 0;
   });
@@ -620,7 +663,7 @@ TEST(StoreRepair, AStepIsBoundedAndYields) {
   const RepairLists lists{inventory_of({id}), {}, lacks_of({{second.id(), {id}}}), {}};
   const auto full_lists_before = first.data().full_list_scans();
 
-  const auto yielded = first.store().repair_step(lists, 8ULL * 1024 * 1024, 8, [] { return true; });
+  const auto yielded = landed_step(first.store(), lists, 8ULL * 1024 * 1024, [] { return true; });
   EXPECT_TRUE(yielded.yielded);
   EXPECT_FALSE(yielded.complete);
   EXPECT_EQ(yielded.bytes_transferred, 0u);
@@ -628,13 +671,13 @@ TEST(StoreRepair, AStepIsBoundedAndYields) {
 
   // Macha's step here had one call for a probe and none for the upload;
   // with no probe, the budget that cannot cover the upload is the bytes'.
-  const auto bounded = first.store().repair_step(lists, bytes.size() - 1, 8);
+  const auto bounded = landed_step(first.store(), lists, bytes.size() - 1);
   EXPECT_FALSE(bounded.complete);
   EXPECT_EQ(bounded.bytes_transferred, 0u);
   EXPECT_EQ(bounded.remote_operations, 0u);
   EXPECT_FALSE(second.data().has(id));
 
-  const auto completed = first.store().repair_step(lists, 8ULL * 1024 * 1024, 8);
+  const auto completed = landed_step(first.store(), lists, 8ULL * 1024 * 1024);
   EXPECT_EQ(completed.bytes_transferred, bytes.size());
   EXPECT_TRUE(completed.complete);
   EXPECT_LE(completed.remote_operations, 8u);
@@ -927,7 +970,7 @@ TEST(StoreRepair, RepairPassesUnavailableAndCountsUnsourceable) {
     return marked;
   };
   const auto step = [&](const std::vector<ObjectId>& live, std::vector<ObjectId> pull) {
-    return node.store().repair_step({inventory_of(live), list_of(std::move(pull)), lacks_of({}), unavailable}, 4ULL * 1024 * 1024, 16);
+    return landed_step(node.store(), {inventory_of(live), list_of(std::move(pull)), lacks_of({}), unavailable}, 4ULL * 1024 * 1024);
   };
 
   // A whole pass over the marked object examines it and attempts nothing.
@@ -2249,10 +2292,10 @@ TEST(StoreRepair, TheStepThatFirstSeesANewListWalksIt) {
   const auto inventory = inventory_of({object_id(pushed), object_id(pulled)});
 
   const RepairLists empty{inventory, list_of({}), lacks_of({{peer.id(), {}}}), {}};
-  EXPECT_TRUE(node.store().repair_step(empty, 128ULL * 1024 * 1024, 0).complete);
+  EXPECT_TRUE(landed_step(node.store(), empty, 128ULL * 1024 * 1024).complete);
 
   const RepairLists named{inventory, list_of({object_id(pulled)}), lacks_of({{peer.id(), {object_id(pushed)}}}), {}};
-  const auto filled = node.store().repair_step(named, 128ULL * 1024 * 1024, 0);
+  const auto filled = landed_step(node.store(), named, 128ULL * 1024 * 1024);
   EXPECT_EQ(peer.data().get(object_id(pushed)), std::optional<Bytes>{pushed});
   EXPECT_EQ(node.data().get(object_id(pulled)), std::optional<Bytes>{pulled});
   // Macha's test_the_repair_step_that_first_sees_a_new_pull_list_walks_it: the new
@@ -2261,26 +2304,28 @@ TEST(StoreRepair, TheStepThatFirstSeesANewListWalksIt) {
 }
 
 // Macha's test_a_pull_list_new_while_the_push_runs_is_not_passed_over, its fix the
-// library matches: with more to push than a step examines, the first list's pull
-// finishes while the pass is still open; a new pull list arriving then is walked by the
-// step that first sees it, not passed over until the push's pass ends. In Macha's shape:
-// its peer holds everything, so the push examines and sends nothing. Dagda's push is
+// library matches: while a pass is still open, a new pull list arriving is walked by the
+// step that first sees it, not passed over until the pass ends. In Macha's shape: its
+// peer holds everything, so the push examines and sends nothing. Dagda's push is
 // diff-only (a listed object is one the peer lacks), so the same is a peer with no room
-// for an extent: examined, never sent. (A push that does send spends the step's
-// operations, which the pull shares, in both stores: sent to the Macha session,
-// 2026-11-16.)
+// for an extent: examined, never sent. Macha's pass stayed open because its step examined
+// a bounded number; the repair redesign's stage 4 took that bound away, and a pass is
+// open while what it started is in flight, so here the first list's pull is held at the
+// peer while the second list arrives.
 TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
+  dannan::test::Gate gate;
   Cluster cluster;
   auto& node = cluster.add("node", options(2));
-  // Room for the object to be pulled from it, none for an extent pushed to it.
+  // Room for the objects to be pulled from it, none for an extent pushed to it.
   auto& peer = cluster.add("peer", options(2, 1, 512 * 1024));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   ASSERT_TRUE(wait_until([&] { return record_of(node, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
   const auto first = pattern(64 * 1024, 73);
   const auto second = pattern(64 * 1024, 74);
-  ASSERT_TRUE(node.data().put(object_id(first), first));
+  ASSERT_TRUE(peer.data().put(object_id(first), first));
   ASSERT_TRUE(peer.data().put(object_id(second), second));
+  ASSERT_TRUE(node.store().should_own(object_id(first)));
   ASSERT_TRUE(node.store().should_own(object_id(second)));
   auto pushing = local_objects(node, 100, 4 * 1024, 60);
   auto everything = pushing;
@@ -2289,13 +2334,19 @@ TEST(StoreRepair, APullListNewWhileThePushRunsIsNotPassedOver) {
   const auto inventory = inventory_of(everything);
   constexpr uint64_t budget = 64ULL * 1024 * 1024;
 
+  dannan::test::GateOpener opener(gate);
+  peer.interpose(hold_ids(message::get_object, {object_id(first)}, gate));
   const RepairLists opening{inventory, list_of({object_id(first)}), lacks_of({{peer.id(), pushing}}), {}};
-  ASSERT_FALSE(node.store().repair_step(opening, budget, 16).complete);
+  ASSERT_FALSE(node.store().repair_step(opening, budget, wide).complete);
+  ASSERT_TRUE(gate.wait_for_entries(1));
   const auto gets = peer.calls_of(message::get_object);
   const RepairLists next{inventory, list_of({object_id(second)}), lacks_of({{peer.id(), pushing}}), {}};
-  (void)node.store().repair_step(next, budget, 16);
+  (void)node.store().repair_step(next, budget, wide);
+  EXPECT_TRUE(wait_until([&] { return node.data().has(object_id(second)); }, 10s));
   EXPECT_EQ(peer.calls_of(message::get_object), gets + 1);
   EXPECT_EQ(node.data().get(object_id(second)), std::optional<Bytes>{second});
+  gate.open();
+  (void)node.store().repair_drain(30s);
   // The push sent nothing: it is Macha's shape.
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
 }
@@ -2330,7 +2381,7 @@ TEST(StoreRepair, APushOutOfCreditDoesNotHoldBackThePull) {
       inventory_of(everything), list_of({object_id(wanted)}), lacks_of({{peer.id(), pushing}}), {}, holds_of({{peer.id(), {object_id(wanted)}}})};
 
   // Credit for one extent a step, and no limit on calls.
-  const auto step = node.store().repair_step(lists, extent, 0);
+  const auto step = landed_step(node.store(), lists, extent);
   EXPECT_EQ(node.data().get(object_id(wanted)), std::optional<Bytes>{wanted})
       << "credit_limited=" << step.credit_limited << " bytes=" << step.bytes_transferred;
 }
@@ -2413,11 +2464,11 @@ TEST(StoreRepair, TheObjectWithFewestCopiesGoesFirst) {
                           {},
                           holds_of({{peer.id(), {object_id(at_risk)}}, {other.id(), {}}})};
 
-  const auto step = node.store().repair_step(lists, extent, 0);
+  const auto step = landed_step(node.store(), lists, extent);
   EXPECT_EQ(node.data().get(object_id(at_risk)), std::optional<Bytes>{at_risk})
       << "credit_limited=" << step.credit_limited << " bytes=" << step.bytes_transferred;
   // And then the rest, a step's credit at a time.
-  for (int more = 0; more < 12; ++more) (void)node.store().repair_step(lists, extent, 0);
+  for (int more = 0; more < 12; ++more) (void)landed_step(node.store(), lists, extent);
   for (const auto& id : pushing) EXPECT_TRUE(peer.data().has(id));
 }
 
@@ -2436,13 +2487,13 @@ TEST(StoreRepair, APushToAPeerThatHoldsTheObjectMovesNoObjectBytes) {
   for (const auto& id : live) ASSERT_TRUE(peer.data().put(id, *writer.data().get(id)));
   const RepairLists lists{inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}};
 
-  const auto step = writer.store().repair_step(lists, 8ULL * 1024 * 1024, 16);
+  const auto step = landed_step(writer.store(), lists, 8ULL * 1024 * 1024);
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
   EXPECT_EQ(step.bytes_transferred, 0u);
   EXPECT_EQ(step.push_examined, live.size());
   EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
   EXPECT_EQ(probes(peer), 0u);
-  (void)writer.store().repair_step(lists, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(writer.store(), lists, 8ULL * 1024 * 1024);
   EXPECT_EQ(peer.calls_of(message::offer_objects), 1u) << "a keeper is remembered as a pushed copy is";
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
   for (const auto& id : live) EXPECT_TRUE(writer.data().has(id));
@@ -2467,11 +2518,11 @@ TEST(StoreRepair, APeerFetchingAnObjectDeclinesItsOfferAndIsSentNothing) {
 
   dannan::test::GateOpener opener(gate);
   writer.interpose(hold(message::get_object, gate));
-  auto pulling = std::async(std::launch::async, [&] { return peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16); });
+  auto pulling = std::async(std::launch::async, [&] { return landed_step(peer.store(), pull, 8ULL * 1024 * 1024); });
   // Opens the gate before the future waits on its thread, so a failure ends the test.
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
-  const auto step = writer.store().repair_step(push, 8ULL * 1024 * 1024, 16);
+  const auto step = landed_step(writer.store(), push, 8ULL * 1024 * 1024);
   EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
   EXPECT_EQ(peer.calls_of(message::put_object), 0u);
   EXPECT_EQ(step.bytes_transferred, 0u);
@@ -2481,7 +2532,7 @@ TEST(StoreRepair, APeerFetchingAnObjectDeclinesItsOfferAndIsSentNothing) {
 
   ASSERT_TRUE(wait_until(
       [&] {
-        (void)writer.store().repair_step(push, 8ULL * 1024 * 1024, 16);
+        (void)landed_step(writer.store(), push, 8ULL * 1024 * 1024);
         return peer.calls_of(message::offer_objects) >= 2;
       },
       15s));
@@ -2510,17 +2561,17 @@ TEST(StoreRepair, APeerThatWantedAnOfferedObjectFetchesItOnlyIfTheCopyNeverComes
     if (type == message::put_object) return Handled::failed(503, "storage_busy", "lost by the case");
     return std::nullopt;
   });
-  (void)writer.store().repair_step({inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(writer.store(), {inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024);
   EXPECT_EQ(peer.calls_of(message::offer_objects), 1u);
   EXPECT_FALSE(peer.data().has(id));
 
   const RepairLists pull{inventory_of({id}), list_of({id}), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), {id}}})};
-  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(peer.store(), pull, 8ULL * 1024 * 1024);
   EXPECT_EQ(writer.calls_of(message::get_object), 0u) << "the copy promised is not fetched too";
   EXPECT_FALSE(peer.data().has(id));
   ASSERT_TRUE(wait_until(
       [&] {
-        (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+        (void)landed_step(peer.store(), pull, 8ULL * 1024 * 1024);
         return peer.data().has(id);
       },
       15s));
@@ -2542,13 +2593,12 @@ TEST(StoreRepair, AHolderOffersOnlyWhatItsCreditWillSend) {
   for (const auto& id : live) ASSERT_TRUE(peer.store().should_own(id));
 
   // Credit for one object and not two.
-  (void)writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, 300 * 1024, 16);
+  (void)landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, 300 * 1024);
   EXPECT_EQ(peer.calls_of(message::put_object), 1u);
   const auto held = std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); });
   EXPECT_EQ(held, 1);
 
-  (void)peer.store().repair_step({inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})}, 8ULL * 1024 * 1024,
-                                 16);
+  (void)landed_step(peer.store(), {inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})}, 8ULL * 1024 * 1024);
   for (const auto& id : live) EXPECT_TRUE(peer.data().has(id));
   EXPECT_EQ(writer.calls_of(message::get_object), live.size() - 1);
 }
@@ -2577,21 +2627,21 @@ TEST(StoreRepair, APromisedPullIsLookedAtAgainEachSecond) {
     if (type == message::put_object) return Handled::failed(503, "storage_busy", "lost by the case");
     return std::nullopt;
   });
-  (void)writer.store().repair_step({inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(writer.store(), {inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024);
   ASSERT_EQ(peer.calls_of(message::offer_objects), 1u);
 
   const RepairLists pull{inventory_of({id}), list_of({id}), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), {id}}})};
-  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(peer.store(), pull, 8ULL * 1024 * 1024);
   for (int second = 1; second < 5; ++second) {
     time.advance(1s);
     peer.store().time_advanced();
-    (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+    (void)landed_step(peer.store(), pull, 8ULL * 1024 * 1024);
     EXPECT_FALSE(peer.data().has(id)) << "promised still, at " << second << " s";
   }
   EXPECT_EQ(writer.calls_of(message::get_object), 0u);
   time.advance(1s);
   peer.store().time_advanced();
-  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  (void)landed_step(peer.store(), pull, 8ULL * 1024 * 1024);
   EXPECT_TRUE(peer.data().has(id)) << "the promise lapsed at 5 s";
   EXPECT_EQ(writer.calls_of(message::get_object), 1u);
 }
@@ -2612,19 +2662,19 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
   const RepairLists pull{inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})};
   const RepairLists push{inventory_of(live), {}, lacks_of({{rejoining.id(), live}}), {}};
 
-  // The pull is serial: one fetch is held at the holder while the holder pushes.
+  // The joiner's fetches are held at the holder while the holder pushes.
   dannan::test::GateOpener opener(gate);
   writer.interpose(hold(message::get_object, gate));
-  auto pulling = std::async(std::launch::async, [&] { return rejoining.store().repair_step(pull, 64ULL * 1024 * 1024, 0); });
+  auto pulling = std::async(std::launch::async, [&] { return landed_step(rejoining.store(), pull, 64ULL * 1024 * 1024); });
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
-  (void)writer.store().repair_step(push, 64ULL * 1024 * 1024, 0);
+  (void)landed_step(writer.store(), push, 64ULL * 1024 * 1024);
   gate.open();
   ASSERT_EQ(pulling.wait_for(30s), std::future_status::ready);
   ASSERT_TRUE(wait_until(
       [&] {
-        (void)writer.store().repair_step(push, 64ULL * 1024 * 1024, 0);
-        (void)rejoining.store().repair_step(pull, 64ULL * 1024 * 1024, 0);
+        (void)landed_step(writer.store(), push, 64ULL * 1024 * 1024);
+        (void)landed_step(rejoining.store(), pull, 64ULL * 1024 * 1024);
         return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return rejoining.data().has(id); });
       },
       15s));
@@ -2637,27 +2687,6 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
 // starts. What lands is kept whatever the turn is doing, and is reported by the next
 // step; the window is the credit's burst; a drained window raises the storage event once
 // so an owner's pass refills it at once; and no call count bounds a turn.
-
-// The node's repair with a window of one extent: the credit's burst is the larger of an
-// extent and five seconds of the link, and the link is taken at 100 KiB/s until one is
-// measured. Its credit and share run on `time`, and its credit earns the whole rate.
-ClusterNodeOptions windowed(dannan::test::SteppedTime& time) {
-  auto out = options(2);
-  out.repair.extent_size = extent;
-  out.repair.initial_bandwidth = 100 * 1024;
-  out.repair.idle_bandwidth_fraction = 1.0;
-  out.repair.time = &time;
-  return out;
-}
-
-// Holds every request of `type` for one of `ids` at `gate`.
-test::Interpose hold_ids(MessageType type, std::set<ObjectId> ids, dannan::test::Gate& gate) {
-  return [type, ids = std::move(ids), &gate](MessageType seen, const dannan::membership::NodeRecord&,
-                                             const dannan::net::Message& request) -> std::optional<Handled> {
-    if (seen == type && ids.contains(message::decode_id(request.payload))) gate.enter_and_wait();
-    return std::nullopt;
-  };
-}
 
 // A transfer returns with its copies in flight: the turn is not held by the peer's
 // answer. Nothing has landed yet, so its result moves no bytes and is not complete, and
@@ -2696,6 +2725,8 @@ TEST(StoreRepair, ATransferReturnsWithItsCopiesInFlight) {
 
   puts.open();
   EXPECT_TRUE(wait_until([&] { return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); }); }, 10s));
+  // The sender has them landed once its window is empty.
+  EXPECT_TRUE(wait_until([&] { return writer.store().repair_diagnostics().in_flight == 0; }, 10s));
   RepairResult next;
   {
     auto turn = repair.begin_turn(time.now(), 0);
