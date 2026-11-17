@@ -4145,8 +4145,25 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     (void)flush();
     if (state.queue_at >= state.queue.size() && !stopped && !result.yielded && !result.credit_limited) state.walk_complete = true;
   }
-  // The fetches of many gathered go out together, their extents already held.
-  for (auto& [peer, many] : fetching_many) send_many(many);
+  // The fetches of many gathered go out together. Each holder's ids go in as many
+  // fetches as the credit and the window still cover, an extent each beside the one
+  // already held, so a step brings a window's worth of large objects and not one
+  // extent's; a part of one id is a fetch of one.
+  for (auto& [peer, many] : fetching_many) {
+    size_t parts = 1;
+    while (parts < many.ids.size() && spent + extent <= byte_budget && fits(0, extent)) {
+      spent += extent;
+      state.enter(extent);
+      ++parts;
+    }
+    for (size_t part = 0; part < parts; ++part) {
+      Many one{many.peer, {}};
+      const size_t first = many.ids.size() * part / parts;
+      const size_t end = many.ids.size() * (part + 1) / parts;
+      one.ids.assign(many.ids.begin() + static_cast<std::ptrdiff_t>(first), many.ids.begin() + static_cast<std::ptrdiff_t>(end));
+      send_many(one);
+    }
+  }
 
   finish_repair_pass(result);
   report_repair(result);
