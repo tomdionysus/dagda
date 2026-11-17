@@ -216,10 +216,9 @@ class StoragePool final : public contract::ObjectStore {
   // and its ciphertext digest. Either role.
   std::optional<LocalStore::SealedObject> get_sealed(const ObjectId& id) const;
   std::optional<dannan::identity::Hash256> held_digest(const ObjectId& id) const;
-  // The object's bytes on disk on the first online backend holding it, from its
-  // index or its file's size, never a read: at least its payload. 0 when none
-  // holds it.
-  uint64_t stored_size(const ObjectId& id) const;
+  // The object's plaintext size on the first online backend holding it, from
+  // its index or its file's size, never a read; 0 when none holds it.
+  uint64_t payload_size(const ObjectId& id) const;
   // Returns once the ticket's generation is durable. Throws
   // StaleDurabilityTicket if it names another process, or a domain or
   // incarnation no longer online; std::invalid_argument for an invalid one;
