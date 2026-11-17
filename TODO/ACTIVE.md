@@ -53,8 +53,9 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
 
 1. **Stage 3's regression under a viewer** (the redesign document, "What stage 3 measured"): a rejoin with a
    viewer on the holder took about three times as long as before. Mechanism suspected, not proven; the fix
-   recommended there (offer only what the step will send; a promised pull looked at again each second) **waits
-   on the maintainer**. Test-first, then remeasure the viewer scenario old against new.
+   recommended there (offer only what the step will send; a promised pull looked at again each second):
+   **approved by the maintainer, 2026-11-17 ("Yes"), before stage 4**. Test-first, then remeasure the viewer scenario old
+   against new.
 2. **Repair, stage 4: the window, and the call count gone.** Shape agreed with the Macha session (the redesign
    document, "Stage 4, the shape proposed", with its answers and the maintainer's ruling that `offer_bytes` and `in_flight`
    join Macha's /status at the cutover). A multi-object message for small values. Measure old against new.

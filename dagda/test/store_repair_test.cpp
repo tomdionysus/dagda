@@ -2525,6 +2525,75 @@ TEST(StoreRepair, APeerThatWantedAnOfferedObjectFetchesItOnlyIfTheCopyNeverComes
   EXPECT_EQ(writer.calls_of(message::get_object), 1u);
 }
 
+// A holder whose credit covers one object offers only that one, so an owner is promised
+// no more than is about to move and fetches the rest itself at once. Stage 3's
+// regression under a viewer (the redesign document, "What stage 3 measured"): a paced
+// holder's whole batch was promised and held the joiner back.
+TEST(StoreRepair, AHolderOffersOnlyWhatItsCreditWillSend) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto live = local_objects(writer, 4, 256 * 1024, 104);
+  for (const auto& id : live) ASSERT_TRUE(peer.store().should_own(id));
+
+  // Credit for one object and not two.
+  (void)writer.store().repair_step({inventory_of(live), {}, lacks_of({{peer.id(), live}}), {}}, 300 * 1024, 16);
+  EXPECT_EQ(peer.calls_of(message::put_object), 1u);
+  const auto held = std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return peer.data().has(id); });
+  EXPECT_EQ(held, 1);
+
+  (void)peer.store().repair_step({inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})}, 8ULL * 1024 * 1024,
+                                 16);
+  for (const auto& id : live) EXPECT_TRUE(peer.data().has(id));
+  EXPECT_EQ(writer.calls_of(message::get_object), live.size() - 1);
+}
+
+// A pull a promise holds back is looked at again each second, not on the doubling
+// backoff, so it fetches as soon as the promise lapses: here five seconds after the
+// offer, where the backoff would have waited until seven.
+TEST(StoreRepair, APromisedPullIsLookedAtAgainEachSecond) {
+  dannan::test::SteppedTime time;
+  // Stepping the peer's clock must not make the writer look dead.
+  Cluster cluster(std::chrono::hours(24));
+  auto& writer = cluster.add("writer", options(2));
+  auto receiving = options(2);
+  receiving.time = &time;
+  receiving.store.object_transfer_call = 5s;
+  auto& peer = cluster.add("peer", receiving);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(wait_until([&] { return record_of(writer, peer.id()).advert_u64(capacity_advert).value_or(0) > 0; }));
+  const auto bytes = pattern(64 * 1024, 105);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(writer.data().put(id, bytes));
+  ASSERT_TRUE(peer.store().should_own(id));
+  // Offered and wanted, and the copy lost on its way.
+  peer.interpose([](MessageType type, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (type == message::put_object) return Handled::failed(503, "storage_busy", "lost by the case");
+    return std::nullopt;
+  });
+  (void)writer.store().repair_step({inventory_of({id}), {}, lacks_of({{peer.id(), {id}}}), {}}, 8ULL * 1024 * 1024, 16);
+  ASSERT_EQ(peer.calls_of(message::offer_objects), 1u);
+
+  const RepairLists pull{inventory_of({id}), list_of({id}), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), {id}}})};
+  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  for (int second = 1; second < 5; ++second) {
+    time.advance(1s);
+    peer.store().time_advanced();
+    (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+    EXPECT_FALSE(peer.data().has(id)) << "promised still, at " << second << " s";
+  }
+  EXPECT_EQ(writer.calls_of(message::get_object), 0u);
+  time.advance(1s);
+  peer.store().time_advanced();
+  (void)peer.store().repair_step(pull, 8ULL * 1024 * 1024, 16);
+  EXPECT_TRUE(peer.data().has(id)) << "the promise lapsed at 5 s";
+  EXPECT_EQ(writer.calls_of(message::get_object), 1u);
+}
+
 // Both ends at once, as a node rejoins: its pull of one object is in flight while the
 // holder pushes everything it lacks. Each object crosses the link once (the baseline
 // measured one and a half to two times).
