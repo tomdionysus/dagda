@@ -2943,7 +2943,7 @@ first in ACTIVE.md's "Next"). Lir's shared-payload point was closed in Lir: it n
 Next: the instant delete's fix, small; then stage 3 (the offer), designed and not built, then old against new measured in one session; stage 4 (the
 window, the count gone), its shape to the Macha session first. Nothing running, no Pi claimed.
 
-## Handoff, 2026-11-16 (night): the instant delete's fix; repair stage 3, the offer; stage 4's shape agreed
+## Handoff, 2026-11-16 (night) to 2026-11-17: the instant delete's fix; repair stage 3, the offer, measured and its regression fixed; stage 4's shape agreed
 
 Branch `feature/macha-store-gaps`, nothing pushed. Every new case was seen failing on the code before it.
 
@@ -2972,6 +2972,14 @@ payload, not the sealed record (Macha's `StoreRepair.ATransferWaitsForItsCredit`
 chosen scenarios (`e5cee19`). Gate on node-b, as above: **1133 ran / 1130 passed / 3 skipped / 0 failed, 0
 warnings**. Remeasured old against new, three rounds: under a viewer 32.5-38.3 s against 34.4-37.9 s, at parity
 with each copy moved once; unpaced 20.6-29.3 s against 36.2-52.5 s.
+
+- **Dannan 0.9.0** (the Dannan session, cutting it on 2026-11-17): Dagda said what the tag must hold; its
+  `storage::FileSystem` has the exclusive lock and the directory sync Dagda's raw syncs need. Recorded in ACTIVE.md.
+- **The documents brought up to date** at the end: the redesign document reorganised (each stage's record in one
+  place, how to measure with where the binaries are, where stage 4 starts), the harness plan pointed at the new
+  figures, the README and the foundations map, ACTIVE.md with a "Start here".
+
+Left ACTIVE.md's "Next", both done: the instant delete's fix (was item 1) and repair's stage 3 (was item 2).
 
 Next: stage 4, a session of its own. Nothing running, no Pi claimed.
 

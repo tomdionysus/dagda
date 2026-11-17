@@ -458,7 +458,7 @@ gate prefix is 0.8.0: the benchmark's binaries are node-b's, copied to node-c, s
 Both Pis are on WiFi (`wlan0`; `eth0` down): the "real link" is wireless, so its raw round trip and rate are
 measured and recorded before it is shaped, and the shaped rate must sit under what it can carry.
 
-The controller is `tools/harness/pi-repair-run.sh` (smoke, link, run, unshape), run from the Mac over ssh.
+The controller is `tools/harness/pi-repair-run.sh` (smoke, link, run, uncount), run from the Mac over ssh.
 
 ### The Macha session's review of the driver (2026-11-16, at `274053c`, read not run)
 
@@ -591,3 +591,13 @@ session's build on node-b its cache.
 Done by 20:10Z: node-b (325 Mbit/s) and node-a (292 Mbit/s) are on 5 GHz, same addresses; node-c and node-d
 stay on 2.4 GHz WiFi(72 Mbit/s at best). A node-b-to-node-d run now crosses both bands; node-b to
 node-a is the pair with the fastest link, and node-a would need the harness binaries copied there.
+
+### Workload 7 after stages 1 to 3: old Dagda against new (2026-11-16 23:21Z to 2026-11-17 01:20Z)
+
+The figures and their reading are in `2026-11-16-repair-redesign.md`, "What stages 1 to 3 measured": the
+baseline's Dagda (`7d12ca8`, kept on node-b and node-d as `build-old/`, store name `dagda-old`) against the tip,
+in one session over the link as it then was (4.8 to 6.7 MB/s), Macha not rerun. Each copy now crosses once in
+every scenario; the unpaced rejoins are a third to a half faster; a rejoin under a viewer, three times slower at
+`d2872de`, is at parity at `d119d14`. The controller gained `STORES` (which two stores a run compares, `dagda-old`
+among them) and `SCENARIOS` (which of the five a run takes). Results: `build/harness/results/2026-11-16-stage3/`
+and `2026-11-17-viewer/`. A comparison with Macha at these stages would rerun Macha in the same session.
