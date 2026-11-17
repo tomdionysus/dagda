@@ -7,8 +7,8 @@
 | 0 | Measure and check | Done. Baseline measured; the three checks answered |
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); not yet benchmarked |
-| 3 | Each copy once (the offer) | Built and gated (`d2872de`); measured: each copy once, faster unpaced, **three times slower under a viewer** (below). **Next: that regression's fix, the maintainer's call** |
-| 4 | A window of transfers; the call count gone | Shape agreed with the Macha session (below); not built |
+| 3 | Each copy once (the offer) | Done, gated (`d119d14`) and measured: each copy once, faster unpaced, at parity under a viewer after its regression's fix (below) |
+| 4 | A window of transfers; the call count gone | Shape agreed with the Macha session (below); not built. **Next** |
 
 Everything is on `feature/macha-store-gaps`, local, nothing pushed.
 
@@ -201,7 +201,24 @@ cores claimed on each, no page-cache drop (`NOCOLD=1`); three rounds, the order 
   step at a time, re-offering (and so renewing) the rest; b does not pull a promised id, as the design says, and
   each deferral doubles its pull's retry backoff (1 s up to ten minutes), so even a landed or lapsed promise is
   met late. The baseline's old store moved 1.09 times the bytes here with b pulling nearly everything.
-- **Not yet decided, for the maintainer**: the fix. The recommendation is in two parts. The holder offers only what this
+- **Fixed, the maintainer approving the recommendation below (2026-11-17, "Yes")**: `63e76a0` the two cases, both seen
+  failing on `d2872de` (`StoreRepair.AHolderOffersOnlyWhatItsCreditWillSend`, which proves the mechanism: a
+  holder with credit for one object promised all four and the joiner fetched none;
+  `.APromisedPullIsLookedAtAgainEachSecond`, on a stepped clock: the backoff fetched at 7 s, not at the promise's
+  5 s); `0dfe22a` the fix; `d119d14` the planned object sized by its payload (`LocalStore::payload_size`, the pack
+  index or the loose file less its header, never a read), since the stored record's seal made credit of exactly
+  an object's size fall short (`.ATransferWaitsForItsCredit`, Macha's, caught it). Gate on node-b, Dannan 0.8.2
+  prefix, Macha's fixtures, GCC Release, warnings as errors: **1133 ran / 1130 passed / 3 skipped / 0 failed,
+  0 warnings**. Remeasured the same way (2026-11-17 01:01 to 01:20Z, link 5.7 to 6.7 MB/s, figures in
+  `build/harness/results/2026-11-17-viewer/`), three rounds:
+
+  | Scenario | Old, rounds 1-3 | New, rounds 1-3 | Bytes a sent, old / new |
+  |---|---|---|---|
+  | Rejoin under a viewer, 26 x 4 MiB | 34.4, 37.9, 36.4 | 32.5, 38.3, 36.7 | 123-128 MB / 114.3 MB |
+  | Rejoin, 26 x 4 MiB | 39.2, 36.2, 52.5 | 20.6, 23.7, 29.3 | 176-185 MB / 114.4 MB |
+
+  The viewer case at parity in time with each copy moved once; the unpaced gain kept.
+- The recommendation as it was put to the maintainer, in two parts. The holder offers only what this
   step will send, so a promise covers a copy about to move: its credit is checked against the object's size
   before the offer, which needs the size from the index without a read. And a pull deferred by a promise is
   looked at again after `retry_first` each time, not on the doubling backoff, so it fetches as soon as the
