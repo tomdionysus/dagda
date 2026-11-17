@@ -477,6 +477,8 @@ struct DistributedStore::SharedFetch {
   // Told once the fetch is done, outside its lock: a reader that does not wait on it
   // (repair's pull).
   std::vector<FetchDone> on_done DANNAN_GUARDED_BY(mutex);
+  // What it brings teaches the link's estimate: not for repair's, which its window does.
+  bool sample_link DANNAN_GUARDED_BY(mutex) = true;
 };
 
 // A push's plan: what is known of an object's owners, and the copies sent to those that
@@ -516,6 +518,15 @@ struct DistributedStore::RepairLanded {
   // A pull's answer, and whether a fetch of many left it for another.
   FetchAnswer answer = FetchAnswer::try_later;
   bool again = false;
+};
+
+// What a landing in repair's window leaves to do: raise the storage event (the window
+// has just drained to half or less, once a drain), and teach the link's estimate a
+// sample of what the window moved.
+struct DistributedStore::RepairLanding {
+  bool drained = false;
+  uint64_t sample_bytes = 0;
+  std::chrono::steady_clock::duration sample_time{};
 };
 
 // Repair's place and counters. The cursors and lists belong to the one
@@ -591,6 +602,12 @@ struct DistributedStore::RepairState {
   // drains to half or less.
   bool drain_owed DANNAN_GUARDED_BY(window_mutex) = false;
   std::vector<RepairLanded> landed DANNAN_GUARDED_BY(window_mutex);
+  // The link as repair's window sees it: the bytes landed since the window last left
+  // empty, or since the last sample. Transfers in a window share the link, so one
+  // transfer's bytes over its own time is only its share: the estimate is taught from
+  // these instead, when the window drains and at each window's worth moved.
+  std::chrono::steady_clock::time_point span_start DANNAN_GUARDED_BY(window_mutex){};
+  uint64_t span_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
   // The owner's: transfers started, objects with one in flight (not started again
   // until it lands), and copies that did not arrive (sent again first; the pass is not
   // complete while there is one).
@@ -605,29 +622,42 @@ struct DistributedStore::RepairState {
 
   void enter(uint64_t amount) {
     Lock lock(window_mutex);
+    if (!in_flight) {
+      span_start = std::chrono::steady_clock::now();
+      span_bytes = 0;
+    }
     in_flight += amount;
     if (in_flight * 2 > window) drain_owed = true;
   }
-  // `amount` leaves the window and `arrived`, if any, waits for the owner. Whether the
-  // window has just drained to half or less: the storage event is raised, once a drain.
-  bool land(uint64_t amount, std::optional<RepairLanded> arrived) {
+  // `amount` leaves the window, `moved` bytes of it having crossed the link, and
+  // `arrived` waits for the owner. A sample is taken when the window drains, and at each
+  // window's worth moved while it never does.
+  RepairLanding land(uint64_t amount, uint64_t moved, uint64_t extent, std::optional<RepairLanded> arrived) {
     std::vector<RepairLanded> all;
     if (arrived) all.push_back(std::move(*arrived));
-    return land_all(amount, std::move(all));
+    return land_all(amount, moved, extent, std::move(all));
   }
-  bool land_all(uint64_t amount, std::vector<RepairLanded> arrived) {
-    bool drained = false;
+  RepairLanding land_all(uint64_t amount, uint64_t moved, uint64_t extent, std::vector<RepairLanded> arrived) {
+    RepairLanding out;
     {
       Lock lock(window_mutex);
       in_flight -= std::min(in_flight, amount);
       for (auto& item : arrived) landed.push_back(std::move(item));
       if (drain_owed && in_flight * 2 <= window) {
         drain_owed = false;
-        drained = true;
+        out.drained = true;
+      }
+      span_bytes += moved;
+      if (span_bytes && (span_bytes >= std::max(window, extent) || !in_flight)) {
+        const auto now = std::chrono::steady_clock::now();
+        out.sample_bytes = span_bytes;
+        out.sample_time = now - span_start;
+        span_start = now;
+        span_bytes = 0;
       }
     }
     window_changed.notify_all();
-    return drained;
+    return out;
   }
   uint64_t flying() const {
     Lock lock(window_mutex);
@@ -2276,7 +2306,7 @@ ReadResult DistributedStore::get_remote(const ObjectId& id, const ReadOptions& o
 }
 
 std::shared_ptr<DistributedStore::SharedFetch> DistributedStore::start_fetch(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist,
-                                                                             FetchDone on_done) {
+                                                                             FetchDone on_done, bool sample_link) {
   const bool foreground = options.frame == FrameType::foreground;
   std::shared_ptr<SharedFetch> fetch;
   bool leader = false;
@@ -2314,6 +2344,7 @@ std::shared_ptr<DistributedStore::SharedFetch> DistributedStore::start_fetch(con
       fetch->foreground = foreground;
       fetch->persist = opportunistic_persist;
       fetch->stripe = options.stripe;
+      fetch->sample_link = sample_link;
       if (on_done) fetch->on_done.push_back(std::move(on_done));
       _fetches[id] = fetch;
       leader = true;
@@ -2424,8 +2455,14 @@ void DistributedStore::fetched(const std::shared_ptr<SharedFetch>& fetch, const 
   if (outcome.reply && outcome.reply->type == message::object_reply) {
     try {
       data = take_object_reply(std::move(*outcome.reply), fetch->id);
-      // A fetch teaches the network estimate, as Macha's (ds:1427-1428 at f0597a4).
-      if (data) note_network(data->bytes.size(), Clock::now() - started);
+      // A fetch teaches the network estimate, as Macha's (ds:1427-1428 at f0597a4),
+      // unless repair's window does.
+      bool sample = false;
+      {
+        Lock lock(fetch->mutex);
+        sample = fetch->sample_link;
+      }
+      if (data && sample) note_network(data->bytes.size(), Clock::now() - started);
     } catch (const std::exception& error) {
       _logger.debug("object read: " + std::string(error.what()));
     }
@@ -3374,6 +3411,11 @@ void DistributedStore::finish_repair_pass(RepairResult& result) {
   }
 }
 
+void DistributedStore::repair_landed(const RepairLanding& landing) {
+  if (landing.sample_bytes) note_network(landing.sample_bytes, landing.sample_time);
+  if (landing.drained) _context.events().notify(_storage_event);
+}
+
 void DistributedStore::report_repair(RepairResult& result) {
   auto& state = *_repair;
   state.push_examined.fetch_add(result.push_examined, std::memory_order_relaxed);
@@ -3713,14 +3755,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
 
     // Every send goes out at once and none is waited for: each lands on the store's
     // executor and is kept whatever repair's turn does meanwhile, and the next step
-    // applies it. One sample of the link for the batch, as its sends share it.
-    struct Batch {
-      explicit Batch(size_t sends) : left(sends) {}
-      std::atomic<size_t> left;
-      std::atomic<uint64_t> delivered{0};
-      const Clock::time_point dispatched = Clock::now();
-    };
-    const auto batch = std::make_shared<Batch>(sends.size());
+    // applies it. The link is sampled from the window, not from each send.
     for (const auto& send : sends) {
       const auto seq = state.started++;
       const uint64_t bytes = send.data->size();
@@ -3730,7 +3765,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       _context.routes().call(
           send.peer, message::put_object, message::encode_object(send.plan->id, *send.data), FrameType::speculative, _options.object_transfer_call, _executor,
           [weak = std::weak_ptr<Shared>(_shared), plan = send.plan, id = send.plan->id, peer = send.peer.id, host = send.peer.host, bytes, seq,
-           batch](CallOutcome outcome) {
+           extent](CallOutcome outcome) {
             const auto shared = weak.lock();
             if (!shared) return;
             ReadLock alive(shared->alive);
@@ -3742,12 +3777,9 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               // figures, as it lands.
               store->_repair->pushed_copies.fetch_add(1, std::memory_order_relaxed);
               store->note_acknowledged(id, peer);
-              batch->delivered.fetch_add(bytes, std::memory_order_relaxed);
             } else {
               store->_logger.debug("repair push peer=" + host + " error=" + outcome_text(outcome));
             }
-            if (batch->left.fetch_sub(1, std::memory_order_acq_rel) == 1)
-              store->note_network(batch->delivered.load(std::memory_order_relaxed), Clock::now() - batch->dispatched);
             RepairLanded landed;
             landed.seq = seq;
             landed.id = id;
@@ -3755,7 +3787,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
             landed.bytes = bytes;
             landed.peer = peer;
             landed.plan = plan;
-            if (store->_repair->land(bytes, std::move(landed))) store->_context.events().notify(store->_storage_event);
+            store->repair_landed(store->_repair->land(bytes, ok ? bytes : 0, extent, std::move(landed)));
           },
           peer_call_watch());
     }
@@ -3815,39 +3847,43 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     ++result.remote_operations;
     ReadOptions options;
     options.frame = FrameType::speculative;
-    (void)start_fetch(id, options, false, [weak = std::weak_ptr<Shared>(_shared), id, seq, extent](ObjectData data, FetchAnswer answer) {
-      const auto shared = weak.lock();
-      if (!shared) return;
-      ReadLock alive(shared->alive);
-      auto* store = shared->store;
-      if (!store) return;
-      auto job = [store, id, seq, extent, data = std::move(data), answer] {
-        RepairLanded landed;
-        landed.seq = seq;
-        landed.id = id;
-        landed.pull = true;
-        landed.answer = answer;
-        if (data) {
-          landed.answer = FetchAnswer::try_later;
-          if (const auto admitted = store->admit_data(FrameType::speculative, data->bytes.size(), no_caller_deadline)) {
-            if (store->_data.put(id, data->bytes)) {
-              landed.ok = true;
-              landed.answer = FetchAnswer::ok;
-              landed.bytes = data->bytes.size();
-              store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
+    // The link is sampled from the window, not from this fetch alone.
+    (void)start_fetch(
+        id, options, false,
+        [weak = std::weak_ptr<Shared>(_shared), id, seq, extent](ObjectData data, FetchAnswer answer) {
+          const auto shared = weak.lock();
+          if (!shared) return;
+          ReadLock alive(shared->alive);
+          auto* store = shared->store;
+          if (!store) return;
+          auto job = [store, id, seq, extent, data = std::move(data), answer] {
+            RepairLanded landed;
+            landed.seq = seq;
+            landed.id = id;
+            landed.pull = true;
+            landed.answer = answer;
+            if (data) {
+              landed.answer = FetchAnswer::try_later;
+              if (const auto admitted = store->admit_data(FrameType::speculative, data->bytes.size(), no_caller_deadline)) {
+                if (store->_data.put(id, data->bytes)) {
+                  landed.ok = true;
+                  landed.answer = FetchAnswer::ok;
+                  landed.bytes = data->bytes.size();
+                  store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
+                }
+              }
+              if (landed.ok) {
+                store->_context.events().notify(store->_storage_event);
+                store->note_acknowledged(id, store->_self);
+              }
             }
-          }
-          if (landed.ok) {
-            store->_context.events().notify(store->_storage_event);
-            store->note_acknowledged(id, store->_self);
-          }
-        }
-        if (store->_repair->land(extent, std::move(landed))) store->_context.events().notify(store->_storage_event);
-      };
-      // The store going: what has not been stored is lost, and the next survey lists
-      // it again.
-      (void)store->submit(std::move(job));
-    });
+            store->repair_landed(store->_repair->land(extent, data ? data->bytes.size() : 0, extent, std::move(landed)));
+          };
+          // The store going: what has not been stored is lost, and the next survey lists
+          // it again.
+          (void)store->submit(std::move(job));
+        },
+        false);
   };
   const auto pull = [&](const ObjectId& id, OfferBook::Fetch& marked) {
     if (!hold_extent()) return false;
@@ -3901,10 +3937,9 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     }
     const auto seq = state.started++;
     ++result.remote_operations;
-    const auto started = Clock::now();
     _context.routes().call(
         many.peer, message::get_objects, message::encode_ids(many.ids), FrameType::speculative, _options.object_transfer_call, _executor,
-        [weak = std::weak_ptr<Shared>(_shared), ids = many.ids, host = many.peer.host, seq, extent, started](CallOutcome outcome) {
+        [weak = std::weak_ptr<Shared>(_shared), ids = many.ids, host = many.peer.host, seq, extent](CallOutcome outcome) {
           const auto shared = weak.lock();
           if (!shared) return;
           ReadLock alive(shared->alive);
@@ -3922,9 +3957,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           }
           uint64_t brought = 0;
           for (const auto& object : objects) brought += object.data.size();
-          // A fetch teaches the network estimate, as a fetch of one does.
-          store->note_network(brought, Clock::now() - started);
-          auto job = [store, ids, objects = std::move(objects), seq, extent] {
+          auto job = [store, ids, objects = std::move(objects), seq, extent, brought] {
             std::vector<RepairLanded> landed;
             bool stored = false;
             for (size_t i = 0; i < ids.size(); ++i) {
@@ -3951,7 +3984,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               landed.push_back(std::move(item));
             }
             if (stored) store->_context.events().notify(store->_storage_event);
-            if (store->_repair->land_all(extent, std::move(landed))) store->_context.events().notify(store->_storage_event);
+            store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
           };
           (void)store->submit(std::move(job));
         },
