@@ -1,44 +1,43 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-16 (night). `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (night)",
-with what left this file on 2026-11-16 archived after "2026-11-16 (evening)". The plan for slices is the
-three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
+Last updated: 2026-11-17. `COMPLETED.md` is the record; its newest handoff is "2026-11-16 (night) to 2026-11-17".
+Nothing is running and no Pi is claimed. The plan for slices is the three-systems design,
+`TODO/2026-11-13-three-systems-design.md`; the slices are paused (below).
+
+## Start here (a fresh session)
+
+Read this file, then `TODO/2026-11-16-repair-redesign.md`: its status table, "Stage 4, the shape agreed" (with
+"Where to start") and "How to measure a stage" (where the binaries and builds are on the Pis). The next work is
+item 1 of "Next": repair's stage 4, test-first, a session of its own.
 
 ## Where it stands
 
 - **Macha first; slices paused; `0.2.0` held** (Tom, 2026-11-14). Work is on `feature/macha-store-gaps` (local,
   nothing pushed). `0.1.5` (main `c20f88c`, Dannan 0.6) is the last pushed release; `0.2.0` (slice 1) is tagged
   locally only.
-- **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI, so no bump.
-  0.8.5 fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
+- **The branch** builds on Dannan 0.8.x (`DAGDA_DANNAN_MINIMUM` 0.8.0; 0.8.1 to 0.8.5 keep 0.8.0's ABI. 0.8.5
+  fixes a node stopped while its io ran, then destroyed after the io stopped, hanging in its second stop: a
   teardown hang in Dagda's tests would look there first). **Last full gate: `d119d14`**, jupiter, Dannan 0.8.2
-  prefix (0.8.0's ABI), GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1133 ran,
-  1130 passed, 3 skipped, 0 failed, 0 warnings. Later commits change the harness and notes only; the gates
-  before it are in `COMPLETED.md`'s handoffs.
-- **The instant delete keeps the copy on a node with no inventory published** (Tom's ruling, gc-and-deletion
-  gap 9): done, `5f3c458`.
-- **Repair is being redesigned** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md`, which has the status of
-  each stage, the rulings and how to measure). Done and gated: the survey keeps who holds what (stage 1); repair
-  works from one queue, fewest copies first, which ends both ways the pull starved (stage 2); each copy moves
-  once, by an offer before the bytes (stage 3, `d2872de`); and Dagda's own loop reads a new reference at once, a
-  gap against Macha (`0d048e0`). Stage 3 measured: each copy once, the unpaced rejoins a third to a half faster,
-  at parity under a viewer once its regression was fixed (`d119d14`). **Next: stage 4**, the window and the call
-  count gone, its shape agreed.
-- **The repair baseline is measured** (harness plan, "Workload 7, the baseline"): Dagda's repair today is at
-  least as fast as Macha's in every scenario; both stores send each object about one and a half to two times;
-  on small objects the 16-call count, not the link, sets the rate. Stages 1 to 3 against the baseline's Dagda:
-  the redesign document, "What stage 3 measured".
+  prefix, GCC Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: 1133 ran, 1130 passed, 3
+  skipped, 0 failed, 0 warnings. Later commits change the harness's controller and notes only.
+- **Repair is being redesigned in stages** (Tom, 2026-11-16; `TODO/2026-11-16-repair-redesign.md` has each
+  stage's state, what was built, the rulings, the figures and how to measure). Stages 1 to 3 are done, gated and
+  measured against the baseline's Dagda: each copy crosses the link once (it was one and a half to two times),
+  the unpaced rejoins are a third to a half faster, a rejoin under a viewer is at parity. **Stage 4 is next**:
+  a window of transfers and the 16-call count gone, which is what still sets the small-object rate. Its shape is
+  agreed with the Macha session.
+- **The instant delete keeps the copy on a node with no inventory published** (Tom's ruling; `5f3c458`).
 - **Macha's port** (the Macha session) builds against this branch: R1 to R5 done, R6 and R7 mostly, at `deceac1`
   on its `port/dannan-dagda`, compile-only so far (the Macha session, 2026-11-16). Macha is given each gated
-  commit, and retires its own cases against named `dagda_tests` cases, mapped one by one. It has been told of
-  stages 1 to 3 and the instant delete's fix, and that no ported case changed; it confirmed stage 3 needs nothing
-  of its pass (it calls `Repair::transfer`, and `dagda::Node` hands its server the offer book).
+  commit (it has `d119d14`), and retires its own cases against named `dagda_tests` cases, mapped one by one. No
+  ported case has changed. Stage 3 asks nothing of its pass.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`). Measured:
   publications and the viewer at parity or better; small files about 6% over Macha's CPU (was 11%), all else
   equal; local reads better with one reader and no steady gap with four; recovery at parity within 2%; repair
-  (above). Not run: reads over a shaped link, CONTROL graphs, deletes and GC, disk pressure, cache. The figures
-  before repair's are on jupiter's previous kernel (6.18.50); repair's are on a WiFi link that has since
-  changed. A comparison with later figures runs both sides again.
+  (the baseline against Macha, then stages 1 to 3 against the baseline's Dagda; Macha not rerun since). Not run:
+  reads over a shaped link, CONTROL graphs, deletes and GC, disk pressure, cache. The figures before repair's
+  are on jupiter's previous kernel (6.18.50); repair's are on a WiFi link that varies. A comparison with later
+  figures runs both sides again.
 - **Acknowledgement levels are the stack's standard** (Tom, 2026-11-15): ephemeral, persisted, decided (Dannan's
   agreement, 0.9.0), replicated; the setting is `ack_level`. Done on the branch and in the stack document. Dagda's
   durable stays beside them until Tom says otherwise.
@@ -57,9 +56,12 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
 
 ## Next (in order)
 
-1. **Repair, stage 4: the window, and the call count gone.** Shape agreed with the Macha session (the redesign
-   document, "Stage 4, the shape proposed", with its answers and Tom's ruling that `offer_bytes` and `in_flight`
-   join Macha's /status at the cutover). A multi-object message for small values. Measure old against new.
+1. **Repair, stage 4: the window, and the call count gone** (the redesign document, "Stage 4, the shape
+   agreed"). `transfer` tops up a window and returns; results report what completed; `operation_budget` goes; a
+   multi-object message for small values; the storage event on a drained window; `offer_bytes` and `in_flight`
+   through `repair_diagnostics()`, their names told to the Macha session with the trace-fixture cases whose
+   order changes. Test-first, one whole-suite run, then old against new on the Pis: keep `build-tip` (stage 3)
+   as a second old side first.
 2. **The rest of harness phase 2**, both stores rerun: reads over a link, CONTROL graphs, deletes and GC, disk
    pressure, cache; strace fsync counts on a separate rerun. **The slow-disk run is approved** (Tom,
    2026-11-16): when a Pi is free, a note on the board, then the device-mapper delay target over a loop file on
@@ -83,7 +85,11 @@ figures, then slices 2 to 5 as the design orders them.
 
 - No builds, tests or benches on the Mac. Linux gates run on the shared Pis, claimed on the board first, nice 19,
   released at once: saturn (.170) and neptune (.202) hold the Dannan 0.8.0 prefix and Macha's fixtures under
-  `/root/dagda-080`; jupiter (.169) builds the harness under `/root/harness`; uranus (.228) has 4 GB.
+  `/root/dagda-080`; jupiter (.169) holds the suite's build on the 0.8.2 prefix under `/root/dagda-s3` (fixtures
+  at `/root/dagda-release/macha-fixtures`) and the harness under `/root/harness`; uranus (.228) has 4 GB and the
+  harness's binaries. The branch travels as a git bundle; the gate scripts are kept beside each build there.
+- Test-first is shown on the Pi: build at the commit that adds the cases, see them fail, then build the fix and
+  run the whole suite once.
 - **Claim what the job uses** (Tom, 2026-11-16): the cores of its `-j`, an end time from a measured rate. A run
   bound by the network or a disk needs a core or two, not a whole Pi for hours. Drop the page cache or fstrim
   only on a Pi held whole. A heavy transfer between Pis slows every session's ssh and rsync: a note on the board
@@ -148,6 +154,11 @@ once), and Tom ruled: **a node with no inventory published keeps the copy**, as 
 does; a test-first fix ahead of repair's stage 3. Raised by Lir on the way and closed in Lir by Tom the same
 evening: two messages never share a large payload's object (each object begins with its message's dot), so the
 instant delete releasing every claim its clock dominates costs Lir nothing, and Dagda's contract is unchanged.
+
+**Tom, 2026-11-17.** To stage 3's regression under a viewer and the fix recommended (a holder offers only what
+the step will send; a promised pull is looked at each second), before stage 4: "Yes." Built and measured.
+Relayed by the Macha session the night before: `offer_bytes` and `in_flight` join Macha's /status repair section
+at the cutover, announced to Core and every client with the other cutover API changes.
 
 **Tom, 2026-11-05, later, to the Macha session and relayed by it; where it differs from the list below,
 this is the later word:**
@@ -302,7 +313,7 @@ asking:
 
 ## Waiting on Tom
 
-Nothing of Dagda's is waiting on Tom (stage 3's viewer regression: his "Yes" of 2026-11-17, built and measured).
+Nothing of Dagda's is waiting on Tom. (Dannan's 0.9.0 tag waits on his word, in the Dannan session.)
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
 under a claim, the local barrier's deadline, wall versus steady ages, the policy disagreement loop, O(state) per

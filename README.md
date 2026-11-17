@@ -54,8 +54,10 @@ Dagda is Macha's store taken out and generalised, so that it is written once:
 - **The ledger.** Claims with reference counts, a held trie per node, the union and
   diff of tries across nodes, retention and the collector, and node horizons so a node
   that was away catches up by difference, never by scan.
-- **Availability and repair.** A survey of what each peer lacks, diff only, and repair
-  paced by a duty share against foreground work: always running, never in the way.
+- **Availability and repair.** A survey of what each peer lacks and holds, diff only;
+  repair from one queue, the object with fewest copies first, a holder offering before
+  it sends so each copy moves once; all of it paced by a duty share against foreground
+  work: always running, never in the way.
 - **Leases and claimed collections.** A lease with an epoch fence, a keeper that takes
   over from a node the roster has lost after a window measured from when it was last
   heard of, and a collection template whose records merge field group by field group,
@@ -191,8 +193,10 @@ Macha needs of Dagda, requirement by requirement:
 Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.8.0. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
-evidence, tickets, availability and repair; an instant delete beside the collector's
-per-domain wait; leases and claimed collections; domains with node-local keys, wrapped
+evidence, tickets, availability and repair (on the port's branch redesigned: one queue
+by copies left, an offer before each push); an instant delete beside the collector's
+per-domain wait, which removes a copy only where a complete published inventory does
+not refer to it; leases and claimed collections; domains with node-local keys, wrapped
 domain keys, member and blind roles, and the scope check at the write floor;
 `dagda-migrate`, which moves Macha's v18 disks to v19 in place; and `dagda::Node`, which
 opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`; head
