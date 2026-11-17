@@ -2600,7 +2600,9 @@ TEST(StoreRepair, AHolderOffersOnlyWhatItsCreditWillSend) {
 
   (void)landed_step(peer.store(), {inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})}, 8ULL * 1024 * 1024);
   for (const auto& id : live) EXPECT_TRUE(peer.data().has(id));
-  EXPECT_EQ(writer.calls_of(message::get_object), live.size() - 1);
+  // The three it fetched, together in one fetch of many.
+  EXPECT_EQ(peer.store().repair_diagnostics().copies_pulled, live.size() - 1);
+  EXPECT_EQ(writer.calls_of(message::get_objects), 1u);
 }
 
 // A pull a promise holds back is looked at again each second, not on the doubling
@@ -2662,9 +2664,10 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
   const RepairLists pull{inventory_of(live), list_of(live), lacks_of({{writer.id(), {}}}), {}, holds_of({{writer.id(), live}})};
   const RepairLists push{inventory_of(live), {}, lacks_of({{rejoining.id(), live}}), {}};
 
-  // The joiner's fetches are held at the holder while the holder pushes.
+  // The joiner's fetches are held at the holder while the holder pushes: one of many,
+  // as the survey says the holder has them all.
   dannan::test::GateOpener opener(gate);
-  writer.interpose(hold(message::get_object, gate));
+  writer.interpose(hold(message::get_objects, gate));
   auto pulling = std::async(std::launch::async, [&] { return landed_step(rejoining.store(), pull, 64ULL * 1024 * 1024); });
   dannan::test::GateOpener release(gate);
   ASSERT_TRUE(gate.wait_for_entries(1));
@@ -2678,7 +2681,8 @@ TEST(StoreRepair, ARejoiningNodeIsSentEachObjectOnce) {
         return std::all_of(live.begin(), live.end(), [&](const ObjectId& id) { return rejoining.data().has(id); });
       },
       15s));
-  EXPECT_EQ(rejoining.calls_of(message::put_object) + writer.calls_of(message::get_object), live.size());
+  EXPECT_EQ(writer.store().repair_diagnostics().copies_pushed + rejoining.store().repair_diagnostics().copies_pulled, live.size());
+  EXPECT_EQ(rejoining.calls_of(message::put_object), writer.store().repair_diagnostics().copies_pushed);
 }
 
 // ---- The repair redesign's stage 4: a window of transfers ---------------------
@@ -2843,7 +2847,8 @@ TEST(StoreRepair, APullThatLandsIsKeptThoughTheNodeStopsMidWindow) {
   ASSERT_TRUE(cluster.converged());
   const auto live = local_objects(holder, 4, 64 * 1024, 114);
   for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
-  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  // No holder known: each is fetched alone, so two can be held while two land.
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}};
   const std::set<ObjectId> held{live[0], live[2]};
   auto& repair = joiner.repair();
   auto& time = joiner.context().time().source();
