@@ -343,6 +343,8 @@ class DagdaRepairNode final : public harness::RepairNode {
     out["push_examined"] = static_cast<double>(repair.push_examined);
     out["pull_examined"] = static_cast<double>(repair.pull_examined);
     out["passes_completed"] = static_cast<double>(repair.passes_completed);
+    out["offer_bytes"] = static_cast<double>(repair.offer_bytes);
+    out["in_flight"] = static_cast<double>(repair.in_flight);
     const auto gates = _node->repair().gates();
     out["gate_ran"] = static_cast<double>(gates.ran);
     out["gate_share"] = static_cast<double>(gates.share);
@@ -351,6 +353,8 @@ class DagdaRepairNode final : public harness::RepairNode {
     // What this node was asked, by message: the other node's calls to it.
     out["asked_put_object"] = static_cast<double>(_node->calls_of(dagda::store::message::put_object));
     out["asked_get_object"] = static_cast<double>(_node->calls_of(dagda::store::message::get_object));
+    out["asked_get_objects"] = static_cast<double>(_node->calls_of(dagda::store::message::get_objects));
+    out["asked_offer_objects"] = static_cast<double>(_node->calls_of(dagda::store::message::offer_objects));
     out["asked_have_objects"] = static_cast<double>(_node->calls_of(dagda::store::message::have_objects));
     out["asked_trie_diff"] = static_cast<double>(_node->calls_of(dagda::store::message::trie_diff));
     return out;

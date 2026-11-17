@@ -9,10 +9,10 @@
 # machine over ssh. It only drives: nothing is built or measured here. Node a runs on $A
 # and holds; node b runs on $B and joins. Both stores' harness binaries and their
 # libraries are under /root/harness on both Pis at the same paths (built on one, copied to
-# the other): macha-build/harness-macha and build-tip/harness-dagda. A second Dagda,
-# store name dagda-old, runs from build-old/ (its harness-dagda and dagda/libdagda.so.*,
-# kept from an earlier build-tip), so a repair stage is measured old against new in one
-# session; its figures carry the store name dagda-old.
+# the other): macha-build/harness-macha and build-tip/harness-dagda. An older Dagda, store
+# name dagda-<name>, runs from build-<name>/ (its harness-dagda and dagda/libdagda.so.*,
+# kept from an earlier build-tip): dagda-old is the baseline's, dagda-s3 stage 3's. So a
+# repair stage is measured old against new in one session; its figures carry that name.
 #
 #   pi-repair-run.sh smoke        one tiny rejoin a store: does the driver work across the Pis
 #   pi-repair-run.sh link         the raw link's rate and round trip now
@@ -93,7 +93,7 @@ start() {
   if [ $n = a ]; then p=$PA; seed=""; else p=$PB; seed="$A $PA"; fi
   case $store in
     macha) bin="$R/macha-build/harness-macha $d repair-node $n $h $p $seed" ;;
-    dagda-old) bin="env LD_LIBRARY_PATH=$R/build-old/dagda $R/build-old/harness-dagda repair-node $d $n $h $p $seed" ;;
+    dagda-*) old=$R/build-${store#dagda-}; bin="env LD_LIBRARY_PATH=$old/dagda $old/harness-dagda repair-node $d $n $h $p $seed" ;;
     *) bin="$R/build-tip/harness-dagda repair-node $d $n $h $p $seed" ;;
   esac
   on $h "cd $d && (setsid nohup $bin >> $d/out 2>> $d/err < /dev/null &)"
