@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <string>
 #include <string_view>
 
 #include "dagda/contract/object_ledger.h"
@@ -261,6 +262,8 @@ class Repair {
   // The link's rate as the credit takes it, and the credit's burst at that rate.
   double bandwidth() const;
   uint64_t burst() const;
+  // A step's or a drain's figures in the node's observations.
+  void observe(const RepairResult& out, const std::string& load);
   // A peer's telemetry shows foreground traffic now.
   bool peer_foreground_active() const;
 

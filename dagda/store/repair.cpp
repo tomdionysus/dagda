@@ -194,9 +194,7 @@ RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
   const std::string load = higher_class_active(turn) ? "loaded" : "idle";
   auto& observations = _context.observations();
   observations.record("maintenance.repair.step_us." + load, stage_elapsed_us(started));
-  observations.add("maintenance.repair.bytes." + load, out.bytes_transferred);
-  observations.add("maintenance.repair.push_examined." + load, out.push_examined);
-  observations.add("maintenance.repair.pull_examined." + load, out.pull_examined);
+  observe(out, load);
   observations.add("maintenance.repair.retained_repairs", _walks_restored);
   log_slow_stage(_logger, "network-repair", started,
                  "bytes=" + std::to_string(out.bytes_transferred) + " retained_repairs=" + std::to_string(_walks_restored) +
@@ -208,9 +206,18 @@ RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
   return out;
 }
 
+void Repair::observe(const RepairResult& out, const std::string& load) {
+  auto& observations = _context.observations();
+  observations.add("maintenance.repair.bytes." + load, out.bytes_transferred);
+  observations.add("maintenance.repair.push_examined." + load, out.push_examined);
+  observations.add("maintenance.repair.pull_examined." + load, out.pull_examined);
+}
+
 RepairResult Repair::drain(std::chrono::milliseconds deadline) {
   auto out = _store.repair_drain(deadline);
   _credit = std::max(0.0, _credit - static_cast<double>(out.credit_spent));
+  // What landed is recorded as a step's is, split by whether a higher class is present.
+  observe(out, paced_by() ? "loaded" : "idle");
   return out;
 }
 
