@@ -342,6 +342,9 @@ struct DistributedStoreOptions {
   std::function<void(std::string_view kind, std::string_view detail)> repair_trace;
   // Told as a read's local and cache stages end, for tests.
   std::function<void(std::string_view stage)> read_trace;
+  // Told, from any thread, as each repair transfer is asked for, answered and stored,
+  // for finding where a transfer's time goes (the harness's trace). Thread-safe.
+  std::function<void(std::string_view event)> repair_timing;
 };
 
 // What one repair step works from: the availability survey's lists, never a
@@ -746,6 +749,7 @@ class DistributedStore final : public ControlObjectSource {
   dannan::net::CallWatch control_call_watch() const;
   void note_network(uint64_t bytes, std::chrono::steady_clock::duration elapsed);
   void trace_repair(const std::string& detail) const;
+  void time_repair(const std::string& event) const;
   void note_unsourceable(const ObjectId& id);
   void note_local_unreadable(const ObjectId& id);
 

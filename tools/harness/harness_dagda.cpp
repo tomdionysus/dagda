@@ -306,12 +306,17 @@ class DagdaRepairNode final : public harness::RepairNode {
     const bool traced = std::getenv("HARNESS_REPAIR_TRACE") != nullptr;
     const auto began = std::chrono::steady_clock::now();
     const auto at = [began] { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count(); };
-    if (traced)
+    if (traced) {
+      static std::mutex lines;
       options.store.repair_trace = [at](std::string_view kind, std::string_view detail) {
-        static std::mutex lines;
         std::lock_guard lock(lines);
         std::cerr << "repair-trace " << at() << " " << kind << " " << detail << "\n";
       };
+      options.store.repair_timing = [at](std::string_view event) {
+        std::lock_guard lock(lines);
+        std::cerr << "repair-time " << at() << " " << event << "\n";
+      };
+    }
     _node = &_cluster.add(name, options);
     _node->start();
     _node->dagda_node().register_reachability(dagda::domain::domain_v1, _provider);
