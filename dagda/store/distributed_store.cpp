@@ -3314,7 +3314,6 @@ void DistributedStore::settle_repair(RepairResult& result) {
     if (item.ok) {
       result.bytes_transferred += item.bytes;
       state.pushed.insert({item.peer, plan.id});
-      state.pushed_copies.fetch_add(1, std::memory_order_relaxed);
       plan.keepers.insert(item.peer);
     } else {
       plan.failed = true;
@@ -3739,7 +3738,9 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
             if (!store) return;
             const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
             if (ok) {
-              // The copy reaches every ticket that names the peer pending.
+              // The copy reaches every ticket that names the peer pending, and the
+              // figures, as it lands.
+              store->_repair->pushed_copies.fetch_add(1, std::memory_order_relaxed);
               store->note_acknowledged(id, peer);
               batch->delivered.fetch_add(bytes, std::memory_order_relaxed);
             } else {
