@@ -2869,6 +2869,44 @@ TEST(StoreRepair, APullThatLandsIsKeptThoughTheNodeStopsMidWindow) {
   EXPECT_TRUE(joiner.data().has(live[3]));
 }
 
+// The link's estimate is taught by what repair moved while its window was busy, not by
+// each transfer alone: with a window, transfers share the link, and each one's bytes
+// over its own time is only its share. Measured (the redesign document, "What stage 4
+// measured"): a joiner's four concurrent pulls, sharing the link with its holder's
+// pushes, took its estimate to 0.69 MB/s on an 8 MB/s link, and its credit, earned at
+// half that, held it idle for 13 s. Here several pulls are held at the holder together,
+// then answered together: the estimate is near their combined rate, not one's.
+TEST(StoreRepair, TheLinksEstimateIsWhatTheWindowMovedNotOneTransfersShare) {
+  dannan::test::Gate gets;
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const dannan::net::ServerLimits limits;
+  const size_t together = std::min<size_t>(6, limits.data_workers - limits.foreground_data_reserve);
+  ASSERT_GE(together, 3u);
+  constexpr size_t size = 512 * 1024;
+  const auto live = local_objects(holder, together, size, 118);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  ASSERT_EQ(joiner.store().estimated_network_bps(), 0.0);
+
+  dannan::test::GateOpener opener(gets);
+  holder.interpose(hold(message::get_object, gets));
+  constexpr auto held = 500ms;
+  std::jthread answer([&] {
+    if (gets.wait_for_entries(together, 10s)) std::this_thread::sleep_for(held);
+    gets.open();
+  });
+  (void)joiner.store().repair_step(lists, 64ULL * 1024 * 1024, wide);
+  answer.join();
+  (void)joiner.store().repair_drain(30s);
+  for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id));
+  const double one = static_cast<double>(size) / std::chrono::duration<double>(held).count();
+  EXPECT_GT(joiner.store().estimated_network_bps(), one * static_cast<double>(together) / 2) << "one transfer's share: " << one;
+}
+
 // Small objects travel many to a message: a pull's size is not known until it lands, so
 // each fetch holds an extent of the window, and one fetch a holder carries up to an
 // extent of objects (get_objects). With a window of one extent, one turn fetches forty
