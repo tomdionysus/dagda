@@ -701,6 +701,7 @@ class DistributedStore final : public ControlObjectSource {
   struct RepairState;
   struct RepairPlan;
   struct RepairLanded;
+  struct RepairLanding;
 
   WriteEvidence run_write(const ObjectId& id, std::span<const uint8_t> data, const WriteOptions& options, std::shared_ptr<TicketRecord> into = {});
   std::shared_ptr<TicketRecord> new_ticket(const ObjectId& id, Durability level, bool deferred);
@@ -761,8 +762,14 @@ class DistributedStore final : public ControlObjectSource {
                         std::optional<dannan::contract::TimePoint> until = std::nullopt);
   // Joins the fetch of `id` in flight, or leads a new one, as one more waiter; `on_done`
   // is told once it is done, outside its lock.
+  // `sample_link`: a fetch it leads teaches the link's estimate as it lands; repair's do
+  // not, as its window samples the link from everything it moved.
   using FetchDone = std::function<void(ObjectData result, FetchAnswer answer)>;
-  std::shared_ptr<SharedFetch> start_fetch(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist, FetchDone on_done = {});
+  std::shared_ptr<SharedFetch> start_fetch(const ObjectId& id, const ReadOptions& options, bool opportunistic_persist, FetchDone on_done = {},
+                                           bool sample_link = true);
+  // What landed in repair's window leaves to do: the storage event once a drain, and a
+  // sample for the link's estimate.
+  void repair_landed(const RepairLanding& landing);
   // Repair's window: what landed since the last step applied to repair's state and
   // `result`, then the pass ended if everything it started has landed; and a step's
   // figures added to the counters.
