@@ -45,8 +45,13 @@ three-systems design, `TODO/2026-11-13-three-systems-design.md`; the slices are 
 - **Agreement waits for Dannan** (the maintainer, 2026-11-15): Dagda builds no consensus or stand-in; its part is a persisting
   acceptor store on a node-local log (slice 4).
 - **New consumers, nothing asked of Dagda now:** Louhi, Mimir and Kvasir, each answered from the design.
-- **Dannan 0.9.0** (not tagged) will carry agreement, the hybrid clock, the file-system interface for the
-  simulation harness and the net layer's per-message record copies.
+- **Dannan 0.9.0** (develop `df4b2d8`, the tag waiting on the maintainer's word, 2026-11-17) carries agreement, the hybrid
+  clock, `storage::FileSystem` and peer records shared per session (the net layer's copies gone). SONAME
+  `libdannan.so.0.9`: a minor bump, so Dagda raises `DAGDA_DANNAN_MINIMUM` when it adopts it. FileSystem meets
+  Dagda's two conditions: `lock(path)` (flock `LOCK_EX|LOCK_NB` for the handle's life, a second holder refused
+  `ErrorClass::busy`, for `migrate/manifest.cpp`) and `sync_directory(path)` (fsync of an `O_DIRECTORY` fd;
+  `sync_all` is syncfs). Dagda told the Dannan session what the tag must hold; DTLS, the high-water mark and the
+  rest can wait for 0.10.0.
 - **Lugh asked** (2026-11-16) when slice 1 can carry its spaces so P8.0 can start. The maintainer, asked the same day:
   `0.2.0` stays held. Lugh is told, and that the repair redesign changes nothing it relies on.
 
