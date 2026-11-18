@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 
@@ -140,8 +142,19 @@ class DataResourceArbiter {
   DataResourceArbiter(const DataResourceArbiter&) = delete;
   DataResourceArbiter& operator=(const DataResourceArbiter&) = delete;
 
-  // Set once, when the node's DATA store opens, before it admits work.
-  void observe_device(const DiskServiceMonitor* monitor, uint64_t min_background_under_pressure);
+  ~DataResourceArbiter();
+
+  // Set once, when the node's DATA store opens, before it admits work. A waiter the
+  // device's pressure turned away looks again when the monitor leaves pressure.
+  void observe_device(DiskServiceMonitor* monitor, uint64_t min_background_under_pressure);
+  // How much longer a foreground user counts as present with nothing held, or none
+  // when it does not: the end of `foreground_recently_active`'s window, so a waiter
+  // turned away for that user looks again when the window closes, though nothing is
+  // released. Called under the arbiter's lock; it must not re-enter. Set once, before
+  // the arbiter admits work. Unset, such a waiter looks again every
+  // `presence_poll`, so no refusal outlasts its cause by more.
+  void foreground_presence_ends(std::function<std::optional<std::chrono::milliseconds>()> present_for);
+  static constexpr std::chrono::milliseconds presence_poll{100};
 
   // Waits for credit to the work's deadline or the no-progress window;
   // nothing when it gives up, is cancelled, or the arbiter stops. Nothing at
@@ -182,6 +195,14 @@ class DataResourceArbiter {
   std::condition_variable_any _changed;
   // Null where no device is measured.
   const DiskServiceMonitor* _monitor DANNAN_GUARDED_BY(_mutex) = nullptr;
+  std::function<std::optional<std::chrono::milliseconds>()> _foreground_present_for DANNAN_GUARDED_BY(_mutex);
+  // What the monitor calls when it leaves pressure: this arbiter while it lives, so a
+  // monitor that outlives it calls nothing (lock order: its mutex, then the arbiter's).
+  struct Wakeup {
+    std::mutex mutex;
+    DataResourceArbiter* arbiter = nullptr;
+  };
+  const std::shared_ptr<Wakeup> _wakeup = std::make_shared<Wakeup>();
   uint64_t _min_background_under_pressure DANNAN_GUARDED_BY(_mutex) = 1;
   uint64_t _used_bytes DANNAN_GUARDED_BY(_mutex) = 0;
   uint64_t _lower_used_bytes DANNAN_GUARDED_BY(_mutex) = 0;

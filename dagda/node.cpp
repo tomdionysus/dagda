@@ -310,6 +310,13 @@ void Node::open() {
           admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
           [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
           _context.time().source());
+      // When that window closes, so a waiter turned away for the user looks again then.
+      _credit->foreground_presence_ends([&activity, quiet]() -> std::optional<std::chrono::milliseconds> {
+        const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(activity.idle_for(dannan::sched::WorkClass::foreground));
+        const auto window = std::chrono::duration_cast<std::chrono::milliseconds>(quiet);
+        if (idle >= window) return std::nullopt;
+        return window - idle;
+      });
       // Device-pressure admission (observing the pool once it is open, below).
       if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
     }

@@ -70,12 +70,31 @@ DataResourceArbiter::DataResourceArbiter(uint64_t capacity_bytes, uint64_t foreg
   if (!_capacity_bytes || !_foreground_reserve_bytes || _foreground_reserve_bytes >= _capacity_bytes)
     throw std::invalid_argument("DATA resource capacity must exceed the foreground reserve");
   if (_no_progress_deadline <= std::chrono::milliseconds::zero()) throw std::invalid_argument("a DATA credit wait needs a no-progress deadline");
+  _wakeup->arbiter = this;
 }
 
-void DataResourceArbiter::observe_device(const DiskServiceMonitor* monitor, uint64_t min_background_under_pressure) {
+DataResourceArbiter::~DataResourceArbiter() {
+  const std::lock_guard lock(_wakeup->mutex);
+  _wakeup->arbiter = nullptr;
+}
+
+void DataResourceArbiter::observe_device(DiskServiceMonitor* monitor, uint64_t min_background_under_pressure) {
+  {
+    Lock lock(_mutex);
+    _monitor = monitor;
+    _min_background_under_pressure = std::max<uint64_t>(1, min_background_under_pressure);
+  }
+  // Outside the arbiter's lock: the monitor calls in holding its own.
+  if (monitor)
+    monitor->on_release([wakeup = _wakeup] {
+      const std::lock_guard lock(wakeup->mutex);
+      if (wakeup->arbiter) wakeup->arbiter->time_advanced();
+    });
+}
+
+void DataResourceArbiter::foreground_presence_ends(std::function<std::optional<std::chrono::milliseconds>()> present_for) {
   Lock lock(_mutex);
-  _monitor = monitor;
-  _min_background_under_pressure = std::max<uint64_t>(1, min_background_under_pressure);
+  _foreground_present_for = std::move(present_for);
 }
 
 bool DataResourceArbiter::foreground(FrameType frame) noexcept { return dannan::sched::work_class(frame) == WorkClass::foreground; }
@@ -143,10 +162,18 @@ std::optional<DataResourceArbiter::Lease> DataResourceArbiter::acquire(const Dat
     bounds.deadline = work.deadline();
     bounds.cancelled = work.cancellation();
     bounds.no_progress = _no_progress_deadline;
-    if (work.cancellation()) bounds.cancellation_poll = cancellation_poll;
+    const auto poll = work.cancellation() ? cancellation_poll : std::chrono::milliseconds{0};
+    bounds.cancellation_poll = poll;
     const auto outcome = _waits.wait(
         lock, _changed, work_class, bounds, [&]() DANNAN_REQUIRES(_mutex) { return _stopping; },
-        [&]() DANNAN_REQUIRES(_mutex) { return available_locked(frame, bytes, &refused_for_pressure); },
+        [&]() DANNAN_REQUIRES(_mutex) {
+          const bool admissible = available_locked(frame, bytes, &refused_for_pressure);
+          // A refusal for pressure can end with nothing released: the foreground user's
+          // window closing, which nothing notifies, so the wait looks again then (the
+          // monitor leaving pressure notifies, as a release does). The wait reads its
+          // bounds each time round.
+          return admissible;
+        },
         // Once per waiter, not per wakeup: it counts work turned away.
         [&]() DANNAN_REQUIRES(_mutex) {
           if (refused_for_pressure) ++_pressure_refusals;
