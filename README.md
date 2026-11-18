@@ -190,11 +190,12 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.8.0. Built and tested: the local store and its
+Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.9.2, the
+Dannan Macha's cutover deploys. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
 evidence, tickets, availability and repair (on the port's branch redesigned: one queue
-by copies left, an offer before each push); an instant delete beside the collector's
+by copies left, an offer before each push, a window of transfers, pulls fetched many to a message); an instant delete beside the collector's
 per-domain wait, which removes a copy only where a complete published inventory does
 not refer to it; leases and claimed collections; domains with node-local keys, wrapped
 domain keys, member and blind roles, and the scope check at the write floor;
