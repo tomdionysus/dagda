@@ -172,6 +172,15 @@ std::optional<DataResourceArbiter::Lease> DataResourceArbiter::acquire(const Dat
           // window closing, which nothing notifies, so the wait looks again then (the
           // monitor leaving pressure notifies, as a release does). The wait reads its
           // bounds each time round.
+          bounds.cancellation_poll = poll;
+          if (!admissible && refused_for_pressure) {
+            std::optional<std::chrono::milliseconds> look;
+            if (!_foreground_present_for)
+              look = presence_poll;
+            else if (const auto left = _foreground_present_for())
+              look = std::max(*left, std::chrono::milliseconds(1));
+            if (look) bounds.cancellation_poll = poll.count() ? std::min(poll, *look) : *look;
+          }
           return admissible;
         },
         // Once per waiter, not per wakeup: it counts work turned away.
