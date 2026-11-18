@@ -45,6 +45,12 @@ void DiskServiceMonitor::note(std::chrono::nanoseconds elapsed, uint64_t bytes) 
   } else if (next_slowdown < _thresholds.release_percent) {
     if (_pressured.exchange(false, std::memory_order_relaxed)) {
       log_transition("DATA device pressure released", next_slowdown, ratio, micros, bytes);
+      try {
+        dannan::contract::Lock lock(_listener_mutex);
+        if (_on_release) _on_release();
+      } catch (...) {
+        // A listener that fails costs only its own wake.
+      }
     }
   }
 }
