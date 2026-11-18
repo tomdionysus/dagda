@@ -86,7 +86,17 @@ Node::Node(dannan::Context& context, NodeOptions options, OpenLater) : _context(
 
 void Node::open_store() {
   if (_server) throw std::logic_error("the store is open already");
-  refusing([this] { open(); });
+  // A stop from another thread waits for this open, which ends refused at its next stage.
+  std::unique_lock opening(_open_mutex);
+  _opener.store(std::this_thread::get_id(), std::memory_order_release);
+  struct Opened {
+    std::atomic<std::thread::id>& opener;
+    ~Opened() { opener.store(std::thread::id{}, std::memory_order_release); }
+  } opened{_opener};
+  refusing([this] {
+    if (_stop_requested.load(std::memory_order_acquire)) throw NodeRefused("the node was stopped before its store opened");
+    open();
+  });
 }
 
 void Node::tell_failure(bool data, const std::string& why) {
@@ -123,6 +133,7 @@ void Node::ready(const std::string& plane) { _context.readiness().ready(plane); 
 
 void Node::startup_stage(std::string_view stage) {
   if (_options.startup_stage) _options.startup_stage(stage);
+  if (_stop_requested.load(std::memory_order_acquire)) throw NodeRefused("the node was stopped while its store opened (at " + std::string(stage) + ")");
 }
 
 void Node::prepare() {
@@ -464,6 +475,11 @@ void Node::open() {
 }
 
 void Node::stop() {
+  // An open in progress on another thread ends first, refused at its next stage, so
+  // nothing is torn down under it; on its own thread, the open's refusal is this stop.
+  _stop_requested.store(true, std::memory_order_release);
+  std::unique_lock opening(_open_mutex, std::defer_lock);
+  if (_opener.load(std::memory_order_acquire) != std::this_thread::get_id()) opening.lock();
   // The maintenance thread first: nothing it reaches has gone yet.
   stop_maintenance();
   {

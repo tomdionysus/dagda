@@ -15,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -358,7 +359,8 @@ class Node {
   Node& operator=(const Node&) = delete;
 
   // Closes the node; idempotent. Waits on the devices and on requests in
-  // flight.
+  // flight, and on an open_store() running on another thread, which then ends
+  // refused at its next startup stage.
   void stop();
   bool running() const noexcept { return _server != nullptr; }
 
@@ -572,6 +574,12 @@ class Node {
   bool _opening_data = false;
   // A plane has told its failure as it failed: the refusal does not tell it again.
   std::atomic<bool> _failure_told{false};
+  // Held for the whole of open_store(), whose thread is `_opener` meanwhile: a stop from
+  // another thread takes it, so waits for the open; a stop begun ends the open refused
+  // at its next startup stage. Taken with no other lock held.
+  std::mutex _open_mutex;
+  std::atomic<std::thread::id> _opener{};
+  std::atomic<bool> _stop_requested{false};
   NodeOptions _options;
   const dannan::status::ScopedLogger _logger;
   dannan::supervise::StartupProgress _progress;
