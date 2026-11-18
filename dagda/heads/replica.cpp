@@ -125,7 +125,7 @@ const AadRule& required_rule(const AadRule& rule) {
 
 std::function<void(const std::filesystem::path&, std::string_view)> file_replacer(std::function<void(const std::filesystem::path&, std::string_view)> given) {
   if (given) return given;
-  return dannan::identity::durable_replace_file;
+  return [](const std::filesystem::path& path, std::string_view contents) { dannan::identity::durable_replace_file(path, contents); };
 }
 
 dannan::status::ScopedLogger logger_of(const std::optional<dannan::status::ScopedLogger>& given) {
