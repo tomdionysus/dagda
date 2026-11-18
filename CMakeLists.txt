@@ -25,10 +25,10 @@ option(DAGDA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer where the compiler has it)" OFF)
 
 # The network layer by minor, at least the patch Dagda was built and tested on: from 0.6.0 Dannan keeps its ABI across a
-# minor's patches (SONAME libdannan.so.0.8 from 0.8.0, SameMinorVersion), and only a new minor changes it: a request
-# for 0.7 would never find 0.8, nor the reverse.
+# minor's patches (SONAME libdannan.so.0.9 from 0.9.0, SameMinorVersion), and only a new minor changes it: a request
+# for 0.8 would never find 0.9, nor the reverse. 0.9.2: the retained-memory lease and the new directory's sync fixed.
 # One number for the build and the installed package's config, which a consumer meets (test/package).
-set(DAGDA_DANNAN_MINIMUM 0.8.0)
+set(DAGDA_DANNAN_MINIMUM 0.9.2)
 find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
 # Where an install puts things; before any target names its install paths.
 include(GNUInstallDirs)
