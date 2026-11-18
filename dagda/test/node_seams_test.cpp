@@ -205,6 +205,63 @@ TEST(NodeSeams, TheLocalStagesRunOnThePassesClocks) {
   EXPECT_TRUE(node.run_maintenance_once().local.scrub_ran);
 }
 
+// Macha's pass parks until the earliest time it has work (maintenance.cpp:1306-1321 and
+// :1366 at main), and the local stages' credit and dates are the node's now: rebalance's
+// credit reaching an extent at its rate unless it rests until an event, the scrub's credit
+// reaching an extent at its share while a campaign is due, else the next campaign's date.
+// Asked by the Macha session (2026-11-18): with only an interval it woke every second.
+TEST(NodeSeams, TheLocalStagesSayWhenTheyNextHaveWork) {
+  using std::chrono::milliseconds;
+  using std::chrono::seconds;
+  dannan::test::SteppedTime time;
+  dannan::test::SteppedWall wall;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = false;
+  options.maintenance.time = &time;
+  options.maintenance.wall = &wall;
+  options.maintenance.cpu = {};
+  options.maintenance.idle_bandwidth_fraction = 0.10;
+  options.maintenance.scrub_fraction = 0.02;
+  options.maintenance.scrub_interval = std::chrono::hours(1);
+  options.store.extent_size = 1024 * 1024;
+  // Rebalance earns 0.1 MiB a second and the scrub 2% of that: an extent in 10 s and 500 s.
+  options.repair.initial_bandwidth = 1024 * 1024;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  auto& dagda = node.dagda_node();
+  const auto near = [&](std::optional<dannan::contract::TimePoint> due, milliseconds after) {
+    if (!due) return testing::AssertionFailure() << "no due time";
+    const auto off = std::chrono::duration_cast<milliseconds>(*due - (time.now() + after)).count();
+    if (off < -50 || off > 50) return testing::AssertionFailure() << "due " << off << " ms from the expected";
+    return testing::AssertionSuccess();
+  };
+
+  // No credit yet, and the scrub's campaign an hour off: rebalance's extent first.
+  LocalTurnOptions idle;
+  idle.busy = false;
+  auto first = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(first);
+  dagda.local_scrub(first);
+  EXPECT_FALSE(first.stages.rebalance_ran);
+  EXPECT_TRUE(near(dagda.local_due(), seconds(10)));
+
+  // An empty node's rebalance finds nothing and rests until an event: the campaign's date.
+  time.advance(seconds(11));
+  auto second = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(second);
+  ASSERT_TRUE(second.stages.rebalance_ran);
+  EXPECT_TRUE(near(dagda.local_due(), std::chrono::hours(1)));
+
+  // A campaign due with no scrub credit banked: the scrub's extent at its share.
+  wall.advance(std::chrono::hours(2));
+  auto third = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(third);
+  dagda.local_scrub(third);
+  EXPECT_FALSE(third.stages.scrub_ran);
+  EXPECT_TRUE(near(dagda.local_due(), seconds(500)));
+}
+
 // What the decision trace was told, by kind.
 class TraceKinds {
  public:
