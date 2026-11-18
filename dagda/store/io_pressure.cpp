@@ -43,8 +43,15 @@ void DiskServiceMonitor::note(std::chrono::nanoseconds elapsed, uint64_t bytes) 
       log_transition("DATA device pressure onset", next_slowdown, ratio, micros, bytes);
     }
   } else if (next_slowdown < _thresholds.release_percent) {
-    if (_pressured.exchange(false, std::memory_order_relaxed)) log_transition("DATA device pressure released", next_slowdown, ratio, micros, bytes);
+    if (_pressured.exchange(false, std::memory_order_relaxed)) {
+      log_transition("DATA device pressure released", next_slowdown, ratio, micros, bytes);
+    }
   }
+}
+
+void DiskServiceMonitor::on_release(std::function<void()> released) {
+  dannan::contract::Lock lock(_listener_mutex);
+  _on_release = std::move(released);
 }
 
 DiskServiceMonitor::Sample DiskServiceMonitor::sample() const noexcept {
