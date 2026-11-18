@@ -3036,6 +3036,42 @@ fixture stopping the node during `open_store()`; Dagda guards it anyway (`591669
 node-c: **1148 / 1145 / 3 skipped / 0 failed**. Then the maintainer, relayed: the cluster is Miach's; everything released.
 Local commits since the last push: `6319a6b` to the record of this. Nothing running, no Pi claimed.
 
+## 2026-11-18 (afternoon): the Macha move only; Dannan 0.9.2 and four port fixes
+
+The maintainer, to Macha, Dannan and Dagda: work only on Macha's move to Dagda until ready for the cutover on live-a and
+live-b. The three sessions agreed the cutover deploys on **Dannan 0.9.2** (Dannan's lease outliving its ledger at
+shutdown, and a new directory not synced into its parent, both fixed only in 0.9).
+- **Dannan 0.9.2** (`7967737`, `eac71b6`, `11fbd69`): `DAGDA_DANNAN_MINIMUM` 0.9.2; the replica's default replacer a
+  lambda (`durable_replace_file` gained a defaulted `FileSystem&`); the roster double's pushed `advertise`; the version
+  case at minor 9; `debian/control` (it still said 0.7) and the build notes. Gate on node-b's 0.9.2 Release prefix:
+  1148 ran, 1144 passed, 3 skipped, 1 failed (only the version case's pin, then fixed and passing).
+- **ASan and UBSan** over it (node-b, GCC RelWithDebInfo, Macha's fixtures): **no sanitizer report**; 1148 ran, 1144
+  passed, 3 skipped, 1 failed (`ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit`, below); 14 warnings, all
+  `-Wmaybe-uninitialized` in libstdc++'s `std::regex`, as at 0.1.0.
+- **A claim seeks write_copies holders again** (`f8a9f0d` the case, `8398ec4`): Macha's
+  `test_a_file_touch_commits_while_a_holder_is_away`. `retain_data` placed a short object again with a default write,
+  which since the acknowledgement standard answers at a majority, so the third holder was left to prompt replication
+  and never claimed. It now puts the object on the ranked nodes that lack it until write_copies hold it, as Macha's put did.
+- **`Node::local_due()`** (`9b8d2c0` the case, `e6418ce`), asked by the Macha session for its pass to park as main's
+  did (maintenance.cpp:1306-1321, :1366): rebalance's and the scrub's credit reaching an extent, else the next
+  campaign's date; none when only an event gives work.
+- **A credit waiter turned away for pressure wakes when the refusal can end** (`c06e022` the cases, `053ee6e`), the
+  intermittent `ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit` of 2026-11-17 and of the ASan run: a loader
+  that stood aside for a recent foreground user on a pressured device looked again only at a release or its window
+  (Macha's arbiter the same). It now looks again when the user's window closes (`foreground_presence_ends`), and the
+  device monitor leaving pressure notifies (`on_release`); nothing polls in a node. Shape agreed with the Macha session.
+- Answered for the Macha session: group 4 (a backend taken away) is `NodeOptions::server.refresh_interval` set to
+  Macha's heartbeat, as Macha's server refreshed every heartbeat; the claims fault's Dagda half is
+  `HeadsExchange.ACommitIsClaimedHereWhenThePeerNeverAnswersTheClaim`, its seam `NodeOptions::front`; `dagda-migrate`'s
+  command line and what it expects of a stopped node (`docs/migration.md`).
+- `06b3960`: `StorageServerOptions::serve_timing`, the holder's side of a served read timed, for the large rejoin.
+- Found, not fixed: directories Dagda makes before a durable write are not synced into their parents (ACTIVE.md, 0b).
+
+Each case failed at its commit before its fix (node-b). **Gate at `053ee6e`**, node-b, Dannan 0.9.2 Release prefix,
+GCC 14 Release, warnings as errors, Macha's fixtures, kernel 6.18.62-v8-va48+: **1152 ran, 1149 passed, 3 skipped, 0
+failed, 0 warnings** (`throttled=0x50000`: past under-voltage). The run at `e6418ce`, before the arbiter fix, failed the
+served-requests case again. Sent to the Macha session. Nothing running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (the maintainer, 2026-11-16). The repair item was answered by the redesign

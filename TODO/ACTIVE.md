@@ -89,10 +89,12 @@ any port failure whose cause is Dagda's.
 
 ## Next (in order): the cutover
 
-0. **Dannan 0.9.2**: `DAGDA_DANNAN_MINIMUM` 0.9.2, built and gated on a 0.9.2 prefix (node-b `/root/dagda-092`),
-   the result sent to Macha and Dannan.
-0a. **Any failure Macha's suite finds in Dagda** (its groups 2 and 4 may be: copies not reaching a peer under stage
-   4's window; a backend taken away not seen), first.
+0. ~~**Dannan 0.9.2**~~ done, with three port fixes (COMPLETED.md, "2026-11-18 (afternoon)"). **Last full gate,
+   `053ee6e`**, node-b, Dannan 0.9.2 Release prefix (`/root/dagda-092/dannan-prefix`), Macha's fixtures: **1152 ran,
+   1149 passed, 3 skipped, 0 failed, 0 warnings**. ASan and UBSan at `7967737`: no report.
+0a. **Any failure Macha's suite finds in Dagda**, first. Answered so far: group 4 is Macha's mapping of
+   `server.refresh_interval` to its heartbeat; the touch-commit claim, the pass's park (`local_due`) and the arbiter's
+   wake are fixed in Dagda.
 0b. **Directories Dagda makes before a durable write** are not synced into their parents (the same class as Dannan's
    `ef3b212`, found 2026-11-18): `node.cpp:769`, `storage_pool.cpp:217`, `unreferenced_since.cpp:129`, the tries',
    retention's and the node pack's directories at open. Objects are safe on Linux (the barrier is a syncfs). On a
@@ -100,8 +102,8 @@ any port failure whose cause is Dagda's.
    `maintenance/`, whose `scrub.next` only times the next scrub: nothing a crash there can lose matters. So it goes
    with item 5 (Dagda's writes through Dannan's `FileSystem`, where the simulated disk, `dannan/test/fixtures/sim/disk.h`,
    can prove it by a crash), not ahead of the cutover.
-0c. **Release prep** for the tag the maintainer is asked for: ASan and UBSan over the branch, the Debian packages (`dagda-tools`
-   with `dagda-migrate`), the version.
+0c. **Release prep** for the tag the maintainer is asked for: ASan and UBSan again at the tagged commit (done at `7967737`, clean),
+   the Debian packages (`dagda-tools` with `dagda-migrate`) built and installed on a Pi, the version.
 1. **Repair stage 4's unpaced large rejoin is still about 3 s slower than stage 3's** (16.7 to 20.9 s against
    14.1 to 17.1). One cause found by tracing and fixed (`79e055d`: the link's estimate collapsed under the
    window); the rest is not yet known. The redesign document, "The unpaced large rejoin: what the trace found",
@@ -154,10 +156,6 @@ figures, then slices 2 to 5 as the design orders them.
 ## Open
 
 From the report's "Open and unexplained" and "What I could not show without a running port", kept there in full:
-- `StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit` failed once (2026-11-17, node-b, the
-  whole suite at `79e055d`, Dannan 0.8.2 prefix, under-voltage seen that run): a loader request waiting on DATA
-  credit was not let through within 5 s of a release. It touches no repair code, passed in every earlier gate and
-  three times alone straight after. A lost wakeup in the arbiter's wait would look like this: not looked into.
 - The heap aborts in the opt-in delete stress case (no mechanism found; no stress runs, the maintainer 2026-11-09). Macha is
   chasing a heap corruption of its own on the Pis (ASan); if it lands in Dagda's code, it comes first.
 - The `mutex lock failed` abort of one 2026-11-05 macOS TSan run.
