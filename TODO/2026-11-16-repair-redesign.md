@@ -365,6 +365,17 @@ round 3 lost when node-d went down as it began, before its node joined). Round 1
   link, or b's stores (a pull lands after its write). The trace marks decisions, not those stages.
 - b then learns 2.6 MB/s from those four, earns 1.3 MB/s, and pulls about one object every 2 s.
 
+**Timed** (2026-11-18 00:00Z, node-b a and node-c b, both 5 GHz and 2.4 GHz as they are; `7a8dd96`'s hook;
+`build/harness/results/2026-11-18-timed/`; 22.6, 17.3, 17.9 s). Round 1:
+- b's stores are not the cause: each pull stored 23 to 67 ms after its answer.
+- **The first transfers are slow on the wire or at the holder.** b's first four fetches of many (one object each,
+  16 MiB) asked at 1.1 s, answered at 9.1 s, alone on the link until 5.2 s; a's first twelve pushes (48 MiB) asked
+  at 5.2 s, answered at 13.3-13.5 s. Later transfers of one 4 MiB object take 0.5 to 1.2 s, the link's rate. The
+  first 13 s move about 5.5 MB/s against about 8 after.
+- Next: time the holder's side of b's first fetches (its DATA admission wait and its reads, just after writing all
+  104 MiB; its survey's trie questions at the same moment) and the connection's first seconds, against stage 3's
+  first pulls the same way.
+
 **Next: the remaining gap, about 3 s.** The stages are now timed (`7a8dd96`: `DistributedStoreOptions::repair_timing`,
 printed by the harness's `TRACE=1` as `repair-time` lines: each push and pull asked, answered, stored); the harness
 needs rebuilding at the tip on both Pis of the pair first. Then trace again (`TRACE=1`, `STORES=dagda`, `SCENARIOS=rejoin-large`) and read
