@@ -1040,6 +1040,8 @@ LocalTurn Node::begin_local_stages(const LocalTurnOptions& options) {
   return begin_local_locked(false, options, maintenance_events().total());
 }
 
+std::optional<dannan::contract::TimePoint> Node::local_due() { return std::nullopt; }
+
 void Node::local_rebalance(LocalTurn& turn) {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (_repair) local_rebalance_locked(turn);

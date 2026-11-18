@@ -464,6 +464,13 @@ class Node {
   LocalTurn begin_local_stages(const LocalTurnOptions& options = {});
   // Thread-safe; waits on nothing.
   MaintenanceEvents maintenance_events() const noexcept;
+  // When the local stages next have work, on the pass's clock, for an owner's pass that
+  // parks until then as Macha's did (maintenance.cpp:1306-1321 and :1366 at main):
+  // rebalance's credit reaching an extent at the last turn's rate, unless it rests until
+  // an event; while a scrub campaign is due, the scrub's credit reaching an extent at its
+  // share; otherwise the next campaign's date. None: only an event gives them work. Read
+  // after a turn's stages. Serialised with the thread's passes; waits on nothing else.
+  std::optional<dannan::contract::TimePoint> local_due();
   void local_rebalance(LocalTurn& turn);
   void retention_compact(LocalTurn& turn);
   void compact_packs(LocalTurn& turn);
@@ -658,6 +665,8 @@ class Node {
   std::optional<store::CpuPacer> _local_cpu DANNAN_GUARDED_BY(_maintenance_mutex);
   std::optional<dannan::contract::TimePoint> _local_at DANNAN_GUARDED_BY(_maintenance_mutex);
   double _local_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
+  // The rate the last turn earned at, bytes a second, for local_due().
+  double _local_rate DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
   double _scrub_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
   uint64_t _scrub_due_unix_ms DANNAN_GUARDED_BY(_maintenance_mutex) = 0;
   // Rebalance found nothing to do at this event count, and waits for another.
