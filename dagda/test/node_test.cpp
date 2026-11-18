@@ -259,6 +259,42 @@ TEST(Node, APlaneThatFailsIsMarkedFailedWhileTheOtherIsStillRecovering) {
   }
 }
 
+// A stop while the store opens on the owner's thread waits for the open, which ends
+// refused, and leaves nothing running: an owner stopping its node while its recovery
+// thread is still opening must not tear the parts down under the open. Found by Macha's
+// port, whose test fixture did that and crashed in the open (2026-11-17, its fixture
+// since fixed); Dagda guards it rather than leave every host to order it.
+TEST(Node, AStopWhileTheStoreOpensWaitsForTheOpenWhichEndsRefused) {
+  dannan::test::Gate gate;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.open_later = true;
+  options.startup_stage = [&gate](std::string_view stage) {
+    if (stage == "control-storage") gate.enter_and_wait();
+  };
+  auto& a = cluster.add("a", options);
+  a.start();
+  dannan::test::GateOpener opener(gate);
+  auto opening = std::async(std::launch::async, [&] {
+    try {
+      a.dagda_node().open_store();
+      return std::string("opened");
+    } catch (const NodeRefused& refused) {
+      return std::string("refused: ") + refused.what();
+    }
+  });
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  auto stopping = std::async(std::launch::async, [&] { a.dagda_node().stop(); });
+  EXPECT_EQ(stopping.wait_for(500ms), std::future_status::timeout) << "the stop did not wait for the open";
+  gate.open();
+  ASSERT_EQ(opening.wait_for(30s), std::future_status::ready);
+  ASSERT_EQ(stopping.wait_for(30s), std::future_status::ready);
+  const auto opened = opening.get();
+  EXPECT_EQ(opened.find("refused: "), 0u) << opened;
+  EXPECT_FALSE(a.dagda_node().running());
+}
+
 // No custody, no node-local key: the ledgers would have no key, so the
 // node is refused and says why.
 TEST(Node, ANodeWithoutCustodyIsRefused) {
