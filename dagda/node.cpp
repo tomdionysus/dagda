@@ -8,6 +8,7 @@
 #include "dagda/node.h"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -807,6 +808,7 @@ LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options,
   if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.repair.initial_bandwidth);
   if (_options.repair.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.repair.max_bandwidth));
   const double rate = bandwidth * (turn.busy ? policy.busy_bandwidth_fraction : policy.idle_bandwidth_fraction) * _local_cpu->scale(seconds, policy.cpu_target);
+  _local_rate = rate;
   const double extent = static_cast<double>(_options.store.extent_size);
   const double burst = std::max(extent, bandwidth * 5.0);
   _local_credit = forced ? burst : std::min(burst, _local_credit + rate * seconds);
@@ -1040,7 +1042,33 @@ LocalTurn Node::begin_local_stages(const LocalTurnOptions& options) {
   return begin_local_locked(false, options, maintenance_events().total());
 }
 
-std::optional<dannan::contract::TimePoint> Node::local_due() { return std::nullopt; }
+std::optional<dannan::contract::TimePoint> Node::local_due() {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_repair) return std::nullopt;
+  const auto now = pass_time().now();
+  const double extent = static_cast<double>(_options.store.extent_size);
+  std::optional<dannan::contract::TimePoint> due;
+  const auto earliest = [&](dannan::contract::TimePoint at) { due = due ? std::min(*due, at) : at; };
+  // The time to earn `credit` up to an extent at `rate`, as Macha's credit deadlines.
+  const auto when_earned = [&](double credit, double rate) {
+    if (rate <= 0.0 || credit >= extent) return;
+    const double seconds = (extent - credit) / rate;
+    if (std::isfinite(seconds) && seconds > 0.0)
+      earliest(now + std::chrono::duration_cast<dannan::contract::TimePoint::duration>(std::chrono::duration<double>(seconds)));
+  };
+  // Macha's scrub (maintenance.cpp:1306-1321 at main): its credit while a campaign is due,
+  // else the campaign's date on the wall clock, carried onto the pass's clock.
+  const auto& policy = _options.maintenance;
+  const auto wall_ms = pass_wall().unix_ms();
+  if (_scrub_due_unix_ms <= wall_ms) {
+    if (policy.scrub_fraction > 0.0) when_earned(_scrub_credit, _local_rate * policy.scrub_fraction);
+  } else {
+    earliest(now + std::chrono::milliseconds(_scrub_due_unix_ms - wall_ms));
+  }
+  // Rebalance's credit (:1366), unless it rests until an event.
+  if (!_local_quiescent_events) when_earned(_local_credit, _local_rate);
+  return due;
+}
 
 void Node::local_rebalance(LocalTurn& turn) {
   dannan::contract::Lock lock(_maintenance_mutex);
