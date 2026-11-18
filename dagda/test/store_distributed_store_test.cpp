@@ -452,6 +452,38 @@ TEST(DistributedStore, ClaimsGoToEveryHolderAtOnce) {
   EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
 }
 
+// Macha's barrier places an object found on fewer holders than write_copies again before
+// it claims, and Macha's put waited for write_copies copies (distributed_store.cpp:898-915
+// at f0597a4), so every holder sought is there to be claimed. Found by Macha's port
+// (test_a_file_touch_commits_while_a_holder_is_away): a write acknowledged at a
+// majority left the third holder to prompt replication, unclaimed for good.
+TEST(DistributedStore, AClaimPlacesAShortObjectOnEveryHolderItSeeksBeforeItClaims) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  auto& a = cluster.add("a", options(3, 3));
+  auto& b = cluster.add("b", options(3, 3));
+  auto& c = cluster.add("c", options(3, 3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 28);
+  const auto id = object_id(data);
+  // Two holders of the three sought, as when the third copy is still on its way.
+  ASSERT_TRUE(a.data().put(id, data));
+  ASSERT_TRUE(b.data().put(id, data));
+  ASSERT_FALSE(c.data().has(id));
+
+  // The third copy is held at c until the claim is seen to have sent it.
+  c.interpose(hold(message::put_object, gate));
+  auto claimed = std::async(std::launch::async, [&] { return a.store().retain_data({id}, {a.id(), 1}, {}); });
+  EXPECT_TRUE(wait_until([&] { return gate.entered() >= 1 || claimed.wait_for(0s) == std::future_status::ready; }, 30s));
+  gate.open();
+  ASSERT_EQ(claimed.wait_for(60s), std::future_status::ready);
+  EXPECT_TRUE(claimed.get().empty());
+  EXPECT_TRUE(c.data().has(id));
+  for (auto* node : {&a, &b, &c}) EXPECT_TRUE(node->claims().retained(contract::RetentionClass::data, id)) << node->name();
+}
+
 // Macha measures each DATA claim barrier (distributed_store.cpp:881-887 at f0597a4):
 // its time, the ids it claimed and those it left under-claimed (the store map,
 // retention gap 2).
