@@ -1,6 +1,6 @@
 # Repair, redesigned: one queue of copies to make (2026-11-16)
 
-## Status (2026-11-17)
+## Status (2026-11-18)
 
 | Stage | What | State |
 |---|---|---|
@@ -8,9 +8,9 @@
 | 1 | The survey keeps who holds what | Done, gated (`502cf57`) |
 | 2 | One queue, fewest copies first | Done, gated (`2a8d24b`); measured with stage 3 |
 | 3 | Each copy once (the offer) | Done, gated (`d119d14`), measured: each copy once, unpaced rejoins a third to a half faster, parity under a viewer |
-| 4 | A window of transfers; the call count gone; pulls fetched many to a message | Built and gated (`c12e36d` to `79e055d`); measured against stage 3: small rejoin three times faster, under a viewer faster, **unpaced large rejoin about 3 s slower: one cause fixed (the link's estimate), the rest open, next** |
+| 4 | A window of transfers; the call count gone; pulls fetched many to a message | Built and gated (`c12e36d` to `79e055d`); measured against stage 3: small rejoin three times faster, under a viewer faster, **unpaced large rejoin about 3 s slower: one cause fixed (the link's estimate), the rest open; the holder's side traced 2026-11-18, not yet read (the last section)** |
 
-Last full gate: see `TODO/ACTIVE.md`. Everything is on `feature/macha-store-gaps`, local, nothing pushed.
+Last full gate: see `TODO/ACTIVE.md`. Everything is on `feature/macha-store-gaps`, local since `8e509cd`.
 
 ## Tom's rulings
 
@@ -383,6 +383,18 @@ both nodes' samples as before. Leads, none proven: each node's first pass earns 
 earlier time earns for none), and stage 3's joiner pulled at once on its initial estimate; a promises what its
 window will send, so b's pulls of those wait for copies a sends at a's pace; a span's bytes are counted as a pull is
 stored, after its disk write. Then a case for the mechanism, the fix, the scenarios against `build-s3`.
+
+**The holder's side, traced** (2026-11-18 18:48-18:51Z, not yet read). `06b3960` added
+`StorageServerOptions::serve_timing`, printed with `TRACE=1` as `serve-time <ms> get_objects|get_object
+arrived|admitted|read peer=<host> ... wall=<unix ms>`; `repair-time` lines now carry `wall=` too, so the two Pis' lines
+can be set side by side (NTP time). Run: store `dagda-092` (the tip at `053ee6e` on Dannan 0.9.2, `/root/harness/build-092`
+on jupiter, copied to saturn), jupiter a (holding), saturn b (joining), `TRACE=1 NOCOLD=1 SCENARIOS=rejoin-large`, three
+rounds. The link was faster than on any earlier day: 13.4 to 13.7 MB/s, 6.3 to 6.7 ms. Times 16.3, 17.6 and 9.7 s
+(about 8 s is the link's for 104 MiB). Both nodes' trace lines: `build/harness/results/2026-11-18-holder/repair-err.txt`
+(442 samples, 371 decisions, 210 repair-time, 162 serve-time lines); figures in `repair.jsonl` there. **Next:** for b's
+first fetches in rounds 1 and 2, set the asked, served-arrived, admitted, read and answered times side by side by wall
+clock; what the holder does not account for is the wire or Dannan's send path. Compare round 3, which ran near the link.
+No stage-3 run on 0.9.2 exists yet; a comparison needs `build-s3` rebuilt on the 0.9.2 prefix first.
 
 ## Not decided
 
