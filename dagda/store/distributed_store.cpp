@@ -2760,7 +2760,22 @@ std::vector<ObjectId> DistributedStore::retain_data(const std::vector<ObjectId>&
       ReadOptions read_options;
       read_options.frame = FrameType::speculative;
       auto data = get(id, read_options);
-      if (!data || !put(id, *data)) continue;
+      if (!data) continue;
+      // Placed on the ranked nodes that lack it until `floor` hold it, as Macha's put
+      // waited for write_copies copies: a write answered at a majority would leave
+      // the rest to prompt replication, after this barrier has claimed.
+      const auto& present = selected_by_object[id];
+      size_t holders = present.size();
+      bool placed = false;
+      for (const auto& candidate : candidates_by_object[id]) {
+        if (holders >= floor) break;
+        if (std::any_of(present.begin(), present.end(), [&](const NodeRecord& held) { return held.id == candidate.id; })) continue;
+        if (put_on(candidate, id, *data, FrameType::loader)) {
+          ++holders;
+          placed = true;
+        }
+      }
+      if (!placed) continue;
       auto candidates = ranked(id);
       candidates_by_object[id] = candidates;
       rescan.emplace(id, std::move(candidates));
