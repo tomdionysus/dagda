@@ -3029,6 +3029,13 @@ plane was marked on readiness only when both planes had ended. `ac96a5a` the cas
 `97a5bed` the fix; gate on node-a: **1147 / 1144 / 3 skipped / 0 failed, 0 warnings**; sent to the Macha session.
 Next: the timed trace on a free pair (node-b and node-c were full, node-d left out). Nothing running, no Pi claimed.
 
+**Into 2026-11-18:** The maintainer: push (refused by the session's permission check; left to the maintainer), wait for node-b. The timed
+trace on node-b and node-c (`6d1d0e7`): the large rejoin's first transfers run at about 5.5 MB/s for 13 s, stores
+fast; the holder's side is next. A third report from the Macha session, a SIGSEGV in `open()`, proven to be its
+fixture stopping the node during `open_store()`; Dagda guards it anyway (`591669a` failing first, `fbdd50a`). Gate on
+node-c: **1148 / 1145 / 3 skipped / 0 failed**. Then the maintainer, relayed: the cluster is Miach's; everything released.
+Local commits since the last push: `6319a6b` to the record of this. Nothing running, no Pi claimed.
+
 ## Archived from ACTIVE.md, 2026-11-16
 
 Moved out when the plan was rationalised (the maintainer, 2026-11-16). The repair item was answered by the redesign

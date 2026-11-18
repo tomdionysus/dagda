@@ -29,6 +29,13 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
   case, `97a5bed`): the refusal wrapping the whole open told a plane's failure only when both planes had ended.
   **Gate at `97a5bed`**, node-a, Dannan 0.8.0 prefix, Macha's fixtures: **1147 ran, 1144 passed, 3 skipped, 0
   failed, 0 warnings**. The Macha session was sent the commit (it waited on it).
+- **A stop while the store opens waits for the open** (2026-11-18, `591669a` the case, `fbdd50a`): Macha's fixture
+  stopped its node while its recovery thread was in `open_store()`, and the open crashed in the server's
+  constructor (proven by the Macha session's backtraces; its fixture is fixed). Dagda guards it: the open holds a
+  lock, a stop from another thread waits, and the open ends refused at its next stage. **Last full gate,
+  `fbdd50a`**, node-c, Dannan 0.8.0 prefix, Macha's fixtures: **1148 ran, 1145 passed, 3 skipped, 0 failed**.
+- **The cluster is Miach's this evening** (the maintainer, relayed by Lir, 2026-11-18 ~00:25Z): nothing new on the Pis until
+  Miach posts that the cluster is clear.
 - **node-d went down at about 22:37Z** during a traced repair round on it, and came back at 22:54Z already
   showing past under-voltage (`0x50000` at one minute up); it keeps no persistent journal. Left out of benchmarks
   until the maintainer says.
