@@ -6,9 +6,16 @@ slices are paused (below).
 
 ## Start here (a fresh session)
 
-Read this file, then `TODO/2026-11-16-repair-redesign.md`: its status table, "What stage 4 built", "What stage 4
-measured" and "Next: the unpaced large rejoin". Stage 4 is built and gated; its unpaced large rejoin is slower than
-stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is running and no Pi is claimed.
+**The maintainer, 2026-11-18 (to Macha, Dannan and Dagda): "work together and focus on the Macha move to Dagda. Work on nothing
+else until this is done. Work autonomously until you're ready to do the cutover on live-a and live-b."** So
+"Next" below is the cutover's list; everything else waits. Macha's plan (the Macha session, 2026-11-18): its suite on
+`fbdd50a`, fixed group by group (`../macha/TODO/2026-11-17-port-suite-triage.md`), then the config mapping against both
+live `macha.yaml`, a migration rehearsal on copies of both nodes' state on a claimed Pi (`docs/migration.md`), custody,
+the deploy tarball with libdagda and libdannan, and the API changes announced. Agreed the same day: **the cutover
+deploys on Dannan 0.9.2**, provided this branch builds and gates on it (Dannan's two fixes: a retained-memory lease
+used after its node at shutdown, `79dfa2e`; a new directory not synced into its parent, `ef3b212`). What Macha needs
+from Dagda: a tag for the deploy (the maintainer's word; `0.2.0` is held), `dagda-migrate`'s command line (sent), and a fix for
+any port failure whose cause is Dagda's.
 
 ## Where it stands
 
@@ -34,8 +41,8 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
   constructor (proven by the Macha session's backtraces; its fixture is fixed). Dagda guards it: the open holds a
   lock, a stop from another thread waits, and the open ends refused at its next stage. **Last full gate,
   `fbdd50a`**, node-c, Dannan 0.8.0 prefix, Macha's fixtures: **1148 ran, 1145 passed, 3 skipped, 0 failed**.
-- **The cluster is Miach's this evening** (the maintainer, relayed by Lir, 2026-11-18 ~00:25Z): nothing new on the Pis until
-  Miach posts that the cluster is clear.
+- The cluster was Miach's for the night of 2026-11-17 only (relayed by Lir at 00:25Z); in ordinary shared use again
+  by 2026-11-18 16:30Z (the Dannan session).
 - **node-d went down at about 22:37Z** during a traced repair round on it, and came back at 22:54Z already
   showing past under-voltage (`0x50000` at one minute up); it keeps no persistent journal. Left out of benchmarks
   until the maintainer says.
@@ -80,8 +87,21 @@ stage 3's and not yet explained. The next work is item 1 of "Next". Nothing is r
 - **Lugh asked** (2026-11-16) when slice 1 can carry its spaces so P8.0 can start. The maintainer, asked the same day:
   `0.2.0` stays held. Lugh is told, and that the repair redesign changes nothing it relies on.
 
-## Next (in order)
+## Next (in order): the cutover
 
+0. **Dannan 0.9.2**: `DAGDA_DANNAN_MINIMUM` 0.9.2, built and gated on a 0.9.2 prefix (node-b `/root/dagda-092`),
+   the result sent to Macha and Dannan.
+0a. **Any failure Macha's suite finds in Dagda** (its groups 2 and 4 may be: copies not reaching a peer under stage
+   4's window; a backend taken away not seen), first.
+0b. **Directories Dagda makes before a durable write** are not synced into their parents (the same class as Dannan's
+   `ef3b212`, found 2026-11-18): `node.cpp:769`, `storage_pool.cpp:217`, `unreferenced_since.cpp:129`, the tries',
+   retention's and the node pack's directories at open. Objects are safe on Linux (the barrier is a syncfs). On a
+   migrated Macha node each of those directories already exists (v18 has `retention/`, `ledger/referenced/`) but
+   `maintenance/`, whose `scrub.next` only times the next scrub: nothing a crash there can lose matters. So it goes
+   with item 5 (Dagda's writes through Dannan's `FileSystem`, where the simulated disk, `dannan/test/fixtures/sim/disk.h`,
+   can prove it by a crash), not ahead of the cutover.
+0c. **Release prep** for the tag the maintainer is asked for: ASan and UBSan over the branch, the Debian packages (`dagda-tools`
+   with `dagda-migrate`), the version.
 1. **Repair stage 4's unpaced large rejoin is still about 3 s slower than stage 3's** (16.7 to 20.9 s against
    14.1 to 17.1). One cause found by tracing and fixed (`79e055d`: the link's estimate collapsed under the
    window); the rest is not yet known. The redesign document, "The unpaced large rejoin: what the trace found",
