@@ -11,9 +11,11 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -50,6 +52,10 @@ struct StorageServerOptions {
   // The domain served: its name is the prefix a write or a claim is checked
   // under when the request names none (Tom, 2026-11-04 evening).
   domain::Domain domain = domain::domain_v1_descriptor();
+  // Told, from any thread, as a served read of DATA arrives, is admitted and has
+  // read its objects, for finding where a transfer's time goes at the holder (the
+  // harness's trace). Thread-safe.
+  std::function<void(std::string_view event)> serve_timing;
 };
 
 // What a served request is admitted by: the node's DATA credit arbiter and

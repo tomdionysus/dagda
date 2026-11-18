@@ -108,6 +108,8 @@ struct ClusterNodeOptions {
   std::string failure_domain;
   store::CacheOptions cache;
   store::DistributedStoreOptions store;
+  // StorageServerOptions::serve_timing, for the harness's trace.
+  std::function<void(std::string_view event)> serve_timing;
   // The node's admission (Macha's data_inflight_bytes and its reserve, its
   // background concurrency and no-progress deadline), and its device
   // reserve; with `admission` off it admits everything.
@@ -482,6 +484,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.server.hosts_extents = _options.hosts_extents;
   out.server.refresh_interval = _options.refresh_interval;
   out.server.admission_wait = _options.admission_wait;
+  out.server.serve_timing = _options.serve_timing;
   out.store = _options.store;
   out.store.admission_wait = _options.admission_wait;
   out.availability = _options.availability;
