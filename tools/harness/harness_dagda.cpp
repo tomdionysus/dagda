@@ -312,9 +312,15 @@ class DagdaRepairNode final : public harness::RepairNode {
         std::lock_guard lock(lines);
         std::cerr << "repair-trace " << at() << " " << kind << " " << detail << "\n";
       };
-      options.store.repair_timing = [at](std::string_view event) {
+      // The wall clock too, so the two Pis' lines can be set side by side (each keeps NTP time).
+      const auto wall = [] { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); };
+      options.store.repair_timing = [at, wall](std::string_view event) {
         std::lock_guard lock(lines);
-        std::cerr << "repair-time " << at() << " " << event << "\n";
+        std::cerr << "repair-time " << at() << " " << event << " wall=" << wall() << "\n";
+      };
+      options.serve_timing = [at, wall](std::string_view event) {
+        std::lock_guard lock(lines);
+        std::cerr << "serve-time " << at() << " " << event << " wall=" << wall() << "\n";
       };
     }
     _node = &_cluster.add(name, options);

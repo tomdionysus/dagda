@@ -265,12 +265,18 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     }
     if (type == message::get_object) {
       const auto id = message::decode_id(request.payload);
+      const auto timing = [&](std::string_view stage, uint64_t bytes) {
+        if (_options.serve_timing) _options.serve_timing("get_object " + std::string(stage) + " peer=" + peer.host + " bytes=" + std::to_string(bytes));
+      };
+      timing("arrived", 0);
       auto admitted = admit_data(frame, extent, true);
       if (!admitted) return gave_up();
+      timing("admitted", 0);
       // Not found is final only when no offline backend could hold it.
       const bool every_backend = _data.every_backend_online();
       auto data = _data.get(id);
       admitted.reset();
+      timing("read", data ? data->size() : 0);
       if (!data)
         return every_backend && _data.every_backend_online() ? Handled::failed(404, "not_found", "object not found")
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
@@ -281,8 +287,15 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       // Repair's fetch of many: one admission of an extent, then the objects in order
       // while the reply stays within it, each sized from the index before it is read.
       const auto ids = message::decode_ids(request.payload, message::max_fetch_batch);
+      const auto timing = [&](std::string_view stage, uint64_t bytes) {
+        if (_options.serve_timing)
+          _options.serve_timing("get_objects " + std::string(stage) + " peer=" + peer.host + " ids=" + std::to_string(ids.size()) +
+                                " bytes=" + std::to_string(bytes));
+      };
+      timing("arrived", 0);
       auto admitted = admit_data(frame, extent, true);
       if (!admitted) return gave_up();
+      timing("admitted", 0);
       std::vector<message::FetchedObject> objects(ids.size());
       uint64_t sent = 0;
       bool full = false;
@@ -310,6 +323,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       }
       admitted.reset();
       _activity.note(frame, sent);
+      timing("read", sent);
       return reply(message::get_objects_reply, message::encode_fetched(objects));
     }
     if (type == message::get_control_object) {
