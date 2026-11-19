@@ -429,6 +429,12 @@ class Space {
   uint64_t current_revision() const noexcept { return _available_revision.load(std::memory_order_acquire); }
   HeadsReport heads() const;
   HeadFields fields(const SpaceView& view) const { return _spec.codec->head_fields(view.state); }
+  // Whether `view` holds the commit `dot` names (CommitOutcome::dot). The shared view moves
+  // forward by generation, not by cause: with several heads, current() and converged() can
+  // stand on a head that lacks a commit this node has already made, until a fold carries
+  // it; local() always holds this node's own. A view that does not cover a commit lags it
+  // and says nothing of what became of it. No dot is covered by nothing. Waits on nothing.
+  bool covers(const SpaceView& view, const Dot& dot) const { return clock_covers(fields(view).clock, dot); }
 
   // The caller supplies the exact change (Mutation::delta), and this is the only way a
   // commit carries one it did not diff. Applied only if the identity, when given, has
