@@ -141,7 +141,11 @@ TEST(MigrateCrash, ALooseObjectWhoseWriteWasCutShortIsFinished) {
     const auto new_tag = deriver.derive(loose.tag, associated_data_v18(id), v1.associated_data(id), loose.ciphertext.size());
     write_at(file, loose_tag_offset, torn(loose.tag, new_tag, cut));
 
-    const auto report = v18.migrate();
+    // A tear on a disk no run has touched is laid out by hand: only a run reading every
+    // record looks for one there (a run's own tears are in its resume window).
+    MigrationOptions every;
+    every.read_every_record = true;
+    const auto report = v18.migrate(every);
     EXPECT_EQ(report.loose_unreadable, 0u);
     EXPECT_EQ(report.loose_torn_finished, 1u);
     expect_v19_opens(bed, v18);
@@ -153,7 +157,10 @@ TEST(MigrateCrash, ARecordThatIsDamagedIsNotTakenForATear) {
   StoreBed bed;
   V18State v18(bed);
   test::corrupt_object(v18.backend, v18.loose[2].first);
-  const auto report = v18.migrate();
+  // Read whole, as only a run reading every record lists damage itself.
+  MigrationOptions every;
+  every.read_every_record = true;
+  const auto report = v18.migrate(every);
   EXPECT_EQ(report.loose_unreadable, 1u);
   EXPECT_EQ(report.loose_torn_finished, 0u);
 }
@@ -720,12 +727,35 @@ TEST(MigrateHeaderOnly, ARecordBehindTheDiskIsCaughtAndNothingIsMovedTwice) {
   std::ofstream(crash.v18.state / progress_record_name, std::ios::trunc) << "dagda-migrate progress 1\nforward\n3\n"
                                                                          << crash.v18.backend.string() << "\n"
                                                                          << (crash.v18.state / "metadata-objects").string() << "\n"
-                                                                         << crash.v18.cache.string() << "\n0 0 0 0 end\n";
+                                                                         << crash.v18.cache.string() << "\n0 0 0 0\n\nend\n";
   std::vector<std::string> said;
   auto options = crash.run_options();
   options.say = [&](std::string_view line) { said.emplace_back(line); };
   const auto report = migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
   EXPECT_TRUE(std::any_of(said.begin(), said.end(), [](const std::string& line) { return line.find("moved already") != std::string::npos; }));
+  EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// The loose objects in another order than the stopped run counted them in (a file system
+// that moved a file between runs; here, the record naming another file at its point):
+// nothing is passed over, every record of that store is read whole, and nothing is moved
+// twice.
+TEST(MigrateHeaderOnly, LooseObjectsInAnotherOrderAreReadWhole) {
+  CrashBed crash;
+  crash.batch = 2;
+  ASSERT_TRUE(crash.die_after(3, false));
+  std::ofstream(crash.v18.state / progress_record_name, std::ios::trunc) << "dagda-migrate progress 1\nforward\n3\n"
+                                                                         << crash.v18.backend.string() << "\n"
+                                                                         << (crash.v18.state / "metadata-objects").string() << "\n"
+                                                                         << crash.v18.cache.string() << "\n0 0 3 0\n"
+                                                                         << (crash.v18.backend / "objects" / "not-the-one.obj").string() << "\nend\n";
+  std::vector<std::string> said;
+  auto options = crash.run_options();
+  options.say = [&](std::string_view line) { said.emplace_back(line); };
+  const auto report = migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
+  EXPECT_TRUE(std::any_of(said.begin(), said.end(), [](const std::string& line) { return line.find("another order") != std::string::npos; }));
   EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
   crash.expect_comparison_passes(19, "after");
   expect_v19_opens(crash.bed, crash.v18);
