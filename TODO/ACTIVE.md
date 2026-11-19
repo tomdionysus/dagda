@@ -14,24 +14,17 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-`feature/macha-store-gaps` is merged into `develop` (`bb1d66c`); work goes on `develop` or a new feature branch
-from it. `release/0.3.0` holds the version commit `4a4b322`. Nothing since `8e509cd` is pushed: pushing needs
-The maintainer's "push". Nothing is running on the Pis unless the board says so (`claims_list`).
+Work goes on `develop` or a feature branch from it; `feature/rejoin-stream` is the open one. Nothing since
+`8e509cd` is pushed (main, develop, the `0.3.0` tag): pushing needs the maintainer's "push". Nothing is running on the Pis
+unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **0.3.0 is being cut for Macha's deploy** (the maintainer, 2026-11-19: "commit and tag the fix", after the release
-  sanitizers). `release/0.3.0` = develop `bb1d66c` + `4a4b322 Version 0.3.0` (CMake, `debian/control`, the migrate
-  tool's version case, README, `docs/packaging.md`, `tools/build-deb.sh`). Its gate, from `git archive 4a4b322`
-  against Dannan 0.9.2 built from its tag, under `/root/dagda-030` on node-c and node-a (`build/pi-release030.sh`):
-  - node-c, GCC 14 Release, warnings as errors: **0 errors, 0 warnings; 1153 ran, 1150 passed, 3 skipped, 0
-    failed**; `dagda-migrate --version` "0.3.0 (dannan 0.9.2)". Then ASan+UBSan: see the handoff.
-  - node-a, clang 19, Dannan and Dagda under TSan, built with 0 warnings: see the handoff.
-  - When it passes: merge to `main` (no-ff), annotated tag `0.3.0` there, `main` merged back into `develop`, the tag
-    and its commit sent to the Macha session, which builds its prefix from `git archive 0.3.0` here and builds its
-    0.95.0 deploy tarball from it. No deploy follows; the cutover is not scheduled (the maintainer: "not yet").
-  - Not in this gate: the Debian packages and lintian (they need Dannan 0.9.2's packages installed on a shared Pi;
-    the deploy builds from source). Offered to the maintainer.
+- **0.3.0 is tagged for Macha's deploy** (2026-11-19; main `2a58202`, tree identical to the gated `4a4b322`; not
+  pushed). Gate in `COMPLETED.md`: plain and ASan/UBSan 1150 of 1153, 3 skipped, 0 failed, no report; TSan no report
+  in Dagda's code (one known Boost.Asio fence false positive). The Macha session has the tag, builds its prefix from
+  `git archive 0.3.0` and its 0.95.0 deploy tarball from it, and reruns its suite there. No deploy follows; the
+  cutover is not scheduled (the maintainer: "not yet"). Not built: the Debian packages and lintian (offered to the maintainer).
 - **Last port fix: a read asks the active peers placement does not name** (`b997ba1`). A peer active in the roster
   whose `dagda/extents` advert had not reached the reader (startup) was never asked, so the read ended unavailable
   at once with nobody asked: Macha's `test_catalogue_uses_final_state_after_coalesced_metadata_burst`, 1 run in 5.
@@ -76,7 +69,8 @@ The maintainer's "push". Nothing is running on the Pis unless the board says so 
      `in_flight` in `/status`.
 - **Repair is redesigned** (`TODO/2026-11-16-repair-redesign.md`). Stages 1 to 4 are done and gated. Small rejoin: 3
   times faster than stage 3. Rejoin under a viewer: faster. **The unpaced large rejoin: still about 3 s slower than
-  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); the cause is found from the trace** (Next 2), not yet fixed.
+  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); explained: repair keeping to `idle_bandwidth_fraction` 0.5 of
+  the link, which stage 3 ran past** (Next 2; the maintainer's call whether that stands).
   Macha's live nodes keep today's repair until the cutover.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`), measured against Macha:
   - At parity or better: publications, the viewer, local reads, recovery (within 2%).
@@ -100,10 +94,11 @@ The maintainer's "push". Nothing is running on the Pis unless the board says so 
    - **Read 2026-11-19** (the redesign document, "The holder's side, traced", "Read"): the holder and the first
      burst are at the link's pace; the gap is b pulling one object a second. A fetch of many is one call per holder
      per step, its reply holds one extent, and what it leaves waits for the next step. **The maintainer chose fix (b)
-     (2026-11-19): a reply that leaves ids sends the next fetch for them at once, inside the window.** A case
-     failing first, on a feature branch from develop, then the scenarios old against new (the harness builds need
-     rebuilding on the Pis after the wipe).
-3. **Finish 0.3.0** ("Where it stands"): tag on a passing gate, tell Macha; the Debian packages if the maintainer wants them.
+     (2026-11-19).** Built and gated on `feature/rejoin-stream`; measured no faster, because the joiner is paced by
+     its credit (half the link estimate), not by the step. Waiting on the maintainer (below).
+   - The harness on the Pis: `/root/harness/build-tip` (the fix) and `build-030` (0.3.0) on node-b and node-c,
+     links into `/root/dagda-stream` and `/root/dagda-030` there.
+3. The Debian packages for 0.3.0, if the maintainer wants them.
 4. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
@@ -121,7 +116,14 @@ The maintainer's "push". Nothing is running on the Pis unless the board says so 
 
 ## Waiting on the maintainer
 
-- **A push** of `main`, `develop` and the `0.3.0` tag once cut (nothing pushed since `8e509cd`): the Macha session
+- **The large rejoin: repair's share of an idle link.** Fix (b) is built and gated on `feature/rejoin-stream`
+  (1152 of 1155, 0 failed) but measured no faster (16.3 to 16.6 s against 0.3.0's 15.6 to 16.6). The trace shows why:
+  the joiner is paced by its credit, `idle_bandwidth_fraction` 0.5 (the live nodes' value) of its link estimate,
+  about one 4 MiB object a second. The 3 s against stage 3 is repair keeping to that share; stage 3, like Macha's
+  repair, ran past it. Recommended: keep 0.5 as written, call the large rejoin's gap explained and closed, and merge
+  (b) since it is correct and costs nothing; if an idle node should use more of the link, that is Macha's
+  configured fraction to raise, not a code change. The redesign document, "(b) built and measured".
+- **A push** of `main`, `develop` and the `0.3.0` tag (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is the maintainer's call while slices pause.
 - **0.3.0's Debian packages and lintian**: not built (they need Dannan 0.9.2's packages installed on a shared Pi).
@@ -153,7 +155,9 @@ merge can collapse it.
     `build/pi-logs/` before the wipe.
   - **node-b (.169) and node-a:** the Macha session's builds under `~/deps` (Dannan 0.9.2 prefixes, its
     Dagda prefixes); not Dagda's to touch.
-  - **node-d (.228):** 4 GB; left out of benchmarks until the maintainer says (it went down mid-run on 2026-11-17).
+  - **node-d (.228):** 4 GB; left out of benchmarks until the maintainer says (it went down mid-run on 2026-11-17). Builds at
+    `-j2`: `/root/dagda-stream` holds `feature/rejoin-stream`'s gate (`build/pi-stream.sh`), its own Dannan 0.9.2
+    prefix and a copy of Macha's fixtures.
   - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
 - **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
   way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it

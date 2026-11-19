@@ -419,6 +419,29 @@ No stage-3 run on 0.9.2 exists yet; a comparison needs `build-s3` rebuilt on the
   (a)'s parallelism unneeded on one link. Either way: a case first (a holder with extent-sized objects; one step
   with room for several extents must move several), seen failing on a Pi, then the scenarios old against new.
 
+**(b) built and measured (2026-11-19, `feature/rejoin-stream`, not merged).** The maintainer chose (b). `ba0cdff` the cases
+(`StoreRepair.WhatAFetchOfManyLeavesIsAskedForAgainAsItLands`, `...PastTheStepsCreditWaitsForTheNextStep`), seen
+failing on node-d (one object, one fetch); `e3ec26a` the fix (`fetch_many_from`: what a reply leaves is asked for
+again at once on the same extent while an allowance of the step's unspent credit covers another). Gate on node-d,
+Dannan 0.9.2, Macha's fixtures: **1155 ran, 1152 passed, 3 skipped, 0 failed, 0 warnings.** Measured against 0.3.0
+in one session (node-b a, node-c b, link 14.5 to 15.6 MB/s, `build/harness/results/2026-11-19-stream/`):
+
+| scenario | 0.3.0 | with (b) |
+|---|---|---|
+| rejoin large | 15.6, 16.6, 16.3 s | 16.3, 16.6, 16.3 s |
+| rejoin small | 2.6, 2.8, 3.0 s | 2.6, 2.2, 2.7 s |
+| rejoin under a viewer | 8.6, 8.6, 8.8 s | 9.2, 8.8, 8.7 s |
+
+**No gain, and the trace says why** (`build/harness/results/2026-11-19-stream-trace/`): the allowance was zero in
+every step. b's step budget is about 10.2 MB: 4.2 MB pays for what landed since the last step, 4.2 MB holds this
+step's fetch, and less than an extent is left. b earns about 4.2 MB a second, which is `idle_bandwidth_fraction`
+(0.5, the live nodes' value, `harness_dagda.cpp:295`) of its link estimate (7.5 to 9.4 MB/s; `repair.cpp:118`). So
+**the large rejoin's pull is paced by repair's configured share of the link, not stalled**: one 4 MiB object a
+second is half the estimate. Stage 3 ran past that share, as Macha's repair does (the harness document, finding 4:
+"repair was running at the link, not at half of it, whatever `idle_bandwidth_fraction` 0.5 intends"). (b) is
+correct and harmless, and helps only where the credit runs ahead of the window. Whether an idle node's repair
+should keep to half the link is the maintainer's (ACTIVE.md, "Waiting on the maintainer").
+
 ## Not decided
 
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue.
