@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -94,7 +94,7 @@ store::ObjectId write_object(ClusterNode& node, uint64_t n) {
   const auto data = test::numbered(n);
   const auto id = store::object_id(data);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   EXPECT_TRUE(node.store().write(id, data, write).met);
   return id;
 }

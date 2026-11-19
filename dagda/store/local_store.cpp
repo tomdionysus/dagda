@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -17,6 +17,7 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -597,6 +598,7 @@ Bytes LocalStore::open_loose(const ObjectId& id, std::span<const uint8_t> file) 
 LocalStore::SealedObject LocalStore::seal(const ObjectId& id, std::span<const uint8_t> data) const {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot seal");
   auto sealed = seal_object(*_key, _sealing, id, data);
+  _seals.fetch_add(1, std::memory_order_relaxed);
   SealedObject out;
   out.plain_size = data.size();
   out.nonce = sealed.nonce;
@@ -612,6 +614,10 @@ Bytes LocalStore::open(const ObjectId& id, const SealedObject& sealed) const {
 
 void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
   _packed.clear();
+  _dead_put_packs.clear();
+  _dead_puts_in_pack.clear();
+  _needed_removes.clear();
+  _needed_touches.clear();
   _pack_dead_bytes = 0;
   _next_pack_sequence = 1;
   _active_pack.clear();
@@ -695,7 +701,11 @@ void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
         break;
       }
       if (header->type == pack_put) {
-        if (const auto old = _packed.find(header->id); old != _packed.end()) _pack_dead_bytes += old->second.record_size;
+        if (const auto old = _packed.find(header->id); old != _packed.end()) {
+          _pack_dead_bytes += old->second.record_size;
+          note_dead_put_locked(header->id, old->second.file);
+        }
+        note_put_locked(header->id);
         PackEntry entry;
         entry.file = file;
         entry.payload_offset = offset + pack_header_size;
@@ -709,12 +719,12 @@ void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
       } else if (header->type == pack_remove) {
         if (const auto old = _packed.find(header->id); old != _packed.end()) {
           _pack_dead_bytes += old->second.record_size;
+          note_dead_put_locked(header->id, old->second.file);
           _packed.erase(old);
         }
-        _pack_dead_bytes += total;
+        note_remove_locked(header->id, file, total);
       } else {
-        if (const auto old = _packed.find(header->id); old != _packed.end()) old->second.touched_unix_ms = header->touched_ms;
-        _pack_dead_bytes += total;
+        note_touch_record_locked(header->id, header->touched_ms, file, total);
       }
       offset += total;
     }
@@ -829,7 +839,11 @@ bool LocalStore::put_packed_locked(const ObjectId& id, const SealedObject& seale
   }
   if (_reserved_write_bytes < need) throw std::logic_error("local store packed write reservation underflow");
   _reserved_write_bytes -= need;
-  if (const auto old = _packed.find(id); old != _packed.end()) _pack_dead_bytes += old->second.record_size;
+  if (const auto old = _packed.find(id); old != _packed.end()) {
+    _pack_dead_bytes += old->second.record_size;
+    note_dead_put_locked(id, old->second.file);
+  }
+  note_put_locked(id);
   _packed[id] = entry;
   if (_ledger) _ledger->record(id, true);
   _used.fetch_add(record_size, std::memory_order_relaxed);
@@ -911,8 +925,7 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
       if (_mode != LocalStoreMode::ephemeral) ensure_accounting_dirty(lock);
       const auto touched = _wall.unix_ms();
       append_pack_record_locked(pack_touch, id, nullptr, touched, &record, &record_size, lock);
-      _packed.at(id).touched_unix_ms = touched;
-      _pack_dead_bytes += record_size;
+      note_touch_record_locked(id, touched, record.file, record_size);
       _used.fetch_add(record_size, std::memory_order_relaxed);
       uint64_t generation = 0;
       if (_mode != LocalStoreMode::ephemeral && _durability_domain) {
@@ -987,6 +1000,10 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
     pack = _pack_threshold && data.size() <= _pack_threshold;
   }
 
+  // Room first, as Macha's put (local_store.cpp:1099-1113 at f0597a4): a put refused
+  // for room seals nothing, so a pool at capacity does not encrypt every write once a
+  // backend it spills through. The ciphertext is the plaintext's size.
+  if (!physical_space_available_locked((pack ? pack_header_size : loose_header_size) + data.size())) return false;
   // Sealed under the object's lock with the index free, as the install is.
   SealedObject sealed;
   {
@@ -1104,9 +1121,10 @@ bool LocalStore::remove_locked(const ObjectId& id, Lock& lock) {
     const auto current = _packed.find(id);
     if (current != _packed.end()) {
       _pack_dead_bytes += current->second.record_size;
+      note_dead_put_locked(id, current->second.file);
       _packed.erase(current);
     }
-    _pack_dead_bytes += tomb_size;
+    note_remove_locked(id, tomb.file, tomb_size);
     if (_ledger) _ledger->record(id, false);
     _losses.fetch_add(1, std::memory_order_release);
     _used.fetch_add(tomb_size, std::memory_order_relaxed);
@@ -1288,6 +1306,18 @@ uint64_t LocalStore::stored_size(const ObjectId& id) const {
   return error ? 0 : size;
 }
 
+uint64_t LocalStore::payload_size(const ObjectId& id) const {
+  ObjectLock object_guard(_object_locks.mutex(id));
+  {
+    Lock lock(_mutex);
+    if (const auto found = _packed.find(id); found != _packed.end()) return found->second.payload_size;
+  }
+  // A loose file is its header and then the ciphertext, as long as the plaintext.
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path(id), error);
+  return error || size < loose_header_size ? 0 : size - loose_header_size;
+}
+
 std::filesystem::file_time_type LocalStore::last_write(const ObjectId& id) const {
   ObjectLock object_guard(_object_locks.mutex(id));
   {
@@ -1308,9 +1338,7 @@ void LocalStore::touch(const ObjectId& id) {
     const auto touched = _wall.unix_ms();
     if (_mode != LocalStoreMode::ephemeral) ensure_accounting_dirty(lock);
     append_pack_record_locked(pack_touch, id, {}, touched, &record, &record_size, lock);
-    // The append released _mutex: find the entry again.
-    if (const auto found = _packed.find(id); found != _packed.end()) found->second.touched_unix_ms = touched;
-    _pack_dead_bytes += record_size;
+    note_touch_record_locked(id, touched, record.file, record_size);
     _used.fetch_add(record_size, std::memory_order_relaxed);
     if (_mode != LocalStoreMode::ephemeral && _durability_domain) {
       const auto generation = _durability_domain->complete_mutation(record.file, _packs);
@@ -1348,6 +1376,96 @@ std::filesystem::file_time_type LocalStore::wall_file_time() const { return file
 
 int64_t LocalStore::age_ms(std::filesystem::file_time_type time) const { return static_cast<int64_t>(_wall.unix_ms()) - unix_ms_of(time); }
 
+void LocalStore::note_dead_put_locked(const ObjectId& id, const std::filesystem::path& pack) {
+  const auto sequence = pack_sequence(pack.filename().string());
+  drop_touch_locked(id);
+  if (!sequence) return;
+  auto& packs = _dead_put_packs[id];
+  if (std::find(packs.begin(), packs.end(), *sequence) != packs.end()) return;
+  packs.push_back(*sequence);
+  _dead_puts_in_pack[*sequence].push_back(id);
+}
+
+void LocalStore::note_touch_locked(const ObjectId& id, const std::filesystem::path& pack, uint64_t bytes) {
+  const auto sequence = pack_sequence(pack.filename().string());
+  drop_touch_locked(id);
+  if (!sequence) {
+    _pack_dead_bytes += bytes;
+    return;
+  }
+  _needed_touches[id] = NeededRecord{*sequence, bytes};
+}
+
+void LocalStore::note_touch_record_locked(const ObjectId& id, uint64_t touched_ms, const std::filesystem::path& pack, uint64_t bytes) {
+  const auto found = _packed.find(id);
+  if (found == _packed.end()) {
+    _pack_dead_bytes += bytes;
+    return;
+  }
+  found->second.touched_unix_ms = touched_ms;
+  if (found->second.file == pack) {
+    // The put shares the pack: compaction rewrites it with this age.
+    drop_touch_locked(id);
+    _pack_dead_bytes += bytes;
+    return;
+  }
+  note_touch_locked(id, pack, bytes);
+}
+
+void LocalStore::drop_touch_locked(const ObjectId& id) {
+  if (const auto needed = _needed_touches.find(id); needed != _needed_touches.end()) {
+    _pack_dead_bytes += needed->second.bytes;
+    _needed_touches.erase(needed);
+  }
+}
+
+void LocalStore::note_remove_locked(const ObjectId& id, const std::filesystem::path& pack, uint64_t bytes) {
+  const auto sequence = pack_sequence(pack.filename().string());
+  if (!sequence || !_dead_put_packs.contains(id)) {
+    _pack_dead_bytes += bytes;
+    return;
+  }
+  // The newest remove keeps the id removed; an earlier one is dead from here.
+  if (const auto earlier = _needed_removes.find(id); earlier != _needed_removes.end()) _pack_dead_bytes += earlier->second.bytes;
+  _needed_removes[id] = NeededRecord{*sequence, bytes};
+}
+
+void LocalStore::note_put_locked(const ObjectId& id) {
+  if (const auto needed = _needed_removes.find(id); needed != _needed_removes.end()) {
+    _pack_dead_bytes += needed->second.bytes;
+    _needed_removes.erase(needed);
+  }
+}
+
+void LocalStore::forget_pack_locked(uint64_t sequence) {
+  const auto found = _dead_puts_in_pack.find(sequence);
+  if (found != _dead_puts_in_pack.end()) {
+    for (const auto& id : found->second) {
+      auto packs = _dead_put_packs.find(id);
+      if (packs == _dead_put_packs.end()) continue;
+      std::erase(packs->second, sequence);
+      if (!packs->second.empty()) continue;
+      _dead_put_packs.erase(packs);
+      // No dead put of the id is left: its remove keeps nothing removed now.
+      if (const auto needed = _needed_removes.find(id); needed != _needed_removes.end() && needed->second.pack != sequence) {
+        _pack_dead_bytes += needed->second.bytes;
+        _needed_removes.erase(needed);
+      }
+    }
+    _dead_puts_in_pack.erase(found);
+  }
+  // Records still placed in the pack went with it, their bytes counted in its size.
+  std::erase_if(_needed_removes, [&](const auto& entry) { return entry.second.pack == sequence; });
+  std::erase_if(_needed_touches, [&](const auto& entry) { return entry.second.pack == sequence; });
+}
+
+std::map<std::filesystem::path, uint64_t> LocalStore::needed_record_bytes_locked() const {
+  std::map<std::filesystem::path, uint64_t> out;
+  for (const auto& [id, needed] : _needed_removes) out[_packs / pack_name(needed.pack)] += needed.bytes;
+  for (const auto& [id, needed] : _needed_touches) out[_packs / pack_name(needed.pack)] += needed.bytes;
+  return out;
+}
+
 bool LocalStore::compact_packs_locked(Lock& lock) {
   if (!_pack_threshold || _pack_dead_bytes == 0) return true;
   // A record written but not yet indexed would count as dead below, and its pack
@@ -1368,6 +1486,11 @@ bool LocalStore::compact_packs_locked(Lock& lock) {
     auto& live = live_by_pack[entry.file];
     if (entry.record_size > std::numeric_limits<uint64_t>::max() - live) throw std::runtime_error("pack compaction live-size overflow");
     live += entry.record_size;
+  }
+  for (const auto& [file, bytes] : needed_record_bytes_locked()) {
+    auto& live = live_by_pack[file];
+    if (bytes > std::numeric_limits<uint64_t>::max() - live) throw std::runtime_error("pack compaction live-size overflow");
+    live += bytes;
   }
   const auto packed_snapshot = _packed;
 
@@ -1409,37 +1532,124 @@ bool LocalStore::compact_packs_locked(Lock& lock) {
     return true;
   }
   if (!space_available) return false;
+  const auto victim_sequence = pack_sequence(victim->file.filename().string());
+  if (!victim_sequence) throw std::runtime_error("pack compaction victim has no sequence");
+
+  // The victim's removes and touches, as replay reads them: a damaged span is
+  // skipped as replay skips it, a torn tail ends the pack.
+  std::vector<PackHeader> marks;
+  {
+    Unlocked unlocked(lock, _mutex);
+    const int fd = ::open(victim->file.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) throw std::runtime_error("cannot open pack for compaction: " + std::string(std::strerror(errno)));
+    uint64_t offset = 0;
+    while (offset < victim->size && victim->size - offset >= pack_header_size) {
+      const auto bytes = read_all_at(fd, pack_header_size, offset);
+      if (!bytes) {
+        ::close(fd);
+        throw std::runtime_error("cannot read pack header during compaction");
+      }
+      const auto header = decode_pack_header(*bytes);
+      if (!header) {
+        const auto next = find_next_pack_header(fd, offset + 1, victim->size);
+        if (!next) break;
+        offset = *next;
+        continue;
+      }
+      const uint64_t total = pack_header_size + header->payload_size;
+      if (total > victim->size - offset) break;
+      if (header->type != pack_put) marks.push_back(*header);
+      offset += total;
+    }
+    ::close(fd);
+  }
+
+  // Carried into the replacement: the remove keeping an id removed while a put of
+  // it survives in another pack, and the touch giving a live object put elsewhere
+  // its age. The live puts are rewritten with their age, so no touch is needed for
+  // them.
+  struct Carried {
+    ObjectId id;
+    uint8_t type = 0;
+    Bytes record;
+  };
+  std::vector<Carried> carried;
+  {
+    std::set<std::pair<uint8_t, ObjectId>> seen;
+    for (const auto& mark : marks) {
+      if (seen.contains({mark.type, mark.id})) continue;
+      if (mark.type == pack_remove) {
+        const auto needed = _needed_removes.find(mark.id);
+        if (needed == _needed_removes.end() || needed->second.pack != *victim_sequence || _packed.contains(mark.id)) continue;
+        const auto dead = _dead_put_packs.find(mark.id);
+        if (dead == _dead_put_packs.end() || std::all_of(dead->second.begin(), dead->second.end(), [&](uint64_t pack) { return pack == *victim_sequence; }))
+          continue;
+        auto record = encode_pack_header(mark);
+        record.resize(pack_header_size + mark.payload_size);
+        carried.push_back({mark.id, pack_remove, std::move(record)});
+      } else if (mark.type == pack_touch) {
+        const auto needed = _needed_touches.find(mark.id);
+        if (needed == _needed_touches.end() || needed->second.pack != *victim_sequence) continue;
+        const auto live = _packed.find(mark.id);
+        if (live == _packed.end() || live->second.file == victim->file) continue;
+        auto touch = mark;
+        touch.touched_ms = live->second.touched_unix_ms;
+        auto record = encode_pack_header(touch);
+        record.resize(pack_header_size + touch.payload_size);
+        carried.push_back({mark.id, pack_touch, std::move(record)});
+      } else {
+        continue;
+      }
+      seen.insert({mark.type, mark.id});
+    }
+  }
 
   std::vector<std::pair<ObjectId, PackEntry>> victim_entries;
   for (const auto& [id, entry] : packed_snapshot)
     if (entry.file == victim->file) victim_entries.push_back({id, entry});
 
   std::filesystem::path replacement;
+  uint64_t replacement_sequence = 0;
   uint64_t replacement_size = 0;
   std::map<ObjectId, PackEntry> rebuilt;
-  if (!victim_entries.empty()) {
+  if (!victim_entries.empty() || !carried.empty()) {
     Unlocked unlocked(lock, _mutex);
     std::filesystem::path temp;
     int fd = -1;
     try {
-      const auto sequence = _next_pack_sequence++;
-      replacement = _packs / pack_name(sequence);
-      temp = _packs / (".compact-" + std::to_string(::getpid()) + "-" + std::to_string(sequence) + ".tmp");
+      replacement_sequence = _next_pack_sequence++;
+      replacement = _packs / pack_name(replacement_sequence);
+      temp = _packs / (".compact-" + std::to_string(::getpid()) + "-" + std::to_string(replacement_sequence) + ".tmp");
       fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
       if (fd < 0) throw std::runtime_error("cannot create compacted pack: " + std::string(std::strerror(errno)));
 
       for (const auto& [id, old_entry] : victim_entries) {
-        if (old_entry.payload_offset < pack_header_size) throw std::runtime_error("invalid packed object offset during compaction");
-        const auto record_offset = old_entry.payload_offset - pack_header_size;
-        const auto bytes = _files.read_at(victim->file, record_offset, static_cast<size_t>(old_entry.record_size));
-        if (!bytes) throw std::runtime_error("short live pack record during compaction");
-        write_all(fd, *bytes);
+        if (old_entry.payload_offset < pack_header_size || old_entry.record_size != pack_header_size + old_entry.payload_size)
+          throw std::runtime_error("invalid packed object offset during compaction");
+        const auto payload = _files.read_at(victim->file, old_entry.payload_offset, static_cast<size_t>(old_entry.payload_size));
+        if (!payload) throw std::runtime_error("short live pack record during compaction");
+        // The put carries the object's age, touches included, so replay needs no
+        // touch for it. The age is outside the seal; only the checksum changes.
+        PackHeader header;
+        header.type = pack_put;
+        header.touched_ms = old_entry.touched_unix_ms;
+        header.id = id;
+        header.plain_size = old_entry.plain_size;
+        header.payload_size = old_entry.payload_size;
+        header.nonce = old_entry.nonce;
+        header.tag = old_entry.tag;
+        write_all(fd, encode_pack_header(header));
+        write_all(fd, *payload);
 
         auto next = old_entry;
         next.file = replacement;
         next.payload_offset = replacement_size + pack_header_size;
         rebuilt.emplace(id, std::move(next));
         replacement_size += old_entry.record_size;
+      }
+      for (const auto& record : carried) {
+        write_all(fd, record.record);
+        replacement_size += record.record.size();
       }
 
       if (::fsync(fd) != 0) throw std::runtime_error("cannot sync compacted pack: " + std::string(std::strerror(errno)));
@@ -1513,6 +1723,13 @@ bool LocalStore::compact_packs_locked(Lock& lock) {
     }
     _pack_dead_bytes = total_dead - victim->dead;
   }
+  // What the replacement now keeps, and what no longer needs keeping.
+  for (const auto& record : carried) {
+    auto& needed = record.type == pack_remove ? _needed_removes : _needed_touches;
+    needed[record.id] = NeededRecord{replacement_sequence, record.record.size()};
+  }
+  for (const auto& [id, entry] : rebuilt) drop_touch_locked(id);
+  if (!remove_error && removed) forget_pack_locked(*victim_sequence);
   if (generation) _last_mutation_generation = std::max(_last_mutation_generation, generation);
   return !remove_error && removed;
 }
@@ -1770,6 +1987,7 @@ LocalStoreDiagnostics LocalStore::diagnostics() const noexcept {
   out.pack_recovery_skipped_regions = _pack_recovery_skipped_regions.load(std::memory_order_relaxed);
   out.pack_recovery_skipped_bytes = _pack_recovery_skipped_bytes.load(std::memory_order_relaxed);
   out.own_syncs = _own_syncs.load(std::memory_order_relaxed);
+  out.seals = _seals.load(std::memory_order_relaxed);
   return out;
 }
 

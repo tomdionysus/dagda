@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -28,6 +28,10 @@
 #include <filesystem>
 #include <future>
 #include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "dagda/store/distributed_store.h"
@@ -263,8 +267,60 @@ struct AskedBarriers {
 WriteOptions deferred_replicated() {
   WriteOptions out;
   out.deferred = true;
-  out.level = Durability::replicated;
+  out.ack_level = Durability::replicated;
   return out;
+}
+
+// A publication with more extents than the ticket table holds: Macha's batch is the
+// caller's and has no bound, so every deferred write waited on is still barriered and
+// met. The table forgets only settled tickets past its bound, never one still waiting
+// (the store map, DistributedStore, gap 1: at Macha's 4 MiB extents a 16 GiB file is
+// 4,096 of them).
+TEST(StoreDurabilityBarrier, APublicationLargerThanTheTicketTableStillBarriersEveryExtent) {
+  Cluster cluster;
+  auto small_table = options(2, 2);
+  small_table.store.max_tickets = 8;
+  auto& a = cluster.add("a", small_table);
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 20; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(40 + i));
+    const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+    ASSERT_FALSE(written.met);
+    tickets.push_back(written.ticket);
+  }
+  for (const auto& ticket : tickets) EXPECT_TRUE(a.store().status(ticket).has_value());
+  const auto evidence = a.store().wait(tickets, 10s);
+  ASSERT_EQ(evidence.size(), tickets.size());
+  for (size_t i = 0; i < evidence.size(); ++i) {
+    EXPECT_EQ(evidence[i].ticket, tickets[i]);
+    EXPECT_TRUE(evidence[i].met) << "extent " << i;
+  }
+}
+
+// A deferred write nobody waits on cannot hold memory for ever: past the ceiling on
+// tickets still waiting, the oldest is forgotten and the store says so.
+TEST(StoreDurabilityBarrier, TicketsStillWaitingAreBoundedByTheirCeiling) {
+  Cluster cluster;
+  auto tight = options(2, 2);
+  tight.store.max_tickets = 2;
+  tight.store.max_waiting_tickets = 4;
+  auto& a = cluster.add("a", tight);
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 6; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(70 + i));
+    tickets.push_back(a.store().write(object_id(bytes), bytes, deferred_replicated()).ticket);
+  }
+  EXPECT_FALSE(a.store().status(tickets[0]).has_value());
+  EXPECT_FALSE(a.store().status(tickets[1]).has_value());
+  for (size_t i = 2; i < tickets.size(); ++i) EXPECT_TRUE(a.store().status(tickets[i]).has_value()) << i;
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "deferred write tickets over their ceiling"));
 }
 
 // Many deferred writes, one peer: one barrier call, at the highest generation
@@ -403,7 +459,9 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
   }
   EXPECT_FALSE(evidence[before.size() - 1].met);
   EXPECT_EQ(evidence[before.size() - 1].on(b.id())->state, ReplicaState::refused);
+  EXPECT_EQ(evidence[before.size() - 1].on(b.id())->loss, BarrierLoss::absent_on_peer);
   EXPECT_EQ(evidence[before.size() - 1].on(a.id())->state, ReplicaState::acknowledged);
+  EXPECT_EQ(evidence[before.size() - 1].on(a.id())->loss, BarrierLoss::none);
   EXPECT_TRUE(evidence.back().met);
 
   size_t plain = 0;
@@ -431,7 +489,8 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
 }
 
 // Macha's distributed_store.cpp:580 at 98b816d: a local barrier that fails is warned
-// of, and the copy stays owed.
+// of. The copy is re-derived from disk (the maintainer, 2026-11-14: "healing is better"); with
+// the backend gone it is absent, and the write is short of it.
 TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   Cluster cluster;
   // Nothing flushed by itself before the backend goes.
@@ -450,6 +509,84 @@ TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   ASSERT_TRUE(evidence);
   EXPECT_FALSE(evidence->met);
   EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "local storage durability barrier failed: "));
+  // Definitive, and typed: put it again.
+  ASSERT_NE(evidence->on(a.id()), nullptr);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::refused);
+  EXPECT_EQ(evidence->on(a.id())->loss, BarrierLoss::absent_here);
+}
+
+// A barrier travels at the frame of the work it makes durable, as Macha's does: the
+// artwork's at speculative (catalogue.hpp:520-521 at f0597a4), a publication's at its
+// work frame (filesystem.cpp:1201), so artwork's barriers never compete with a
+// publication's at loader (the store map, distributed store gap 3).
+TEST(StoreDurabilityBarrier, ABarrierTravelsAtTheFrameItsWriteWasMadeAt) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto artwork = deferred_replicated();
+  artwork.frame = FrameType::speculative;
+  const auto bytes = pattern(32 * 1024, 91);
+  const auto written = a.store().write(object_id(bytes), bytes, artwork);
+  ASSERT_EQ(written.holders(), 2u);
+  const auto evidence = a.store().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_TRUE(evidence->met);
+  EXPECT_EQ(b.frames_of(message::object_durability_barrier), std::set<FrameType>{FrameType::speculative});
+}
+
+// Macha's barrier answers false at once on a transient failure (distributed_store.cpp
+// :766-767 at f0597a4): the wait answers when its barriers have, with the copy still
+// owed, not at the caller's deadline (the store map, distributed store gap 2).
+TEST(StoreDurabilityBarrier, ATransientBarrierFailureAnswersAtOnceNotAtTheDeadline) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::object_durability_barrier) return Handled::failed(500, "barrier_failed", "storage durability barrier failed: injected");
+    return std::nullopt;
+  });
+  const auto bytes = pattern(32 * 1024, 92);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 2u);
+  const auto started = std::chrono::steady_clock::now();
+  const auto evidence = a.store().wait(written.ticket, 30s);
+  const auto took = std::chrono::steady_clock::now() - started;
+  ASSERT_TRUE(evidence);
+  EXPECT_LT(took, 10s) << "the wait ran on to its deadline";
+  EXPECT_FALSE(evidence->met);
+  EXPECT_FALSE(evidence->settled);
+  ASSERT_NE(evidence->on(b.id()), nullptr);
+  EXPECT_EQ(evidence->on(b.id())->state, ReplicaState::pending);
+  EXPECT_EQ(evidence->on(b.id())->loss, BarrierLoss::none);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::acknowledged);
+}
+
+// A deferred write that ended short of its floor (no further copy could be had
+// promptly) is made durable at what landed, as Macha's batch required what landed
+// (distributed_store.cpp:375, :475 at f0597a4); the copies it is owed are prompt
+// replication's and repair's (the store map, distributed store gap 4).
+TEST(StoreDurabilityBarrier, AWriteThatEndedShortIsMetAtWhatLanded) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::put_object_deferred || seen == message::put_object) return Handled::failed(507, "storage_full", "storage limit reached");
+    return std::nullopt;
+  });
+  const auto bytes = pattern(32 * 1024, 93);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 1u);
+  EXPECT_EQ(written.sought, 1u);
+  const auto evidence = a.store().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_TRUE(evidence->met);
+  EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::acknowledged);
 }
 
 // The asynchronous form posts its evidence, never inline, in the order asked;
@@ -462,7 +599,7 @@ TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
   const auto bytes = pattern(32 * 1024, 7);
   WriteOptions deferred;
   deferred.deferred = true;
-  deferred.level = Durability::persisted;
+  deferred.ack_level = Durability::persisted;
   const auto written = a.store().write(object_id(bytes), bytes, deferred);
 
   boost::asio::io_context caller;
@@ -485,6 +622,150 @@ TEST(StoreDurabilityBarrier, AWaitOverManyTicketsPostsItsEvidenceInOrder) {
   (void)caller.poll();
   ASSERT_TRUE(told.has_value());
   EXPECT_TRUE(told->empty());
+}
+
+// Macha's lines for a barrier that leaves a write short are its barrier's, whoever
+// waits (distributed_store.cpp:725-727 and :760-764 at f0597a4): so through the
+// contract's waits too, and a local copy re-derived from disk is counted on the round's
+// one re-derived line, as Macha counts its stale local tokens (the store map,
+// distributed store gap 14).
+TEST(StoreDurabilityBarrier, AnUnmetBarrierThroughTheContractIsLoggedAsMachaLogsIt) {
+  Cluster cluster;
+  auto one = options(1);
+  one.durability_window = 2s;
+  auto& a = cluster.add("a", one);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(32 * 1024, 78);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_NE(written.on(a.id()), nullptr);
+  ASSERT_TRUE(written.on(a.id())->durability);
+  std::filesystem::remove_all(a.backend());
+  const auto evidence = a.api().tickets().wait(written.ticket, 10s);
+  ASSERT_TRUE(evidence);
+  EXPECT_FALSE(evidence->met);
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(a.log().saw(LogLevel::debug, "object durability quorum unavailable id=" + to_string(written.id) + " required=1 durable=0 transient=no"));
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=0 absent=1 peers=0"));
+}
+
+// One barrier round that probes two restarted peers says so on one line with the
+// count of peers probed, as Macha's (distributed_store.cpp:725-727 at f0597a4), not a
+// line a peer.
+TEST(StoreDurabilityBarrier, ARoundThatProbesTwoPeersSaysSoOnOneLine) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(3, 3));
+  auto& b = cluster.add("b", options(3, 3));
+  auto& c = cluster.add("c", options(3, 3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  WriteOptions durable;
+  durable.deferred = true;
+  durable.ack_level = Durability::durable;
+  std::vector<Ticket> tickets;
+  for (uint8_t i = 0; i < 4; ++i) {
+    const auto bytes = pattern(32 * 1024, static_cast<uint8_t>(230 + i));
+    const auto written = a.store().write(object_id(bytes), bytes, durable);
+    ASSERT_EQ(written.holders(), 3u);
+    tickets.push_back(written.ticket);
+  }
+  b.restart();
+  c.restart();
+  ASSERT_TRUE(cluster.converged());
+  std::vector<WriteEvidence> evidence;
+  ASSERT_TRUE(wait_until(
+      [&] {
+        evidence = a.store().wait(tickets, 2s);
+        return std::all_of(evidence.begin(), evidence.end(), [](const WriteEvidence& one) { return one.settled; });
+      },
+      30s));
+  for (const auto& one : evidence) EXPECT_TRUE(one.met);
+  using dannan::status::LogLevel;
+  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=8 absent=0 peers=2"));
+  EXPECT_FALSE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=4 absent=0 peers=1"));
+}
+
+// Macha's write quorum line says result=1 for any write that landed a copy and was not
+// cancelled, one that ended short of its floor included (distributed_store.cpp:288 and
+// :475 at f0597a4). The line is written only for a write of half a second or more, so
+// the peer's refusal is held that long.
+TEST(StoreDurabilityBarrier, ASlowWriteThatEndedShortIsLoggedAsLanded) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  b.interpose([](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen != message::put_object_deferred && seen != message::put_object) return std::nullopt;
+    // Real time: the line's threshold is the write's own steady clock, as Macha's.
+    std::this_thread::sleep_for(600ms);
+    return Handled::failed(507, "storage_full", "storage limit reached");
+  });
+  const auto bytes = pattern(32 * 1024, 94);
+  const auto written = a.store().write(object_id(bytes), bytes, deferred_replicated());
+  ASSERT_EQ(written.holders(), 1u);
+  std::optional<std::string> line;
+  for (const auto& one : a.log().lines())
+    if (one.find("object write quorum id=" + to_string(written.id)) != std::string::npos) line = one;
+  ASSERT_TRUE(line);
+  EXPECT_NE(line->find(" success=1 "), std::string::npos) << *line;
+  EXPECT_TRUE(line->ends_with(" result=1")) << *line;
+}
+
+// The synchronous wait runs on the caller's thread, as Macha's durability_barrier did
+// (distributed_store.cpp:681 at f0597a4): its barriers there and its answer by a
+// condition, not a timer armed, a worker's job and three posts a ticket on the store's
+// executor (the small-files profile, 2026-11-15: futex wake-ups, a write crossing more
+// threads than Macha's). So it answers with every executor thread busy.
+TEST(StoreDurabilityBarrier, ASynchronousWaitNeedsNoExecutorThread) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  WriteOptions deferred;
+  deferred.deferred = true;
+  deferred.ack_level = Durability::persisted;
+  std::vector<Ticket> tickets;
+  for (uint8_t seed = 40; seed < 44; ++seed) {
+    const auto bytes = pattern(32 * 1024, seed);
+    const auto written = a.store().write(object_id(bytes), bytes, deferred);
+    ASSERT_NE(written.on(a.id()), nullptr);
+    ASSERT_TRUE(written.on(a.id())->durability);
+    tickets.push_back(written.ticket);
+  }
+
+  // Every thread of the io context held until the case lets go, whatever it asserts.
+  std::promise<void> release;
+  const auto released = release.get_future().share();
+  std::atomic<size_t> holding{0};
+  for (size_t i = 0; i < cluster.io().threads.size(); ++i)
+    boost::asio::post(cluster.io().context, [&holding, released] {
+      ++holding;
+      released.wait();
+    });
+  struct LetGo {
+    std::promise<void>& release;
+    ~LetGo() { release.set_value(); }
+  } let_go{release};
+  ASSERT_TRUE(wait_until([&] { return holding.load() == cluster.io().threads.size(); }));
+
+  const auto started = std::chrono::steady_clock::now();
+  const auto evidence = a.store().wait(tickets, 10s);
+  const auto took = std::chrono::steady_clock::now() - started;
+  EXPECT_LT(took, 5s) << "the wait answered only past its deadline";
+  ASSERT_EQ(evidence.size(), tickets.size());
+  for (size_t i = 0; i < tickets.size(); ++i) {
+    EXPECT_EQ(evidence[i].ticket, tickets[i]);
+    EXPECT_TRUE(evidence[i].met);
+    EXPECT_TRUE(evidence[i].settled);
+  }
+
+  // One ticket, the same way; a forgotten one is no evidence.
+  const auto one = a.store().wait(tickets.front(), 10s);
+  ASSERT_TRUE(one);
+  EXPECT_TRUE(one->met);
+  EXPECT_FALSE(a.store().wait(Ticket{987654321}, 10s).has_value());
+  EXPECT_LT(std::chrono::steady_clock::now() - started, 5s);
 }
 
 }  // namespace

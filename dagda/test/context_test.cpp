@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -14,13 +14,19 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "dagda/test/fixtures/cluster.h"
+#include "dagda/test/fixtures/reachability.h"
 
 namespace dagda {
 namespace {
@@ -99,7 +105,7 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
   const auto data = test::numbered(42);
   const auto id = store::object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = on_strand<WriteEvidence>(strand, [&](boost::asio::any_io_executor executor, Context::Objects::WriteDone done) {
     a.api().objects().write(data, write, deadline, executor, std::move(done));
   });
@@ -156,7 +162,12 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
 
   // The instant delete (step 7b): a's claim, observed, goes, and with it
   // every copy, the answer on the caller's strand; the blocking form waits
-  // on the same completion.
+  // on the same completion. Each node has published an inventory referring to
+  // nothing; one with none published keeps its copy.
+  test::TestProvider nothing;
+  nothing.answer.complete = true;
+  a.publish_inventory(nothing);
+  b.publish_inventory(nothing);
   const auto removed = on_strand<RemoveEvidence>(strand, [&](boost::asio::any_io_executor executor, Context::Objects::RemoveDone done) {
     a.api().objects().remove({id}, {{a.id(), 1}}, {}, deadline, executor, std::move(done));
   });
@@ -171,6 +182,227 @@ TEST(Context, EachNounCompletesOnTheCallersStrandOnATwoNodeCluster) {
   EXPECT_THROW(a.api().objects().remove({id}, {}, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().objects().read(id, {}, std::chrono::milliseconds(0)), std::invalid_argument);
   EXPECT_THROW(a.api().claims().retain(contract::RetentionClass::data, {id}, {a.id(), 0}, {}, deadline), std::invalid_argument);
+}
+
+// Contract version 2's object forms, Macha's (the maintainer, 2026-11-14, the route: Context
+// serves every store call Macha makes, with Macha's semantics): a write naming its
+// id, hashed once; a blocking read and write on the caller's own thread, no worker
+// hop, with no deadline of their own unless the options name one; and one wait over
+// many tickets, one barrier a place.
+TEST(Context, VersionTwoServesMachasObjectForms) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  struct Stages {
+    std::mutex mutex;
+    std::vector<std::thread::id> on;
+  };
+  auto stages = std::make_shared<Stages>();
+  auto& a = cluster.add("a", [&] {
+    auto out = options;
+    out.store.read_trace = [stages](std::string_view) {
+      std::lock_guard lock(stages->mutex);
+      stages->on.push_back(std::this_thread::get_id());
+    };
+    return out;
+  }());
+  cluster.add("b", options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(44);
+  const auto id = store::object_id(data);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  const auto written = a.api().objects().write(id, std::span<const uint8_t>(data), write);
+  EXPECT_EQ(written.id, id);
+  EXPECT_TRUE(written.met);
+  // A wrong id is refused before anything is written.
+  EXPECT_THROW((void)a.api().objects().write(store::object_id(test::numbered(45)), std::span<const uint8_t>(data), write), std::exception);
+
+  {
+    std::lock_guard lock(stages->mutex);
+    stages->on.clear();
+  }
+  const auto read = a.api().objects().read(id, ReadOptions{});
+  ASSERT_NE(read.object, nullptr);
+  EXPECT_EQ(read.end, store::ReadEnd::served);
+  {
+    std::lock_guard lock(stages->mutex);
+    ASSERT_FALSE(stages->on.empty());
+    EXPECT_NE(std::find(stages->on.begin(), stages->on.end(), std::this_thread::get_id()), stages->on.end()) << "a blocking read hopped to a worker";
+  }
+
+  // Deferred writes, then one wait over all their tickets.
+  WriteOptions deferred = write;
+  deferred.deferred = true;
+  std::vector<Ticket> tickets;
+  for (int n = 46; n < 50; ++n) {
+    const auto bytes = test::numbered(n);
+    tickets.push_back(a.api().objects().write(store::object_id(bytes), std::span<const uint8_t>(bytes), deferred).ticket);
+  }
+  const auto waited = a.api().tickets().wait(tickets, std::chrono::seconds(10));
+  ASSERT_EQ(waited.size(), tickets.size());
+  for (const auto& one : waited) EXPECT_TRUE(one.met);
+
+  auto strand = boost::asio::make_strand(cluster.io().context);
+  const auto many = on_strand<std::vector<WriteEvidence>>(strand, [&](boost::asio::any_io_executor executor, Context::Tickets::ManyDone done) {
+    a.api().tickets().wait(tickets, std::chrono::seconds(10), executor, std::move(done));
+  });
+  ASSERT_EQ(many.size(), tickets.size());
+  for (const auto& one : many) EXPECT_TRUE(one.met);
+}
+
+// Contract version 2's filesystem forms, Macha's (distributed_store.hpp at f0597a4,
+// the callers' map's filesystem and FUSE sections): a write durable here with the
+// further copies owed, and its deferred form; the local view (pool, then cache);
+// the cache written through and hydrated; a DATA object made local; claims here for
+// what is held; and the reachability epoch a parked write retries on.
+TEST(Context, VersionTwoServesMachasFilesystemForms) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  auto& a = cluster.add("a", options);
+  auto& b = cluster.add("b", options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto& objects = a.api().objects();
+
+  const auto here = test::numbered(70);
+  const auto here_id = store::object_id(here);
+  EXPECT_TRUE(objects.put_here(here_id, std::span<const uint8_t>(here)));
+  EXPECT_TRUE(objects.has(here_id));
+  EXPECT_TRUE(objects.locally_available(here_id));
+
+  const auto deferred = test::numbered(71);
+  const auto deferred_id = store::object_id(deferred);
+  const auto evidence = objects.put_deferred_here(deferred_id, std::span<const uint8_t>(deferred));
+  ASSERT_TRUE(evidence.ticket.valid());
+  const auto waited = a.api().tickets().wait(evidence.ticket, std::chrono::seconds(10));
+  ASSERT_TRUE(waited.has_value());
+  EXPECT_NE(waited->on(a.id()), nullptr);
+
+  // Made local on b from a, then held there.
+  EXPECT_TRUE(b.api().objects().ensure_local(here_id));
+  EXPECT_TRUE(b.api().objects().has(here_id));
+
+  // Claims here: what a holds, claimed; the rest returned.
+  const auto absent = store::object_id(test::numbered(72));
+  const auto rest = a.api().claims().retain_data_here({here_id, absent}, {a.id(), 9});
+  ASSERT_EQ(rest.size(), 1u);
+  EXPECT_EQ(rest[0], absent);
+  EXPECT_TRUE(a.api().claims().retained(contract::RetentionClass::data, here_id));
+
+  // No cache configured here: nothing to hydrate into, nothing written through.
+  EXPECT_EQ(objects.hydration_available(), a.dagda_node().store().hydration_available());
+  EXPECT_EQ(objects.reachability_epoch(), a.dagda_node().store().reachability_epoch());
+}
+
+// Contract version 2's device forms, for Macha's own disk I/O (a torrent's reads and
+// writes): DATA admission on the same credit and device reserve the store's own work
+// takes, and the pool's service monitor fed and read, as Macha's MachaDiskIo did on
+// NodeResources (the callers' map, ingest and torrent).
+TEST(Context, VersionTwoAdmitsTheOwnersDiskIo) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  cluster.start_all();
+  auto& devices = a.api().devices();
+
+  const auto admitted = devices.admit_data(dannan::sched::FrameType::loader, 1024 * 1024, std::chrono::milliseconds(0));
+  EXPECT_TRUE(admitted.has_value());
+  EXPECT_THROW((void)devices.admit_data(dannan::sched::FrameType::control, 1, std::chrono::milliseconds(0)), std::invalid_argument);
+
+  const auto before = devices.sample().operations;
+  devices.note_io(std::chrono::milliseconds(3), 4096);
+  EXPECT_EQ(devices.sample().operations, before + 1);
+  EXPECT_EQ(devices.pressured(), a.dagda_node().data().service_monitor().pressured());
+}
+
+// Contract version 2's bare CONTROL forms, Macha's catalogue and metadata calls (the
+// callers' map, Macha d53ddfe): held here and read back; a strict local put, durable,
+// that offers and claims nothing; a fetch to local from a peer, verified, that claims
+// nothing; and an offer to every node, writing no claim. Claims stay Claims::retain.
+TEST(Context, VersionTwoServesMachasBareControlForms) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  auto& b = cluster.add("b");
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(60);
+  const auto id = store::object_id(data);
+  EXPECT_FALSE(a.api().control().has(id));
+  EXPECT_FALSE(a.api().control().get(id).has_value());
+  EXPECT_TRUE(a.api().control().put(id, std::span<const uint8_t>(data)));
+  EXPECT_TRUE(a.api().control().has(id));
+  ASSERT_TRUE(a.api().control().get(id).has_value());
+  EXPECT_EQ(*a.api().control().get(id), data);
+  EXPECT_FALSE(b.api().control().has(id));
+  EXPECT_FALSE(a.api().claims().retained(contract::RetentionClass::control, id));
+  EXPECT_THROW((void)a.api().control().put(store::object_id(test::numbered(61)), std::span<const uint8_t>(data)), std::exception);
+
+  // Fetched to b from a, nothing claimed.
+  EXPECT_TRUE(b.api().control().ensure_local(id));
+  ASSERT_TRUE(b.api().control().get(id).has_value());
+  EXPECT_EQ(*b.api().control().get(id), data);
+  EXPECT_FALSE(b.api().claims().retained(contract::RetentionClass::control, id));
+  EXPECT_FALSE(b.api().control().ensure_local(store::object_id(test::numbered(62))));
+
+  // Offered from a to every node, nothing claimed.
+  const auto more = test::numbered(63);
+  const auto more_id = store::object_id(more);
+  ASSERT_TRUE(a.api().control().put(more_id, std::span<const uint8_t>(more)));
+  const auto offered = a.api().control().offer({more_id});
+  EXPECT_EQ(offered.held_by, 2u);
+  EXPECT_TRUE(b.api().control().has(more_id));
+  EXPECT_FALSE(b.api().claims().retained(contract::RetentionClass::control, more_id));
+  EXPECT_FALSE(a.api().claims().retained(contract::RetentionClass::control, more_id));
+}
+
+// Contract version 2's logical capacity, Macha's statfs (FileSystem::logical_capacity,
+// filesystem.cpp:2412 at f0597a4; the Macha session's port, R2): over the active nodes
+// that host extents, the water level at min(replication, nodes) replicas across failure
+// domains, and their advertised used over that many replicas, never above the total. An
+// edge node holding no extents is not in it; with no hosting node known, this node's
+// own pool.
+TEST(Context, VersionTwoGivesTheLogicalCapacityAsMachasStatfs) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.store.replication = 2;
+  options.store.write_copies = 2;
+  auto& a = cluster.add("a", options);
+  auto& b = cluster.add("b", options);
+  auto edge_options = options;
+  edge_options.hosts_extents = false;
+  auto& c = cluster.add("c", edge_options);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  const auto data = test::numbered(70);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(a.api().objects().write(store::object_id(data), std::span<const uint8_t>(data), write).met);
+
+  // Two domains of one pool each at two replicas: one pool's worth of logical space.
+  const auto expected_used = [&] { return (a.data().used() + b.data().used()) / 2; };
+  for (auto* node : {&a, &b, &c}) {
+    EXPECT_TRUE(test::wait_until([&] {
+      const auto capacity = node->api().objects().logical_capacity();
+      return capacity.total == options.limit && capacity.used == expected_used() && capacity.used > 0;
+    })) << "total "
+        << node->api().objects().logical_capacity().total << " used " << node->api().objects().logical_capacity().used << " expected " << expected_used();
+  }
+
+  // Alone, a node's figure is its own pool's.
+  Cluster single;
+  auto& d = single.add("d", options);
+  single.start_all();
+  EXPECT_TRUE(test::wait_until([&] {
+    const auto capacity = d.api().objects().logical_capacity();
+    return capacity.total == d.data().limit() && capacity.used == std::min(d.data().limit(), d.data().used());
+  }));
 }
 
 }  // namespace

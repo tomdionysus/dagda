@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -83,6 +83,7 @@ class AvailabilityService {
  public:
   using MissingHere = std::shared_ptr<const std::vector<ObjectId>>;
   using Lacks = std::shared_ptr<const ledger::PeerLacks>;
+  using Holds = std::shared_ptr<const ledger::PeerHolds>;
 
   // `ledger` supplies the inventory and this node's held view; both outlive
   // the service.
@@ -103,6 +104,11 @@ class AvailabilityService {
   MissingHere missing_here() const { return _missing.handle(); }
   // Per peer, what it lacked of what this node holds; repair pushes from it.
   Lacks peer_lacks() const { return _lacks.handle(); }
+  // Per peer, what it held of what this node lacks, from the same diffs; null
+  // before the first survey that asked. A survey that asks nobody (a gain alone)
+  // leaves the last one standing: what this node has gained since is no longer
+  // lacking, and a reader takes it with missing_here().
+  Holds peer_holds() const { return _holds.handle(); }
   // The last survey found no reachable node holding it.
   bool unavailable(const ObjectId& id) const;
   // When refresh() next has something to do with no new event.
@@ -116,6 +122,7 @@ class AvailabilityService {
   const dannan::status::ScopedLogger _logger;
   dannan::contract::Published<AvailabilitySnapshot> _snapshot;
   dannan::contract::Published<ledger::PeerLacks> _lacks;
+  dannan::contract::Published<ledger::PeerHolds> _holds;
   dannan::contract::Published<std::vector<ObjectId>> _missing;
 
   // refresh()'s own: what the last survey saw.

@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -59,6 +60,7 @@
 #include "dannan/identity/key_custody.h"
 #include "dannan/identity/node_identity.h"
 #include "dannan/identity/secure_memory.h"
+#include "dannan/identity/signing.h"
 #include "dannan/node.h"
 #include "dannan/supervise/startup.h"
 #include "dannan/test/fixtures/ports.h"
@@ -94,13 +96,20 @@ struct ClusterNodeOptions {
   bool keeps_backend = false;
   bool packed = false;
   size_t pack_target_size = 0;
+  // The largest object packed; with none, the pack target (everything packs).
+  size_t pack_threshold = 0;
   // More DATA backends beside the node's first, by path; a case adds one to
   // what a restart opens.
   std::vector<std::filesystem::path> more_backends;
+  // Each backend's directory made before the node opens, as an operator mounts its
+  // disks; off for a case about a disk not mounted.
+  bool create_backends = true;
   std::chrono::milliseconds durability_window{20};
   std::string failure_domain;
   store::CacheOptions cache;
   store::DistributedStoreOptions store;
+  // StorageServerOptions::serve_timing, for the harness's trace.
+  std::function<void(std::string_view event)> serve_timing;
   // The node's admission (Macha's data_inflight_bytes and its reserve, its
   // background concurrency and no-progress deadline), and its device
   // reserve; with `admission` off it admits everything.
@@ -112,6 +121,11 @@ struct ClusterNodeOptions {
   store::IoReserveOptions io;
   bool device_reserve = true;
   std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
+  // The cadences, quick so a case converges fast; the harness sets a deployment's.
+  std::chrono::milliseconds heartbeat{100};
+  std::chrono::milliseconds telemetry_interval{200};
+  std::chrono::milliseconds status_interval{200};
+  std::chrono::milliseconds refresh_interval{500};
   // The survey's and repair's, with each trie question bounded short.
   store::AvailabilityOptions availability{std::chrono::milliseconds(5000)};
   store::RepairOptions repair = [] {
@@ -146,6 +160,8 @@ struct ClusterNodeOptions {
   std::filesystem::path data{};
   // The node's open and stop stages, as dagda::Node reports them.
   std::function<void(std::string_view)> trace;
+  // Macha's startup stages, as dagda::Node tells them (NodeOptions::startup_stage).
+  std::function<void(std::string_view)> startup_stage;
   // The owner's startup progress, handed to the node when given.
   dannan::supervise::StartupProgress* startup_progress = nullptr;
   // The control store's, and the node's time (a stepped one, for a case that
@@ -157,6 +173,12 @@ struct ClusterNodeOptions {
   std::vector<heads::SpaceSpec> spaces;
   // What they exchange under. The dead_after the cluster runs on goes in by itself.
   heads::ExchangeOptions exchange;
+  // A node other machines reach (the harness's two-machine workloads): the address it
+  // listens on and advertises (none: loopback), its port (0: a free one), and nodes of
+  // the same cluster in other processes to bootstrap from, beside this process's.
+  std::string host;
+  uint16_t port = 0;
+  std::vector<dannan::net::Endpoint> seeds;
 };
 
 // Answers a request in the server's place when it returns a value; nothing
@@ -200,6 +222,8 @@ class ClusterNode {
   dagda::Context& api() { return _dagda->context(); }
   dannan::identity::NodeId id() const { return _id; }
   uint16_t port() const { return _port; }
+  // The address it listens on and advertises.
+  std::string host() const { return _options.host.empty() ? "127.0.0.1" : _options.host; }
   const std::string& name() const { return _name; }
   store::DistributedStore& store() { return _dagda->store(); }
   store::StorageServer& server() { return _dagda->server(); }
@@ -277,10 +301,22 @@ class ClusterNode {
 class Cluster {
  public:
   explicit Cluster(std::chrono::milliseconds dead_after = std::chrono::milliseconds(1500))
-      : _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
+      : _temp(std::in_place),
+        _root(_temp->path()),
+        _ca(dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000)),
         _dead_after(dead_after) {
-    std::ofstream(_dir.path() / "cluster.key") << "dagda cluster test";
-    _key = dannan::identity::load_cluster_key(_dir.path() / "cluster.key");
+    std::ofstream(_root / "cluster.key") << "dagda cluster test";
+    _key = dannan::identity::load_cluster_key(_root / "cluster.key");
+  }
+  // Over `kept`, made if missing and never removed: what one process wrote, another
+  // opens again (the harness's recovery workload). The cluster key and the storage key
+  // are the same in every cluster, so a node reopens what its earlier self wrote. Its CA
+  // is kept there too (`ca.key`, `ca.pem`), so a process given a copy of those two files,
+  // on this machine or another, runs nodes of the same cluster.
+  Cluster(std::filesystem::path kept, std::chrono::milliseconds dead_after) : _root(std::move(kept)), _ca(kept_ca(_root)), _dead_after(dead_after) {
+    std::filesystem::create_directories(_root);
+    std::ofstream(_root / "cluster.key") << "dagda cluster test";
+    _key = dannan::identity::load_cluster_key(_root / "cluster.key");
   }
   ~Cluster() {
     // Every node stops before the io context it runs on.
@@ -358,7 +394,7 @@ class Cluster {
   }
 
   ClusterIo& io() { return _io; }
-  const std::filesystem::path& dir() const { return _dir.path(); }
+  const std::filesystem::path& dir() const { return _root; }
   const dannan::identity::ClusterKey& key() const { return _key; }
   const dannan::identity::CertificateAuthority& ca() const { return _ca; }
   // Every node's custody source: a passphrase, light costs.
@@ -374,12 +410,33 @@ class Cluster {
   std::vector<dannan::net::Endpoint> seeds_for(const ClusterNode& node) const {
     std::vector<dannan::net::Endpoint> out;
     for (const auto& other : _nodes)
-      if (other.get() != &node) out.push_back({"127.0.0.1", other->port()});
+      if (other.get() != &node) out.push_back({other->host(), other->port()});
     return out;
   }
 
  private:
-  dannan::test::TempDir _dir;
+  // The CA under `root`: read if both its files are there, else made and written.
+  static dannan::identity::CertificateAuthority kept_ca(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root);
+    const auto key_path = root / "ca.key";
+    const auto certificate_path = root / "ca.pem";
+    if (std::filesystem::exists(key_path) && std::filesystem::exists(certificate_path)) {
+      std::ifstream key_in(key_path, std::ios::binary);
+      const std::vector<uint8_t> key((std::istreambuf_iterator<char>(key_in)), std::istreambuf_iterator<char>());
+      std::ifstream certificate_in(certificate_path, std::ios::binary);
+      const std::string pem((std::istreambuf_iterator<char>(certificate_in)), std::istreambuf_iterator<char>());
+      return dannan::identity::CertificateAuthority(dannan::identity::SigningKey::from_pkcs8(key), dannan::identity::Certificate::from_pem(pem));
+    }
+    auto ca = dannan::identity::CertificateAuthority::create("dagda test cluster", dannan::contract::system_wall_clock().unix_ms() - 60000);
+    const auto key = ca.key().to_pkcs8();
+    std::ofstream(key_path, std::ios::binary).write(reinterpret_cast<const char*>(key.reveal().data()), static_cast<std::streamsize>(key.size()));
+    std::ofstream(certificate_path, std::ios::binary) << ca.certificate().pem();
+    return ca;
+  }
+
+  // The temporary directory, when the cluster made one; `_root` either way.
+  std::optional<dannan::test::TempDir> _temp;
+  std::filesystem::path _root;
   dannan::identity::ClusterKey _key;
   dannan::identity::CertificateAuthority _ca;
   const std::chrono::milliseconds _dead_after;
@@ -388,7 +445,11 @@ class Cluster {
 };
 
 inline ClusterNode::ClusterNode(Cluster& cluster, std::string name, ClusterNodeOptions options)
-    : _cluster(cluster), _name(std::move(name)), _options(std::move(options)), _dir(cluster.dir() / _name), _port(dannan::test::free_port()) {
+    : _cluster(cluster),
+      _name(std::move(name)),
+      _options(std::move(options)),
+      _dir(cluster.dir() / _name),
+      _port(_options.port ? _options.port : dannan::test::free_port()) {
   std::filesystem::create_directories(_dir);
 }
 
@@ -403,7 +464,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     out.pool.pack_threshold = 0;
     out.pool.pack_target_size = 0;
   } else if (_options.pack_target_size) {
-    out.pool.pack_threshold = _options.pack_target_size;
+    out.pool.pack_threshold = _options.pack_threshold ? _options.pack_threshold : _options.pack_target_size;
     out.pool.pack_target_size = _options.pack_target_size;
   }
   out.cache = _options.cache;
@@ -421,8 +482,9 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     out.admission.reset();
   }
   out.server.hosts_extents = _options.hosts_extents;
-  out.server.refresh_interval = std::chrono::milliseconds(500);
+  out.server.refresh_interval = _options.refresh_interval;
   out.server.admission_wait = _options.admission_wait;
+  out.server.serve_timing = _options.serve_timing;
   out.store = _options.store;
   out.store.admission_wait = _options.admission_wait;
   out.availability = _options.availability;
@@ -430,8 +492,9 @@ inline dagda::NodeOptions ClusterNode::node_options() {
   out.maintenance = _options.maintenance;
   out.garbage_grace = _options.garbage_grace;
   if (_options.wall) out.wall = _options.wall;
-  out.status_interval = std::chrono::milliseconds(200);
+  out.status_interval = _options.status_interval;
   out.trace = _options.trace;
+  out.startup_stage = _options.startup_stage;
   out.startup_progress = _options.startup_progress;
   out.control = _options.control;
   out.startup_progress = _options.startup_progress;
@@ -463,21 +526,28 @@ inline void ClusterNode::start() {
 
 inline void ClusterNode::open() {
   if (_node) return;
+  // Its disks are there before it starts, as an operator mounts them: a node never
+  // makes a backend's directory (a missing one is a disk not mounted).
+  if (_options.create_backends) {
+    if (_options.hosts_extents || _options.keeps_backend) std::filesystem::create_directories(backend());
+    for (const auto& more : _options.more_backends) std::filesystem::create_directories(more);
+  }
   dannan::NodeConfig config;
   config.state_path = _dir / "node";
   config.key = _cluster.key();
-  config.listen_host = "127.0.0.1";
-  config.advertise_host = "127.0.0.1";
+  config.listen_host = host();
+  config.advertise_host = host();
   config.port = _port;
   config.node_name = _name;
   // Loopback nodes are independent failure domains, as Macha's test nodes
   // are, unless a case says otherwise.
   config.failure_domain = _options.failure_domain.empty() ? _name : _options.failure_domain;
   config.bootstrap = _cluster.seeds_for(*this);
+  config.bootstrap.insert(config.bootstrap.end(), _options.seeds.begin(), _options.seeds.end());
   config.inbound = dannan::reach::Inbound::yes;
-  config.heartbeat = std::chrono::milliseconds(100);
+  config.heartbeat = _options.heartbeat;
   config.dead_after = _cluster.dead_after();
-  config.telemetry_interval = std::chrono::milliseconds(200);
+  config.telemetry_interval = _options.telemetry_interval;
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;

@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -71,7 +71,8 @@ std::vector<RemovedObject> remove_here(const RemoveReplica& replica, std::vector
     const auto guard = replica.data.claim_locks().lock(ids);
     (void)replica.claims.release_observed(contract::RetentionClass::data, ids, observed);
     // The inventory as published now: what the owner's state refers to on this
-    // node. One that could not be read whole may refer to anything.
+    // node. One that could not be read whole may refer to anything, and so may
+    // one not yet published (the maintainer, 2026-11-16).
     const auto inventory = replica.ledger ? replica.ledger->inventory() : nullptr;
     for (const auto& id : ids) {
       RemovedObject entry;
@@ -80,7 +81,7 @@ std::vector<RemovedObject> remove_here(const RemoveReplica& replica, std::vector
       if (!claims.adds.empty()) {
         entry.state = RemoveState::kept_by_claim;
         for (const auto& [origin, sequence] : claims.adds) entry.claims.push_back({origin, sequence});
-      } else if (inventory && (!inventory->complete() || inventory->referenced(contract::RetentionClass::data, id))) {
+      } else if (!inventory || !inventory->complete() || inventory->referenced(contract::RetentionClass::data, id)) {
         entry.state = RemoveState::kept_referenced;
       } else {
         going.emplace_back(out.size(), replica.data.claim_locks().begin_deleting(id));

@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -1229,7 +1229,7 @@ class StressBed {
     std::vector<Head::Made> standing;
     const bool ran = on(index, [&](ClusterNode& node) {
       store::WriteOptions options;
-      options.level = store::Durability::replicated;
+      options.ack_level = store::Durability::replicated;
       options.frame = random() % 2 ? dannan::sched::FrameType::foreground : dannan::sched::FrameType::loader;
       std::vector<ObjectId> ids;
       for (const auto& one : made) {
@@ -1490,7 +1490,7 @@ class StressBed {
         const auto id = store::object_id(bytes);
         _head.exempt(id);
         store::WriteOptions options;
-        options.level = store::Durability::persisted;
+        options.ack_level = store::Durability::persisted;
         if (!node.store().write(id, bytes, options).met) return;
         const auto key = "k" + std::to_string(++made);
         (void)space.mutate_delta(test::neutral_mutation([&](test::NeutralEditing& editing) { editing.delta.upsert_keys[key] = item_naming(id); }));

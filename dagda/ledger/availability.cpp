@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -72,6 +72,7 @@ AvailabilitySurvey survey_by_diff(const std::shared_ptr<const TrieUnion>& mine, 
             if (difference.left && !difference.right) {
               if (referenced.contains(difference.id)) lacks.push_back(difference.id);
             } else if (!difference.left && difference.right) {
+              // Referenced and lacking here, or the peer's own garbage: kept apart below.
               holds.push_back(difference.id);
             }
           },
@@ -90,6 +91,10 @@ AvailabilitySurvey survey_by_diff(const std::shared_ptr<const TrieUnion>& mine, 
     peers[i].root = there.root_hash();
     peers[i].lacks = std::move(lacks);
     held_elsewhere.insert(held_elsewhere.end(), holds.begin(), holds.end());
+    // Of what the peer holds and this node does not, what is referenced: `missing_here`
+    // is exactly the referenced ids this node lacks.
+    std::sort(holds.begin(), holds.end());
+    std::set_intersection(holds.begin(), holds.end(), missing_here.begin(), missing_here.end(), std::back_inserter(peers[i].holds));
   }
   sort_unique(held_elsewhere);
   std::set_difference(missing_here.begin(), missing_here.end(), held_elsewhere.begin(), held_elsewhere.end(),

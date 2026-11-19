@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -99,18 +99,24 @@ RepairGates Repair::gates() const {
   return out;
 }
 
+double Repair::bandwidth() const {
+  double out = _store.estimated_network_bps();
+  if (out <= 0.0) out = static_cast<double>(_options.initial_bandwidth);
+  if (_options.max_bandwidth) out = std::min(out, static_cast<double>(_options.max_bandwidth));
+  return out;
+}
+
+uint64_t Repair::burst() const { return static_cast<uint64_t>(std::max(static_cast<double>(_options.extent_size), bandwidth() * 5.0)); }
+
 RepairCredit Repair::earn_credit(TimePoint now, std::optional<std::chrono::milliseconds> when_no_time_passed) {
   // Credit: the link's rate, a fraction of it, banked to a burst.
-  double bandwidth = _store.estimated_network_bps();
-  if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.initial_bandwidth);
-  if (_options.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.max_bandwidth));
+  const double link = bandwidth();
   double seconds = _last ? std::chrono::duration<double>(now - *_last).count() : 0.0;
   _last = now;
   if (seconds <= 0.0 && when_no_time_passed) seconds = std::chrono::duration<double>(*when_no_time_passed).count();
-  const double burst = std::max(static_cast<double>(_options.extent_size), bandwidth * 5.0);
   const double cpu_scale = _cpu.scale(seconds, _options.cpu_target);
-  const double rate = bandwidth * _options.idle_bandwidth_fraction * cpu_scale;
-  _credit = std::min(burst, _credit + rate * std::max(0.0, seconds));
+  const double rate = link * _options.idle_bandwidth_fraction * cpu_scale;
+  _credit = std::min(static_cast<double>(burst()), _credit + rate * std::max(0.0, seconds));
   return {credit(), rate, seconds};
 }
 
@@ -175,36 +181,50 @@ RepairLists Repair::lists() const {
   out.pull = _availability.missing_here();
   out.lacks = _availability.peer_lacks();
   out.unavailable = [this](const ObjectId& id) { return _availability.unavailable(id); };
+  out.holds = _availability.peer_holds();
   return out;
 }
 
 RepairResult Repair::transfer(Turn& turn, const RepairLists& lists) {
   const auto started = dannan::contract::Clock::now();
-  auto out = _store.repair_step(lists, static_cast<uint64_t>(_credit), _options.operation_budget,
+  auto out = _store.repair_step(lists, static_cast<uint64_t>(_credit), RepairWindow{burst()},
                                 [&] { return _share.should_yield(_time.now(), higher_class_active(turn)); });
   // Split by whether a higher class was present as the step ended: repair idle
   // against repair on its share.
   const std::string load = higher_class_active(turn) ? "loaded" : "idle";
   auto& observations = _context.observations();
   observations.record("maintenance.repair.step_us." + load, stage_elapsed_us(started));
-  observations.add("maintenance.repair.bytes." + load, out.bytes_transferred);
-  observations.add("maintenance.repair.push_examined." + load, out.push_examined);
-  observations.add("maintenance.repair.pull_examined." + load, out.pull_examined);
+  observe(out, load);
   observations.add("maintenance.repair.retained_repairs", _walks_restored);
   log_slow_stage(_logger, "network-repair", started,
                  "bytes=" + std::to_string(out.bytes_transferred) + " retained_repairs=" + std::to_string(_walks_restored) +
                      " push_examined=" + std::to_string(out.push_examined) + " pull_examined=" + std::to_string(out.pull_examined) +
-                     " remote_ops=" + std::to_string(out.remote_operations) + " complete=" + std::to_string(out.complete ? 1 : 0) +
-                     " yielded=" + std::to_string(out.yielded ? 1 : 0));
+                     " remote_ops=" + std::to_string(out.remote_operations) + " in_flight=" + std::to_string(out.in_flight) +
+                     " complete=" + std::to_string(out.complete ? 1 : 0) + " yielded=" + std::to_string(out.yielded ? 1 : 0));
   _walks_restored = 0;
-  _credit = std::max(0.0, _credit - static_cast<double>(out.bytes_transferred));
+  _credit = std::max(0.0, _credit - static_cast<double>(out.credit_spent));
+  return out;
+}
+
+void Repair::observe(const RepairResult& out, const std::string& load) {
+  auto& observations = _context.observations();
+  observations.add("maintenance.repair.bytes." + load, out.bytes_transferred);
+  observations.add("maintenance.repair.push_examined." + load, out.push_examined);
+  observations.add("maintenance.repair.pull_examined." + load, out.pull_examined);
+}
+
+RepairResult Repair::drain(std::chrono::milliseconds deadline) {
+  auto out = _store.repair_drain(deadline);
+  _credit = std::max(0.0, _credit - static_cast<double>(out.credit_spent));
+  // What landed is recorded as a step's is, split by whether a higher class is present.
+  observe(out, paced_by() ? "loaded" : "idle");
   return out;
 }
 
 RepairSettled Repair::settle(const RepairWalks& walks, const RepairResult& step) {
   if (step.credit_limited) return RepairSettled::credit;
   if (step.yielded) return RepairSettled::yielded;
-  if (!step.complete || walks.restored || step.bytes_transferred || walks.unfinished) return RepairSettled::more_work;
+  if (!step.complete || step.in_flight || walks.restored || step.bytes_transferred || walks.unfinished) return RepairSettled::more_work;
   if (walks.waiting_for_credit) return RepairSettled::waiting_for_credit;
   _credit = 0.0;
   return RepairSettled::quiescent;

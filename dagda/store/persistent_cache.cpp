@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -75,6 +75,11 @@ void PersistentBlockCache::reconfigure(CacheOptions options) {
 bool PersistentBlockCache::enabled() const {
   Lock lock(_state_mutex);
   return _store && _options.max_blocks;
+}
+
+size_t PersistentBlockCache::max_blocks() const {
+  Lock lock(_state_mutex);
+  return _store ? _options.max_blocks : 0;
 }
 
 void PersistentBlockCache::rebuild_lru_locked() {

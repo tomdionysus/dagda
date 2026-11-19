@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -80,6 +80,8 @@ class PersistentBlockCache {
   bool has(const ObjectId& id) const;
   bool remove(const ObjectId& id);
   size_t blocks() const;
+  // The blocks it may hold: zero when off.
+  size_t max_blocks() const;
 
   // Cumulative since start; entries is instantaneous. Sustained zero hits
   // with high evictions is a defect.

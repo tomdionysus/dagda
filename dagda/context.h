@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -7,10 +7,12 @@
 
 #pragma once
 
+#include <atomic>
 #include <boost/asio/any_io_executor.hpp>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -23,7 +25,9 @@
 #include "dagda/heads/spaces.h"
 #include "dagda/lease/keeper.h"
 #include "dagda/lease/lease.h"
+#include "dagda/store/data_work.h"
 #include "dagda/store/distributed_store.h"
+#include "dagda/store/io_pressure.h"
 #include "dagda/store/object_id.h"
 #include "dannan/sched/walk.h"
 #include "dannan/sched/work.h"
@@ -33,10 +37,17 @@
 // Dannan's Context. Written as a specification: every operation states what
 // it waits on and its thread safety; every asynchronous operation takes a
 // deadline and the caller's executor and posts its completion there, never
-// inline, at the latest when the deadline passes; every blocking form is a
-// wait on that completion, never another code path, and must not be called
-// from one of the io context's threads; nothing that happened on more than
-// one node is a bare boolean. Every noun is thread-safe.
+// inline, at the latest when the deadline passes; every blocking form of
+// version 1 is a wait on that completion, never another code path, and must not
+// be called from one of the io context's threads; nothing that happened on more
+// than one node is a bare boolean. Every noun is thread-safe.
+//
+// Version 2's blocking forms for Macha (the maintainer, 2026-11-14, the route: the Context
+// serves every store call Macha makes, with Macha's semantics) run on the
+// caller's own thread with no worker hop, as Macha's store calls did, and take
+// any deadline from their options, zero being none of its own. A cancellation
+// or progress counter a caller hands in is co-owned by the store for as long as
+// its work runs (read and write requirement 5).
 //
 // Version 1 is frozen at 0.1.4 (the maintainer, 2026-11-13): Domains, Objects (with the
 // instant delete), Claims, Leases, Tickets and, on one node, Heads; it is what
@@ -176,7 +187,7 @@ class Context {
   // Content-addressed objects in the node's domain, named by the SHA-256
   // of their bytes. A write is checked at every storing replica under
   // options.principal and options.prefix (this node and the domain's name
-  // when unset) and waits for options.level; its evidence names every node
+  // when unset) and waits for options.ack_level; its evidence names every node
   // and carries the ticket that outlives the call. A read is local, then
   // the cache, then remote owners in latency order.
   class Objects {
@@ -194,17 +205,51 @@ class Context {
     // Throws std::invalid_argument for a deadline that is not positive.
     void read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ReadDone done);
     ReadResult read(const ObjectId& id, ReadOptions options, std::chrono::milliseconds deadline);
+
+    // Contract version 2, Macha's forms (the maintainer, 2026-11-14). A write naming its id,
+    // which is checked against the bytes, hashed once; throws std::runtime_error
+    // when they differ or the bytes are larger than an extent. The blocking forms
+    // run on the caller's own thread, no worker hop, and take their deadline from
+    // the options: zero is none of its own, as Macha's, admission's window and
+    // each peer's no-progress bound ending the wait.
+    void write(const ObjectId& id, store::Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done);
+    WriteEvidence write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options);
+    ReadResult read(const ObjectId& id, ReadOptions options);
+    // Macha's filesystem forms, on the caller's own thread. put_here: durable here
+    // and returned at once, the further copies owed to prompt replication; a
+    // put() on a node that hosts no extents. put_deferred_here: written here, made
+    // durable by a wait on the evidence's ticket. Both throw std::runtime_error
+    // when the bytes are not the id's.
+    bool put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+    WriteEvidence put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame = dannan::sched::FrameType::loader);
+    // In this node's pool or its cache. Asks no peer.
+    bool locally_available(const ObjectId& id) const;
+    // Written through to this node's cache, when it has one; false is only that
+    // the cache did not take it.
+    bool cache_local(const ObjectId& id, std::span<const uint8_t> data);
+    // This node has a cache to hydrate into.
+    bool hydration_available() const;
+    // True once the object is here, fetching it into the cache if not.
+    bool hydrate(const ObjectId& id, ReadOptions options = {});
+    // Made local: held and valid, else from the cache, else fetched.
+    bool ensure_local(const ObjectId& id, bool foreground = false);
+    // Moves when what this node can reach may have (the membership, its disks
+    // online): a write parked as unreachable retries when it does.
+    uint64_t reachability_epoch() const;
     // This node's pool holds it: the local ground truth. Asks no peer.
     static constexpr dannan::sched::Waits has_waits = dannan::sched::local_waits;
     bool has(const ObjectId& id) const;
+    // The cluster's logical space and use, as Macha's statfs gives them
+    // (store::DistributedStore::logical_capacity). Waits on nothing.
+    store::DistributedStore::LogicalCapacity logical_capacity() const;
 
     // The instant delete (the maintainer, 2026-11-04 night, "Claims and space"; the
     // message and the replica's rule are store/remove.h). Every node present
     // checks `writer` as it checks a write, releases on each object only the
     // claims `observed` dominates (a claim written where the caller has not
     // seen survives, partition or not), and deletes its copy at once where no
-    // claim remains and its current inventory does not refer to it; it keeps
-    // it otherwise. The evidence names, node by node and object by object,
+    // claim remains and its current inventory, published and complete, does
+    // not refer to it; it keeps it otherwise. The evidence names, node by node and object by object,
     // what was removed, which claim kept a copy, what the inventory kept,
     // which node refused the scope and why, and which could not be reached
     // (a member of the replication set not present among them). Idempotent:
@@ -248,6 +293,10 @@ class Context {
     // This node holds a claim on it.
     static constexpr dannan::sched::Waits retained_waits = dannan::sched::local_waits;
     bool retained(contract::RetentionClass type, const ObjectId& id) const;
+    // Contract version 2, Macha's retain_data_here: claims here whichever of
+    // `ids` this node holds, on the caller's own thread, and returns the rest,
+    // sorted and unique.
+    std::vector<ObjectId> retain_data_here(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot);
 
    private:
     friend class Context;
@@ -388,10 +437,95 @@ class Context {
     std::optional<WriteEvidence> wait(Ticket ticket, std::chrono::milliseconds deadline);
     void wait_complete(Ticket ticket, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Done done);
     std::optional<WriteEvidence> wait_complete(Ticket ticket, std::chrono::milliseconds deadline);
+    // Contract version 2: one wait over many tickets (a publication's extents),
+    // one barrier a place whichever tickets name it; the evidence in the order
+    // asked, a forgotten ticket's empty. Throws std::invalid_argument for a
+    // deadline that is not positive.
+    using ManyDone = std::function<void(std::vector<WriteEvidence>)>;
+    void wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done);
+    std::vector<WriteEvidence> wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline);
 
    private:
     friend class Context;
     explicit Tickets(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
+  // CONTROL objects (a head space's nodes, Macha's catalogue and metadata trees)
+  // on this node's control store, outside DATA credit (law 1). Contract version 2,
+  // Macha's bare forms: none claims anything; a claim is Claims::retain(control).
+  // Each blocks on the caller's own thread.
+  class Control {
+   public:
+    static constexpr dannan::sched::Waits local_waits = dannan::sched::local_waits;
+    static constexpr dannan::sched::Waits fetch_waits = dannan::sched::Waits::state_device | dannan::sched::Waits::network | dannan::sched::Waits::locks;
+    // Held here: the control store only, no peer asked.
+    bool has(const ObjectId& id) const;
+    // Opened and checked against its id; nothing when not held here.
+    std::optional<store::Bytes> get(const ObjectId& id) const;
+    // Durable here before it returns; nothing offered, nothing claimed. Throws
+    // std::runtime_error when the bytes are not the id's. False when this node's
+    // store could not take it.
+    bool put(const ObjectId& id, std::span<const uint8_t> data);
+    // Made local from a peer that holds it, verified by its id; true at once when
+    // held here, false when no peer could supply it.
+    bool ensure_local(const ObjectId& id);
+    // Offered to every active node that lacks them, writing no claim: only when
+    // every one is held here.
+    store::ControlOffer offer(const std::vector<ObjectId>& ids);
+
+   private:
+    friend class Context;
+    explicit Control(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
+  // This node's DATA devices, for an owner's own disk I/O (reads and writes of
+  // files it keeps on them): the same credit and device reserve the store's work takes, and
+  // the pool's service monitor. Contract version 2.
+  class Devices {
+   public:
+    static constexpr dannan::sched::Waits admit_waits = dannan::sched::Waits::locks;
+    // DATA credit, then a device slot, for `bytes` of `frame` work, held by the
+    // returned admission across one device operation, never across a peer's
+    // answer. `wait`: none runs under the arbiter's no-progress window; zero tries
+    // once. Nothing when refused, cancelled or stopping. Throws
+    // std::invalid_argument for the control frame (law 1).
+    std::optional<store::DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
+                                                   std::shared_ptr<std::atomic_bool> cancelled = {});
+    // One completed DATA read or write of the owner's on these devices: feeds
+    // the pressure signal deferrable work stands aside for. Waits on nothing.
+    void note_io(std::chrono::nanoseconds elapsed, uint64_t bytes) noexcept;
+    bool pressured() const noexcept;
+    store::DiskServiceSample sample() const noexcept;
+
+   private:
+    friend class Context;
+    explicit Devices(Node& node) : _node(node) {}
+    Node& _node;
+  };
+
+  // When work of each class was last present here, on the one clock the store,
+  // repair, the local stages and DATA admission read (contract version 2). The
+  // store notes its own object work; a hosted system notes what only it sees, as
+  // Macha's HTTP server notes every API request and every response body still
+  // draining as a viewer present (Macha's law 2). Lock-free; waits on nothing;
+  // safe from any thread.
+  class Activity {
+   public:
+    static constexpr dannan::sched::Waits waits = dannan::sched::Waits::none;
+    // A class present now, with no bytes: a request.
+    void note(dannan::sched::WorkClass work);
+    // Bytes a frame class moved, and its class present.
+    void note(dannan::sched::FrameType frame, uint64_t bytes);
+    // 24 h when the class has never been present.
+    std::chrono::milliseconds idle_for(dannan::sched::WorkClass work) const;
+    // The bytes since the last take, for foreground, read-ahead and loader.
+    uint64_t take_bytes(dannan::sched::FrameType frame);
+
+   private:
+    friend class Context;
+    explicit Activity(Node& node) : _node(node) {}
     Node& _node;
   };
 
@@ -414,6 +548,9 @@ class Context {
   Leases& leases() noexcept { return _leases; }
   Heads& heads() noexcept { return _heads; }
   Tickets& tickets() noexcept { return _tickets; }
+  Activity& activity() noexcept { return _activity; }
+  Control& control() noexcept { return _control; }
+  Devices& devices() noexcept { return _devices; }
 
  private:
   Domains _domains;
@@ -422,6 +559,9 @@ class Context {
   Leases _leases;
   Heads _heads;
   Tickets _tickets;
+  Activity _activity;
+  Control _control;
+  Devices _devices;
 };
 
 }  // namespace dagda

@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -117,7 +117,12 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   const auto inventory = _ledger.inventory();
   auto view = _ledger.held_view(contract::RetentionClass::data);
   const auto later = [&](TimePoint at) { _due = _due ? std::min(*_due, at) : at; };
-  _due = _retry_at;
+  // A retry still ahead stays due; one whose time has come is this refresh's to make,
+  // and what it leads to (a new retry, or none) is set below. Kept from a passed
+  // retry, due() would name a time already gone after a second failure or an answer,
+  // and wake the owner at once for nothing.
+  _due.reset();
+  if (_retry_at && *_retry_at > now) _due = _retry_at;
   // A disk being seeded: what this node holds cannot be named yet. Before
   // the first inventory there is nothing referenced to join.
   if (!view.identity.complete || !view.trie || !inventory) {
@@ -135,7 +140,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   for (const auto& peer : _context.nodes().active()) {
     if (peer.id == self || !peer.advert(extents_advert)) continue;
     hosts.push_back(peer);
-    peers.emplace_back(peer.id, peer.advert_u64(used_advert).value_or(0));
+    peers.emplace_back(peer.id, used_of(peer));
   }
   std::sort(peers.begin(), peers.end());
   const auto previous = _snapshot.handle();
@@ -189,6 +194,9 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
     ledger::PeerLacks lacks;
     lacks.generation = inventory->generation();
     lacks.complete = true;
+    ledger::PeerHolds holds;
+    holds.generation = inventory->generation();
+    holds.complete = true;
     // Macha's lines (ledger/availability.cpp:101, service/availability_service.cpp:473-479
     // at 98b816d): each peer that could not finish, then each diff.
     for (size_t i = 0; i < hosts.size(); ++i)
@@ -199,13 +207,16 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
                     " reply_bytes=" + std::to_string(tries[i].reply_bytes()) + " waited_ms=" + std::to_string(tries[i].waited().count()));
       if (!diffs[i].answered) {
         lacks.complete = false;
+        holds.complete = false;
         retry_needed = true;
         continue;
       }
       lacks.lacks.emplace(hosts[i].id, std::make_shared<const std::vector<ObjectId>>(std::move(diffs[i].lacks)));
+      holds.holds.emplace(hosts[i].id, std::make_shared<const std::vector<ObjectId>>(std::move(diffs[i].holds)));
     }
     if (next.survey.peers_failed && _surveyed && previous) ledger::keep_unavailable(next.survey, previous->survey, view.held);
     _lacks.publish(std::move(lacks));
+    _holds.publish(std::move(holds));
     _surveyed_at = now;
   } else {
     // Gained alone: what was missing is still missing, less what this node
