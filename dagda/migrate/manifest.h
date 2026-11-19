@@ -122,6 +122,10 @@ struct ManifestOptions {
   std::function<void(std::string_view)> say{};
   // Called after every durable checkpoint: a test stops the pass here.
   std::function<void()> after_checkpoint{};
+  // Threads that read and authenticate records beside the one writing the manifest
+  // (migrate/pipeline.h); zero: the cores less one. The manifest is the same whatever
+  // the number.
+  size_t workers = 0;
 };
 
 struct ManifestCategory {
