@@ -902,6 +902,8 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
       if (value.layout == record_v18 || value.layout == record_v19) _proved = true;
       if (value.layout == record_unreadable) ++_unreadable;
       values[*index] = value;
+      // Taken from the pass that stopped, not read again.
+      ++_summary.resumed_items;
     }
   } else {
     journal.remove();

@@ -471,10 +471,10 @@ class ProgressRecord {
     for (const auto& store : stores) head << store.string() << "\n";
     _head = head.str();
   }
-  // Where a stopped run of the same direction over the same stores got to; nothing if
-  // there is no record, or one of another direction or other stores, or one that does
-  // not parse.
-  std::optional<Point> left() const {
+  // Where a stopped run of the same direction over the same stores got to, and the
+  // loose object at that point (empty where there is none); nothing if there is no
+  // record, or one of another direction or other stores, or one that does not parse.
+  std::optional<std::pair<Point, std::string>> left() const {
     std::error_code ec;
     if (!std::filesystem::exists(_path, ec)) return std::nullopt;
     std::ifstream in(_path, std::ios::binary);
@@ -482,13 +482,15 @@ class ProgressRecord {
     if (!text.starts_with(_head)) return std::nullopt;
     std::istringstream rest(text.substr(_head.size()));
     Point point;
-    std::string end;
-    if (!(rest >> point.store >> point.part >> point.index >> point.offset >> end) || end != "end") return std::nullopt;
-    return point;
+    std::string line;
+    if (!(rest >> point.store >> point.part >> point.index >> point.offset) || !std::getline(rest, line) || !line.empty()) return std::nullopt;
+    std::string at;
+    if (!std::getline(rest, at) || !std::getline(rest, line) || line != "end") return std::nullopt;
+    return std::pair{point, at};
   }
-  void write(const Point& point) const {
+  void write(const Point& point, const std::string& at = {}) const {
     std::ostringstream out;
-    out << _head << point.store << " " << point.part << " " << point.index << " " << point.offset << " end\n";
+    out << _head << point.store << " " << point.part << " " << point.index << " " << point.offset << "\n" << at << "\nend\n";
     dannan::identity::durable_replace_file(_path, out.str());
   }
   void remove() const {
@@ -505,8 +507,9 @@ class ProgressRecord {
 struct ObjectsRun {
   const ProgressRecord* progress = nullptr;
   // Where a stopped run got to: before it, nothing is read; from it to a batch past it,
-  // every record is authenticated.
+  // every record is authenticated. And the loose object it named there.
   std::optional<Point> resume;
+  std::string resume_at;
   uint64_t store = 0;
   // The first record of a batch was moved already, so the record does not say what the
   // disk holds: every record of this store from there is authenticated.
@@ -603,9 +606,22 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
   const auto close_batch = [&](uint64_t next) {
     sync_loose_batch(written, written_paths);
     written_paths.clear();
-    if (run && run->progress && !options.dry_run) run->progress->write({run->store, 0, next, 0});
+    if (run && run->progress && !options.dry_run)
+      run->progress->write({run->store, 0, next, 0}, next < loose.size() ? loose[next].first.string() : std::string());
     in_batch = 0;
   };
+  // A stopped run counted in this same order; if the file at its point is another, the
+  // order moved under it, and what it would pass over may not be what it moved: nothing
+  // is passed over, and every record of the store is read whole.
+  if (run && run->resume && run->resume->store == run->store && run->resume->part == 0 && run->resume->index > 0 && run->resume->index < loose.size() &&
+      loose[run->resume->index].first.string() != run->resume_at) {
+    say(options, "the loose objects of " + root.string() + " are in another order than the stopped run's: every record is read whole");
+    // Nor does this run leave a record of this store for a later one to pass over by.
+    if (!options.dry_run) run->progress->remove();
+    run->progress = nullptr;
+    run->resume.reset();
+    run->authenticate_rest = true;
+  }
   for (uint64_t k = 0; k < loose.size(); ++k) {
     if (options.probe_only && proved) return;
     const auto& [file, id] = loose[k];
@@ -1190,14 +1206,20 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   for (const auto& [_, path] : stores) store_paths.push_back(path);
   const ProgressRecord record(state, false, store_paths);
   std::optional<Point> resume;
+  std::string resume_at;
   bool by_header = false;
-  if (!options.dry_run) {
+  if (!options.dry_run && !options.read_every_record) {
     if (layout == state_layout_v18) {
       by_header = true;
     } else if (layout == store::state_layout_going_forward) {
-      resume = record.left();
+      if (const auto left = record.left()) {
+        resume = left->first;
+        resume_at = left->second;
+      }
       by_header = resume.has_value();
     }
+  }
+  if (!options.dry_run) {
     if (!by_header) record.remove();
     if (by_header && !resume) record.write({});
   }
@@ -1210,7 +1232,7 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   // tree of loose files and packs.
   for (uint64_t i = 0; i < stores.size(); ++i) {
     say(options, stores[i].first + stores[i].second.string());
-    ObjectsRun run{&record, resume, i, false};
+    ObjectsRun run{&record, resume, resume_at, i, false};
     migrate_objects(stores[i].second, *domain_key, deriver, to, report, proved, options, by_header ? &run : nullptr);
   }
   if (by_header) record.write({stores.size(), 0, 0, 0});
@@ -1366,14 +1388,20 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   for (const auto& [_, path] : stores) store_paths.push_back(path);
   const ProgressRecord record(state, true, store_paths);
   std::optional<Point> resume;
+  std::string resume_at;
   bool by_header = false;
-  if (!options.dry_run) {
+  if (!options.dry_run && !options.read_every_record) {
     if (layout == store::state_layout_marker(v19)) {
       by_header = true;
     } else if (layout == store::state_layout_going_back) {
-      resume = record.left();
+      if (const auto left = record.left()) {
+        resume = left->first;
+        resume_at = left->second;
+      }
       by_header = resume.has_value();
     }
+  }
+  if (!options.dry_run) {
     if (!by_header) record.remove();
     if (by_header && !resume) record.write({});
   }
@@ -1383,7 +1411,7 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_back) + "\n");
   for (uint64_t i = 0; i < stores.size(); ++i) {
     say(options, stores[i].first + stores[i].second.string());
-    ObjectsRun run{&record, resume, i, false};
+    ObjectsRun run{&record, resume, resume_at, i, false};
     migrate_objects(stores[i].second, *domain_key, deriver, v19, report, proved, options, by_header ? &run : nullptr);
   }
   if (by_header) record.write({stores.size(), 0, 0, 0});
