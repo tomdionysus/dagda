@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -11,9 +11,11 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -24,6 +26,7 @@
 #include "dagda/store/data_work.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/messages.h"
+#include "dagda/store/offer_book.h"
 #include "dagda/store/persistent_cache.h"
 #include "dagda/store/storage_pool.h"
 #include "dannan/context.h"
@@ -49,6 +52,10 @@ struct StorageServerOptions {
   // The domain served: its name is the prefix a write or a claim is checked
   // under when the request names none (Tom, 2026-11-04 evening).
   domain::Domain domain = domain::domain_v1_descriptor();
+  // Told, from any thread, as a served read of DATA arrives, is admitted and has
+  // read its objects, for finding where a transfer's time goes at the holder (the
+  // harness's trace). Thread-safe.
+  std::function<void(std::string_view event)> serve_timing;
 };
 
 // What a served request is admitted by: the node's DATA credit arbiter and
@@ -86,7 +93,8 @@ struct StorageServerAdmission {
 // neither. A read or write of DATA (get_object, put_object, remove_objects)
 // waits under the arbiter's no-progress window and fails 503 stopping, as
 // Macha's does; a probe that must not wait (have_object, have_objects,
-// have_valid_objects, delete_object) tries once and fails 503 storage_busy.
+// have_valid_objects, delete_object) and repair's offer (offer_objects)
+// try once and fail 503 storage_busy.
 //
 // The trie questions (requirement L7): a root question pins the node's
 // current held union under its hash, at most four, each dropped two minutes
@@ -112,6 +120,10 @@ class StorageServer {
     const contract::ObjectLedger* ledger = nullptr;
     // As DistributedStore::Stores: object bytes this node served. None: the node's.
     dannan::status::ActivityClocks* activity = nullptr;
+    // What this node's repair is about to receive (the store's): an offer is
+    // answered from it, and a put that lands ends its promise. None: an offer
+    // of an object not held is always wanted.
+    OfferBook* offers = nullptr;
   };
 
   StorageServer(dannan::Context& context, Stores stores, StorageServerOptions options = {}, StorageServerAdmission admission = {});
@@ -150,6 +162,7 @@ class StorageServer {
   contract::ClaimStore& _claims;
   PersistentBlockCache* const _cache;
   const contract::ObjectLedger* const _ledger;
+  OfferBook* const _offers;
   const StorageServerOptions _options;
   const StorageServerAdmission _admission;
   const dannan::status::ScopedLogger _logger;

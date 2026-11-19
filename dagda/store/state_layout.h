@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -37,8 +37,12 @@ inline constexpr std::string_view state_layout_going_forward_heads = "dagda-stat
 std::string migrate_first(const std::filesystem::path& state);
 
 // Accepts the state directory for the scheme's domain. A marked directory
-// must name v19 and that domain; an unmarked one must be empty but for the
-// storage lock's `.macha.lock`, and is then marked. A v18 state is refused
+// must name v19 and that domain; an unmarked one must hold none of what a
+// store keeps there (Dagda's ledgers, claims, CONTROL objects, backend
+// identities, maintenance figures and heads; an older store's metadata,
+// survey and repair position), and is then marked: anything else in it is its
+// host's (for Macha the state directory is the node's one, Dannan's too), and
+// is left alone. A v18 state is refused
 // with a reason naming dagda-migrate; anything else is refused too. Nothing
 // is changed by a refusal. A missing directory is created first. Call it
 // holding the state directory's StorageLock. Waits on the state device.

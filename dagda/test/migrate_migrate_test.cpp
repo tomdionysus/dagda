@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -811,7 +811,7 @@ TEST(MigrateTool, DagdaMigrateRunsTheMigration) {
   {
     const auto [code, output] = run({"--version"}, "version.log");
     EXPECT_EQ(code, std::optional<int>(0));
-    EXPECT_EQ(output.substr(0, 6), "0.2.0 ");
+    EXPECT_EQ(output.substr(0, 6), "0.3.0 ");
   }
   {
     const auto [code, output] = run({}, "usage.log");

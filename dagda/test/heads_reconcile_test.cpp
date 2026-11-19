@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -603,7 +603,7 @@ TEST(HeadsReconcile, AMergeClaimsWhatItIntroduces) {
     const auto bytes = test::pattern(256 * 1024, seed);
     const auto id = store::object_id(bytes);
     store::WriteOptions write;
-    write.level = store::Durability::durable;
+    write.ack_level = store::Durability::durable;
     EXPECT_TRUE(node.store().write(id, bytes, write).met);
     return id;
   };
@@ -1261,7 +1261,7 @@ TEST(HeadsReconcile, TwoNodesFormingAtOnceConverge) {
   const auto input = test::pattern(128 * 1024);
   const auto extent = store::object_id(input);
   store::WriteOptions write;
-  write.level = store::Durability::durable;
+  write.ack_level = store::Durability::durable;
   ASSERT_TRUE(a.store().write(extent, input, write).met);
   (void)space_on(a).mutate_delta(stamped_mutation([&](NeutralEditing& editing) {
     NeutralItem item;
@@ -1484,7 +1484,7 @@ TEST(HeadsReconcile, AConflictsValuesAreClaimedAndRootedWhileItStands) {
     const auto bytes = test::pattern(4096, static_cast<uint8_t>(i + 1));
     ids[i] = store::object_id(bytes);
     store::WriteOptions write;
-    write.level = store::Durability::durable;
+    write.ack_level = store::Durability::durable;
     ASSERT_TRUE(node.store().write(ids[i], bytes, write).met);
     naming[i].kind = 2;
     NeutralRef ref;

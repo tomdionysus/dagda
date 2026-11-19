@@ -32,8 +32,8 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
   else. It must also hold the id the disks carry: a migrated marker keeps
   the node id it was written with and a pool refuses another node's disk,
   so a backend naming another id is refused before anything is written.
-  Either use Macha's state directory as Dannan's, or copy its `node-id`
-  there first.
+  For Macha this is Macha's state directory itself (ruled 2026-11-13: one
+  state directory, Macha's `state_path`, so `--node-state` is `--state`).
 - `--cluster-key`: the cluster key file, which gives domain v1's storage
   key, exactly as Macha derived it. Objects are not re-encrypted.
 - `KEY` opens the custody, as `dannan-node` takes it: `--passphrase-env VAR`

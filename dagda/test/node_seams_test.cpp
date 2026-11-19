@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -49,6 +49,27 @@ using test::Cluster;
 using test::ClusterNode;
 using test::ClusterNodeOptions;
 
+// Macha's shape: NodeOptions::state is the node's one state directory, Dannan's too, so
+// the Dannan node's id and custody are there before the store opens. A fresh node opens,
+// marks its layout beside them, keeps what it is given and opens again. Found by Macha's
+// port (its first full suite, 2026-11-17), where every fresh node was refused.
+TEST(NodeSeams, AStoreOpensInTheStateDirectoryItsHostShares) {
+  Cluster cluster;
+  ClusterNodeOptions shared;
+  shared.state = cluster.dir() / "one" / "node";
+  auto& node = cluster.add("one", shared);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_TRUE(std::filesystem::exists(shared.state / "storage-layout"));
+  EXPECT_TRUE(dannan::identity::KeyCustody::exists(shared.state));
+  const auto bytes = test::pattern(64 * 1024, 7);
+  const auto id = store::object_id(bytes);
+  ASSERT_TRUE(node.store().put(id, bytes));
+  node.restart();
+  ASSERT_TRUE(cluster.converged());
+  EXPECT_EQ(node.data().get(id), std::optional<store::Bytes>{bytes});
+}
+
 // Custody and no certificate, as a Macha node under its cluster key has: the
 // advert is signed by a certificate's key, so there is none to publish, and the
 // node opens without it. The cluster fixture always issues a certificate, so this
@@ -80,6 +101,8 @@ TEST(NodeSeams, ANodeWithoutACertificateOpensAndAdvertisesNoWrapKey) {
   NodeOptions options;
   options.state = dir.path() / "state";
   options.key = test::known_answer_key();
+  // A disk mounted there: a node never makes a backend's directory.
+  std::filesystem::create_directories(dir.path() / "data");
   options.pool.backends.push_back({dir.path() / "data", 64ULL * 1024 * 1024, 0});
   options.maintenance.automatic = false;
   Node node(host.context(), options);
@@ -180,6 +203,63 @@ TEST(NodeSeams, TheLocalStagesRunOnThePassesClocks) {
   EXPECT_FALSE(node.run_maintenance_once().local.scrub_ran);
   wall.advance(std::chrono::hours(2));
   EXPECT_TRUE(node.run_maintenance_once().local.scrub_ran);
+}
+
+// Macha's pass parks until the earliest time it has work (maintenance.cpp:1306-1321 and
+// :1366 at main), and the local stages' credit and dates are the node's now: rebalance's
+// credit reaching an extent at its rate unless it rests until an event, the scrub's credit
+// reaching an extent at its share while a campaign is due, else the next campaign's date.
+// Asked by the Macha session (2026-11-18): with only an interval it woke every second.
+TEST(NodeSeams, TheLocalStagesSayWhenTheyNextHaveWork) {
+  using std::chrono::milliseconds;
+  using std::chrono::seconds;
+  dannan::test::SteppedTime time;
+  dannan::test::SteppedWall wall;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = false;
+  options.maintenance.time = &time;
+  options.maintenance.wall = &wall;
+  options.maintenance.cpu = {};
+  options.maintenance.idle_bandwidth_fraction = 0.10;
+  options.maintenance.scrub_fraction = 0.02;
+  options.maintenance.scrub_interval = std::chrono::hours(1);
+  options.store.extent_size = 1024 * 1024;
+  // Rebalance earns 0.1 MiB a second and the scrub 2% of that: an extent in 10 s and 500 s.
+  options.repair.initial_bandwidth = 1024 * 1024;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  auto& dagda = node.dagda_node();
+  const auto near = [&](std::optional<dannan::contract::TimePoint> due, milliseconds after) {
+    if (!due) return testing::AssertionFailure() << "no due time";
+    const auto off = std::chrono::duration_cast<milliseconds>(*due - (time.now() + after)).count();
+    if (off < -50 || off > 50) return testing::AssertionFailure() << "due " << off << " ms from the expected";
+    return testing::AssertionSuccess();
+  };
+
+  // No credit yet, and the scrub's campaign an hour off: rebalance's extent first.
+  LocalTurnOptions idle;
+  idle.busy = false;
+  auto first = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(first);
+  dagda.local_scrub(first);
+  EXPECT_FALSE(first.stages.rebalance_ran);
+  EXPECT_TRUE(near(dagda.local_due(), seconds(10)));
+
+  // An empty node's rebalance finds nothing and rests until an event: the campaign's date.
+  time.advance(seconds(11));
+  auto second = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(second);
+  ASSERT_TRUE(second.stages.rebalance_ran);
+  EXPECT_TRUE(near(dagda.local_due(), std::chrono::hours(1)));
+
+  // A campaign due with no scrub credit banked: the scrub's extent at its share.
+  wall.advance(std::chrono::hours(2));
+  auto third = dagda.begin_local_stages(idle);
+  dagda.local_rebalance(third);
+  dagda.local_scrub(third);
+  EXPECT_FALSE(third.stages.scrub_ran);
+  EXPECT_TRUE(near(dagda.local_due(), seconds(500)));
 }
 
 // What the decision trace was told, by kind.
@@ -371,7 +451,7 @@ TEST(NodeSeams, TheUnsourceableSampleNamesItsObjects) {
       std::make_shared<const contract::InventoryHorizon>(uint64_t{1}, true, live, std::vector<store::ObjectId>{}, std::vector<contract::Garbage>{});
   lists.pull = std::make_shared<const std::vector<store::ObjectId>>(live);
   ASSERT_TRUE(test::wait_until([&] {
-    (void)node.store().repair_step(lists, 1ULL << 30, 16, [] { return false; });
+    (void)node.store().repair_step(lists, 1ULL << 30, store::RepairWindow{1ULL << 30}, [] { return false; });
     return !node.store().repair_diagnostics().unsourceable_sample.empty();
   }));
   const auto text = published(node, "repair.unsourceable_sample");
@@ -467,6 +547,8 @@ struct HandBuiltNode {
     NodeOptions options;
     options.state = state();
     options.key = test::known_answer_key();
+    // A disk mounted there: a node never makes a backend's directory.
+    std::filesystem::create_directories(data());
     options.pool.backends.push_back({data(), 64ULL * 1024 * 1024, 0});
     options.maintenance.automatic = false;
     if (configure) configure(options);
@@ -573,6 +655,7 @@ TEST(NodeSeams, AStopBetweenBackendsComesThroughAndTheNextRunFinishes) {
   std::stop_source stop;
   HandBuiltNode built([&](NodeOptions& options) {
     pack_options(options);
+    std::filesystem::create_directories(options.state.parent_path() / "second");
     options.pool.backends.push_back({options.state.parent_path() / "second", 64ULL * 1024 * 1024, 0});
   });
   const auto second = built.dir.path() / "second";

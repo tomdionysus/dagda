@@ -45,15 +45,16 @@ which discipline it follows.
 ## Building and testing
 
 Dagda links an installed Dannan of the pinned minor, at least the pinned patch
-(`find_package(dannan 0.7.0 CONFIG)`; from 0.7.0 Dannan keeps its ABI across a minor's patches). Once per checkout, build the pinned tag
+(`find_package(dannan 0.9.2 CONFIG)`; Dannan keeps its ABI across a minor's patches, and only within a minor, so an
+installed 0.8 is never taken for it). Once per checkout, build the pinned tag
 from the sibling repository into `build/deps/` (this reads `../dannan` and
 writes nothing there):
 
 ```
-git clone --branch 0.7.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.7.0
-cmake -S build/deps/dannan-0.7.0 -B build/deps/dannan-0.7.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.9.2 --depth 1 file://$PWD/../dannan build/deps/dannan-0.9.2
+cmake -S build/deps/dannan-0.9.2 -B build/deps/dannan-0.9.2-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix -DCMAKE_PREFIX_PATH="/opt/local/libexec/boost/1.88;/opt/local"
-cmake --build build/deps/dannan-0.7.0-build -j8 && cmake --install build/deps/dannan-0.7.0-build
+cmake --build build/deps/dannan-0.9.2-build -j8 && cmake --install build/deps/dannan-0.9.2-build
 ```
 
 Then:

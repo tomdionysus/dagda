@@ -225,6 +225,11 @@ The lease template stays (E1-E9; `lease/keeper.h`). Its records move from one no
 `lir/shard/<n>` leases in a space placed with the same scheme as the shard, so the holder is drawn from the replica set
 (D5, Lir N5); Lugh's rotation lease in an every-node or replicas space. Epochs and the fence are unchanged.
 
+To weigh when slice 3 is built (2026-11-15, not ruled): Tom ruled that Dannan will build a linearizable register over
+a caller-supplied replica set, the hosted system holding the acceptor state (for Mimir's agreement commands). If Lugh
+and Louhi take that in place of leases, head-backed leases keep Lir's shard leases (N5) as their consumer and lose two.
+Louhi already uses a lease only to fence tasks that must not run twice (its session, 2026-11-15).
+
 ### The domain catalogue
 
 An every-node space of the register-map merge, made at genesis, holding each domain's description, its member
@@ -353,6 +358,14 @@ loopback, the same runs as the Mac; outputs in `/root/dagda-arm64/bench-log-runs
     so the breakdown is right in proportion but the full timeline is not. Closing it needs the replicator's rounds
     timed from inside (per-round counters: commits taken, claim rounds, history calls, time to accept on each peer),
     which slice 2 adds as the first step, not another blind run.
+  - **Closed (2026-11-14, corvus-saturn, Dannan 0.7.0, `feature/replicator-rounds` at `2693009`):** the replicator
+    counted and timed from inside (`Exchange::replicator()`, `ReplicatorDiagnostics`). In one run of Lugh's shape (the
+    lag reproduced: seen on b at p50 10.0 s, p99 23.0 s) node a's replicator ran 158 rounds over 2,425 generations: 45.3
+    s retaining 2,425 claim sets on the peers, one synchronous round per commit (about 19 ms each), and 29.3 s in 86
+    head offers (history pushed, then accepted), which asked 4,837 history entries of a peer one by one (two a commit);
+    the longest round 7.8 s. About 75 s busy in a run of about 75 s: saturated, at about 31 ms a commit against a
+    commit every 25 ms, so the lag grows while commits come. The off-CPU profile's third was its own undercount. Claims
+    are three fifths of the cost and the history push most of the rest.
   - What slice 2 then weighs (Tom's call, with Lugh's bound of about a second): claims retained per round, not per
     commit (one batched call per peer for every owed commit's claims, as group commit batches them locally); the
     history push told what the peer already holds instead of asking entry by entry; and the accept sent to a peer as

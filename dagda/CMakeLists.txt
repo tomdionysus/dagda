@@ -1,5 +1,5 @@
 #
-# Dagda - The Store
+# Dagda - The Distributed Object Store
 #
 # Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 # Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -69,6 +69,7 @@ add_library(dagda SHARED
   store/local_store_files.cpp
   store/messages.cpp
   store/object_id.cpp
+  store/offer_book.cpp
   store/persistent_cache.cpp
   store/placement.cpp
   store/presence_index.cpp

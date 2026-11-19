@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -109,10 +109,13 @@ TEST(DistributedStore, APutIsLoaderActivityNotViewerActivity) {
 }
 
 // test_store_put_publishes_at_the_floor_and_copies_promptly: a put returns
-// at write_copies with the local copy, never waiting for owners beyond the
-// floor; the prompt worker then copies it to one more owner, and never to an
-// owner that advertises no room.
+// with the local copy, never waiting for owners beyond it; the prompt worker
+// then copies it to one more owner, and never to an owner that advertises no
+// room. Macha's floor is persisted under the stack's acknowledgement standard
+// (Tom, 2026-11-15: the disk that took it), so the writes name it.
 TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
+  WriteOptions floor;
+  floor.ack_level = Durability::persisted;
   {
     dannan::test::Gate owners_answer;
     Cluster cluster;
@@ -127,7 +130,7 @@ TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
 
     const auto data = pattern(128 * 1024);
     const auto id = object_id(data);
-    const auto evidence = writer.store().write(id, data, {});
+    const auto evidence = writer.store().write(id, data, floor);
     EXPECT_EQ(owners_answer.entered(), 0u);
     EXPECT_TRUE(evidence.met);
     EXPECT_EQ(evidence.acknowledged(), 1u);
@@ -147,7 +150,7 @@ TEST(DistributedStore, APutPublishesAtTheFloorAndCopiesPromptly) {
     cluster.start_all();
     ASSERT_TRUE(cluster.converged());
     const auto other = pattern(128 * 1024, 7);
-    ASSERT_TRUE(writer.store().put(object_id(other), other));
+    ASSERT_TRUE(writer.store().put(object_id(other), other, floor));
     ASSERT_TRUE(wait_until([&] { return writer.store().prompt_replication_stats().skipped_no_room == 1; }));
     const auto stats = writer.store().prompt_replication_stats();
     EXPECT_EQ(stats.dropped, 1u);
@@ -183,18 +186,532 @@ TEST(DistributedStore, APutReplacesAReplicaThatFailsAtOnce) {
     return std::nullopt;
   });
   // Bounds a put that never replaces the refused replica.
-  std::atomic_bool cancelled{false};
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
   std::jthread watchdog([&](std::stop_token stop) {
     const auto until = std::chrono::steady_clock::now() + 2s;
     while (!stop.stop_requested() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(5ms);
-    if (!stop.stop_requested()) cancelled = true;
+    if (!stop.stop_requested()) *cancelled = true;
   });
   WriteOptions write;
-  write.cancelled = &cancelled;
+  write.cancelled = cancelled;
   EXPECT_TRUE(writer.store().put(object_id(data), data, write));
   watchdog.request_stop();
-  EXPECT_FALSE(cancelled.load());
+  EXPECT_FALSE(cancelled->load());
   EXPECT_EQ(standby->calls_of(message::put_object), 1u);
+}
+
+// Repair's pacing learns the link from the store's own traffic, as Macha's does: a write
+// that lands a copy on a peer and a read fetched from one each teach the network
+// estimate (distributed_store.cpp:435, :1428 at f0597a4; the store map's review). Before,
+// only replication and repair's batches did, so pacing stayed at its first guess.
+TEST(DistributedStore, WritesAndReadsTeachTheNetworkEstimate) {
+  Cluster cluster;
+  auto small_extents = [] {
+    auto out = options(2, 2);
+    out.store.extent_size = 64 * 1024;
+    return out;
+  };
+  auto& writer = cluster.add("writer", small_extents());
+  cluster.add("peer", small_extents());
+  auto& reader = cluster.add("reader", [&] {
+    auto out = small_extents();
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_EQ(writer.store().estimated_network_bps(), 0.0);
+  const auto data = pattern(64 * 1024, 21);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(object_id(data), data, write).met);
+  EXPECT_GT(writer.store().estimated_network_bps(), 0.0);
+
+  ASSERT_EQ(reader.store().estimated_network_bps(), 0.0);
+  ASSERT_TRUE(reader.store().get(object_id(data), ReadOptions{}));
+  EXPECT_GT(reader.store().estimated_network_bps(), 0.0);
+}
+
+// Macha's put: a cancel seen while the write still waits on a copy fails the write,
+// whatever already landed (distributed_store.cpp:147-151, 378-383 at f0597a4): the
+// id-taking form answers false and the content-addressed form throws "object
+// replication cancelled". Macha's callers turn that into EINTR or a torrent's abort. The
+// evidence says it was cancelled (the store map, DistributedStore, gap 5).
+TEST(DistributedStore, ACancelledPutFailsEvenWhenACopyLanded) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  dannan::test::Gate gate;
+  peer.interpose(hold(message::put_object, gate));
+  const auto cancel_soon = [](std::atomic_bool& flag) {
+    return std::jthread([&flag] {
+      std::this_thread::sleep_for(300ms);
+      flag = true;
+    });
+  };
+
+  const auto data = pattern(64 * 1024, 9);
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
+  WriteOptions write;
+  write.cancelled = cancelled;
+  {
+    auto canceller = cancel_soon(*cancelled);
+    EXPECT_FALSE(writer.store().put(object_id(data), data, write));
+  }
+  // The local copy landed before the cancel: it is the write, not the answer.
+  EXPECT_TRUE(writer.data().has(object_id(data)));
+  const auto evidence = writer.store().write(object_id(data), data, write);
+  EXPECT_TRUE(evidence.cancelled);
+
+  const auto other = pattern(64 * 1024, 10);
+  *cancelled = false;
+  {
+    auto canceller = cancel_soon(*cancelled);
+    try {
+      (void)writer.store().put(other, write);
+      ADD_FAILURE() << "a cancelled put returned an id";
+    } catch (const StorageUnavailable&) {
+      ADD_FAILURE() << "a cancelled put was refused as unavailable";
+    } catch (const std::runtime_error& error) {
+      EXPECT_STREQ(error.what(), "object replication cancelled");
+    }
+  }
+  gate.open();
+}
+
+// Read and write requirement 5 (the Macha session's, 2026-11-14): a caller may cancel
+// and go away while its fetch is in flight, as an abandoned FUSE read does. The store
+// co-owns the cancellation, so nothing it runs reads the caller's memory after the
+// caller let it go; the cancel is honoured at the fetch, and the store lets the flag
+// go once its work is done.
+TEST(DistributedStore, ACallerMayCancelAndGoWhileItsFetchIsInFlight) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  auto& reader = cluster.add("reader", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 23);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(id, data, write).met);
+
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  writer.interpose(hold(message::get_object, gate));
+  peer.interpose(hold(message::get_object, gate));
+  boost::asio::io_context caller;
+  std::optional<ReadResult> read;
+  std::weak_ptr<std::atomic_bool> held;
+  {
+    ReadOptions options;
+    options.cancelled = std::make_shared<std::atomic_bool>(false);
+    held = options.cancelled;
+    auto cancel = options.cancelled;
+    reader.store().read(id, std::move(options), caller.get_executor(), [&](ReadResult result) { read = std::move(result); });
+    ASSERT_TRUE(gate.wait_for_entries(1));
+    *cancel = true;
+  }
+  // The caller holds nothing now; the store still does.
+  EXPECT_FALSE(held.expired());
+  ASSERT_TRUE(wait_until([&] {
+    caller.restart();
+    caller.poll();
+    return read.has_value();
+  }));
+  EXPECT_EQ(read->object, nullptr);
+  EXPECT_NE(read->answer, FetchAnswer::ok);
+  EXPECT_EQ(read->end, ReadEnd::cancelled);
+  gate.open();
+  EXPECT_TRUE(wait_until([&] { return held.expired(); }));
+}
+
+// Read requirement 2 (the Macha session's, 2026-11-14): a read that brings nothing says
+// how it ended, so a FUSE read answers EINTR, ETIMEDOUT or EIO as Macha's does and
+// never guesses from try_later.
+TEST(DistributedStore, AReadSaysHowItEnded) {
+  Cluster cluster;
+  auto& writer = cluster.add("writer", options(2, 2));
+  auto& peer = cluster.add("peer", options(2, 2));
+  auto& reader = cluster.add("reader", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 24);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(writer.store().write(id, data, write).met);
+
+  const auto read = [&](ReadOptions options) {
+    std::promise<ReadResult> told;
+    auto future = told.get_future();
+    boost::asio::io_context caller;
+    reader.store().read(id, std::move(options), caller.get_executor(), [&](ReadResult result) { told.set_value(std::move(result)); });
+    EXPECT_TRUE(wait_until([&] {
+      caller.restart();
+      caller.poll();
+      return future.wait_for(0s) == std::future_status::ready;
+    }));
+    return future.get();
+  };
+
+  // Cancelled before it began: nothing asked.
+  ReadOptions cancelled;
+  cancelled.cancelled = std::make_shared<std::atomic_bool>(true);
+  EXPECT_EQ(read(cancelled).end, ReadEnd::cancelled);
+
+  // Peers that cannot answer now: unavailable, not missing.
+  const auto busy = [](MessageType seen, const dannan::membership::NodeRecord&, const dannan::net::Message&) -> std::optional<Handled> {
+    if (seen == message::get_object) return Handled::failed(503, "storage_busy", "busy");
+    return std::nullopt;
+  };
+  writer.interpose(busy);
+  peer.interpose(busy);
+  const auto unavailable = read({});
+  EXPECT_EQ(unavailable.object, nullptr);
+  EXPECT_EQ(unavailable.end, ReadEnd::unavailable);
+
+  // Peers that hold the answer back past the caller's deadline: timed out.
+  {
+    dannan::test::Gate gate;
+    dannan::test::GateOpener opener(gate);
+    writer.interpose(hold(message::get_object, gate));
+    peer.interpose(hold(message::get_object, gate));
+    ReadOptions bounded;
+    bounded.deadline = 300ms;
+    EXPECT_EQ(read(bounded).end, ReadEnd::timed_out);
+  }
+  writer.interpose({});
+  peer.interpose({});
+
+  // Served, and an object nobody holds.
+  const auto served = read({});
+  ASSERT_NE(served.object, nullptr);
+  EXPECT_EQ(served.end, ReadEnd::served);
+  const auto other = pattern(64 * 1024, 25);
+  ReadResult missing;
+  {
+    std::promise<ReadResult> told;
+    auto future = told.get_future();
+    boost::asio::io_context caller;
+    reader.store().read(object_id(other), {}, caller.get_executor(), [&](ReadResult result) { told.set_value(std::move(result)); });
+    ASSERT_TRUE(wait_until([&] {
+      caller.restart();
+      caller.poll();
+      return future.wait_for(0s) == std::future_status::ready;
+    }));
+    missing = future.get();
+  }
+  EXPECT_EQ(missing.answer, FetchAnswer::not_found);
+  EXPECT_EQ(missing.end, ReadEnd::not_found);
+}
+
+// An active peer is asked though placement does not name it (the Macha session's
+// test_catalogue_uses_final_state_after_coalesced_metadata_burst, 2026-11-18): a peer
+// whose extents advert has not reached the reader yet, as at startup, still holds what
+// it wrote, and the read finds it there rather than ending unavailable with nobody
+// asked. Macha's read asked the active peers when placement named no holder; an absent
+// advert must not stand in for an absent node.
+TEST(DistributedStore, AReadAsksAnActivePeerPlacementDoesNotName) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(1));
+  auto& holder = cluster.add("holder", [] {
+    auto out = options(1);
+    out.hosts_extents = false;
+    out.keeps_backend = true;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(32 * 1024, 26);
+  const auto id = object_id(data);
+  ASSERT_TRUE(holder.data().put(id, data));
+  const auto ranked = reader.store().ranked(id);
+  ASSERT_TRUE(std::none_of(ranked.begin(), ranked.end(), [&](const auto& node) { return node.id == holder.id(); }));
+
+  ReadOptions options;
+  options.deadline = 30s;
+  const auto served = reader.store().read(id, options);
+  ASSERT_NE(served.object, nullptr);
+  EXPECT_EQ(served.end, ReadEnd::served);
+  EXPECT_EQ(served.source, ReadSource::remote);
+  EXPECT_EQ(served.served_by, holder.id());
+  EXPECT_EQ(served.object->bytes, data);
+
+  // Every active peer asked and every one without it: not found, not unavailable.
+  const auto other = pattern(32 * 1024, 27);
+  const auto missing = reader.store().read(object_id(other), options);
+  EXPECT_EQ(missing.object, nullptr);
+  EXPECT_EQ(missing.end, ReadEnd::not_found);
+}
+
+// Macha claims on each holder at once, one std::async a node (distributed_store.cpp
+// :924-954 at f0597a4), so a publication's claim costs the slowest holder, not their sum
+// (the store map, retention gap 1). Both holders' claims are in flight together.
+TEST(DistributedStore, ClaimsGoToEveryHolderAtOnce) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  auto& b = cluster.add("b", options(2, 2));
+  auto& c = cluster.add("c", [] {
+    auto out = options(2, 2);
+    out.hosts_extents = false;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 26);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(a.store().write(id, data, write).met);
+  ASSERT_TRUE(a.data().has(id));
+  ASSERT_TRUE(b.data().has(id));
+
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  a.interpose(hold(message::retain_objects, gate));
+  b.interpose(hold(message::retain_objects, gate));
+  auto claimed = std::async(std::launch::async, [&] { return c.store().retain_data({id}, {c.id(), 1}, {}); });
+  EXPECT_TRUE(gate.wait_for_entries(2, 10s)) << "the holders were claimed on one after the other";
+  gate.open();
+  ASSERT_EQ(claimed.wait_for(30s), std::future_status::ready);
+  EXPECT_TRUE(claimed.get().empty());
+  EXPECT_TRUE(a.claims().retained(contract::RetentionClass::data, id));
+  EXPECT_TRUE(b.claims().retained(contract::RetentionClass::data, id));
+}
+
+// Macha's barrier places an object found on fewer holders than write_copies again before
+// it claims, and Macha's put waited for write_copies copies (distributed_store.cpp:898-915
+// at f0597a4), so every holder sought is there to be claimed. Found by Macha's port
+// (test_a_file_touch_commits_while_a_holder_is_away): a write acknowledged at a
+// majority left the third holder to prompt replication, unclaimed for good.
+TEST(DistributedStore, AClaimPlacesAShortObjectOnEveryHolderItSeeksBeforeItClaims) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  auto& a = cluster.add("a", options(3, 3));
+  auto& b = cluster.add("b", options(3, 3));
+  auto& c = cluster.add("c", options(3, 3));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 28);
+  const auto id = object_id(data);
+  // Two holders of the three sought, as when the third copy is still on its way.
+  ASSERT_TRUE(a.data().put(id, data));
+  ASSERT_TRUE(b.data().put(id, data));
+  ASSERT_FALSE(c.data().has(id));
+
+  // The third copy is held at c until the claim is seen to have sent it.
+  c.interpose(hold(message::put_object, gate));
+  auto claimed = std::async(std::launch::async, [&] { return a.store().retain_data({id}, {a.id(), 1}, {}); });
+  EXPECT_TRUE(wait_until([&] { return gate.entered() >= 1 || claimed.wait_for(0s) == std::future_status::ready; }, 30s));
+  gate.open();
+  ASSERT_EQ(claimed.wait_for(60s), std::future_status::ready);
+  EXPECT_TRUE(claimed.get().empty());
+  EXPECT_TRUE(c.data().has(id));
+  for (auto* node : {&a, &b, &c}) EXPECT_TRUE(node->claims().retained(contract::RetentionClass::data, id)) << node->name();
+}
+
+// Macha measures each DATA claim barrier (distributed_store.cpp:881-887 at f0597a4):
+// its time, the ids it claimed and those it left under-claimed (the store map,
+// retention gap 2).
+TEST(DistributedStore, ADataClaimBarrierIsMeasured) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 27);
+  const auto id = object_id(data);
+  WriteOptions write;
+  write.ack_level = Durability::replicated;
+  ASSERT_TRUE(a.store().write(id, data, write).met);
+  const auto absent = object_id(pattern(64 * 1024, 28));
+  auto& observations = a.context().observations();
+  const auto ids_before = observations.counter("claim.data_barrier.ids").load();
+  const auto short_before = observations.counter("claim.data_barrier.under_claimed").load();
+  EXPECT_EQ(a.store().retain_data({id, absent}, {a.id(), 1}), std::vector<ObjectId>{absent});
+  EXPECT_EQ(observations.counter("claim.data_barrier.ids").load(), ids_before + 2);
+  EXPECT_EQ(observations.counter("claim.data_barrier.under_claimed").load(), short_before + 1);
+  EXPECT_GE(observations.histogram("claim.data_barrier_us").snapshot().count, 1u);
+}
+
+// Macha's delete handler checks the claim before admission (storage_server.cpp:393-410
+// at f0597a4): a claimed object answers 409 "claimed" however busy the node is; an
+// unclaimed one on a busy node answers 503 (the store map, retention gap 7).
+TEST(DistributedStore, ADeleteOfAClaimedObjectIsClaimedEvenWhenBusy) {
+  Cluster cluster;
+  auto busy_options = options(1);
+  const uint64_t extent = busy_options.store.extent_size;
+  busy_options.data_inflight_bytes = 2 * extent;
+  busy_options.foreground_reserve_bytes = extent;
+  busy_options.background_concurrency = 1;
+  auto& a = cluster.add("a", busy_options);
+  auto& b = cluster.add("b", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto claimed = pattern(32 * 1024, 30);
+  const auto unclaimed = pattern(32 * 1024, 31);
+  ASSERT_TRUE(a.data().put(object_id(claimed), claimed));
+  ASSERT_TRUE(a.data().put(object_id(unclaimed), unclaimed));
+  a.claims().retain(contract::RetentionClass::data, object_id(claimed), {a.id(), 1});
+
+  // Every byte of a's loader credit held.
+  ASSERT_NE(a.credit(), nullptr);
+  const DataWorkContext loader(FrameType::loader);
+  auto held = a.credit()->try_acquire(loader, extent);
+  ASSERT_TRUE(held.has_value());
+  ASSERT_FALSE(a.credit()->try_acquire(loader, 1).has_value());
+
+  std::optional<dannan::membership::NodeRecord> target;
+  for (const auto& node : b.context().nodes().active())
+    if (node.id == a.id()) target = node;
+  ASSERT_TRUE(target.has_value());
+  const auto ask = [&](const Bytes& data) -> uint16_t {
+    const auto outcome = b.context().routes().call_and_wait(*target, message::delete_object, message::encode_id(object_id(data)), FrameType::loader, 10s);
+    if (!outcome.reply) return 0;
+    const auto refusal = dannan::net::refusal_of(*outcome.reply);
+    return refusal ? refusal->status : 0;
+  };
+  EXPECT_EQ(ask(claimed), 409);
+  EXPECT_TRUE(a.data().has(object_id(claimed)));
+  EXPECT_EQ(ask(unclaimed), 503);
+  EXPECT_TRUE(a.data().has(object_id(unclaimed)));
+}
+
+// Each storage refresh advertises how many of the node's disks are online, as Macha's
+// (storage_server.cpp:56-57 at f0597a4, into telemetry and Status), so a peer reads it
+// without asking (the store map, pool gap 5).
+TEST(DistributedStore, ARefreshAdvertisesTheBackendsOnline) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto seen = [&]() -> std::optional<uint64_t> {
+    for (const auto& node : b.context().nodes().active())
+      if (node.id == a.id())
+        if (const auto figures = figures_of(node)) return figures->backends_online;
+    return std::nullopt;
+  };
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(1); }));
+  std::filesystem::rename(a.backend(), cluster.dir() / "away");
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(0); }));
+  std::filesystem::rename(cluster.dir() / "away", a.backend());
+  a.server().refresh();
+  EXPECT_TRUE(wait_until([&] { return seen() == std::optional<uint64_t>(1); }));
+}
+
+// Each storage refresh advertises the cache's capacity, its use and its activity, as
+// Macha's (storage_server.cpp:62-65 at f0597a4, shown by Status per node; the store
+// map, cache gap 3).
+TEST(DistributedStore, TheCacheIsAdvertisedWithItsActivity) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(256 * 1024, 13);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(peer.data().put(id, bytes));
+  reader.cache().reconfigure({cluster.dir() / "reader" / "cache", 8, true});
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.server().refresh();
+  const uint64_t extent = options(2).store.extent_size;
+  const auto figures = [&]() -> std::optional<StoreFigures> {
+    for (const auto& node : peer.context().nodes().active())
+      if (node.id == reader.id()) return figures_of(node);
+    return std::nullopt;
+  };
+  EXPECT_TRUE(wait_until([&] { return figures() && figures()->cache_capacity == 8 * extent; }));
+  ASSERT_TRUE(figures().has_value());
+  EXPECT_TRUE(figures()->has_cache);
+  EXPECT_EQ(figures()->cache_used, extent);
+  EXPECT_GE(figures()->cache_hits, 1u);
+}
+
+// The store's figures travel as one advert beside the three placement and sealing
+// read on their own (capacity, extents and the domain's wrap key), so a roster record,
+// copied on every placement and every message, carries four of Dagda's adverts, not ten
+// (Tom, 2026-11-15: the side-by-side harness found the copies a part of Dagda's CPU
+// on small files). A peer reads them through figures_of, never by parsing.
+TEST(DistributedStore, TheStoresFiguresTravelAsOneAdvert) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2));
+  auto& b = cluster.add("b", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  ASSERT_TRUE(a.data().put(object_id(pattern(64 * 1024, 17)), pattern(64 * 1024, 17)));
+  a.server().refresh();
+  const auto record = [&]() -> std::optional<dannan::membership::NodeRecord> {
+    for (const auto& node : b.context().nodes().active())
+      if (node.id == a.id()) return node;
+    return std::nullopt;
+  };
+  EXPECT_TRUE(wait_until([&] {
+    const auto seen = record();
+    return seen && figures_of(*seen) && figures_of(*seen)->used == a.data().used() && used_of(*seen) == a.data().used();
+  }));
+  const auto seen = record();
+  ASSERT_TRUE(seen.has_value());
+  size_t dagda_adverts = 0;
+  for (const auto& [key, value] : seen->adverts) dagda_adverts += key.rfind("dagda", 0) == 0 ? 1 : 0;
+  EXPECT_EQ(dagda_adverts, 4u);
+  EXPECT_TRUE(seen->adverts.contains(capacity_advert));
+  EXPECT_TRUE(seen->adverts.contains(extents_advert));
+  EXPECT_TRUE(seen->adverts.contains(figures_advert));
+  EXPECT_EQ(figures_of(*seen)->backends_online, 1u);
+  // A record without the advert has no figures, and its used reads as zero.
+  dannan::membership::NodeRecord bare;
+  EXPECT_FALSE(figures_of(bare).has_value());
+  EXPECT_EQ(used_of(bare), 0u);
+  // What the encoder writes, the reader reads.
+  StoreFigures written;
+  written.used = 7;
+  written.backends_online = 2;
+  written.has_cache = true;
+  written.cache_capacity = 11;
+  written.cache_used = 3;
+  written.cache_hits = 5;
+  written.cache_misses = 1;
+  written.cache_evictions = 4;
+  bare.adverts[figures_advert] = encode_figures(written);
+  ASSERT_TRUE(figures_of(bare).has_value());
+  EXPECT_EQ(*figures_of(bare), written);
+  EXPECT_EQ(used_of(bare), 7u);
+}
+
+// A foreground copy put to a peer is foreground work moved, as Macha's put_on notes
+// (distributed_store.cpp:1345-1346 at f0597a4; the store map, distributed store gap 15).
+TEST(DistributedStore, AForegroundReplicateAllIsForegroundActivity) {
+  Cluster cluster;
+  auto& a = cluster.add("a", options(2, 2));
+  cluster.add("b", options(2, 2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(64 * 1024, 29);
+  (void)a.store().take_foreground_bytes();
+  EXPECT_GE(a.store().replicate_all(object_id(data), data, true), 1u);
+  EXPECT_GE(a.store().take_foreground_bytes(), data.size());
+  EXPECT_GE(a.store().replicate_all(object_id(data), data, false), 1u);
+  EXPECT_EQ(a.store().take_foreground_bytes(), 0u);
 }
 
 // test_store_claims_ask_nothing_more_about_objects_nobody_holds: claiming
@@ -349,7 +866,10 @@ TEST(DistributedStore, HealsABadLocalCopyFromAPeer) {
                           std::make_shared<const std::vector<ObjectId>>(live),
                           {},
                           {}};
-  for (int step = 0; step < 4 && !data.has(id); ++step) (void)reader.store().repair_step(lists, 128ULL * 1024 * 1024, 0);
+  for (int step = 0; step < 4 && !data.has(id); ++step) {
+    (void)reader.store().repair_step(lists, 128ULL * 1024 * 1024, RepairWindow{128ULL * 1024 * 1024});
+    (void)reader.store().repair_drain(std::chrono::seconds(30));
+  }
   EXPECT_EQ(data.get(id), bytes);
 }
 
@@ -380,6 +900,102 @@ TEST(DistributedStore, ARuntimeCacheKeepsAPlaybackFetch) {
   EXPECT_EQ(again.object->bytes, bytes);
   EXPECT_EQ(again.source, ReadSource::cache);
   EXPECT_EQ(peer.calls_of(message::get_object), gets);
+}
+
+// A read holds an extent of its class's retained memory from before it reads until
+// the last reader lets its buffer go, as Macha's (distributed_store.cpp:1744-1767 at
+// f0597a4; the store map, cache gap 1 and distributed store gap 6): many readers
+// cannot pass the node's memory. Short of it, the read waits under its deadline.
+TEST(DistributedStore, AReadHoldsItsClassMemoryUntilTheLastReaderLetsGo) {
+  Cluster cluster;
+  auto& node = cluster.add("node", options(1));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(64 * 1024, 14);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(node.data().put(id, bytes));
+  const uint64_t extent = options(1).store.extent_size;
+  auto& budget = node.context().budget();
+  const auto owned = [&] {
+    const auto stats = budget.stats();
+    const auto found = stats.owner_bytes.find(object_payload_owner);
+    return found == stats.owner_bytes.end() ? uint64_t{0} : found->second;
+  };
+  ASSERT_EQ(owned(), 0u);
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  {
+    const auto read = node.store().read(id, playback);
+    ASSERT_NE(read.object, nullptr);
+    auto shared = read.object;
+    EXPECT_EQ(owned(), extent);
+  }
+  EXPECT_EQ(owned(), 0u);
+
+  // Every byte the loader class may hold, held here: a loader read waits, and ends at
+  // its deadline with nothing.
+  std::vector<dannan::sched::RetainedMemoryLedger::Lease> held;
+  for (int i = 0; i < 1 << 16; ++i) {
+    auto lease = budget.reserve(dannan::sched::WorkClass::loader, 64 * 1024);
+    if (!lease) break;
+    held.push_back(std::move(*lease));
+  }
+  ReadOptions loading;
+  loading.frame = FrameType::loader;
+  loading.deadline = 300ms;
+  const auto starved = node.store().read(id, loading);
+  EXPECT_EQ(starved.object, nullptr);
+  EXPECT_EQ(starved.end, ReadEnd::timed_out);
+  // A cancel ends the wait too, with nothing for the caller to wake.
+  ReadOptions cancelled = loading;
+  cancelled.deadline = 30s;
+  cancelled.cancelled = std::make_shared<std::atomic_bool>(false);
+  auto waiting = std::async(std::launch::async, [&] { return node.store().read(id, cancelled); });
+  EXPECT_EQ(waiting.wait_for(200ms), std::future_status::timeout);
+  *cancelled.cancelled = true;
+  ASSERT_EQ(waiting.wait_for(5s), std::future_status::ready);
+  EXPECT_EQ(waiting.get().end, ReadEnd::cancelled);
+  held.clear();
+  EXPECT_NE(node.store().read(id, loading).object, nullptr);
+}
+
+// An opportunistic copy is held in speculative memory while queued, and dropped when
+// there is none, so playback never waits behind it and the queue never passes the
+// node's memory (Macha's distributed_store.cpp:3111-3119 at f0597a4; the store map,
+// cache gap 2). The read is served all the same; the copy is repair's later.
+TEST(DistributedStore, AnOpportunisticCopyIsDroppedWhenSpeculativeMemoryIsShort) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(2));
+  auto& peer = cluster.add("peer", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto bytes = pattern(256 * 1024, 12);
+  const auto id = object_id(bytes);
+  ASSERT_TRUE(peer.data().put(id, bytes));
+  reader.cache().reconfigure({cluster.dir() / "reader" / "cache", 8, true});
+  ASSERT_TRUE(reader.cache().enabled());
+
+  // Every byte the speculative class may hold, held here.
+  std::vector<dannan::sched::RetainedMemoryLedger::Lease> held;
+  for (int i = 0; i < 1 << 16; ++i) {
+    auto lease = reader.context().budget().reserve(dannan::sched::WorkClass::speculative, 64 * 1024);
+    if (!lease) break;
+    held.push_back(std::move(*lease));
+  }
+  ASSERT_FALSE(reader.context().budget().reserve(dannan::sched::WorkClass::speculative, bytes.size()).has_value());
+
+  ReadOptions playback;
+  playback.frame = FrameType::foreground;
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  EXPECT_FALSE(reader.cache().has(id));
+  EXPECT_TRUE(reader.log().saw(dannan::status::LogLevel::debug, "opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory"));
+
+  // With room again, the next fetch is kept.
+  held.clear();
+  ASSERT_EQ(reader.store().get(id, playback), bytes);
+  reader.store().wait_local_copies_settled();
+  EXPECT_TRUE(reader.cache().has(id));
 }
 
 // test_store_control_objects_take_no_data_credit_and_commit_alone: the
@@ -481,7 +1097,7 @@ TEST(DistributedStore, WriteCopiesTwoUsesAFallbackWhenAPreferredOwnerIsFull) {
   const auto data = preferred_for(b, a.id(), 128 * 1024);
   const auto id = object_id(data);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = b.store().write(id, data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_FALSE(a.data().has(id));
@@ -660,7 +1276,7 @@ TEST(DistributedStore, ADeferredWritesBarrierAcrossPeerRestarts) {
   ASSERT_TRUE(cluster.converged());
   WriteOptions deferred;
   deferred.deferred = true;
-  deferred.level = Durability::replicated;
+  deferred.ack_level = Durability::replicated;
 
   // Ordinary: both copies awaiting the barrier, then on disk.
   const auto data = pattern(64 * 1024, 91);
@@ -736,7 +1352,7 @@ TEST(DistributedStore, EphemeralReturnsAtOnceAndItsTicketReportsTheCopies) {
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 41);
   WriteOptions write;
-  write.level = Durability::ephemeral;
+  write.ack_level = Durability::ephemeral;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_FALSE(evidence.settled);
@@ -764,7 +1380,7 @@ TEST(DistributedStore, PersistedReturnsOnTheFirstCopyOnDisk) {
   peer.interpose(hold(message::put_object, held));
   const auto data = pattern(32 * 1024, 42);
   WriteOptions write;
-  write.level = Durability::persisted;
+  write.ack_level = Durability::persisted;
   write.deadline = 10s;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -777,17 +1393,18 @@ TEST(DistributedStore, PersistedReturnsOnTheFirstCopyOnDisk) {
   held.open();
 }
 
-// Replicated: on disk on k = write_copies nodes before it returns.
-TEST(DistributedStore, ReplicatedWaitsForWriteCopies) {
+// Replicated: on disk on a majority of the replication set before it returns, the
+// stack's acknowledgement standard (Tom, 2026-11-15), whatever write_copies is.
+TEST(DistributedStore, ReplicatedWaitsForAMajorityOfTheReplicas) {
   Cluster cluster;
-  auto& writer = cluster.add("writer", options(3, 2));
-  cluster.add("one", options(3, 2));
-  cluster.add("two", options(3, 2));
+  auto& writer = cluster.add("writer", options(3, 1));
+  cluster.add("one", options(3, 1));
+  cluster.add("two", options(3, 1));
   cluster.start_all();
   ASSERT_TRUE(cluster.converged());
   const auto data = pattern(32 * 1024, 43);
   WriteOptions write;
-  write.level = Durability::replicated;
+  write.ack_level = Durability::replicated;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
   EXPECT_EQ(evidence.sought, 2u);
@@ -797,6 +1414,19 @@ TEST(DistributedStore, ReplicatedWaitsForWriteCopies) {
   EXPECT_GE(holding, 2u);
   // Every member of the replication set is named.
   EXPECT_EQ(std::count_if(evidence.replicas.begin(), evidence.replicas.end(), [](const ReplicaEvidence& r) { return r.in_set; }), 3);
+
+  // Of two replicas the majority is both.
+  Cluster pair;
+  auto& first = pair.add("first", options(2, 1));
+  auto& second = pair.add("second", options(2, 1));
+  pair.start_all();
+  ASSERT_TRUE(pair.converged());
+  const auto both = pattern(32 * 1024, 46);
+  const auto on_both = first.store().write(object_id(both), both, write);
+  EXPECT_TRUE(on_both.met);
+  EXPECT_EQ(on_both.sought, 2u);
+  EXPECT_TRUE(first.data().has(object_id(both)));
+  EXPECT_TRUE(second.data().has(object_id(both)));
 }
 
 // Durable: on disk on every live member of the replication set, named by
@@ -810,7 +1440,7 @@ TEST(DistributedStore, DurableWritesEveryLiveMember) {
   ASSERT_TRUE(cluster.converged());
   const auto data = pattern(32 * 1024, 44);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 10s;
   const auto evidence = writer.store().write(object_id(data), data, write);
   EXPECT_TRUE(evidence.met);
@@ -839,7 +1469,7 @@ TEST(DistributedStore, DurableSkipsADeadMemberAndCatchesItUp) {
 
   const auto data = pattern(32 * 1024, 45);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 10s;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -877,7 +1507,7 @@ TEST(DistributedStore, DurableWaitsForASilentLiveMemberToTheDeadline) {
 
   const auto data = pattern(32 * 1024, 46);
   WriteOptions write;
-  write.level = Durability::durable;
+  write.ack_level = Durability::durable;
   write.deadline = 400ms;
   const auto started = std::chrono::steady_clock::now();
   const auto evidence = writer.store().write(object_id(data), data, write);
@@ -940,7 +1570,7 @@ TEST(DistributedStore, CompletionsArePostedNeverRunInline) {
   // Ephemeral is answered at once: still posted.
   std::optional<WriteEvidence> queued;
   WriteOptions ephemeral;
-  ephemeral.level = Durability::ephemeral;
+  ephemeral.ack_level = Durability::ephemeral;
   node.store().write(object_id(pattern(8 * 1024, 49)), pattern(8 * 1024, 49), ephemeral, caller.get_executor(),
                      [&](WriteEvidence evidence) { queued = std::move(evidence); });
   EXPECT_FALSE(queued);
@@ -1052,7 +1682,7 @@ TEST(StoreDistributedStore, MachasFormsSeekWriteCopies) {
   EXPECT_TRUE(two.get());
   const auto evidence = one.get();
   EXPECT_TRUE(evidence.deferred);
-  EXPECT_EQ(evidence.level, Durability::persisted);
+  EXPECT_EQ(evidence.ack_level, Durability::persisted);
   EXPECT_TRUE(careful.data().has(object_id(bytes)));
   const auto settled = careful.store().wait(evidence.ticket, 10s);
   ASSERT_TRUE(settled.has_value());
@@ -1171,7 +1801,8 @@ TEST(StoreClaimLocks, ADeleteMarksItsObjectAndHoldsNoStripe) {
   const auto refused = locks.deletion(id, [] { return true; });
   EXPECT_TRUE(refused.claimed());
   EXPECT_FALSE(locks.deleting(id));
-  // Two deletes at once: the first to finish does not end the second's mark.
+  // Two deletes at once (Macha's test_a_delete_mark_lasts_until_the_last_delete_of_the_id_
+  // ends): the first to finish does not end the other's mark, whichever began first.
   {
     auto first = locks.deletion(id, [] { return false; });
     {
@@ -1180,6 +1811,14 @@ TEST(StoreClaimLocks, ADeleteMarksItsObjectAndHoldsNoStripe) {
     EXPECT_TRUE(locks.deleting(id));
   }
   EXPECT_FALSE(locks.deleting(id));
+  {
+    std::optional<ClaimDeletion> first(locks.deletion(id, [] { return false; }));
+    std::optional<ClaimDeletion> second(locks.deletion(id, [] { return false; }));
+    first.reset();
+    EXPECT_TRUE(locks.deleting(id));
+    second.reset();
+    EXPECT_FALSE(locks.deleting(id));
+  }
 }
 
 // A claim, local or from a peer, finds a marked object not present.
@@ -1445,6 +2084,8 @@ TEST(StoreDistributedStore, TheReachabilityEpochMovesWithMembershipAndDisks) {
   EXPECT_TRUE(wait_until([&] { return node.store().reachability_epoch() != first; }, 30s));
   const auto second = node.store().reachability_epoch();
   auto backends = node.dagda_node().options().pool.backends;
+  // A disk mounted there: a path that is not a directory stays offline.
+  std::filesystem::create_directories(cluster.dir() / "another");
   backends.push_back({cluster.dir() / "another", 64ULL * 1024 * 1024, 0});
   node.dagda_node().reconfigure({backends, {}});
   EXPECT_NE(node.store().reachability_epoch(), second);
@@ -1470,8 +2111,12 @@ TEST(StoreDistributedStore, HostingExtentsChangesWhileRunning) {
   EXPECT_TRUE(wait_until([&] { return node.store().holds_extents() && hosts_on_peer(); }));
 }
 
-// Macha's activity means object bytes this store moved. Dannan's clocks count every
-// inbound request, so traffic that is not object work does not read as present here.
+// Macha's activity is object bytes this store moved and what its owner notes. Dannan's
+// clocks count every inbound request, a peer's included, so traffic Dannan alone sees
+// does not read as present here. An owner's note through the Context does: Macha's
+// HTTP server notes every API request and draining body as a viewer present (law 2,
+// principles-and-laws.md:92-99; service.cpp:81-82 at f0597a4), and repair and DATA
+// admission must yield to it.
 TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
   Cluster cluster;
   auto& node = cluster.add("node", options(1));
@@ -1480,6 +2125,12 @@ TEST(StoreDistributedStore, ActivityIsObjectWorkInMachasMeaning) {
   const auto before = store.idle_for(dannan::sched::WorkClass::foreground);
   node.context().activity().note(FrameType::foreground, 4096);
   EXPECT_GE(store.idle_for(dannan::sched::WorkClass::foreground), before);
+  EXPECT_EQ(store.take_foreground_bytes(), 0u);
+  // An API request, noted by the owner on the store's clock: a viewer present.
+  ASSERT_GE(before, 10s);
+  node.api().activity().note(dannan::sched::WorkClass::foreground);
+  EXPECT_LT(store.idle_for(dannan::sched::WorkClass::foreground), 10s);
+  EXPECT_LT(node.api().activity().idle_for(dannan::sched::WorkClass::foreground), 10s);
   EXPECT_EQ(store.take_foreground_bytes(), 0u);
   const auto data = pattern(4096, 81);
   ASSERT_TRUE(store.put(object_id(data), data));

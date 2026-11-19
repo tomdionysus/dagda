@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -31,7 +31,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -347,6 +349,67 @@ TEST(StoreIoPressure, AForegroundUserBetweenTwoExtentsIsStillPresent) {
   foreground.reset();
   const auto resumed = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
   EXPECT_TRUE(resumed.has_value());
+}
+
+// A loader waiting because a foreground user is present on a slow device is let through
+// when the user goes, though nothing is released: the user's going notifies nobody, and
+// the wait otherwise looked again only at a release or at the end of its window. Macha's
+// arbiter waits the same way (data_work.hpp:239-299 at main); found as
+// StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit failing on a
+// slow Pi (2026-11-17, and under ASan 2026-11-18), its other holders never releasing.
+TEST(StoreIoPressure, AWaitingLoaderSeesTheForegroundUserGoWithNothingReleased) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  std::atomic_bool watching{true};
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 1h, [&] { return watching.load(); });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+
+  const auto trickle = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  ASSERT_TRUE(trickle.has_value());
+  auto waiting = std::async(std::launch::async, [&] { return arbiter.acquire(work(arbiter, FrameType::loader), 1024 * 1024); });
+  ASSERT_TRUE(test::wait_until([&] { return arbiter.stats().loader_waits >= 1; }, 5s));
+  EXPECT_EQ(waiting.wait_for(50ms), std::future_status::timeout);
+
+  watching = false;
+  ASSERT_EQ(waiting.wait_for(2s), std::future_status::ready) << "the loader slept on after the foreground user went";
+  EXPECT_TRUE(waiting.get().has_value());
+}
+
+// The node's arbiter knows when the user's window closes, and looks again exactly then;
+// and work turned away for the pressure alone is woken by the device leaving it, though
+// nothing is released and no window is open: nothing polls (the Macha session's word,
+// 2026-11-18: park on what can change the answer).
+TEST(StoreIoPressure, AWaiterWakesWhenTheWindowClosesOrThePressureEnds) {
+  DiskServiceMonitor monitor(quiet(), defaults);
+  std::atomic<int64_t> present_for_ms{300};
+  DataResourceArbiter arbiter(16 * 1024 * 1024, 4 * 1024 * 1024, 8, 1h, [&] { return present_for_ms.load() > 0; });
+  arbiter.foreground_presence_ends([&]() -> std::optional<std::chrono::milliseconds> {
+    const auto left = present_for_ms.load();
+    return left > 0 ? std::optional(std::chrono::milliseconds(left)) : std::nullopt;
+  });
+  arbiter.observe_device(&monitor, 1);
+  for (int i = 0; i < 30; ++i) monitor.note(9000ms, 4 * 1024 * 1024);
+  ASSERT_TRUE(monitor.pressured());
+  const auto trickle = arbiter.try_acquire(work(arbiter, FrameType::loader), 1024 * 1024);
+  ASSERT_TRUE(trickle.has_value());
+
+  // The user's window: the loader looks again when it closes, told nothing.
+  auto loader = std::async(std::launch::async, [&] { return arbiter.acquire(work(arbiter, FrameType::loader), 1024 * 1024); });
+  ASSERT_TRUE(test::wait_until([&] { return arbiter.stats().loader_waits >= 1; }, 5s));
+  present_for_ms = 0;
+  ASSERT_EQ(loader.wait_for(2s), std::future_status::ready) << "the loader slept past the window's end";
+  auto second = loader.get();
+  EXPECT_TRUE(second.has_value());
+
+  // Speculative work stands aside for the pressure itself: woken when it ends.
+  auto speculative = std::async(std::launch::async, [&] { return arbiter.acquire(work(arbiter, FrameType::speculative), 1024 * 1024); });
+  ASSERT_TRUE(test::wait_until([&] { return arbiter.stats().speculative_waits >= 1; }, 5s));
+  EXPECT_EQ(speculative.wait_for(300ms), std::future_status::timeout);
+  for (int i = 0; i < 200 && monitor.pressured(); ++i) monitor.note(1ms, 4 * 1024 * 1024);
+  ASSERT_FALSE(monitor.pressured());
+  ASSERT_EQ(speculative.wait_for(2s), std::future_status::ready) << "the speculative work slept on after the pressure ended";
+  EXPECT_TRUE(speculative.get().has_value());
 }
 
 // Macha: test_background_work_always_drains_on_a_pressured_device. Law 4:
