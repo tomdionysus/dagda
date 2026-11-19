@@ -910,7 +910,7 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
       left.push_back(i);
       paths.push_back(path_of(store.loose[i]));
     }
-  const auto order = disk_order(paths);
+  const auto visit = disk_order(paths);
 
   struct Loaded {
     size_t index = 0;
@@ -931,10 +931,10 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
   run_ordered<Loaded, Read>(
       _limits,
       [&]() -> std::optional<std::pair<Loaded, uint64_t>> {
-        if (next >= order.size()) return std::nullopt;
+        if (next >= visit.size()) return std::nullopt;
         Loaded loaded;
-        loaded.index = left[order[next]];
-        loaded.bytes = read_file(paths[order[next]]);
+        loaded.index = left[visit[next]];
+        loaded.bytes = read_file(paths[visit[next]]);
         ++next;
         const uint64_t weight = loaded.bytes.size();
         return std::pair{std::move(loaded), weight};
