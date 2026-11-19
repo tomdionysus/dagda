@@ -464,8 +464,10 @@ struct DistributedStore::SharedFetch {
   bool foreground DANNAN_GUARDED_BY(mutex) = false;
   bool persist DANNAN_GUARDED_BY(mutex) = false;
   size_t stripe DANNAN_GUARDED_BY(mutex) = 0;
-  // The preferred owners first, then the other ranked nodes.
+  // The preferred owners first, then the other ranked nodes, then the active
+  // peers placement does not name.
   bool fallback_phase DANNAN_GUARDED_BY(mutex) = false;
+  bool peers_phase DANNAN_GUARDED_BY(mutex) = false;
   std::set<NodeId> preferred DANNAN_GUARDED_BY(mutex);
   std::vector<NodeRecord> candidates DANNAN_GUARDED_BY(mutex);
   size_t attempt DANNAN_GUARDED_BY(mutex) = 0;
@@ -2402,6 +2404,15 @@ void DistributedStore::fetch_next(const std::shared_ptr<SharedFetch>& fetch) {
         fetch->fallback_phase = true;
         for (auto& node : ranked(fetch->id))
           if (node.id != _self && !fetch->preferred.contains(node.id)) fetch->candidates.push_back(std::move(node));
+      }
+      // Last, the active peers without the extents advert: one whose advert has not
+      // reached this node yet, as at startup, may hold what it wrote, and one that
+      // stopped hosting keeps what it has not drained. An absent advert is not an
+      // absent node; each answers with the object or not found.
+      if (fetch->candidates.empty() && !fetch->peers_phase) {
+        fetch->peers_phase = true;
+        for (auto& node : _context.nodes().active())
+          if (node.id != _self && !node.adverts.contains(extents_advert)) fetch->candidates.push_back(std::move(node));
       }
       if (fetch->candidates.empty()) {
         conclude = true;

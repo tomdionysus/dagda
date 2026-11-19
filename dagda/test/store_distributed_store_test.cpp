@@ -417,6 +417,45 @@ TEST(DistributedStore, AReadSaysHowItEnded) {
   EXPECT_EQ(missing.end, ReadEnd::not_found);
 }
 
+// An active peer is asked though placement does not name it (the Macha session's
+// test_catalogue_uses_final_state_after_coalesced_metadata_burst, 2026-11-18): a peer
+// whose extents advert has not reached the reader yet, as at startup, still holds what
+// it wrote, and the read finds it there rather than ending unavailable with nobody
+// asked. Macha's read asked the active peers when placement named no holder; an absent
+// advert must not stand in for an absent node.
+TEST(DistributedStore, AReadAsksAnActivePeerPlacementDoesNotName) {
+  Cluster cluster;
+  auto& reader = cluster.add("reader", options(1));
+  auto& holder = cluster.add("holder", [] {
+    auto out = options(1);
+    out.hosts_extents = false;
+    out.keeps_backend = true;
+    return out;
+  }());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto data = pattern(32 * 1024, 26);
+  const auto id = object_id(data);
+  ASSERT_TRUE(holder.data().put(id, data));
+  const auto ranked = reader.store().ranked(id);
+  ASSERT_TRUE(std::none_of(ranked.begin(), ranked.end(), [&](const auto& node) { return node.id == holder.id(); }));
+
+  ReadOptions options;
+  options.deadline = 30s;
+  const auto served = reader.store().read(id, options);
+  ASSERT_NE(served.object, nullptr);
+  EXPECT_EQ(served.end, ReadEnd::served);
+  EXPECT_EQ(served.source, ReadSource::remote);
+  EXPECT_EQ(served.served_by, holder.id());
+  EXPECT_EQ(served.object->bytes, data);
+
+  // Every active peer asked and every one without it: not found, not unavailable.
+  const auto other = pattern(32 * 1024, 27);
+  const auto missing = reader.store().read(object_id(other), options);
+  EXPECT_EQ(missing.object, nullptr);
+  EXPECT_EQ(missing.end, ReadEnd::not_found);
+}
+
 // Macha claims on each holder at once, one std::async a node (distributed_store.cpp
 // :924-954 at f0597a4), so a publication's claim costs the slowest holder, not their sum
 // (the store map, retention gap 1). Both holders' claims are in flight together.
