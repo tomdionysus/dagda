@@ -25,6 +25,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/migrate/disk_order.h"
 #include "dagda/migrate/heads_metadata.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/retag.h"
@@ -439,8 +440,136 @@ void progress(MigrationReport& report, const MigrationOptions& options) {
   options.say(out.str());
 }
 
+// ---- Header-only moves and the progress record (TODO/2026-11-19-migrate-speed.md) --------
+//
+// A record's tag in the other layout follows from its tag, the two associated data and
+// its length (retag.h), so a run moves a record from its header alone. What a full read
+// gave, telling a moved record from one not moved and finding a tear, a run that stopped
+// needs only for the records it may have written last: the progress record says where
+// everything before is moved and on the device, and a resumed run authenticates the
+// records from there to a batch past it, as before. Only a run that began on a whole
+// state (v18 going forward, v19 going back) or that resumes from its own record moves
+// records unauthenticated; any other authenticates every record, and writes no record.
+
+// A point in a run's objects; everything before it is moved and on the device.
+struct Point {
+  // The run's stores in the order it takes them; then loose (0) or packs (1); the
+  // loose object's place in the device's order or the pack's in sequence order; and
+  // the offset in that pack.
+  uint64_t store = 0;
+  uint64_t part = 0;
+  uint64_t index = 0;
+  uint64_t offset = 0;
+  auto operator<=>(const Point&) const = default;
+};
+
+class ProgressRecord {
+ public:
+  ProgressRecord(const std::filesystem::path& state, bool reverse, const std::vector<std::filesystem::path>& stores) : _path(state / progress_record_name) {
+    std::ostringstream head;
+    head << "dagda-migrate progress 1\n" << (reverse ? "back" : "forward") << "\n" << stores.size() << "\n";
+    for (const auto& store : stores) head << store.string() << "\n";
+    _head = head.str();
+  }
+  // Where a stopped run of the same direction over the same stores got to; nothing if
+  // there is no record, or one of another direction or other stores, or one that does
+  // not parse.
+  std::optional<Point> left() const {
+    std::error_code ec;
+    if (!std::filesystem::exists(_path, ec)) return std::nullopt;
+    std::ifstream in(_path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), {});
+    if (!text.starts_with(_head)) return std::nullopt;
+    std::istringstream rest(text.substr(_head.size()));
+    Point point;
+    std::string end;
+    if (!(rest >> point.store >> point.part >> point.index >> point.offset >> end) || end != "end") return std::nullopt;
+    return point;
+  }
+  void write(const Point& point) const {
+    std::ostringstream out;
+    out << _head << point.store << " " << point.part << " " << point.index << " " << point.offset << " end\n";
+    dannan::identity::durable_replace_file(_path, out.str());
+  }
+  void remove() const {
+    std::error_code ec;
+    std::filesystem::remove(_path, ec);
+  }
+
+ private:
+  std::filesystem::path _path;
+  std::string _head;
+};
+
+// How a run takes one store's records. No run: every record authenticated.
+struct ObjectsRun {
+  const ProgressRecord* progress = nullptr;
+  // Where a stopped run got to: before it, nothing is read; from it to a batch past it,
+  // every record is authenticated.
+  std::optional<Point> resume;
+  uint64_t store = 0;
+  // The first record of a batch was moved already, so the record does not say what the
+  // disk holds: every record of this store from there is authenticated.
+  bool authenticate_rest = false;
+};
+
+// Whether the run takes this record without reading it whole: outside the resume window
+// and not the first of its batch (`since_check`, counted whatever the sync batch, which a
+// test makes one), the store not given over to authenticating.
+bool header_only(const ObjectsRun* run, bool in_window, uint64_t since_check, uint64_t batch) {
+  if (!run || !run->progress || run->authenticate_rest || in_window) return false;
+  return since_check % batch != 0;
+}
+
+// One loose object moved from its first bytes: its header read, the tag derived from
+// it and the ciphertext's length, written, the modification time kept. False for a
+// file with no header to read (an empty one, a crash's, which the store prunes; or one
+// that is not an object), which is listed. Not synced: the caller syncs the batch.
+bool move_loose_header(const std::filesystem::path& file, const ObjectId& id, const TagDeriver& deriver, const store::SealingScheme& to,
+                       MigrationReport& report, bool proved, const MigrationOptions& options, Fd& fd) {
+  struct stat before{};
+  if (::fstat(fd.get(), &before) != 0) throw std::runtime_error("cannot stat " + file.string() + ": " + std::strerror(errno));
+  const auto size = static_cast<uint64_t>(before.st_size);
+  if (size == 0) return false;
+  const auto header = size >= loose_header_size ? read_at(fd.get(), loose_header_size, 0) : std::nullopt;
+  if (!header) {
+    unreadable(report, proved, report.loose_unreadable, file.string() + ": shorter than an object's header");
+    return false;
+  }
+  LooseObject loose;
+  try {
+    loose = decode_loose(*header);
+  } catch (const std::exception& error) {
+    unreadable(report, proved, report.loose_unreadable, file.string() + ": " + error.what());
+    return false;
+  }
+  report.bytes_read += header->size();
+  const auto tag = moved_tag(deriver, to, id, loose.tag, size - loose_header_size, options.reverse);
+  write_at(fd.get(), tag, loose_tag_offset, file);
+  keep_modified_time(fd.get(), before, file);
+  report.bytes_written += tag.size();
+  ++report.loose_migrated;
+  ++report.records_header_only;
+  return true;
+}
+
+// The loose objects a batch moved from their headers, made durable together: one
+// syncfs on Linux, which the device does as one flush, else each file's fsync.
+void sync_loose_batch(std::vector<std::unique_ptr<Fd>>& written, const std::vector<std::filesystem::path>& paths) {
+  if (written.empty()) return;
+#if defined(__linux__)
+  if (::syncfs(written.front()->get()) != 0) throw std::runtime_error("cannot sync the filesystem of " + paths.front().string() + ": " + std::strerror(errno));
+#else
+  for (size_t i = 0; i < written.size(); ++i) sync_fd(written[i]->get(), paths[i]);
+#endif
+  written.clear();
+}
+
+void migrate_pack_records(const std::filesystem::path& pack, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report,
+                          bool& proved, const MigrationOptions& options, const TagDeriver* deriver, ObjectsRun* run, uint64_t position);
+
 void migrate_objects(const std::filesystem::path& root, const domain::StorageKey& key, const TagDeriver& deriver, const store::SealingScheme& to,
-                     MigrationReport& report, bool& proved, const MigrationOptions& options) {
+                     MigrationReport& report, bool& proved, const MigrationOptions& options, ObjectsRun* run = nullptr) {
   std::error_code ec;
   const auto objects = root / "objects";
   std::vector<std::pair<std::filesystem::path, ObjectId>> loose;
@@ -452,10 +581,70 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
     if (ec) throw std::runtime_error("cannot walk " + objects.string() + ": " + ec.message());
   }
   std::sort(loose.begin(), loose.end());
-  for (const auto& [file, id] : loose) {
-    if (options.probe_only && proved) return;
-    migrate_loose_file(file, id, key, to, report, proved, options, &deriver);
+  // Where the device holds them, so the disk moves forward between files: the same
+  // order every run, as the progress record counts in it.
+  if (!options.probe_only && loose.size() > 1) {
+    std::vector<std::filesystem::path> paths;
+    paths.reserve(loose.size());
+    for (const auto& [file, _] : loose) paths.push_back(file);
+    const auto order = disk_order(paths);
+    std::vector<std::pair<std::filesystem::path, ObjectId>> placed;
+    placed.reserve(loose.size());
+    for (const auto index : order) placed.push_back(std::move(loose[index]));
+    loose = std::move(placed);
   }
+
+  std::vector<std::unique_ptr<Fd>> written;
+  std::vector<std::filesystem::path> written_paths;
+  uint64_t in_batch = 0;
+  uint64_t since_resume = 0;
+  const uint64_t window = std::max<uint64_t>(1, options.batch_records);
+  const uint64_t batch = options.after_step ? 1 : window;
+  const auto close_batch = [&](uint64_t next) {
+    sync_loose_batch(written, written_paths);
+    written_paths.clear();
+    if (run && run->progress && !options.dry_run) run->progress->write({run->store, 0, next, 0});
+    in_batch = 0;
+  };
+  for (uint64_t k = 0; k < loose.size(); ++k) {
+    if (options.probe_only && proved) return;
+    const auto& [file, id] = loose[k];
+    const Point here{run ? run->store : 0, 0, k, 0};
+    if (run && run->resume && here < *run->resume) {
+      ++report.loose_already;
+      continue;
+    }
+    const bool in_window = run && run->resume && run->resume->store == here.store && run->resume->part == here.part && since_resume < window;
+    bool moved_from_header = false;
+    if (header_only(run, in_window, since_resume, window)) {
+      auto fd = std::make_unique<Fd>(file, O_RDWR);
+      if (move_loose_header(file, id, deriver, to, report, proved, options, *fd)) {
+        written.push_back(std::move(fd));
+        written_paths.push_back(file);
+        moved_from_header = true;
+      }
+    } else {
+      // Read whole and authenticated; written, synced and stepped by itself.
+      const auto already = report.loose_already;
+      migrate_loose_file(file, id, key, to, report, proved, options, &deriver);
+      // The first of its batch past the window moved already: the record does not say
+      // what the disk holds.
+      if (run && run->progress && since_resume % window == 0 && !in_window && report.loose_already != already) {
+        run->authenticate_rest = true;
+        say(options, "a record past the progress record was moved already: every record of " + root.string() + " is read whole from here");
+      }
+    }
+    ++since_resume;
+    const bool closes = ++in_batch >= batch;
+    if (closes) close_batch(k + 1);
+    if (moved_from_header) {
+      progress(report, options);
+      // On the device and recorded before a test may end the process here.
+      if (closes) step(options, report);
+    }
+  }
+  if (in_batch) close_batch(loose.size());
+  if (run && run->progress && !options.dry_run) run->progress->write({run->store, 1, 0, 0});
 
   const auto packs = root / "packs";
   std::vector<std::pair<uint64_t, std::filesystem::path>> files;
@@ -467,9 +656,9 @@ void migrate_objects(const std::filesystem::path& root, const domain::StorageKey
     if (ec) throw std::runtime_error("cannot list " + packs.string() + ": " + ec.message());
   }
   std::sort(files.begin(), files.end());
-  for (const auto& [sequence, pack] : files) {
+  for (uint64_t p = 0; p < files.size(); ++p) {
     if (options.probe_only && proved) return;
-    migrate_pack_file(pack, key, to, report, proved, options, &deriver);
+    migrate_pack_records(files[p].second, key, to, report, proved, options, &deriver, run, p);
   }
 }
 
@@ -582,7 +771,7 @@ bool migration_temporary(std::string_view file_name) {
   // author, set-aside, the seed at either name).
   return base == "storage-layout" || base == store::backend_marker_name || base == "claims.log" || base == "unreferenced-data.bin" ||
          base == "unreferenced-control.bin" || base == "root" || base == "journal.log" || base.ends_with(".id") || base == "history.log" ||
-         base.ends_with(".meta");
+         base.ends_with(".meta") || base == progress_record_name;
 }
 
 RecordLayout record_layout(const domain::StorageKey& key, const store::SealingScheme& to, const ObjectId& id, std::span<const uint8_t, 12> nonce,
@@ -663,6 +852,13 @@ void migrate_loose_file(const std::filesystem::path& file, const ObjectId& id, c
 
 void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report, bool& proved,
                        const MigrationOptions& options, const TagDeriver* deriver) {
+  migrate_pack_records(pack, key, to, report, proved, options, deriver, nullptr, 0);
+}
+
+namespace {
+
+void migrate_pack_records(const std::filesystem::path& pack, const domain::StorageKey& key, const store::SealingScheme& to, MigrationReport& report,
+                          bool& proved, const MigrationOptions& options, const TagDeriver* deriver, ObjectsRun* run, uint64_t position) {
   ++report.packs;
   Fd fd(pack, options.dry_run ? O_RDONLY : O_RDWR);
   struct stat st{};
@@ -675,8 +871,18 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
   // either way, so a crash costs only the re-doing; the last sync is before
   // the markers can follow.
   uint64_t unsynced = 0;
-  constexpr uint64_t sync_every = 256;
+  const uint64_t window = std::max<uint64_t>(1, options.batch_records);
+  const uint64_t sync_every = options.after_step ? 1 : window;
+  // The run's place: what it passes over, the window from where it resumes, the batch.
+  const bool resumes_here = run && run->resume && run->resume->store == run->store && run->resume->part == 1 && run->resume->index == position;
+  const bool passed_whole = run && run->resume && Point{run->store, 1, position, 0} < *run->resume && !resumes_here;
+  uint64_t since_resume = 0;
+  const auto record_progress = [&](uint64_t next) {
+    if (run && run->progress && !options.dry_run) run->progress->write({run->store, 1, position, next});
+  };
   while (offset < file_size) {
+    const bool passed = passed_whole || (resumes_here && offset < run->resume->offset);
+    const bool in_window = resumes_here && !passed && since_resume < window;
     if (file_size - offset < pack_header_size) {
       report.pack_tail_bytes += file_size - offset;
       break;
@@ -730,8 +936,41 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
       break;
     }
     if (header->type != pack_put) {
-      ++report.pack_records_unsealed;
+      if (!passed) ++report.pack_records_unsealed;
       offset += total;
+      continue;
+    }
+    if (passed) {
+      // Before where a stopped run got to: moved and on the device.
+      ++report.pack_records_already;
+      offset += total;
+      continue;
+    }
+    const auto sync_and_step = [&] {
+      // Reported once the record is on the device, and recorded, where a test may end
+      // the process.
+      if (unsynced && unsynced >= sync_every) {
+        sync_fd(fd.get(), pack);
+        unsynced = 0;
+        record_progress(offset + total);
+      }
+      step(options, report);
+    };
+    if (header_only(run, in_window, since_resume, window)) {
+      // Moved from its header: the tag derived from the tag and the ciphertext's length.
+      auto rewritten = *header;
+      rewritten.tag = moved_tag(*deriver, to, header->id, header->tag, header->payload_size, options.reverse);
+      const auto encoded = encode_pack_header(rewritten);
+      write_at(fd.get(), std::span<const uint8_t>(encoded).subspan(pack_tag_offset), offset + pack_tag_offset, pack);
+      report.bytes_written += encoded.size() - pack_tag_offset;
+      report.bytes_read += pack_header_size;
+      ++unsynced;
+      ++report.pack_records_migrated;
+      ++report.records_header_only;
+      ++since_resume;
+      sync_and_step();
+      offset += total;
+      progress(report, options);
       continue;
     }
     const auto payload = read_at(fd.get(), static_cast<size_t>(header->payload_size), offset + pack_header_size);
@@ -743,6 +982,12 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
       proved = true;
       if (layout == (options.reverse ? RecordLayout::v18 : RecordLayout::v19)) {
         ++report.pack_records_already;
+        // The first of its 256 past the window moved already: the record does not say
+        // what the disk holds.
+        if (run && run->progress && since_resume % window == 0 && !in_window && !run->authenticate_rest) {
+          run->authenticate_rest = true;
+          say(options, "a record past the progress record was moved already: every record of " + pack.parent_path().string() + " is read whole from here");
+        }
       } else {
         // The tag and the checksum after it, one write: a header is whole
         // or it is not, and the store's recovery tells.
@@ -755,22 +1000,21 @@ void migrate_pack_file(const std::filesystem::path& pack, const domain::StorageK
           ++unsynced;
         }
         ++report.pack_records_migrated;
-        // Reported once the record is on the device where a test may end the
-        // process.
-        if (unsynced && (options.after_step || unsynced >= sync_every)) {
-          sync_fd(fd.get(), pack);
-          unsynced = 0;
-        }
-        step(options, report);
+        sync_and_step();
       }
     }
     if (options.probe_only && proved) return;
+    ++since_resume;
     offset += total;
     report.bytes_read += total;
     progress(report, options);
   }
   if (unsynced) sync_fd(fd.get(), pack);
+  // The pack is moved: the next begins.
+  if (run && run->progress && !options.dry_run) run->progress->write({run->store, 1, position + 1, 0});
 }
+
+}  // namespace
 
 std::string MigrationReport::summary() const {
   std::ostringstream out;
@@ -784,6 +1028,8 @@ std::string MigrationReport::summary() const {
   out << "loose objects: " << loose_migrated << " migrated, " << loose_already << done << loose_unreadable << " unreadable\n";
   if (loose_torn_finished + pack_records_torn_finished)
     out << "cut short by a crash and finished: " << loose_torn_finished << " loose objects, " << pack_records_torn_finished << " pack records\n";
+  if (records_header_only)
+    out << "moved from their headers, not read whole: " << records_header_only << " (the manifests on each side are what read and check them)\n";
   out << "pack records: " << pack_records_migrated << " migrated, " << pack_records_already << done << pack_records_unreadable << " unreadable, "
       << pack_records_unsealed << " unsealed (touches and tombstones), in " << packs << " packs; " << pack_regions_skipped << " damaged spans skipped, "
       << pack_tail_bytes << " torn tail bytes left\n";
@@ -831,6 +1077,8 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
       return report;
     }
     report.already_v19 = true;
+    // What a run that ended between its last marker and removing its record left.
+    if (!options.dry_run) std::filesystem::remove(state / progress_record_name, ec);
     if (heads_metadata_pending(state, options.cache, options.space_name))
       say(options, "metadata " + (state / "metadata").string() + " is still Macha's: --heads moves it, at the port's later stage");
     say(options, report.summary());
@@ -930,24 +1178,42 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
   std::vector<std::filesystem::path> backend_paths;
   for (const auto& backend : found) backend_paths.push_back(backend.path);
   remove_temporaries(state, backend_paths, options);
+
+  // The stores in the order the run takes them, and how: from their headers on a whole
+  // v18 state or one this run's own record covers; every record read whole otherwise
+  // (TODO/2026-11-19-migrate-speed.md).
+  std::vector<std::pair<std::string, std::filesystem::path>> stores;
+  for (const auto& backend : found) stores.emplace_back("backend ", backend.path);
+  if (have_control) stores.emplace_back("control store ", control);
+  if (have_cache) stores.emplace_back("cache ", options.cache);
+  std::vector<std::filesystem::path> store_paths;
+  for (const auto& [_, path] : stores) store_paths.push_back(path);
+  const ProgressRecord record(state, false, store_paths);
+  std::optional<Point> resume;
+  bool by_header = false;
+  if (!options.dry_run) {
+    if (layout == state_layout_v18) {
+      by_header = true;
+    } else if (layout == store::state_layout_going_forward) {
+      resume = record.left();
+      by_header = resume.has_value();
+    }
+    if (!by_header) record.remove();
+    if (by_header && !resume) record.write({});
+  }
+  if (!by_header && layout == store::state_layout_going_forward) say(options, "no progress record of this run: every record is read whole");
   // From the first write to the last the state is part v18 and part v19. Under
   // v18's marker a Macha restarted on it would read the moved part as corrupt.
   if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_forward) + "\n");
 
   // Objects first: a backend, the control store and the cache are each a
   // tree of loose files and packs.
-  for (const auto& backend : found) {
-    say(options, "backend " + backend.path.string());
-    migrate_objects(backend.path, *domain_key, deriver, to, report, proved, options);
+  for (uint64_t i = 0; i < stores.size(); ++i) {
+    say(options, stores[i].first + stores[i].second.string());
+    ObjectsRun run{&record, resume, i, false};
+    migrate_objects(stores[i].second, *domain_key, deriver, to, report, proved, options, by_header ? &run : nullptr);
   }
-  if (have_control) {
-    say(options, "control store " + control.string());
-    migrate_objects(control, *domain_key, deriver, to, report, proved, options);
-  }
-  if (have_cache) {
-    say(options, "cache " + options.cache.string());
-    migrate_objects(options.cache, *domain_key, deriver, to, report, proved, options);
-  }
+  if (by_header) record.write({stores.size(), 0, 0, 0});
 
   // Then every ledger: the held tries, the claims and their tries, the
   // reference counts.
@@ -977,6 +1243,7 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
       if (const auto v18 = parse_backend_marker_v18(read_text(mirror))) rewrite(mirror, v19_marker_for(*v18, *domain_key, to));
   }
   rewrite(layout_marker, store::state_layout_marker(to) + "\n");
+  if (!options.dry_run) record.remove();
   say(options, report.summary());
   return report;
 }
@@ -1088,22 +1355,38 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
   std::vector<std::filesystem::path> backend_paths;
   for (const auto& backend : found) backend_paths.push_back(backend.path);
   remove_temporaries(state, backend_paths, options);
+
+  // From their headers on a whole v19 state or one this run's own record covers; from a
+  // state a forward run left part way, every record read whole.
+  std::vector<std::pair<std::string, std::filesystem::path>> stores;
+  for (const auto& backend : found) stores.emplace_back("backend ", backend.path);
+  if (have_control) stores.emplace_back("control store ", control);
+  if (have_cache) stores.emplace_back("cache ", options.cache);
+  std::vector<std::filesystem::path> store_paths;
+  for (const auto& [_, path] : stores) store_paths.push_back(path);
+  const ProgressRecord record(state, true, store_paths);
+  std::optional<Point> resume;
+  bool by_header = false;
+  if (!options.dry_run) {
+    if (layout == store::state_layout_marker(v19)) {
+      by_header = true;
+    } else if (layout == store::state_layout_going_back) {
+      resume = record.left();
+      by_header = resume.has_value();
+    }
+    if (!by_header) record.remove();
+    if (by_header && !resume) record.write({});
+  }
   // From the first write to the last the state is part v18 and part v19. Under
   // either marker Macha or the store would open it and read the other part as
   // corrupt, and a forward run would call it done.
   if (!options.dry_run) dannan::identity::durable_replace_file(layout_marker, std::string(store::state_layout_going_back) + "\n");
-  for (const auto& backend : found) {
-    say(options, "backend " + backend.path.string());
-    migrate_objects(backend.path, *domain_key, deriver, v19, report, proved, options);
+  for (uint64_t i = 0; i < stores.size(); ++i) {
+    say(options, stores[i].first + stores[i].second.string());
+    ObjectsRun run{&record, resume, i, false};
+    migrate_objects(stores[i].second, *domain_key, deriver, v19, report, proved, options, by_header ? &run : nullptr);
   }
-  if (have_control) {
-    say(options, "control store " + control.string());
-    migrate_objects(control, *domain_key, deriver, v19, report, proved, options);
-  }
-  if (have_cache) {
-    say(options, "cache " + options.cache.string());
-    migrate_objects(options.cache, *domain_key, deriver, v19, report, proved, options);
-  }
+  if (by_header) record.write({stores.size(), 0, 0, 0});
   migrate_ledgers(state, node_local, domain_key, report, options);
   // The metadata, whatever moved of it: Macha's binary reads only its own.
   migrate_heads_metadata(state, *domain_key, *node_local, options, report, false);
@@ -1137,6 +1420,7 @@ MigrationReport migrate_state_back(const std::filesystem::path& state, const std
     // so again, which is no change to report.
     dannan::identity::durable_replace_file(layout_marker, std::string(state_layout_v18) + "\n");
   }
+  if (!options.dry_run) record.remove();
   say(options, report.summary());
   return report;
 }
