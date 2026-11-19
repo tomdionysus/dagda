@@ -38,16 +38,15 @@ struct Place {
 
 #if defined(__linux__)
 std::optional<uint64_t> first_extent(int fd) {
-  struct {
-    struct fiemap map;
-    struct fiemap_extent extent;
-  } request{};
-  request.map.fm_start = 0;
-  request.map.fm_length = std::numeric_limits<uint64_t>::max();
-  request.map.fm_flags = 0;
-  request.map.fm_extent_count = 1;
-  if (::ioctl(fd, FS_IOC_FIEMAP, &request.map) != 0 || request.map.fm_mapped_extents == 0) return std::nullopt;
-  return request.extent.fe_physical;
+  // The request and room for one extent after it: struct fiemap ends in its array.
+  alignas(struct fiemap) unsigned char request[sizeof(struct fiemap) + sizeof(struct fiemap_extent)]{};
+  auto* map = reinterpret_cast<struct fiemap*>(request);
+  map->fm_start = 0;
+  map->fm_length = std::numeric_limits<uint64_t>::max();
+  map->fm_flags = 0;
+  map->fm_extent_count = 1;
+  if (::ioctl(fd, FS_IOC_FIEMAP, map) != 0 || map->fm_mapped_extents == 0) return std::nullopt;
+  return map->fm_extents[0].fe_physical;
 }
 #endif
 
