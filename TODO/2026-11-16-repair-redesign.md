@@ -442,6 +442,26 @@ second is half the estimate. Stage 3 ran past that share, as Macha's repair does
 correct and harmless, and helps only where the credit runs ahead of the window. Whether an idle node's repair
 should keep to half the link is Tom's (ACTIVE.md, "Waiting on Tom").
 
+**Tom: "Let idle repair use the link" (2026-11-19).** With nothing of a higher class present, here or at a peer
+(`Repair::paced_by()` zero), repair's credit accrues at the whole link estimate; while something is, at
+`idle_bandwidth_fraction` of it, and the duty share holds its turns as before (`repair.cpp` `earn_credit`; the
+option keeps its name, so Macha's key still maps to it, and its comment says what it now means). `719d028` the case
+(`StoreRepair.AnIdleNodesRepairEarnsTheWholeLinkAndAPacedOneItsFraction`), seen failing on neptune; `5d85996` the
+change. Gate on neptune, Dannan 0.9.2, Macha's fixtures: **1156 ran, 1153 passed, 3 skipped, 0 failed, 0
+warnings.** Measured against 0.3.0 in one session (jupiter a, neptune b, link 5.1 to 5.2 MB/s, slower than the
+morning's pair, so these figures stand only against each other; `build/harness/results/2026-11-19-idle/`):
+
+| scenario | 0.3.0 | (b) and the idle credit |
+|---|---|---|
+| rejoin large | 28.1, 29.0, 30.3 s | 26.4, 26.7, 25.3 s |
+| rejoin small | 5.9, 9.1, 6.5 s | 6.6, 6.8, 6.5 s |
+| rejoin under a viewer | 23.7, 23.7, 24.1 s | 26.5, 23.4, 23.7 s |
+| the viewer's reads under repair, p99 | 15.2, 14.0, 16.9 ms | 16.2, 13.0, 15.0 ms (alone 11.8 to 15.7), no misses |
+
+The large rejoin about 10% faster, within about 5 s of the link's own time for 104 MiB (21 s at 5.1 MB/s); the
+small within the spread; under a viewer the same but for one round, and the viewer's reads unchanged. **Merged to
+develop. The large rejoin's gap is closed.**
+
 ## Not decided
 
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue.
