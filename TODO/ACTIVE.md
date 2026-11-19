@@ -25,8 +25,19 @@ unless the board says so (`claims_list`).
   four passes. **Tom chose B**: the migration moves tags from headers alone, and the before and after proof stays
   two independent full manifest passes, each at the disk's rate; the dry run leaves the runbook. The plan and what
   was found: `TODO/2026-11-19-migrate-speed.md`. On `feature/migrate-speed`:
-  - `54e36fa` an ordered pipeline (`migrate/pipeline.h`), `e4f2e03` the manifest pass on it (same manifest, byte for
-    byte, whatever its workers). Gate on neptune running.
+  - **Built and gated** (merged to develop): an ordered pipeline (`migrate/pipeline.h`); the manifest pass reading
+    loose objects in the device's order (`migrate/disk_order.h`, FIEMAP after a sync, else inode), authenticating
+    on the workers, writing the same manifest, journalled beside the partial for `--resume`; the migration moving
+    records from their headers with a progress record (`<state>/migration-progress`), a resume window read whole,
+    a record read whole at the start of each batch, the file at the record's point checked, and
+    `--read-every-record` for the old way. `docs/migration.md`, "How a run moves records (0.3.1)". Gate on uranus at
+    `f5c52f8`, Dannan 0.9.2, Macha's fixtures: **1172 ran, 1169 passed, 3 skipped, 0 failed, 0 warnings**; the
+    new cases seen failing first on neptune. Found on the way: an order taken before a fresh file's blocks were
+    placed moved between runs (fixed, and guarded); a pre-existing 1-in-256 flake in
+    `MigrateCrash.APackRecordWhoseWriteWasCutShortIsFinished` (its cut can leave the bytes whole; the case now
+    expects that). Three cases that lay a tear or damage on an untouched disk now take `--read-every-record`.
+  - Not measured on a slow disk: the pass rates are the Macha session's figures (about 125 MiB/s whole in device
+    order, about 6 ms a file for a header). A rehearsal on a copy would show them.
   - The Macha session's disk figures: macnessa 1.54 M loose 4 MiB objects (31 packs), raw 147-229 MB/s, but about
     45 ms a file read whole one at a time (84 MiB/s), inode order no better, 8 in flight 108 MiB/s; inverbeg 0.90 M
     loose, 103 MiB/s, concurrency hurts. The per-file cost dominates, so header-only is not 2-4 h either (about
