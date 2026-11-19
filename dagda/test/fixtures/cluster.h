@@ -120,6 +120,10 @@ struct ClusterNodeOptions {
   std::chrono::milliseconds no_progress{std::chrono::seconds(30)};
   store::IoReserveOptions io;
   bool device_reserve = true;
+  // What counts as a slow DATA device to the admission's pressure gate (Macha's
+  // dht.io_pressure_*); a zero slowdown_percent turns the gate off, for a case about
+  // something else on a machine whose device runs slow (a sanitizer's).
+  store::DiskServiceThresholds device_pressure{};
   std::chrono::milliseconds admission_wait{std::chrono::seconds(10)};
   // The cadences, quick so a case converges fast; the harness sets a deployment's.
   std::chrono::milliseconds heartbeat{100};
@@ -477,6 +481,7 @@ inline dagda::NodeOptions ClusterNode::node_options() {
     admission.no_progress = _options.no_progress;
     admission.io = _options.io;
     admission.device_reserve = _options.device_reserve;
+    admission.device_pressure = _options.device_pressure;
     out.admission = admission;
   } else {
     out.admission.reset();
