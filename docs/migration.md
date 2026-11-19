@@ -21,7 +21,8 @@ migration is run once, by the operator, with the node stopped:
 
 ```
 dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
-              [--backend DIR]... [--control DIR] [--cache DIR] [--heads] [--space NAME] [--dry-run]
+              [--backend DIR]... [--control DIR] [--cache DIR] [--heads] [--space NAME] [--dry-run] \
+              [--read-every-record]
 ```
 
 - `--state`: Dagda's state directory (the `storage-layout` marker, the
@@ -52,7 +53,10 @@ dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY \
   unless given. The port's facade must open the space by the same name.
 - `--dry-run`: classify and report; change no data. It still takes each
   store's lock, which can leave an empty lock file. The refusals are the same
-  as a real run's.
+  as a real run's. It reads every record whole.
+- `--read-every-record`: read and authenticate every record, as runs did before
+  0.3.1, instead of moving each from its header (below, "How a run moves
+  records"). Slower by the whole disk; it lists damaged and torn records itself.
 
 Every refusal comes before the first write: the node id, the key (proved
 on the first record that opens), a retention checkpoint from before the
@@ -66,9 +70,47 @@ else under the state is left byte for byte, `metadata/` among it without `--head
 Exit code 0 means the state is v19 (migrated now, or already); 1 means
 refused or failed, with the reason on standard error; 2 is a usage error.
 Standard output carries the evidence: counts of loose objects and pack
-records migrated, already v19 and unreadable; ledgers re-sealed, already
-and empty; markers rewritten; bytes read and written; and every record left
-as it was, by file and id.
+records migrated, already v19 and unreadable, and how many were moved from
+their headers alone; ledgers re-sealed, already and empty; markers rewritten;
+bytes read and written; and every record it read and left as it was, by file
+and id.
+
+## How a run moves records (0.3.1)
+
+A record's tag in the other layout follows from its tag, the two associated
+data and its length alone (`dagda/migrate/retag.h`), so a run moves each record
+from its header: a pack record's 125 bytes, a loose object's first 44. It does
+not read the object or authenticate it. Reading every record whole cost a full
+pass over the disk, which on a 5.9 TB USB disk is most of a day
+(`TODO/2026-11-19-migrate-speed.md`).
+
+- **The key is proved first**, as before: the first record of each store is
+  opened before anything is written.
+- **Loose objects in the order the device holds them**: each file's first
+  extent (FIEMAP, after writing the file out so its blocks are placed), else its
+  inode. Pack records in pack order.
+- **The progress record**, `<state>/migration-progress`, written durably before
+  the state's going-forward marker and after each batch of 256 records is
+  synced (one `syncfs` for loose objects, one `fsync` for a pack): the direction,
+  the stores, the point everything before which is moved and on the device, and
+  the loose object at that point. Gone when the run ends.
+- **A run that stopped** resumes from its record. Everything before the point is
+  passed over unread. The records from the point to one batch past it are read
+  whole and authenticated, as every record was before: a record moved last, and a
+  tag a crash cut short, are found there.
+- **The record is checked as the run goes.** The first record of every batch is
+  read whole; if it is already moved, the record does not say what the disk
+  holds, and the rest of that store is read whole. If the loose object at the
+  record's point is not the one it names, the store's order has moved under it,
+  nothing of that store is passed over, and it is read whole.
+- **No record** under a part-way marker (a run of an earlier version, or a record
+  lost) means every record is read whole, as before. So does `--reverse` from a
+  state a forward run left part way.
+- **A damaged record** moved from its header stays damaged: its tag is derived
+  like any other's, and opens under neither layout. The run does not list it; the
+  manifests on each side do, and the comparison names it.
+
+Going back from a whole v19 state moves records from their headers the same way.
 
 ## Proving nothing was lost
 
@@ -94,7 +136,13 @@ set of stores. `--expect-before` and `--expect-after` (18 or 19) compare other
 journeys: 18 then 18 is there and back, whose tags must be equal too.
 
 **The before pass takes the place of `--dry-run`:** it reads the same bytes and
-refuses the same way, and it leaves no lock files. Take the after pass before the
+refuses the same way, and it leaves no lock files. A runbook needs three passes over
+the disk: before, the migration (from headers), after.
+
+A pass reads loose objects in the order the device holds them, one at a time, and
+authenticates on the other cores; it writes the manifest in id order all the same.
+What it has read of a store's loose objects is kept beside the partial, made durable
+at each checkpoint, so `--resume` goes on from the last one. Take the after pass before the
 node starts: the store truncates torn tails, prunes empty files and rewrites its
 accounting at its first open, and the comparison will report each one.
 
