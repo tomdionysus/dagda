@@ -888,6 +888,10 @@ TEST(StoreRepair, ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit) {
   server_options.data_inflight_bytes = 4 * extent;
   server_options.foreground_reserve_bytes = extent;
   server_options.background_concurrency = 4;
+  // The case is about credit; the device's pressure is another gate (its own cases are
+  // StoreIoPressure's), which a device slowed by a sanitizer trips (seen under TSan,
+  // 2026-11-19: 316 to 482% of the expected service time).
+  server_options.device_pressure.slowdown_percent = 0;
   auto& server = cluster.add("server", server_options);
   auto& client = cluster.add("client", options(1));
   cluster.start_all();
@@ -937,7 +941,12 @@ TEST(StoreRepair, ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit) {
   EXPECT_EQ(loaded.reply->type, message::object_reply);
   const auto validated = routes.call_and_wait(target, message::have_object, message::encode_id(id), FrameType::speculative, 2s);
   ASSERT_TRUE(validated.reply);
-  EXPECT_EQ(validated.reply->type, message::bool_reply);
+  const auto refused = dannan::net::refusal_of(*validated.reply);
+  const auto at_refusal = credit.stats();
+  EXPECT_EQ(validated.reply->type, message::bool_reply)
+      << "refused " << (refused ? std::to_string(refused->status) + " " + refused->code + ": " + refused->message : "") << "; pressured "
+      << at_refusal.device_pressured << ", pressure refusals " << at_refusal.pressure_refusals << ", slowdown " << at_refusal.device_slowdown_percent
+      << "%, background " << at_refusal.background_active << " of " << at_refusal.background_limit << ", used " << at_refusal.used_bytes;
 
   const auto stats = credit.stats();
   EXPECT_GE(stats.foreground_admissions, 1u);
@@ -2735,6 +2744,36 @@ TEST(StoreRepair, ATransferReturnsWithItsCopiesInFlight) {
   EXPECT_EQ(next.bytes_transferred, live.size() * 64 * 1024);
 }
 
+// With nothing of a higher class present, repair's credit accrues at the whole link; while
+// one is, at `idle_bandwidth_fraction` of it, and the share holds repair's turns besides
+// (Tom, 2026-11-19: "Let idle repair use the link"). Measured (the redesign document, "(b)
+// built and measured"): a joiner on an idle pair earned half the link and pulled one 4 MiB
+// object a second on a link that carried one in a third of a second.
+TEST(StoreRepair, AnIdleNodesRepairEarnsTheWholeLinkAndAPacedOneItsFraction) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto alone = options(2);
+  alone.repair.extent_size = extent;
+  alone.repair.initial_bandwidth = 100 * 1024;
+  alone.repair.idle_bandwidth_fraction = 0.5;
+  alone.repair.time = &time;
+  auto& node = cluster.add("node", alone);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto& repair = node.repair();
+  ASSERT_EQ(repair.paced_by(), 0);
+  (void)repair.earn_credit(time.now());
+  time.advance(1s);
+  const auto idle = repair.earn_credit(time.now());
+  EXPECT_DOUBLE_EQ(idle.rate, 100.0 * 1024) << "an idle node's repair earns the whole link";
+
+  node.dagda_node().activity().note(FrameType::foreground, 64 * 1024);
+  ASSERT_NE(repair.paced_by(), 0);
+  time.advance(1s);
+  const auto paced = repair.earn_credit(time.now());
+  EXPECT_DOUBLE_EQ(paced.rate, 0.5 * 100.0 * 1024) << "under a viewer, the fraction";
+}
+
 // No call count bounds a turn (it was 16 calls a step, which set the rate for small
 // objects: the redesign document, stage 0). A hundred small objects the credit covers
 // all go in one turn and land with no other.
@@ -2974,6 +3013,47 @@ TEST(StoreRepair, AStepFetchesAWindowsWorthOfLargeObjectsFromOneHolder) {
   for (const auto& id : live) EXPECT_TRUE(joiner.data().has(id));
   // One fetch an object: each part of one id is a fetch of one.
   EXPECT_EQ(holder.calls_of(message::get_objects) + holder.calls_of(message::get_object), live.size());
+}
+
+// What a fetch of many leaves is asked for again as its answer lands, on the extent of
+// the window it already holds, while the step's credit covers it; it does not wait for
+// the next step. Measured (the redesign document, "The holder's side, traced", "Read"):
+// with a window of one extent, a joiner pulled one 4 MiB object a step, a second apart,
+// on a link that carried one in a third of a second. Six objects of most of an extent,
+// a window of one extent, credit for six: one step and its drain bring them all.
+TEST(StoreRepair, WhatAFetchOfManyLeavesIsAskedForAgainAsItLands) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 900 * 1024, 119);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  (void)joiner.store().repair_step(lists, 6 * extent, RepairWindow{extent});
+  (void)joiner.store().repair_drain(30s);
+  for (const auto& id : live) EXPECT_TRUE(joiner.data().has(id));
+  // One fetch an object, every one from the one step.
+  EXPECT_EQ(holder.calls_of(message::get_objects), live.size());
+  EXPECT_EQ(holder.calls_of(message::get_object), 0u);
+}
+
+// The credit still bounds it: what the step's credit does not cover waits for the next
+// step, as before. Credit for two extents: the step and its drain bring two.
+TEST(StoreRepair, WhatAFetchOfManyLeavesPastTheStepsCreditWaitsForTheNextStep) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 900 * 1024, 120);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  (void)joiner.store().repair_step(lists, 2 * extent, RepairWindow{extent});
+  (void)joiner.store().repair_drain(30s);
+  const auto held = std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return joiner.data().has(id); });
+  EXPECT_EQ(held, 2);
+  EXPECT_EQ(holder.calls_of(message::get_objects), 2u);
 }
 
 // The survey through an owner's provider: what is referenced is the

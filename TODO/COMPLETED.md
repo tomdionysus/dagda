@@ -3,6 +3,50 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-19: the read asks the active peers; 0.3.0 cut for the deploy
+
+- **The read fix** (`b997ba1`, Tom's choice over a test-only fix in Macha). Macha's
+  `test_catalogue_uses_final_state_after_coalesced_metadata_burst` failed 1 run in 5: s1's roster held s2 active
+  without the `dagda/extents` advert (shown by the Macha session at the failing read), so `ranked()` named no peer
+  and the read ended unavailable at once with nobody asked. `fetch_next` now asks, after the ranked owners and
+  fallbacks, the active peers without the advert; placement and writes keep it. Case
+  `DistributedStore.AReadAsksAnActivePeerPlacementDoesNotName`, failing first on jupiter (110 ms, nobody asked).
+  Gate at 053ee6e plus the fix, jupiter, Dannan 0.9.2, Macha's fixtures: **1153 ran, 1150 passed, 3 skipped, 0
+  failed, 0 warnings**. The Macha session on 053ee6e plus the patch: the case 20 of 20 serially, its suite 545 of 545.
+- **0.3.0** (Tom: "yes, go"). `feature/macha-store-gaps` merged to develop (`bb1d66c`); `release/0.3.0` with the
+  version commit `4a4b322` (CMake, `debian/control`, the migrate tool's version case, README, `docs/packaging.md`,
+  `tools/build-deb.sh`); merged to main (`2a58202`), tagged `0.3.0` there (annotated; tree `af09d301`, the gated
+  commit's), main merged back to develop (`4c05bd4`). Not pushed. Gate from `git archive 4a4b322` against Dannan 0.9.2
+  built from its tag (`build/pi-release030.sh`, logs in `/root/dagda-030` on saturn and neptune):
+  - saturn, GCC 14 Release, warnings as errors: **0 errors, 0 warnings; 1153 ran, 1150 passed, 3 skipped, 0
+    failed**; `dagda-migrate --version` "0.3.0 (dannan 0.9.2)".
+  - saturn, ASan and UBSan: **1153 ran, 1150 passed, 3 skipped, 0 failed, no report**; the 14 known `std::regex`
+    `-Wmaybe-uninitialized` warnings.
+  - neptune, clang 19, Dannan and Dagda under TSan: 1151 ran, 1148 passed, 3 skipped, 0 failed with deadlock
+    detection on, and the two cases past its 64 locks alone with it off, 2 passed. **No report in Dagda's code.**
+    One report (exit 66), in `StoreRepair.AFailedDiffIsAskedAgainOnATimer`'s teardown: Boost 1.83's
+    `ref_count_down` (`asio/detail/atomic_count.hpp:48-56`, a release `fetch_sub` then an acquire
+    `atomic_thread_fence`) freeing a Dannan session strand's executor on one fixture io thread after the other
+    decremented it. TSan does not model the fence: a known false positive, not suppressed. Told to the Macha
+    session.
+  - Not built: the Debian packages and lintian (they need Dannan 0.9.2's packages on a shared Pi; the deploy builds
+    from source).
+  The tag and its commit sent to the Macha session, which builds its prefix from `git archive 0.3.0` and its 0.95.0
+  deploy tarball from it. No deploy follows; the cutover is not scheduled.
+- **Mixed versions** answered from code for the Macha session's runbook (ACTIVE.md, "Where it stands"): 0.94.2 and
+  Dagda's store must not replicate together (capacity adverts differ, 769-774 answered 501, 0.94.2's `finish()`
+  refusing Dagda's appended principal). `dagda-migrate` is purely local; its credential by `systemd-run
+  LoadCredentialEncrypted=` with no `--credentials-dir`.
+- **The Pis were wiped** (2026-11-18 about 20:30Z). Every Dagda log, gate script and Macha's fixtures were copied to
+  `build/pi-logs/` first.
+- **The large rejoin's 3 s, read** from the 2026-11-18 holder trace (the redesign document, "Read"): the holder and
+  the first burst are at the link's pace; then a fetch of many from one holder is one call a step, its reply one
+  extent, and what it leaves waits for the next step, a second later. Tom chose the fix: ask again at once for what
+  a reply left, while the step's credit covers it. On `feature/rejoin-stream`.
+- **Cleanup** (Tom: "clean things up"): the merged local branches deleted (`feature/bench`, `feature/dannan-070`,
+  `feature/macha-store-gaps`, `feature/read-memory`, `feature/slice1`, `release/0.2.0`, `release/0.3.0`; the tags
+  keep the releases), `build/` from 10.2 GB to 0.76 GB.
+
 ## 2026-11-14 (05:25Z): develop on Dannan 0.7.0 (`feature/dannan-070`, merged)
 
 Lir and Lugh run Dannan 0.7.0 and can link only one Dannan, so slice 1's tag must be on 0.7 for them to link Dagda
