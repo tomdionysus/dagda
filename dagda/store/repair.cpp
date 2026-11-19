@@ -109,13 +109,16 @@ double Repair::bandwidth() const {
 uint64_t Repair::burst() const { return static_cast<uint64_t>(std::max(static_cast<double>(_options.extent_size), bandwidth() * 5.0)); }
 
 RepairCredit Repair::earn_credit(TimePoint now, std::optional<std::chrono::milliseconds> when_no_time_passed) {
-  // Credit: the link's rate, a fraction of it, banked to a burst.
+  // Credit: the link's rate, banked to a burst. The whole of it while nothing of a higher
+  // class is present, here or at a peer; while something is, its fraction, and the share
+  // holds repair's turns besides (the maintainer, 2026-11-19).
   const double link = bandwidth();
   double seconds = _last ? std::chrono::duration<double>(now - *_last).count() : 0.0;
   _last = now;
   if (seconds <= 0.0 && when_no_time_passed) seconds = std::chrono::duration<double>(*when_no_time_passed).count();
   const double cpu_scale = _cpu.scale(seconds, _options.cpu_target);
-  const double rate = link * _options.idle_bandwidth_fraction * cpu_scale;
+  const double fraction = paced_by() ? _options.idle_bandwidth_fraction : 1.0;
+  const double rate = link * fraction * cpu_scale;
   _credit = std::min(static_cast<double>(burst()), _credit + rate * std::max(0.0, seconds));
   return {credit(), rate, seconds};
 }

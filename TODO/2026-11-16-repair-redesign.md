@@ -396,6 +396,72 @@ first fetches in rounds 1 and 2, set the asked, served-arrived, admitted, read a
 clock; what the holder does not account for is the wire or Dannan's send path. Compare round 3, which ran near the link.
 No stage-3 run on 0.9.2 exists yet; a comparison needs `build-s3` rebuilt on the 0.9.2 prefix first.
 
+**Read (2026-11-19).** `build/harness/holder_align.py` merges both nodes' timed lines by wall clock
+(`build/harness/results/2026-11-18-holder/aligned.txt`). Found:
+- **The holder is not the cause.** Each `get_objects` arrives 10 to 20 ms after b asks, is admitted at once and read
+  in 10 to 30 ms.
+- **The first 3.7 s are the link.** a's eight pushes and b's four fetches (48 MiB) start together and all land between
+  3.4 and 3.9 s: about 13 MB/s, the link's rate.
+- **Then b pulls one object a second** (rounds 1 and 2). From its second step on, b holds 6.8 to 8.4 MB of credit,
+  `gate=0`, no credit gate. Each step it sends one `get_objects` per holder with every id it lacks there (14, 13,
+  12, ...). The reply holds one extent (one 4 MiB object), answered in 0.34 s. The rest come back `left`, go to
+  `pull_again` (`distributed_store.cpp:3358`) and wait for the next step, one second later (`:4050-4068`). So the
+  link is busy a third of the time while 9 to 10 objects come this way: about 4 MiB/s against 13.5. That is the
+  remaining gap.
+- Round 3 (9.7 s) pulled the same objects mostly by single `get_object` (promised pulls, several at once) and ran
+  near the link.
+- **Mechanism (from the trace, not yet a case):** a fetch of many from one holder is one call per step, its reply is
+  one extent, and what it leaves waits for the next step. With extent-sized objects, pulls move one extent per step
+  whatever the window and credit allow. Two shapes of fix, for the maintainer: (a) a step splits a holder's ids over as many
+  calls as its window and credit hold (sizes of what it lacks are not known, so by count, with leftovers as now);
+  (b) a reply that leaves ids sends the next fetch for them at once, inside the window, without waiting for the
+  next step. Recommended: (b), which keeps one call per holder streaming at the link whatever the object size, with
+  (a)'s parallelism unneeded on one link. Either way: a case first (a holder with extent-sized objects; one step
+  with room for several extents must move several), seen failing on a Pi, then the scenarios old against new.
+
+**(b) built and measured (2026-11-19, `feature/rejoin-stream`, not merged).** The maintainer chose (b). `ba0cdff` the cases
+(`StoreRepair.WhatAFetchOfManyLeavesIsAskedForAgainAsItLands`, `...PastTheStepsCreditWaitsForTheNextStep`), seen
+failing on node-d (one object, one fetch); `e3ec26a` the fix (`fetch_many_from`: what a reply leaves is asked for
+again at once on the same extent while an allowance of the step's unspent credit covers another). Gate on node-d,
+Dannan 0.9.2, Macha's fixtures: **1155 ran, 1152 passed, 3 skipped, 0 failed, 0 warnings.** Measured against 0.3.0
+in one session (node-b a, node-c b, link 14.5 to 15.6 MB/s, `build/harness/results/2026-11-19-stream/`):
+
+| scenario | 0.3.0 | with (b) |
+|---|---|---|
+| rejoin large | 15.6, 16.6, 16.3 s | 16.3, 16.6, 16.3 s |
+| rejoin small | 2.6, 2.8, 3.0 s | 2.6, 2.2, 2.7 s |
+| rejoin under a viewer | 8.6, 8.6, 8.8 s | 9.2, 8.8, 8.7 s |
+
+**No gain, and the trace says why** (`build/harness/results/2026-11-19-stream-trace/`): the allowance was zero in
+every step. b's step budget is about 10.2 MB: 4.2 MB pays for what landed since the last step, 4.2 MB holds this
+step's fetch, and less than an extent is left. b earns about 4.2 MB a second, which is `idle_bandwidth_fraction`
+(0.5, the live nodes' value, `harness_dagda.cpp:295`) of its link estimate (7.5 to 9.4 MB/s; `repair.cpp:118`). So
+**the large rejoin's pull is paced by repair's configured share of the link, not stalled**: one 4 MiB object a
+second is half the estimate. Stage 3 ran past that share, as Macha's repair does (the harness document, finding 4:
+"repair was running at the link, not at half of it, whatever `idle_bandwidth_fraction` 0.5 intends"). (b) is
+correct and harmless, and helps only where the credit runs ahead of the window. Whether an idle node's repair
+should keep to half the link is the maintainer's (ACTIVE.md, "Waiting on the maintainer").
+
+**The maintainer: "Let idle repair use the link" (2026-11-19).** With nothing of a higher class present, here or at a peer
+(`Repair::paced_by()` zero), repair's credit accrues at the whole link estimate; while something is, at
+`idle_bandwidth_fraction` of it, and the duty share holds its turns as before (`repair.cpp` `earn_credit`; the
+option keeps its name, so Macha's key still maps to it, and its comment says what it now means). `719d028` the case
+(`StoreRepair.AnIdleNodesRepairEarnsTheWholeLinkAndAPacedOneItsFraction`), seen failing on node-a; `5d85996` the
+change. Gate on node-a, Dannan 0.9.2, Macha's fixtures: **1156 ran, 1153 passed, 3 skipped, 0 failed, 0
+warnings.** Measured against 0.3.0 in one session (node-b a, node-a b, link 5.1 to 5.2 MB/s, slower than the
+morning's pair, so these figures stand only against each other; `build/harness/results/2026-11-19-idle/`):
+
+| scenario | 0.3.0 | (b) and the idle credit |
+|---|---|---|
+| rejoin large | 28.1, 29.0, 30.3 s | 26.4, 26.7, 25.3 s |
+| rejoin small | 5.9, 9.1, 6.5 s | 6.6, 6.8, 6.5 s |
+| rejoin under a viewer | 23.7, 23.7, 24.1 s | 26.5, 23.4, 23.7 s |
+| the viewer's reads under repair, p99 | 15.2, 14.0, 16.9 ms | 16.2, 13.0, 15.0 ms (alone 11.8 to 15.7), no misses |
+
+The large rejoin about 10% faster, within about 5 s of the link's own time for 104 MiB (21 s at 5.1 MB/s); the
+small within the spread; under a viewer the same but for one round, and the viewer's reads unchanged. **Merged to
+develop. The large rejoin's gap is closed.**
+
 ## Not decided
 
 - Whether the claim walks' restorer (`Repair::Restorer`, an extent of credit a missing claim) joins the queue.
