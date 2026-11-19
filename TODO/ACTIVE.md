@@ -14,24 +14,17 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-`feature/macha-store-gaps` is merged into `develop` (`bb1d66c`); work goes on `develop` or a new feature branch
-from it. `release/0.3.0` holds the version commit `4a4b322`. Nothing since `8e509cd` is pushed: pushing needs
-Tom's "push". Nothing is running on the Pis unless the board says so (`claims_list`).
+Work goes on `develop` or a feature branch from it; `feature/rejoin-stream` is the open one. Nothing since
+`8e509cd` is pushed (main, develop, the `0.3.0` tag): pushing needs Tom's "push". Nothing is running on the Pis
+unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **0.3.0 is being cut for Macha's deploy** (Tom, 2026-11-19: "commit and tag the fix", after the release
-  sanitizers). `release/0.3.0` = develop `bb1d66c` + `4a4b322 Version 0.3.0` (CMake, `debian/control`, the migrate
-  tool's version case, README, `docs/packaging.md`, `tools/build-deb.sh`). Its gate, from `git archive 4a4b322`
-  against Dannan 0.9.2 built from its tag, under `/root/dagda-030` on saturn and neptune (`build/pi-release030.sh`):
-  - saturn, GCC 14 Release, warnings as errors: **0 errors, 0 warnings; 1153 ran, 1150 passed, 3 skipped, 0
-    failed**; `dagda-migrate --version` "0.3.0 (dannan 0.9.2)". Then ASan+UBSan: see the handoff.
-  - neptune, clang 19, Dannan and Dagda under TSan, built with 0 warnings: see the handoff.
-  - When it passes: merge to `main` (no-ff), annotated tag `0.3.0` there, `main` merged back into `develop`, the tag
-    and its commit sent to the Macha session, which builds its prefix from `git archive 0.3.0` here and builds its
-    0.95.0 deploy tarball from it. No deploy follows; the cutover is not scheduled (Tom: "not yet").
-  - Not in this gate: the Debian packages and lintian (they need Dannan 0.9.2's packages installed on a shared Pi;
-    the deploy builds from source). Offered to Tom.
+- **0.3.0 is tagged for Macha's deploy** (2026-11-19; main `2a58202`, tree identical to the gated `4a4b322`; not
+  pushed). Gate in `COMPLETED.md`: plain and ASan/UBSan 1150 of 1153, 3 skipped, 0 failed, no report; TSan no report
+  in Dagda's code (one known Boost.Asio fence false positive). The Macha session has the tag, builds its prefix from
+  `git archive 0.3.0` and its 0.95.0 deploy tarball from it, and reruns its suite there. No deploy follows; the
+  cutover is not scheduled (Tom: "not yet"). Not built: the Debian packages and lintian (offered to Tom).
 - **Last port fix: a read asks the active peers placement does not name** (`b997ba1`). A peer active in the roster
   whose `dagda/extents` advert had not reached the reader (startup) was never asked, so the read ended unavailable
   at once with nobody asked: Macha's `test_catalogue_uses_final_state_after_coalesced_metadata_burst`, 1 run in 5.
@@ -103,7 +96,7 @@ Tom's "push". Nothing is running on the Pis unless the board says so (`claims_li
      (2026-11-19): a reply that leaves ids sends the next fetch for them at once, inside the window.** A case
      failing first, on a feature branch from develop, then the scenarios old against new (the harness builds need
      rebuilding on the Pis after the wipe).
-3. **Finish 0.3.0** ("Where it stands"): tag on a passing gate, tell Macha; the Debian packages if Tom wants them.
+3. The Debian packages for 0.3.0, if Tom wants them.
 4. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
@@ -121,7 +114,7 @@ Tom's "push". Nothing is running on the Pis unless the board says so (`claims_li
 
 ## Waiting on Tom
 
-- **A push** of `main`, `develop` and the `0.3.0` tag once cut (nothing pushed since `8e509cd`): the Macha session
+- **A push** of `main`, `develop` and the `0.3.0` tag (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is Tom's call while slices pause.
 - **0.3.0's Debian packages and lintian**: not built (they need Dannan 0.9.2's packages installed on a shared Pi).
@@ -153,7 +146,9 @@ merge can collapse it.
     `build/pi-logs/` before the wipe.
   - **jupiter (.169) and neptune:** the Macha session's builds under `/home/tom/deps` (Dannan 0.9.2 prefixes, its
     Dagda prefixes); not Dagda's to touch.
-  - **uranus (.228):** 4 GB; left out of benchmarks until Tom says (it went down mid-run on 2026-11-17).
+  - **uranus (.228):** 4 GB; left out of benchmarks until Tom says (it went down mid-run on 2026-11-17). Builds at
+    `-j2`: `/root/dagda-stream` holds `feature/rejoin-stream`'s gate (`build/pi-stream.sh`), its own Dannan 0.9.2
+    prefix and a copy of Macha's fixtures.
   - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
 - **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
   way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it
