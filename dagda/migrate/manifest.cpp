@@ -26,6 +26,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/migrate/disk_order.h"
 #include "dagda/migrate/heads_metadata.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/manifest_format.h"
@@ -237,6 +238,94 @@ class HeldPartial {
 
  private:
   int _fd = -1;
+};
+
+// What a pass has read of one store's loose objects, in the order the device holds
+// them, before it writes their section in id order (TODO/2026-11-19-migrate-speed.md):
+// each object's key and value, made durable at the pass's checkpoints, so a stopped
+// pass goes on without reading them again. Beside the partial; gone once the section
+// is in it. A frame is a u32 length, the key's length, the key, the value, and the first
+// eight bytes of the SHA-256 of what the length covers; a frame cut short, or whose
+// check fails, ends what is read, as a torn tail.
+class LooseJournal {
+ public:
+  explicit LooseJournal(std::filesystem::path path) : _path(std::move(path)) {}
+  ~LooseJournal() {
+    if (_fd >= 0) ::close(_fd);
+  }
+  LooseJournal(const LooseJournal&) = delete;
+  LooseJournal& operator=(const LooseJournal&) = delete;
+
+  // The whole frames a stopped pass left, and keeps only those: what follows them is
+  // cut off before anything is added.
+  std::vector<std::pair<Bytes, Bytes>> take_over() {
+    std::vector<std::pair<Bytes, Bytes>> out;
+    std::error_code ec;
+    if (!std::filesystem::exists(_path, ec)) return out;
+    const auto bytes = read_file(_path);
+    size_t at = 0;
+    while (bytes.size() - at >= 4) {
+      const uint32_t length = (uint32_t{bytes[at]} << 24) | (uint32_t{bytes[at + 1]} << 16) | (uint32_t{bytes[at + 2]} << 8) | uint32_t{bytes[at + 3]};
+      if (length < 4 || bytes.size() - at - 4 < uint64_t{length} + 8) break;
+      const auto body = std::span<const uint8_t>(bytes).subspan(at + 4, length);
+      const auto check = dannan::identity::sha256(body);
+      if (!std::equal(check.bytes.begin(), check.bytes.begin() + 8, bytes.begin() + static_cast<std::ptrdiff_t>(at + 4 + length))) break;
+      const uint32_t key_length = (uint32_t{body[0]} << 24) | (uint32_t{body[1]} << 16) | (uint32_t{body[2]} << 8) | uint32_t{body[3]};
+      if (key_length > length - 4) break;
+      out.emplace_back(Bytes(body.begin() + 4, body.begin() + 4 + key_length), Bytes(body.begin() + 4 + key_length, body.end()));
+      at += 4 + length + 8;
+    }
+    if (at != bytes.size()) std::filesystem::resize_file(_path, at);
+    return out;
+  }
+  void add(const Bytes& key, const Bytes& value) {
+    const uint32_t length = static_cast<uint32_t>(4 + key.size() + value.size());
+    Bytes body;
+    body.reserve(length);
+    for (const int shift : {24, 16, 8, 0}) body.push_back(static_cast<uint8_t>(key.size() >> shift));
+    body.insert(body.end(), key.begin(), key.end());
+    body.insert(body.end(), value.begin(), value.end());
+    for (const int shift : {24, 16, 8, 0}) _pending.push_back(static_cast<uint8_t>(length >> shift));
+    _pending.insert(_pending.end(), body.begin(), body.end());
+    const auto check = dannan::identity::sha256(body);
+    _pending.insert(_pending.end(), check.bytes.begin(), check.bytes.begin() + 8);
+    if (_pending.size() >= (1U << 20)) write_out();
+  }
+  // What was added is on the device.
+  void sync() {
+    write_out();
+    if (_fd >= 0 && ::fsync(_fd) != 0) throw std::runtime_error("cannot sync " + _path.string() + ": " + std::strerror(errno));
+  }
+  void remove() {
+    if (_fd >= 0) ::close(_fd);
+    _fd = -1;
+    _pending.clear();
+    std::error_code ec;
+    std::filesystem::remove(_path, ec);
+  }
+
+ private:
+  void write_out() {
+    if (_pending.empty()) return;
+    if (_fd < 0) {
+      _fd = ::open(_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+      if (_fd < 0) throw std::runtime_error("cannot open " + _path.string() + ": " + std::strerror(errno));
+    }
+    size_t done = 0;
+    while (done < _pending.size()) {
+      const auto wrote = ::write(_fd, _pending.data() + done, _pending.size() - done);
+      if (wrote < 0) {
+        if (errno == EINTR) continue;
+        throw std::runtime_error("cannot write " + _path.string() + ": " + std::strerror(errno));
+      }
+      done += static_cast<size_t>(wrote);
+    }
+    _pending.clear();
+  }
+
+  const std::filesystem::path _path;
+  int _fd = -1;
+  Bytes _pending;
 };
 
 // What a stopped pass left, to go on from.
@@ -597,6 +686,10 @@ class Pass {
   uint64_t _bytes_this_run = 0;
   // Records read ahead of the manifest's writing: a window of 16, and 64 MiB.
   PipelineLimits _limits;
+  // `<manifest>.partial`, and the loose journal beside it while a store's loose
+  // objects are read (made durable at each checkpoint).
+  std::filesystem::path _partial;
+  LooseJournal* _journal = nullptr;
 };
 
 void Pass::find_stores() {
@@ -744,6 +837,7 @@ void Pass::checkpoint_if_due(ManifestFile& file) {
   if (_since_checkpoint_records < _options.checkpoint_records && _since_checkpoint_bytes < _options.checkpoint_bytes) return;
   _since_checkpoint_records = 0;
   _since_checkpoint_bytes = 0;
+  if (_journal) _journal->sync();
   file.flush(true);
   if (_options.after_checkpoint) _options.after_checkpoint();
 }
@@ -775,37 +869,89 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
   if (recorded && held != recorded->size()) throw changed(store.label + " has lost a loose object");
   if (closed && held < store.loose.size()) throw changed(store.label + " has a loose object it did not have: " + store::to_string(store.loose[held].id));
 
-  // The rest read and authenticated on the workers, several files at once, and written
-  // to the manifest here in the files' order: the manifest a serial pass writes.
+  if (closed) {
+    category(display, recorded ? recorded->size() : store.loose.size());
+    return;
+  }
+
+  // The rest read where the device holds them (TODO/2026-11-19-migrate-speed.md): one
+  // file at a time in the order their bytes start, authenticated on the workers, each
+  // value kept and made durable beside the partial at the pass's checkpoints; then the
+  // section written in id order, the manifest a serial pass writes.
+  const auto path_of = [&](const Store::Loose& loose) { return loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel; };
+  const auto index_of = [&](const Bytes& key) -> std::optional<size_t> {
+    const auto found =
+        std::lower_bound(store.loose.begin(), store.loose.end(), key, [](const Store::Loose& loose, const Bytes& k) { return BytesOrder{}(loose.key, k); });
+    if (found == store.loose.end() || found->key != key) return std::nullopt;
+    return static_cast<size_t>(found - store.loose.begin());
+  };
+  LooseJournal journal(_partial.string() + ".loose-" + dannan::identity::hex(dannan::identity::sha256(bytes_of(store.label))).substr(0, 16));
+  std::vector<std::optional<LooseValue>> values(store.loose.size());
+  if (_resumed) {
+    for (const auto& [key, encoded] : journal.take_over()) {
+      const auto index = index_of(key);
+      if (!index) throw changed(store.label + " has lost a loose object");
+      if (*index < held) continue;
+      const auto value = decode_loose_value(encoded);
+      const auto& loose = store.loose[*index];
+      if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns)
+        throw changed(store.label + " loose object " + store::to_string(loose.id));
+      if (value.layout == record_v18 || value.layout == record_v19) _proved = true;
+      if (value.layout == record_unreadable) ++_unreadable;
+      values[*index] = value;
+    }
+  } else {
+    journal.remove();
+  }
+  std::vector<size_t> left;
+  std::vector<std::filesystem::path> paths;
+  for (size_t i = held; i < store.loose.size(); ++i)
+    if (!values[i]) {
+      left.push_back(i);
+      paths.push_back(path_of(store.loose[i]));
+    }
+  const auto order = disk_order(paths);
+
+  struct Loaded {
+    size_t index = 0;
+    Bytes bytes;
+  };
   struct Read {
     size_t index = 0;
     LooseValue value;
     uint64_t bytes = 0;
-    std::filesystem::path path;
   };
-  size_t next = held;
-  run_ordered<size_t, Read>(
+  size_t next = 0;
+  // Synced at each checkpoint while the section is read; never past this function.
+  const struct Journalling {
+    LooseJournal*& slot;
+    Journalling(LooseJournal*& s, LooseJournal& journal) : slot(s) { slot = &journal; }
+    ~Journalling() { slot = nullptr; }
+  } journalling(_journal, journal);
+  run_ordered<Loaded, Read>(
       _limits,
-      [&]() -> std::optional<std::pair<size_t, uint64_t>> {
-        if (closed || next >= store.loose.size()) return std::nullopt;
-        const auto index = next++;
-        return std::pair{index, store.loose[index].stat.size};
+      [&]() -> std::optional<std::pair<Loaded, uint64_t>> {
+        if (next >= order.size()) return std::nullopt;
+        Loaded loaded;
+        loaded.index = left[order[next]];
+        loaded.bytes = read_file(paths[order[next]]);
+        ++next;
+        const uint64_t weight = loaded.bytes.size();
+        return std::pair{std::move(loaded), weight};
       },
-      [&](size_t& index) {
-        const auto& loose = store.loose[index];
+      [&](Loaded& loaded) {
+        const auto& loose = store.loose[loaded.index];
         Read out;
-        out.index = index;
-        out.path = loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel;
-        const auto bytes = read_file(out.path);
-        out.bytes = bytes.size();
-        out.value.file_size = bytes.size();
+        out.index = loaded.index;
+        out.bytes = loaded.bytes.size();
+        out.value.file_size = loaded.bytes.size();
         out.value.mtime_ns = loose.stat.mtime_ns;
-        if (bytes.empty()) {
+        if (loaded.bytes.empty()) {
           out.value.layout = record_empty;
           return out;
         }
         try {
-          const auto decoded = decode_loose(bytes);
+          const auto decoded = decode_loose(loaded.bytes);
           out.value.plain_size = decoded.plain_size;
           out.value.nonce = decoded.nonce;
           out.value.tag = decoded.tag;
@@ -813,21 +959,26 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
         } catch (const std::exception&) {
           out.value.layout = record_unreadable;
         }
+        loaded.bytes.clear();
         return out;
       },
       [&](Read& read) {
         if (read.value.layout == record_unreadable)
-          note_unreadable(read.path.string());
+          note_unreadable(path_of(store.loose[read.index]).string());
         else if (read.value.layout != record_empty)
           _proved = true;
-        file.item(store.loose[read.index].key, encode(read.value));
+        journal.add(store.loose[read.index].key, encode(read.value));
+        values[read.index] = read.value;
         note_record(read.bytes);
         checkpoint_if_due(file);
       });
-  if (!closed) {
-    file.end();
-  }
-  category(display, recorded && closed ? recorded->size() : store.loose.size());
+
+  for (size_t i = held; i < store.loose.size(); ++i) file.item(store.loose[i].key, encode(*values[i]));
+  file.end();
+  // The section is in the partial, on the device, before what it was made from goes.
+  file.flush(true);
+  journal.remove();
+  category(display, store.loose.size());
 }
 
 void Pass::read_one_pack(const Store::Pack& pack, uint64_t from, ManifestFile& file, Replay& replay) {
@@ -1352,6 +1503,7 @@ void Pass::run(const std::filesystem::path& manifest) {
   std::error_code ec;
   if (std::filesystem::exists(manifest, ec)) throw MigrationRefused("manifest " + manifest.string() + " exists: a pass never overwrites one");
   const auto partial = std::filesystem::path(manifest.string() + ".partial");
+  _partial = partial;
   const bool had_partial = std::filesystem::exists(partial, ec);
   if (had_partial && !_options.resume)
     throw MigrationRefused(partial.string() + " exists from a pass that stopped: give --resume to go on from it, or remove it to start again");
