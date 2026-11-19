@@ -135,7 +135,7 @@ that node starts (the node registers its message types and declares its readines
 planes itself), and holds the node's `dagda::Context`:
 
 ```cmake
-find_package(dagda 0.2.0 CONFIG REQUIRED)  # the exact version; Dannan comes with it
+find_package(dagda 0.3.0 CONFIG REQUIRED)  # the exact version; Dannan comes with it
 target_link_libraries(my_system PRIVATE dagda::dagda)
 ```
 
@@ -190,8 +190,7 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.9.2, the
-Dannan Macha's cutover deploys. Built and tested: the local store and its
+Version 0.3.0, on Dannan 0.9.2, the Dannan Macha's cutover deploys. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
 evidence, tickets, availability and repair (on the port's branch redesigned: one queue
