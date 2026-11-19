@@ -69,7 +69,8 @@ unless the board says so (`claims_list`).
      `in_flight` in `/status`.
 - **Repair is redesigned** (`TODO/2026-11-16-repair-redesign.md`). Stages 1 to 4 are done and gated. Small rejoin: 3
   times faster than stage 3. Rejoin under a viewer: faster. **The unpaced large rejoin: still about 3 s slower than
-  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); the cause is found from the trace** (Next 2), not yet fixed.
+  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); explained: repair keeping to `idle_bandwidth_fraction` 0.5 of
+  the link, which stage 3 ran past** (Next 2; Tom's call whether that stands).
   Macha's live nodes keep today's repair until the cutover.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`), measured against Macha:
   - At parity or better: publications, the viewer, local reads, recovery (within 2%).
@@ -93,9 +94,10 @@ unless the board says so (`claims_list`).
    - **Read 2026-11-19** (the redesign document, "The holder's side, traced", "Read"): the holder and the first
      burst are at the link's pace; the gap is b pulling one object a second. A fetch of many is one call per holder
      per step, its reply holds one extent, and what it leaves waits for the next step. **Tom chose fix (b)
-     (2026-11-19): a reply that leaves ids sends the next fetch for them at once, inside the window.** A case
-     failing first, on a feature branch from develop, then the scenarios old against new (the harness builds need
-     rebuilding on the Pis after the wipe).
+     (2026-11-19).** Built and gated on `feature/rejoin-stream`; measured no faster, because the joiner is paced by
+     its credit (half the link estimate), not by the step. Waiting on Tom (below).
+   - The harness on the Pis: `/root/harness/build-tip` (the fix) and `build-030` (0.3.0) on jupiter and saturn,
+     links into `/root/dagda-stream` and `/root/dagda-030` there.
 3. The Debian packages for 0.3.0, if Tom wants them.
 4. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
@@ -114,6 +116,13 @@ unless the board says so (`claims_list`).
 
 ## Waiting on Tom
 
+- **The large rejoin: repair's share of an idle link.** Fix (b) is built and gated on `feature/rejoin-stream`
+  (1152 of 1155, 0 failed) but measured no faster (16.3 to 16.6 s against 0.3.0's 15.6 to 16.6). The trace shows why:
+  the joiner is paced by its credit, `idle_bandwidth_fraction` 0.5 (the live nodes' value) of its link estimate,
+  about one 4 MiB object a second. The 3 s against stage 3 is repair keeping to that share; stage 3, like Macha's
+  repair, ran past it. Recommended: keep 0.5 as written, call the large rejoin's gap explained and closed, and merge
+  (b) since it is correct and costs nothing; if an idle node should use more of the link, that is Macha's
+  configured fraction to raise, not a code change. The redesign document, "(b) built and measured".
 - **A push** of `main`, `develop` and the `0.3.0` tag (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is Tom's call while slices pause.
