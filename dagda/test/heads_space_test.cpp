@@ -837,6 +837,64 @@ TEST(HeadsSpace, TheRevisionMovesWhenTheTreeDoes) {
   EXPECT_EQ(space->current_revision(), first.revision + 1);
 }
 
+// A view says whether it holds a commit (the maintainer, 2026-11-19, after a file committed short in
+// Macha's cutover rehearsal). The shared view moves forward by generation, which is not
+// causal: with a peer's head ahead of this node's own, a commit made here extends this
+// node's own head and the view stays on the peer's, without the commit, until a fold
+// carries both. An owner that compares a view with what it wrote asks covers() first: a
+// view that does not cover the commit lags it, and says nothing about the commit's fate.
+TEST(HeadsSpace, AViewSaysWhetherItHoldsACommit) {
+  SpaceBed bed;
+  Record selected;
+  bed.converge = [&] { return selected; };
+  auto space = bed.open();
+  bed.found(*space);
+  const auto founded = space->replica().committed();
+  const auto base = *NeutralCodec::as_head(space->local().state);
+
+  const auto first = space->mutate_delta(neutral_mutation([](NeutralEditing& editing) { editing.set_note("mine", "1"); }));
+  ASSERT_TRUE(space->current());
+  EXPECT_TRUE(space->covers(*space->current(), dot_of(first)));
+  // No dot is no commit: nothing covers it.
+  EXPECT_FALSE(space->covers(*space->current(), Dot{}));
+
+  // A peer's branch from the founded head, three commits long, arrives and is what the
+  // exchange selects: the view moves to it, and it holds nothing this node wrote.
+  auto theirs = base;
+  Record peer = founded;
+  for (uint64_t sequence = 1; sequence <= 3; ++sequence) {
+    theirs.clock[author(9)] = sequence;
+    peer = record_after(peer, neutral_payload(theirs));
+    commit_record(space->replica(), peer);
+  }
+  selected = peer;
+  EXPECT_EQ(space->converged().hash, peer.hash);
+  EXPECT_FALSE(space->covers(*space->current(), dot_of(first)));
+
+  // A commit here extends this node's own head, a generation behind the peer's: the view
+  // stays where it was and does not hold the commit. This node's own head does.
+  const auto second = space->mutate_delta(neutral_mutation([](NeutralEditing& editing) { editing.set_note("mine", "2"); }));
+  EXPECT_EQ(second.record.previous, first.record.hash);
+  ASSERT_LT(second.record.generation, peer.generation);
+  EXPECT_EQ(space->current()->hash, peer.hash);
+  EXPECT_FALSE(space->covers(*space->current(), dot_of(second)));
+  const auto own = space->local();
+  EXPECT_EQ(own.hash, second.record.hash);
+  EXPECT_TRUE(space->covers(own, dot_of(first)));
+  EXPECT_TRUE(space->covers(own, dot_of(second)));
+
+  // A fold of the two carries both clocks; the view that reaches it covers the commit.
+  auto folded = head_of(own);
+  folded.clock[author(9)] = 3;
+  const auto fold = record_after(peer, neutral_payload(folded));
+  commit_record(space->replica(), fold);
+  selected = fold;
+  const auto after = space->converged();
+  EXPECT_EQ(after.hash, fold.hash);
+  EXPECT_TRUE(space->covers(after, dot_of(first)));
+  EXPECT_TRUE(space->covers(after, dot_of(second)));
+}
+
 // test_the_metadata_view_pages_a_live_namespace (NE:187) stays Macha's over its noun;
 // this is what S4 supplies it: a live space's pages equal the walk over the same view.
 TEST(HeadsSpace, AViewPagesItsTreeLikeTheWalk) {
