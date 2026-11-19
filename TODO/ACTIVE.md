@@ -1,7 +1,7 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-18 (evening). `COMPLETED.md` is the record; its newest handoff is "2026-11-18 (afternoon): the
-Macha move only; Dannan 0.9.2 and four port fixes".
+Last updated: 2026-11-19 (early). `COMPLETED.md` is the record; its newest handoff is "2026-11-19: the read asks the
+active peers; 0.3.0 cut for the deploy".
 
 ## Start here (a fresh session)
 
@@ -14,17 +14,42 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-The work is on `feature/macha-store-gaps`. Its tip `5c2e91e` and everything since `8e509cd` is local and unpushed:
-pushing needs Tom's "push". Nothing is running on the Pis unless the board says so (`claims_list`).
+`feature/macha-store-gaps` is merged into `develop` (`bb1d66c`); work goes on `develop` or a new feature branch
+from it. `release/0.3.0` holds the version commit `4a4b322`. Nothing since `8e509cd` is pushed: pushing needs
+Tom's "push". Nothing is running on the Pis unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **The branch is on Dannan 0.9.2** (`DAGDA_DANNAN_MINIMUM` 0.9.2, `debian/control` `>= 0.9.2, << 0.10~`), the
-  Dannan the cutover deploys (agreed by the three sessions, 2026-11-18). **Last full gate, `053ee6e`**, jupiter,
-  Dannan 0.9.2 Release prefix, GCC 14 Release, warnings as errors, Macha's fixtures: **1152 ran, 1149 passed, 3
-  skipped, 0 failed, 0 warnings**. ASan and UBSan at `7967737` (the same library less the three fixes below): no
-  report, 14 known `std::regex` false-positive warnings.
-- **Port fixes so far**, each a case failing first, then the fix, sent to the Macha session:
+- **0.3.0 is being cut for Macha's deploy** (Tom, 2026-11-19: "commit and tag the fix", after the release
+  sanitizers). `release/0.3.0` = develop `bb1d66c` + `4a4b322 Version 0.3.0` (CMake, `debian/control`, the migrate
+  tool's version case, README, `docs/packaging.md`, `tools/build-deb.sh`). Its gate, from `git archive 4a4b322`
+  against Dannan 0.9.2 built from its tag, under `/root/dagda-030` on saturn and neptune (`build/pi-release030.sh`):
+  - saturn, GCC 14 Release, warnings as errors: **0 errors, 0 warnings; 1153 ran, 1150 passed, 3 skipped, 0
+    failed**; `dagda-migrate --version` "0.3.0 (dannan 0.9.2)". Then ASan+UBSan: see the handoff.
+  - neptune, clang 19, Dannan and Dagda under TSan, built with 0 warnings: see the handoff.
+  - When it passes: merge to `main` (no-ff), annotated tag `0.3.0` there, `main` merged back into `develop`, the tag
+    and its commit sent to the Macha session, which builds its prefix from `git archive 0.3.0` here and builds its
+    0.95.0 deploy tarball from it. No deploy follows; the cutover is not scheduled (Tom: "not yet").
+  - Not in this gate: the Debian packages and lintian (they need Dannan 0.9.2's packages installed on a shared Pi;
+    the deploy builds from source). Offered to Tom.
+- **Last port fix: a read asks the active peers placement does not name** (`b997ba1`). A peer active in the roster
+  whose `dagda/extents` advert had not reached the reader (startup) was never asked, so the read ended unavailable
+  at once with nobody asked: Macha's `test_catalogue_uses_final_state_after_coalesced_metadata_burst`, 1 run in 5.
+  `fetch_next` now has a third phase after the ranked owners and fallbacks: the active peers without the advert.
+  Placement and writes keep the advert. Tom chose this over a test-only fix. Case
+  `DistributedStore.AReadAsksAnActivePeerPlacementDoesNotName`, failing first on the Pi. Macha's run on 053ee6e plus
+  the patch: the case 20 of 20 serially, its suite **545 of 545**. That was the last library-side failure.
+- **Mixed versions during the cutover** (answered to the Macha session from code, 2026-11-19): 0.94.2's store and
+  Dagda's must not replicate together. Wire numbers and payloads match, and Dagda serves every protocol-23 store
+  type, but: the capacity adverts differ (`macha/capacity`/`macha/used` against `dagda/capacity`/`dagda/figures`),
+  so each reads the other's capacity as 0; 0.94.2 answers Dagda's 769-774 with 501 (deletes do not land there,
+  repair never pushes there, pulls fall back to one at a time); and 0.94.2's put and retain handlers end with
+  `Reader::finish()`, which throws on Dagda's appended principal (confirmed by the Macha session), so every put and
+  claim from Dagda to 0.94.2 fails. Not checked: Dannan replying on the request's lane and frame, the held tries'
+  hashing across v18 and v19. Macha's runbook keeps the mixed window to minutes with `collect_garbage` false.
+  `dagda-migrate` is purely local. Its credential: run under `systemd-run --wait --pipe -p
+  LoadCredentialEncrypted=dannan-root:<sealed> ... --credential dannan-root`, no `--credentials-dir`.
+- **Port fixes before it**, each a case failing first, then the fix, sent to the Macha session:
   - state layout beside the host's files (`8b544d6`)
   - a failed plane marked as it fails (`97a5bed`)
   - a stop waits for an open in progress (`fbdd50a`)
@@ -39,8 +64,9 @@ pushing needs Tom's "push". Nothing is running on the Pis unless the board says 
     seam is `NodeOptions::front`.
   - `dagda-migrate`'s command line and what it expects of a stopped node: `docs/migration.md` (`--node-state` is
     `--state`, custody by systemd credential, every backend named, manifests before and after on another disk).
-- **The Macha session's plan to the cutover:**
-  1. Its suite green on `053ee6e` (it was 540 passed, 4 failed on `7b2a7be`; the four are now answered).
+- **The Macha session's plan to the cutover** (its runbook is Macha's; as last told, 2026-11-19):
+  1. Its suite green on Dagda: done on 053ee6e plus the read patch (545 of 545); to be rerun on the 0.3.0 tag. Its
+     API is back to 0.94.2's shape (Tom's ruling) and its repair runs on the pass clock, as on main.
   2. The config key mapping against both live `macha.yaml` files.
   3. A migration rehearsal on copies of both nodes' state on a claimed Pi, timed, every id listed before and after,
      with a written rollback.
@@ -50,8 +76,8 @@ pushing needs Tom's "push". Nothing is running on the Pis unless the board says 
      `in_flight` in `/status`.
 - **Repair is redesigned** (`TODO/2026-11-16-repair-redesign.md`). Stages 1 to 4 are done and gated. Small rejoin: 3
   times faster than stage 3. Rejoin under a viewer: faster. **The unpaced large rejoin: still about 3 s slower than
-  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); cause not yet found.** Macha's live nodes keep today's repair until
-  the cutover.
+  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); the cause is found from the trace** (Next 2), not yet fixed.
+  Macha's live nodes keep today's repair until the cutover.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`), measured against Macha:
   - At parity or better: publications, the viewer, local reads, recovery (within 2%).
   - Small files: about 6% over Macha's CPU.
@@ -59,26 +85,24 @@ pushing needs Tom's "push". Nothing is running on the Pis unless the board says 
   - Figures before repair's are on jupiter's old kernel. Repair's are on a WiFi link that varies, so a stage is
     measured old against new in one session.
 - **`0.1.5`** (main `c20f88c`, Dannan 0.6) is the last pushed release. **`0.2.0`** (slice 1) is tagged locally only
-  and held (Tom, 2026-11-14 and 2026-11-16). The branch contains it.
+  and held (Tom, 2026-11-14 and 2026-11-16). 0.3.0 contains it.
 
 ## Next (in order): the cutover
 
-1. **Any failure Macha's suite finds in Dagda**, first.
+1. **Any failure Macha's suite finds in Dagda**, first (it reruns on the 0.3.0 tag).
 2. **The large rejoin's remaining 3 s.** The holder's side is now timed: `06b3960`, `StorageServerOptions::serve_timing`,
    printed by the harness's `TRACE=1` as `serve-time` lines beside `repair-time`, both with `wall=` for lining the two
    Pis up.
    - A traced run is done and not yet read (2026-11-18 18:48-18:51Z): jupiter holding, saturn joining, store
      `dagda-092` (`/root/harness/build-092`, copied to saturn with `/root/dagda-092/dannan-prefix`), link 13.5 MB/s.
      Rounds took 16.3, 17.6 and 9.7 s, where the link alone takes about 8 s. Trace:
-     `build/harness/results/2026-11-18-holder/repair-err.txt`. Claims released.
-   - Read b's first fetches against a's `serve-time` (arrived, admitted, read) by wall clock. Whatever the holder
-     doesn't account for is the wire or Dannan's send path. The method and leads are in the redesign document,
-     "The holder's side, traced".
-3. **Release prep** for the deploy's tag:
-   - ASan and UBSan again at the tag's commit.
-   - The Debian packages built on a Pi (`tools/build-deb.sh`): `libdagda<ver>`, `libdagda-dev`, `dagda-tools` with
-     `dagda-migrate`; installed and consumed (`test/package`); lintian.
-   - The version in `CMakeLists.txt` and `debian/control` set to the number Tom gives ("Waiting on Tom").
+     `build/harness/results/2026-11-18-holder/repair-err.txt` (local; the Pis' harness builds went in the wipe).
+   - **Read 2026-11-19** (the redesign document, "The holder's side, traced", "Read"): the holder and the first
+     burst are at the link's pace; the gap is b pulling one object a second. A fetch of many is one call per holder
+     per step, its reply holds one extent, and what it leaves waits for the next step. A fix shape is Tom's
+     (recommended: a reply that leaves ids sends the next fetch at once, inside the window); then a case failing
+     first and the scenarios old against new.
+3. **Finish 0.3.0** ("Where it stands"): tag on a passing gate, tell Macha; the Debian packages if Tom wants them.
 4. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
@@ -96,13 +120,12 @@ pushing needs Tom's "push". Nothing is running on the Pis unless the board says 
 
 ## Waiting on Tom
 
-- **The deploy's tag.** Macha needs a Dagda tag to deploy (or Tom's word on deploying a bundle). `0.2.0` is held, and
-  this branch is 0.2.0 plus the Macha store gaps, repair stages 1 to 4 and the port fixes, on Dannan 0.9.2.
-  Recommendation: tag **0.3.0** from this branch once Macha's suite is green on it, after the release prep in Next 3,
-  and push `main`, `develop` and the tag at his word. That also releases slice 1 (0.2.0's content), which Lugh asked
-  for on 2026-11-16.
-- **A push** of `feature/macha-store-gaps` (local since `8e509cd`): the Macha session builds from this machine's
-  repository, so nothing waits on it, but the remote is behind.
+- **The large rejoin's fix shape** (Next 2): (a) a step splits a holder's ids over several calls, or (b,
+  recommended) a reply that leaves ids sends the next fetch at once, inside the window.
+- **A push** of `main`, `develop` and the `0.3.0` tag once cut (nothing pushed since `8e509cd`): the Macha session
+  builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
+  1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is Tom's call while slices pause.
+- **0.3.0's Debian packages and lintian**: not built (they need Dannan 0.9.2's packages installed on a shared Pi).
 
 In Macha's list, and Dagda follows: the remaining design defects there (the torrent merge, the fence on actions
 under a claim, the local barrier's deadline, wall versus steady ages, the policy disagreement loop, O(state) per
@@ -121,21 +144,22 @@ merge can collapse it.
   - nice 19 and ionice idle.
   - Release the claim the moment the job ends or fails.
   - When none is free, `claim-board wait ... &` in the background; never poll.
-- **Where things are on the Pis:**
-  - **jupiter (.169):** the 0.9.2 gate under `/root/dagda-092`. That holds `dannan-prefix` (Dannan 0.9.2 Release),
-    `repo` (a clone fed by `dagda-gaps*.bundle`), `src`, `build` (Release, warnings as errors), `build-asan`, and the
-    gate scripts `pi-*.sh` writing `status.txt`.
-  - **jupiter, harness:** under `/root/harness`. `build-092` is the tip on 0.9.2; `build-tip` and `build-s3` are on
-    0.8.2.
-  - **Macha's fixtures:** `/root/dagda-release/macha-fixtures` on jupiter and neptune.
-  - **saturn (.170):** `/root/dagda-080` (0.8.0), and a copy of jupiter's 0.9.2 prefix and `build-092` harness.
-  - **neptune (.202):** the Macha session's port builds.
+- **Where things are on the Pis:** all four were wiped to bare OS on 2026-11-18 (about 20:30Z); the toolchains
+  (GCC 14, clang 19, cmake, ninja, Boost 1.83, OpenSSL, GoogleTest 1.16) came back, nothing else of Dagda's.
+  - **saturn (.170) and neptune (.202):** `/root/dagda-030`, 0.3.0's gate: the archives, `macha-fixtures`,
+    `dannan-plain` (Dannan 0.9.2 Release prefix, saturn) and `dannan-tsan` (neptune), `build-*`, `run-*.txt`,
+    `status.txt`.
+  - **Macha's fixtures:** in `/root/dagda-030/macha-fixtures` on saturn and neptune, and kept here in
+    `build/pi-logs/macha-fixtures` (the only copy off the Pis). Every earlier Pi log and gate script was copied to
+    `build/pi-logs/` before the wipe.
+  - **jupiter (.169) and neptune:** the Macha session's builds under `/home/tom/deps` (Dannan 0.9.2 prefixes, its
+    Dagda prefixes); not Dagda's to touch.
   - **uranus (.228):** 4 GB; left out of benchmarks until Tom says (it went down mid-run on 2026-11-17).
-  - All on WiFi, kernel 6.18.62-v8-va48+; all report past under-voltage (`throttled=0x50000`).
-- **Shipping the branch:** it travels as a git bundle (`git bundle create build/ship/dagda-gaps.bundle
-  feature/macha-store-gaps`, then scp). Gate scripts are written there with `cat > pi-x.sh <<EOF` over ssh and run
-  with `nohup ... &`. Wait on a marker line in `status.txt` with a background `until ssh ... grep -q marker; do sleep
-  60; done`.
+  - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
+- **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
+  way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it
+  detached (`ssh -n host 'setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`: a plain `nohup ... &` over ssh holds the
+  session open), and wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
 - **Test-first is shown on the Pi:** build at the commit that adds the cases and see them fail, then build the fix
   and run the whole suite once. One whole-suite run at a step's last commit; no rerun without a named reason.
   Sanitizers only for a release or to hunt one named bug.
@@ -174,6 +198,10 @@ nodes; the Macha session reviews, builds the port, and pauses it for a defect Da
 
 The rulings of 2026-11-13 and 2026-11-14 are in the design's "Ruled" section; those below stand where it does not
 supersede them.
+
+**Tom, 2026-11-18 and 19, in this repository's session:** a read whose ranked owners and fallbacks are spent asks
+the active peers without the extents advert (chosen over a test-only fix in Macha); then "yes, go": commit the fix,
+run the release sanitizers, merge, cut `0.3.0` for Macha's deploy, tell the Macha session. Nothing pushed.
 
 **Tom, 2026-11-18:** the Macha move to Dagda only, until ready for the cutover on macnessa and inverbeg (above). Agreed
 among the three sessions the same day: the cutover deploys on Dannan 0.9.2. The Macha session agreed that Dagda fixes
