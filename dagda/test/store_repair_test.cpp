@@ -2735,6 +2735,36 @@ TEST(StoreRepair, ATransferReturnsWithItsCopiesInFlight) {
   EXPECT_EQ(next.bytes_transferred, live.size() * 64 * 1024);
 }
 
+// With nothing of a higher class present, repair's credit accrues at the whole link; while
+// one is, at `idle_bandwidth_fraction` of it, and the share holds repair's turns besides
+// (the maintainer, 2026-11-19: "Let idle repair use the link"). Measured (the redesign document, "(b)
+// built and measured"): a joiner on an idle pair earned half the link and pulled one 4 MiB
+// object a second on a link that carried one in a third of a second.
+TEST(StoreRepair, AnIdleNodesRepairEarnsTheWholeLinkAndAPacedOneItsFraction) {
+  dannan::test::SteppedTime time;
+  Cluster cluster;
+  auto alone = options(2);
+  alone.repair.extent_size = extent;
+  alone.repair.initial_bandwidth = 100 * 1024;
+  alone.repair.idle_bandwidth_fraction = 0.5;
+  alone.repair.time = &time;
+  auto& node = cluster.add("node", alone);
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  auto& repair = node.repair();
+  ASSERT_EQ(repair.paced_by(), 0);
+  (void)repair.earn_credit(time.now());
+  time.advance(1s);
+  const auto idle = repair.earn_credit(time.now());
+  EXPECT_DOUBLE_EQ(idle.rate, 100.0 * 1024) << "an idle node's repair earns the whole link";
+
+  node.dagda_node().activity().note(FrameType::foreground, 64 * 1024);
+  ASSERT_NE(repair.paced_by(), 0);
+  time.advance(1s);
+  const auto paced = repair.earn_credit(time.now());
+  EXPECT_DOUBLE_EQ(paced.rate, 0.5 * 100.0 * 1024) << "under a viewer, the fraction";
+}
+
 // No call count bounds a turn (it was 16 calls a step, which set the rate for small
 // objects: the redesign document, stage 0). A hundred small objects the credit covers
 // all go in one turn and land with no other.
