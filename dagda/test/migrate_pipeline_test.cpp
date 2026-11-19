@@ -104,13 +104,13 @@ TEST(MigratePipeline, AWorkersExceptionComesAtItsItemsTurn) {
   std::vector<int> seen;
   PipelineLimits limits;
   limits.workers = 4;
-  EXPECT_THROW(run_ordered<int, int>(
+  EXPECT_THROW((run_ordered<int, int>(
                    limits, counting(100),
                    [](int& item) {
                      if (item == 37) throw std::runtime_error("item 37");
                      return item;
                    },
-                   [&](int& result) { seen.push_back(result); }),
+                   [&](int& result) { seen.push_back(result); })),
                std::runtime_error);
   ASSERT_EQ(seen.size(), 37u);
   for (int i = 0; i < 37; ++i) EXPECT_EQ(seen[static_cast<size_t>(i)], i);
@@ -122,13 +122,13 @@ TEST(MigratePipeline, AProducersExceptionComesAfterWhatItProduced) {
   auto next = std::make_shared<int>(0);
   PipelineLimits limits;
   limits.workers = 2;
-  EXPECT_THROW(run_ordered<int, int>(
+  EXPECT_THROW((run_ordered<int, int>(
                    limits,
                    [&]() -> std::optional<std::pair<int, uint64_t>> {
                      if (*next == 20) throw std::runtime_error("cannot read");
                      return std::pair{(*next)++, uint64_t{1}};
                    },
-                   [](int& item) { return item; }, [&](int& result) { seen.push_back(result); }),
+                   [](int& item) { return item; }, [&](int& result) { seen.push_back(result); })),
                std::runtime_error);
   EXPECT_EQ(seen.size(), 20u);
 }
@@ -138,11 +138,11 @@ TEST(MigratePipeline, TheCallersExceptionStopsEverything) {
   int consumed = 0;
   PipelineLimits limits;
   limits.workers = 3;
-  EXPECT_THROW(run_ordered<int, int>(
+  EXPECT_THROW((run_ordered<int, int>(
                    limits, counting(1000), [](int& item) { return item; },
                    [&](int&) {
                      if (++consumed == 10) throw std::logic_error("refused");
-                   }),
+                   })),
                std::logic_error);
   EXPECT_EQ(consumed, 10);
 }
