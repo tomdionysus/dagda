@@ -167,6 +167,33 @@ TEST(MigrateCompare, AStateMigratedWholePassesWithEveryCategorySized) {
   EXPECT_EQ(report.summary().find("RESULT: FAIL"), std::string::npos);
 }
 
+// The pass reads and authenticates on workers beside the one writing the manifest
+// (TODO/2026-11-19-migrate-speed.md), and the manifest is the one a serial pass writes:
+// the same items in the same order, byte for byte. Sixty more loose objects than the
+// window holds, and one damaged, so the window turns over many times and an unreadable
+// record is met in the middle.
+TEST(MigrateCompare, ThePassWritesTheSameManifestWhateverItsWorkers) {
+  Bed bed;
+  for (uint32_t i = 0; i < 60; ++i) {
+    const auto data = pattern(3000 + i * 17, static_cast<uint8_t>(i + 40));
+    legacy::write_loose_v18(bed.v18.backend, *bed.bed.key, store::object_id(data), data);
+  }
+  test::corrupt_object(bed.v18.backend, bed.v18.loose[3].first);
+  auto serial = bed.pass_options();
+  serial.workers = 1;
+  const auto one = bed.pass("serial", serial);
+  auto wide = bed.pass_options();
+  wide.workers = 6;
+  const auto six = bed.pass("wide", wide);
+  EXPECT_EQ(one.items, six.items);
+  EXPECT_EQ(one.bytes_read, six.bytes_read);
+  EXPECT_EQ(legacy::read_file(bed.manifests / "serial"), legacy::read_file(bed.manifests / "wide"));
+  ComparisonOptions same;
+  same.after_layout = 18;
+  const auto report = compare_manifests(bed.manifests / "serial", bed.manifests / "wide", same);
+  EXPECT_TRUE(report.passed()) << report.summary();
+}
+
 // A pass given no metadata reader leaves the metadata NOT CHECKED and nothing
 // passes, however whole the rest. (dagda-migrate always gives one since S7.)
 TEST(MigrateCompare, WithNoMetadataReaderTheMetadataIsNotCheckedAndTheComparisonFails) {

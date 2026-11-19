@@ -30,6 +30,7 @@
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/manifest_format.h"
 #include "dagda/migrate/migrate.h"
+#include "dagda/migrate/pipeline.h"
 #include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/sealing.h"
@@ -509,7 +510,9 @@ class Pass {
         _summary(summary),
         _domain_key(std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_v1(cluster))),
         _node_local(std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_node_local(custody))),
-        _scheme(store::SealingScheme::v19(domain::domain_v1)) {}
+        _scheme(store::SealingScheme::v19(domain::domain_v1)) {
+    _limits.workers = options.workers ? options.workers : pipeline_workers();
+  }
 
   void run(const std::filesystem::path& manifest);
 
@@ -592,6 +595,8 @@ class Pass {
   uint64_t _temporaries = 0;
   std::chrono::steady_clock::time_point _started = std::chrono::steady_clock::now();
   uint64_t _bytes_this_run = 0;
+  // Records read ahead of the manifest's writing: a window of 16, and 64 MiB.
+  PipelineLimits _limits;
 };
 
 void Pass::find_stores() {
@@ -759,44 +764,66 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
   };
   size_t held = 0;
   if (!closed) file.begin(order, display, SectionKind::loose);
-  for (const auto& loose : store.loose) {
-    if (recorded && held < recorded->size()) {
-      const auto& [key, encoded] = (*recorded)[held];
-      if (key != loose.key) throw changed(store.label + " loose object " + store::to_string(loose.id));
-      const auto value = decode_loose_value(encoded);
-      if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns)
-        throw changed(store.label + " loose object " + store::to_string(loose.id));
-      ++held;
-      continue;
-    }
-    if (closed) throw changed(store.label + " has a loose object it did not have: " + store::to_string(loose.id));
-    const auto path = loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel;
-    const auto bytes = read_file(path);
-    LooseValue value;
-    value.file_size = bytes.size();
-    value.mtime_ns = loose.stat.mtime_ns;
-    if (bytes.empty()) {
-      value.layout = record_empty;
-    } else {
-      try {
-        const auto decoded = decode_loose(bytes);
-        value.plain_size = decoded.plain_size;
-        value.nonce = decoded.nonce;
-        value.tag = decoded.tag;
-        value.layout = open_layout(loose.id, decoded.nonce, decoded.tag, decoded.ciphertext, decoded.plain_size);
-      } catch (const std::exception&) {
-        value.layout = record_unreadable;
-      }
-      if (value.layout == record_unreadable)
-        note_unreadable(path.string());
-      else
-        _proved = true;
-    }
-    file.item(loose.key, encode(value));
-    note_record(bytes.size());
-    checkpoint_if_due(file);
+  // What the partial holds first: checked against the files, not read.
+  for (; recorded && held < recorded->size() && held < store.loose.size(); ++held) {
+    const auto& loose = store.loose[held];
+    const auto& [key, encoded] = (*recorded)[held];
+    if (key != loose.key) throw changed(store.label + " loose object " + store::to_string(loose.id));
+    const auto value = decode_loose_value(encoded);
+    if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns) throw changed(store.label + " loose object " + store::to_string(loose.id));
   }
   if (recorded && held != recorded->size()) throw changed(store.label + " has lost a loose object");
+  if (closed && held < store.loose.size()) throw changed(store.label + " has a loose object it did not have: " + store::to_string(store.loose[held].id));
+
+  // The rest read and authenticated on the workers, several files at once, and written
+  // to the manifest here in the files' order: the manifest a serial pass writes.
+  struct Read {
+    size_t index = 0;
+    LooseValue value;
+    uint64_t bytes = 0;
+    std::filesystem::path path;
+  };
+  size_t next = held;
+  run_ordered<size_t, Read>(
+      _limits,
+      [&]() -> std::optional<std::pair<size_t, uint64_t>> {
+        if (closed || next >= store.loose.size()) return std::nullopt;
+        const auto index = next++;
+        return std::pair{index, store.loose[index].stat.size};
+      },
+      [&](size_t& index) {
+        const auto& loose = store.loose[index];
+        Read out;
+        out.index = index;
+        out.path = loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel;
+        const auto bytes = read_file(out.path);
+        out.bytes = bytes.size();
+        out.value.file_size = bytes.size();
+        out.value.mtime_ns = loose.stat.mtime_ns;
+        if (bytes.empty()) {
+          out.value.layout = record_empty;
+          return out;
+        }
+        try {
+          const auto decoded = decode_loose(bytes);
+          out.value.plain_size = decoded.plain_size;
+          out.value.nonce = decoded.nonce;
+          out.value.tag = decoded.tag;
+          out.value.layout = open_layout(loose.id, decoded.nonce, decoded.tag, decoded.ciphertext, decoded.plain_size);
+        } catch (const std::exception&) {
+          out.value.layout = record_unreadable;
+        }
+        return out;
+      },
+      [&](Read& read) {
+        if (read.value.layout == record_unreadable)
+          note_unreadable(read.path.string());
+        else if (read.value.layout != record_empty)
+          _proved = true;
+        file.item(store.loose[read.index].key, encode(read.value));
+        note_record(read.bytes);
+        checkpoint_if_due(file);
+      });
   if (!closed) {
     file.end();
   }
@@ -811,57 +838,101 @@ void Pass::read_one_pack(const Store::Pack& pack, uint64_t from, ManifestFile& f
     ~Closing() { ::close(fd); }
   } closing{fd};
   const uint64_t file_size = pack.stat.size;
-  uint64_t offset = from;
-  const auto span = [&](uint8_t kind, uint64_t length) {
+  // The pack walked and each record read here, in order (the kernel streams it); a
+  // put authenticated on the workers; everything written to the manifest by the
+  // caller in the pack's order, as a serial pass writes it.
+  struct Record {
+    uint64_t offset = 0;
+    uint64_t length = 0;
     PackValue value;
-    value.span = kind;
-    value.length = length;
-    value.digest = digest_of_span(fd, offset, length, pack.path);
-    file.item(pack_key(pack.sequence, offset), encode(value));
-    note_record(length);
-    if (kind == span_tail) _summary.tail_bytes += length;
-    offset += length;
+    // A put waiting to be opened: its payload.
+    std::optional<Bytes> payload;
+    // A span: whether it is a damaged one (records follow it) or the tail, and whether
+    // a checkpoint follows it (a header that did not decode, as the serial pass had it).
+    bool damaged = false;
+    bool checkpoint = false;
   };
-  while (offset < file_size) {
-    if (file_size - offset < pack_header_size) {
-      span(span_tail, file_size - offset);
-      break;
-    }
-    const auto bytes = read_at(fd, pack_header_size, offset);
-    if (!bytes) throw std::runtime_error("cannot read " + pack.path.string());
-    const auto header = decode_pack_header(*bytes);
-    if (!header) {
-      // As the store's recovery: a torn tail, or damage with records after it.
-      const auto next = find_next_pack_header(fd, offset + 1, file_size);
-      span(next ? span_damaged : span_tail, (next ? *next : file_size) - offset);
-      if (next) note_unreadable(pack.path.string() + " damaged span");
-      checkpoint_if_due(file);
-      continue;
-    }
-    const uint64_t total = pack_header_size + header->payload_size;
-    if (total > file_size - offset) {
-      span(span_tail, file_size - offset);
-      break;
-    }
-    PackValue value;
-    value.header = *header;
-    if (header->type == pack_put) {
-      const auto payload = read_at(fd, static_cast<size_t>(header->payload_size), offset + pack_header_size);
-      if (!payload) throw std::runtime_error("cannot read " + pack.path.string());
-      value.layout = open_layout(header->id, header->nonce, header->tag, *payload, header->plain_size);
-      if (value.layout == record_unreadable)
-        note_unreadable(pack.path.string() + " record " + store::to_string(header->id) + " at " + std::to_string(offset));
-      else
-        _proved = true;
-      replay.last[header->id] = std::nullopt;
-    } else if (header->type == pack_remove) {
-      replay.last[header->id] = header->touched_ms;
-    }
-    file.item(pack_key(pack.sequence, offset), encode(value));
-    offset += total;
-    note_record(total);
-    checkpoint_if_due(file);
-  }
+  uint64_t offset = from;
+  bool done = false;
+  run_ordered<Record, Record>(
+      _limits,
+      [&]() -> std::optional<std::pair<Record, uint64_t>> {
+        if (done || offset >= file_size) return std::nullopt;
+        Record record;
+        record.offset = offset;
+        const auto span = [&](uint8_t kind, uint64_t length, bool damaged) {
+          record.value.span = kind;
+          record.value.length = length;
+          record.value.digest = digest_of_span(fd, offset, length, pack.path);
+          record.length = length;
+          record.damaged = damaged;
+          offset += length;
+        };
+        if (file_size - offset < pack_header_size) {
+          span(span_tail, file_size - offset, false);
+          done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        const auto bytes = read_at(fd, pack_header_size, offset);
+        if (!bytes) throw std::runtime_error("cannot read " + pack.path.string());
+        const auto header = decode_pack_header(*bytes);
+        if (!header) {
+          // As the store's recovery: a torn tail, or damage with records after it.
+          const auto next = find_next_pack_header(fd, offset + 1, file_size);
+          span(next ? span_damaged : span_tail, (next ? *next : file_size) - offset, next.has_value());
+          record.checkpoint = true;
+          if (!next) done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        const uint64_t total = pack_header_size + header->payload_size;
+        if (total > file_size - offset) {
+          span(span_tail, file_size - offset, false);
+          done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        record.value.header = *header;
+        record.length = total;
+        if (header->type == pack_put) {
+          auto payload = read_at(fd, static_cast<size_t>(header->payload_size), offset + pack_header_size);
+          if (!payload) throw std::runtime_error("cannot read " + pack.path.string());
+          record.payload = std::move(*payload);
+        }
+        offset += total;
+        const uint64_t weight = record.payload ? record.payload->size() : 0;
+        return std::pair{std::move(record), weight};
+      },
+      [&](Record& record) {
+        if (record.payload) {
+          const auto& header = record.value.header;
+          record.value.layout = open_layout(header.id, header.nonce, header.tag, *record.payload, header.plain_size);
+          record.payload.reset();
+        }
+        return std::move(record);
+      },
+      [&](Record& record) {
+        const auto key = pack_key(pack.sequence, record.offset);
+        if (record.value.span != span_record) {
+          file.item(key, encode(record.value));
+          note_record(record.length);
+          if (record.value.span == span_tail) _summary.tail_bytes += record.length;
+          if (record.damaged) note_unreadable(pack.path.string() + " damaged span");
+          if (record.checkpoint) checkpoint_if_due(file);
+          return;
+        }
+        const auto& header = record.value.header;
+        if (header.type == pack_put) {
+          if (record.value.layout == record_unreadable)
+            note_unreadable(pack.path.string() + " record " + store::to_string(header.id) + " at " + std::to_string(record.offset));
+          else
+            _proved = true;
+          replay.last[header.id] = std::nullopt;
+        } else if (header.type == pack_remove) {
+          replay.last[header.id] = header.touched_ms;
+        }
+        file.item(key, encode(record.value));
+        note_record(record.length);
+        checkpoint_if_due(file);
+      });
 }
 
 void Pass::read_packs(Store& store, ManifestFile& file, Replay& replay) {
