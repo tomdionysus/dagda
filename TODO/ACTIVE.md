@@ -99,9 +99,10 @@ The maintainer's "push". Nothing is running on the Pis unless the board says so 
      `build/harness/results/2026-11-18-holder/repair-err.txt` (local; the Pis' harness builds went in the wipe).
    - **Read 2026-11-19** (the redesign document, "The holder's side, traced", "Read"): the holder and the first
      burst are at the link's pace; the gap is b pulling one object a second. A fetch of many is one call per holder
-     per step, its reply holds one extent, and what it leaves waits for the next step. A fix shape is the maintainer's
-     (recommended: a reply that leaves ids sends the next fetch at once, inside the window); then a case failing
-     first and the scenarios old against new.
+     per step, its reply holds one extent, and what it leaves waits for the next step. **The maintainer chose fix (b)
+     (2026-11-19): a reply that leaves ids sends the next fetch for them at once, inside the window.** A case
+     failing first, on a feature branch from develop, then the scenarios old against new (the harness builds need
+     rebuilding on the Pis after the wipe).
 3. **Finish 0.3.0** ("Where it stands"): tag on a passing gate, tell Macha; the Debian packages if the maintainer wants them.
 4. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
@@ -120,8 +121,6 @@ The maintainer's "push". Nothing is running on the Pis unless the board says so 
 
 ## Waiting on the maintainer
 
-- **The large rejoin's fix shape** (Next 2): (a) a step splits a holder's ids over several calls, or (b,
-  recommended) a reply that leaves ids sends the next fetch at once, inside the window.
 - **A push** of `main`, `develop` and the `0.3.0` tag once cut (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is the maintainer's call while slices pause.
@@ -201,7 +200,11 @@ supersede them.
 
 **The maintainer, 2026-11-18 and 19, in this repository's session:** a read whose ranked owners and fallbacks are spent asks
 the active peers without the extents advert (chosen over a test-only fix in Macha); then "yes, go": commit the fix,
-run the release sanitizers, merge, cut `0.3.0` for Macha's deploy, tell the Macha session. Nothing pushed.
+run the release sanitizers, merge, cut `0.3.0` for Macha's deploy, tell the Macha session. Nothing pushed. On the
+large rejoin, the fix where a reply that leaves ids sends the next fetch at once ("yes"), and "clean things up":
+the merged local branches deleted (`feature/bench`, `feature/dannan-070`, `feature/macha-store-gaps`,
+`feature/read-memory`, `feature/slice1`, `release/0.2.0`, which the tag keeps), `build/` cut from 10.2 GB to 0.76 GB
+(the Mac build and sanitizer trees, bundles, the bench's stores; every log, script and note kept).
 
 **The maintainer, 2026-11-18:** the Macha move to Dagda only, until ready for the cutover on live-a and live-b (above). Agreed
 among the three sessions the same day: the cutover deploys on Dannan 0.9.2. The Macha session agreed that Dagda fixes
