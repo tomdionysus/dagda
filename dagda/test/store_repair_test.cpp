@@ -2976,6 +2976,47 @@ TEST(StoreRepair, AStepFetchesAWindowsWorthOfLargeObjectsFromOneHolder) {
   EXPECT_EQ(holder.calls_of(message::get_objects) + holder.calls_of(message::get_object), live.size());
 }
 
+// What a fetch of many leaves is asked for again as its answer lands, on the extent of
+// the window it already holds, while the step's credit covers it; it does not wait for
+// the next step. Measured (the redesign document, "The holder's side, traced", "Read"):
+// with a window of one extent, a joiner pulled one 4 MiB object a step, a second apart,
+// on a link that carried one in a third of a second. Six objects of most of an extent,
+// a window of one extent, credit for six: one step and its drain bring them all.
+TEST(StoreRepair, WhatAFetchOfManyLeavesIsAskedForAgainAsItLands) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 900 * 1024, 119);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  (void)joiner.store().repair_step(lists, 6 * extent, RepairWindow{extent});
+  (void)joiner.store().repair_drain(30s);
+  for (const auto& id : live) EXPECT_TRUE(joiner.data().has(id));
+  // One fetch an object, every one from the one step.
+  EXPECT_EQ(holder.calls_of(message::get_objects), live.size());
+  EXPECT_EQ(holder.calls_of(message::get_object), 0u);
+}
+
+// The credit still bounds it: what the step's credit does not cover waits for the next
+// step, as before. Credit for two extents: the step and its drain bring two.
+TEST(StoreRepair, WhatAFetchOfManyLeavesPastTheStepsCreditWaitsForTheNextStep) {
+  Cluster cluster;
+  auto& holder = cluster.add("holder", options(2));
+  auto& joiner = cluster.add("joiner", options(2));
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto live = local_objects(holder, 6, 900 * 1024, 120);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  (void)joiner.store().repair_step(lists, 2 * extent, RepairWindow{extent});
+  (void)joiner.store().repair_drain(30s);
+  const auto held = std::count_if(live.begin(), live.end(), [&](const ObjectId& id) { return joiner.data().has(id); });
+  EXPECT_EQ(held, 2);
+  EXPECT_EQ(holder.calls_of(message::get_objects), 2u);
+}
+
 // The survey through an owner's provider: what is referenced is the
 // provider's answer; what this node lacks, what a peer lacks and what nobody
 // holds follow from it and from the two held tries alone. Before any
