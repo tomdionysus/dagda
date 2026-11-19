@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -16,11 +16,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -75,6 +77,46 @@ std::string refusal_of(ClusterNode& node) {
   return {};
 }
 
+// The DATA pool and the control chain recover side by side, as Macha's do
+// (local_state.cpp:57-79 at f0597a4): a pool held in its stage leaves the control
+// store and the cache to come up and be reported ready, and the open waits for both.
+// Macha's stage names are heard on the thread that does the plane: data-storage on
+// the pool's, control-storage, cache and retention on the open's (the store map,
+// pool gap 1).
+TEST(Node, TheDataPoolAndTheControlChainRecoverSideBySide) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  struct Heard {
+    std::mutex mutex;
+    std::vector<std::string> stages;
+  };
+  auto heard = std::make_shared<Heard>();
+  ClusterNodeOptions options;
+  options.startup_stage = [&gate, heard](std::string_view stage) {
+    {
+      std::lock_guard lock(heard->mutex);
+      heard->stages.emplace_back(stage);
+    }
+    if (stage == "data-storage") gate.enter_and_wait();
+  };
+  auto& a = cluster.add("a", options);
+  auto opening = std::async(std::launch::async, [&] { a.open(); });
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  EXPECT_TRUE(test::wait_until([&] { return a.context().readiness().has("control_storage") && a.context().readiness().has("cache"); }))
+      << "the control chain waited for the pool";
+  EXPECT_FALSE(a.context().readiness().has("data_storage"));
+  EXPECT_EQ(opening.wait_for(0ms), std::future_status::timeout);
+  gate.open();
+  ASSERT_EQ(opening.wait_for(30s), std::future_status::ready);
+  opening.get();
+  EXPECT_TRUE(a.context().readiness().has("data_storage"));
+  EXPECT_TRUE(a.context().readiness().has("retention"));
+  std::lock_guard lock(heard->mutex);
+  for (const auto* stage : {"data-storage", "control-storage", "cache", "retention"})
+    EXPECT_NE(std::find(heard->stages.begin(), heard->stages.end(), stage), heard->stages.end()) << stage;
+}
+
 // It opens in the design's order on a fresh state and again on the state it
 // left, stops in the reverse order, and what it held is still held.
 TEST(Node, OpensAndStopsInOrderOnAFreshStateAndAReopenedOne) {
@@ -98,7 +140,7 @@ TEST(Node, OpensAndStopsInOrderOnAFreshStateAndAReopenedOne) {
   const auto data = test::numbered(7);
   const auto id = store::object_id(data);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(id, data, write).met);
   a.stop();
   EXPECT_EQ(stages.take(), stops);
@@ -176,6 +218,83 @@ TEST(Node, MachasUnmovedMetadataRefusesAHeadsNodeNamingTheMigration) {
   EXPECT_FALSE(b.running());
 }
 
+// A plane that fails is marked on the node's readiness at once, from its own thread, as
+// Macha's LocalState marked it (local_state.cpp:127, :183 at 98b816d), while the other
+// plane is still held: the node says failed, and why, before the other plane ends. Found
+// by Macha's port (service_root's failed-startup cases, 2026-11-17): the failure was told
+// only when both planes had ended. Both ways: the DATA pool fails on its thread while
+// the control chain is held, and the cache fails on the opening thread while the pool is
+// held, its reason empty.
+TEST(Node, APlaneThatFailsIsMarkedFailedWhileTheOtherIsStillRecovering) {
+  struct Shape {
+    std::string failing;
+    std::string held;
+    std::string why;
+    std::string line;
+  };
+  for (const auto& shape : {Shape{"data-storage", "control-storage", "backend missing", "node data storage recovery failed: backend missing"},
+                            Shape{"cache", "data-storage", "", "node local state recovery failed: "}}) {
+    dannan::test::Gate gate;
+    Cluster cluster;
+    ClusterNodeOptions options;
+    options.startup_stage = [&gate, shape](std::string_view stage) {
+      if (stage == shape.held) gate.enter_and_wait();
+      if (stage == shape.failing) throw std::runtime_error(shape.why);
+    };
+    auto& a = cluster.add("a", options);
+    dannan::test::GateOpener opener(gate);
+    auto starting = std::async(std::launch::async, [&] {
+      try {
+        a.start();
+      } catch (const std::exception&) {
+      }
+    });
+    dannan::test::GateOpener release(gate);
+    ASSERT_TRUE(gate.wait_for_entries(1, 10s)) << shape.failing;
+    EXPECT_TRUE(test::wait_until([&] { return a.context().readiness().failed(); }, 5s)) << shape.failing << " failed with " << shape.held << " still held";
+    EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::error, shape.line)) << shape.failing;
+    gate.open();
+    ASSERT_EQ(starting.wait_for(30s), std::future_status::ready);
+    EXPECT_FALSE(a.running());
+  }
+}
+
+// A stop while the store opens on the owner's thread waits for the open, which ends
+// refused, and leaves nothing running: an owner stopping its node while its recovery
+// thread is still opening must not tear the parts down under the open. Found by Macha's
+// port, whose test fixture did that and crashed in the open (2026-11-17, its fixture
+// since fixed); Dagda guards it rather than leave every host to order it.
+TEST(Node, AStopWhileTheStoreOpensWaitsForTheOpenWhichEndsRefused) {
+  dannan::test::Gate gate;
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.open_later = true;
+  options.startup_stage = [&gate](std::string_view stage) {
+    if (stage == "control-storage") gate.enter_and_wait();
+  };
+  auto& a = cluster.add("a", options);
+  a.start();
+  dannan::test::GateOpener opener(gate);
+  auto opening = std::async(std::launch::async, [&] {
+    try {
+      a.dagda_node().open_store();
+      return std::string("opened");
+    } catch (const NodeRefused& refused) {
+      return std::string("refused: ") + refused.what();
+    }
+  });
+  dannan::test::GateOpener release(gate);
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  auto stopping = std::async(std::launch::async, [&] { a.dagda_node().stop(); });
+  EXPECT_EQ(stopping.wait_for(500ms), std::future_status::timeout) << "the stop did not wait for the open";
+  gate.open();
+  ASSERT_EQ(opening.wait_for(30s), std::future_status::ready);
+  ASSERT_EQ(stopping.wait_for(30s), std::future_status::ready);
+  const auto opened = opening.get();
+  EXPECT_EQ(opened.find("refused: "), 0u) << opened;
+  EXPECT_FALSE(a.dagda_node().running());
+}
+
 // No custody, no node-local key: the ledgers would have no key, so the
 // node is refused and says why.
 TEST(Node, ANodeWithoutCustodyIsRefused) {
@@ -230,7 +349,7 @@ TEST(Node, TheStorageLockRefusesASecondNodeAndTheMigration) {
 
   const auto data = test::numbered(11);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   EXPECT_TRUE(a.store().write(store::object_id(data), data, write).met);
 
   // The other way: the migration holds the backend (as it does while it
@@ -313,7 +432,7 @@ TEST(Node, PublishesTheStoresFiguresAndGoesReady) {
 
   const auto data = test::numbered(3);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(store::object_id(data), data, write).met);
   a.dagda_node().publish_status();
   snapshot = a.context().status().snapshot();
@@ -358,11 +477,95 @@ TEST(Node, NoBackendOnlineIsReadyButDegraded) {
   EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "node data storage degraded: no disk online of 1; running without one until it returns"));
   EXPECT_TRUE(a.context().readiness().complete());
   auto backends = node.options().pool.backends;
+  // A disk mounted there: a path that is not a directory stays offline (Macha's
+  // activate, storage_pool.cpp:175-178 at f0597a4).
+  std::filesystem::create_directories(cluster.dir() / "good");
   backends[0].path = cluster.dir() / "good";
   node.reconfigure({backends, {}});
   EXPECT_FALSE(degraded());
   EXPECT_TRUE(a.context().readiness().complete());
   a.stop();
+}
+
+// A backend path that does not exist is a disk not mounted: it stays offline and
+// nothing is made there, so no write lands on the filesystem beneath the mount point
+// (Macha's activate, storage_pool.cpp:175-178 at f0597a4). Before, the node's lock on
+// the root made the directory and the pool adopted it as an empty disk (the store map,
+// pool and local store, gap 2).
+TEST(Node, AMissingBackendPathStaysOfflineAndIsNotCreated) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "unmounted";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  EXPECT_TRUE(a.data().degraded());
+  EXPECT_FALSE(std::filesystem::exists(cluster.dir() / "unmounted"));
+  a.data().refresh();
+  EXPECT_FALSE(std::filesystem::exists(cluster.dir() / "unmounted"));
+  a.stop();
+}
+
+// Mounted later, the disk comes online at the next refresh, and this node holds its
+// lock from then on: another process is refused it.
+TEST(Node, ABackendThatAppearsLaterComesOnlineHeldByThisNode) {
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "later";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  ASSERT_TRUE(a.data().degraded());
+  std::filesystem::create_directories(cluster.dir() / "later");
+  a.data().refresh();
+  EXPECT_FALSE(a.data().degraded());
+  EXPECT_THROW(store::StorageLock held(cluster.dir() / "later"), std::runtime_error);
+  a.stop();
+}
+
+// A path that cannot be made (beneath a file) is a disk not there either: the node
+// runs, degraded, rather than being refused (the store map, pool and local store, gap 2).
+TEST(Node, ABackendPathThatCannotBeCreatedLeavesTheNodeDegradedNotRefused) {
+  Cluster cluster;
+  std::ofstream(cluster.dir() / "a-file") << "not a directory\n";
+  ClusterNodeOptions options;
+  options.data = cluster.dir() / "a-file" / "data";
+  options.create_backends = false;
+  auto& a = cluster.add("a", options);
+  a.start();
+  EXPECT_TRUE(a.running());
+  EXPECT_TRUE(a.data().degraded());
+  a.stop();
+}
+
+// A cache that cannot be had (its path beneath a file, or another holding it) is a cache
+// turned off, not a node refused: Macha's cache warns "persistent cache disabled: " and
+// the node runs without it (persistent_cache.cpp:73-84 at f0597a4; the store map's
+// review, the cache root).
+TEST(Node, ACacheThatCannotBeHadIsDisabledAndTheNodeRuns) {
+  Cluster cluster;
+  std::ofstream(cluster.dir() / "a-file") << "not a directory\n";
+  ClusterNodeOptions beneath_a_file;
+  beneath_a_file.cache.path = cluster.dir() / "a-file" / "cache";
+  beneath_a_file.cache.max_blocks = 64;
+  auto& a = cluster.add("a", beneath_a_file);
+  a.start();
+  EXPECT_TRUE(a.running());
+  EXPECT_FALSE(a.cache().enabled());
+  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "persistent cache disabled: "));
+  a.stop();
+
+  const auto held_path = cluster.dir() / "held-cache";
+  std::filesystem::create_directories(held_path);
+  store::StorageLock held(held_path);
+  ClusterNodeOptions held_elsewhere;
+  held_elsewhere.cache.path = held_path;
+  held_elsewhere.cache.max_blocks = 64;
+  auto& b = cluster.add("b", held_elsewhere);
+  b.start();
+  EXPECT_TRUE(b.running());
+  EXPECT_FALSE(b.cache().enabled());
+  b.stop();
 }
 
 // Macha's node answers while its store recovers: the Dannan node starts first, so
@@ -543,7 +746,7 @@ TEST(Node, AStageHoldsTheOpenAndTheOwnersProgressTellsAStallFromRecovery) {
 
   const auto data = test::numbered(11);
   store::WriteOptions write;
-  write.level = store::Durability::persisted;
+  write.ack_level = store::Durability::persisted;
   ASSERT_TRUE(a.store().write(store::object_id(data), data, write).met);
   a.stop();
   // No clean checkpoint to trust: the open's accounting scan walks the store,
@@ -568,6 +771,45 @@ TEST(Node, TheDeviceReserveCanBeOff) {
   EXPECT_TRUE(a.store().put(store::object_id(bytes), bytes));
   EXPECT_TRUE(a.store().get(store::object_id(bytes)).has_value());
   a.dagda_node().publish_status();
+}
+
+// The harness's two-machine workloads run one cluster in two processes: each a Cluster
+// over a kept directory, the second given a copy of the first's CA and its node's
+// endpoint as a seed. Shown here with two Clusters in one process. (Two with a CA each
+// join as well, on the cluster key every fixture node keeps; one CA is kept so the
+// certificates agree too, as in one process.)
+TEST(DagdaNode, TwoKeptClustersWithOneCaAreOneCluster) {
+  dannan::test::TempDir temp;
+  Cluster first(temp.path() / "first", 1500ms);
+  auto& a = first.add("a");
+  a.start();
+  std::filesystem::create_directories(temp.path() / "second");
+  for (const auto* file : {"ca.key", "ca.pem"}) std::filesystem::copy_file(temp.path() / "first" / file, temp.path() / "second" / file);
+  Cluster second(temp.path() / "second", 1500ms);
+  ClusterNodeOptions joining;
+  joining.seeds = {{a.host(), a.port()}};
+  auto& b = second.add("b", joining);
+  b.start();
+  const auto sees = [](ClusterNode& observer, ClusterNode& other) {
+    return test::wait_until([&] {
+      for (const auto& record : observer.context().nodes().active())
+        if (record.id == other.id()) return true;
+      return false;
+    });
+  };
+  EXPECT_TRUE(sees(a, b));
+  EXPECT_TRUE(sees(b, a));
+}
+
+// A node listens where it is told: the port given, not a free one.
+TEST(DagdaNode, ANodeTakesThePortItIsGiven) {
+  Cluster cluster;
+  ClusterNodeOptions fixed;
+  fixed.port = dannan::test::free_port();
+  auto& node = cluster.add("node", fixed);
+  EXPECT_EQ(node.port(), fixed.port);
+  node.start();
+  EXPECT_EQ(node.context().identity().id(), node.id());
 }
 
 }  // namespace

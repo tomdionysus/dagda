@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -14,6 +14,11 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
 #include <thread>
 #include <variant>
 
@@ -22,6 +27,7 @@
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/reachability.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/test/fixtures/gate.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
 namespace dagda {
@@ -100,6 +106,43 @@ TEST(NodeLocalMaintenance, RebalanceMovesCopiesOntoTheirPreferredBackend) {
   EXPECT_EQ(figure(node, "dagda.maintenance.rebalance_objects"), moved);
   for (const auto& id : ids) EXPECT_TRUE(node.data().has(id));
   EXPECT_FALSE(node.run_maintenance_once().local.rebalance_ran);
+}
+
+// The stage hook hears each local stage in Macha's names as it runs
+// (maintenance.cpp:1102, 1163, 1214 at f0597a4; the store map, pool gap 6).
+TEST(NodeLocalMaintenance, TheStageHookHearsEveryLocalStageInMachasNames) {
+  struct Heard {
+    std::mutex mutex;
+    std::set<std::string> stages;
+  };
+  auto heard = std::make_shared<Heard>();
+  dannan::test::SteppedWall wall(dannan::contract::system_wall_clock().unix_ms());
+  auto options = fast_link();
+  options.wall = &wall;
+  options.maintenance.stage = [heard](std::string_view stage) {
+    std::lock_guard lock(heard->mutex);
+    heard->stages.emplace(stage);
+  };
+  Cluster cluster;
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  for (uint64_t n = 0; n < 16; ++n) (void)put_one(node, n);
+  node.add_backend(cluster.dir() / "second");
+  node.restart();
+  ASSERT_EQ(node.data().online_backends(), 2u);
+  wall.advance(std::chrono::hours(24 * 30) + 1s);
+  bool rebalance = false;
+  bool scrub = false;
+  bool verify = false;
+  for (int pass = 0; pass < 8 && !(rebalance && scrub && verify); ++pass) {
+    const auto report = node.run_maintenance_once();
+    rebalance = rebalance || report.local.rebalance_ran;
+    scrub = scrub || report.local.scrub_ran;
+    verify = verify || report.local.verify_ran;
+  }
+  ASSERT_TRUE(rebalance && scrub && verify);
+  std::lock_guard lock(heard->mutex);
+  for (const auto* stage : {"local-rebalance", "scrub", "ledger-verify"}) EXPECT_TRUE(heard->stages.contains(stage)) << stage;
 }
 
 // Past 4096 records the claims' journal is compacted by the pass.
@@ -333,6 +376,54 @@ TEST(NodeReconfigure, BackendsAndCacheFollowALiveReload) {
   EXPECT_EQ(node.data().online_backends(), 1u);
   EXPECT_FALSE(node.cache().enabled());
   EXPECT_NO_THROW(store::StorageLock free_again(second));
+}
+
+// A reload naming one disk twice is refused before anything changes: no new root is
+// locked and the node keeps what it had, as Node::reconfigure promises (the store map,
+// pool gap 8).
+TEST(NodeReconfigure, AReloadRefusedForADuplicateBackendChangesNothing) {
+  Cluster cluster;
+  auto& node = cluster.add("node", fast_link());
+  cluster.start_all();
+  const auto backends = node.dagda_node().options().pool.backends;
+  const auto second = cluster.dir() / "second";
+  std::filesystem::create_directories(second);
+  auto twice = backends;
+  twice.push_back({second, 64ULL * 1024 * 1024, 0});
+  twice.push_back({second, 64ULL * 1024 * 1024, 0});
+  EXPECT_THROW(node.dagda_node().reconfigure({twice, {}}), NodeRefused);
+  EXPECT_EQ(node.data().online_backends(), 1u);
+  EXPECT_EQ(node.dagda_node().options().pool.backends.size(), backends.size());
+  // Not locked by the refused reload: another may take it.
+  EXPECT_NO_THROW(store::StorageLock free(second));
+}
+
+// Macha's reload touches only the pool's locks (local_state.cpp:189-193 at f0597a4):
+// a maintenance pass in progress does not hold it back (the store map, pool gap 4).
+TEST(NodeReconfigure, AReloadDoesNotWaitForAMaintenancePassInProgress) {
+  Cluster cluster;
+  dannan::test::Gate gate;
+  dannan::test::GateOpener opener(gate);
+  auto armed = std::make_shared<std::atomic<bool>>(false);
+  auto options = fast_link();
+  options.maintenance.stage = [&gate, armed](std::string_view) {
+    if (armed->exchange(false)) gate.enter_and_wait();
+  };
+  auto& node = cluster.add("node", options);
+  cluster.start_all();
+  const auto backends = node.dagda_node().options().pool.backends;
+
+  armed->store(true);
+  auto pass = std::async(std::launch::async, [&] { (void)node.run_maintenance_once(); });
+  ASSERT_TRUE(gate.wait_for_entries(1, 10s));
+  auto reload = std::async(std::launch::async, [&] { node.dagda_node().reconfigure({backends, {}}); });
+  EXPECT_EQ(reload.wait_for(10s), std::future_status::ready) << "the reload waited for the maintenance pass";
+  gate.open();
+  ASSERT_EQ(pass.wait_for(60s), std::future_status::ready);
+  pass.get();
+  ASSERT_EQ(reload.wait_for(60s), std::future_status::ready);
+  reload.get();
+  EXPECT_EQ(node.data().online_backends(), 1u);
 }
 
 // Macha's test_replication_policy_change_on_restart: replication is taken at a

@@ -1,4 +1,4 @@
-# Dagda - The Store
+# Dagda - The Distributed Object Store
 
 Dagda is the store for a cluster of trusted machines. It is a C++20 library that keeps
 objects, claims, leases and shared state across a set of nodes, sealed at rest, with
@@ -54,8 +54,10 @@ Dagda is Macha's store taken out and generalised, so that it is written once:
 - **The ledger.** Claims with reference counts, a held trie per node, the union and
   diff of tries across nodes, retention and the collector, and node horizons so a node
   that was away catches up by difference, never by scan.
-- **Availability and repair.** A survey of what each peer lacks, diff only, and repair
-  paced by a duty share against foreground work: always running, never in the way.
+- **Availability and repair.** A survey of what each peer lacks and holds, diff only;
+  repair from one queue, the object with fewest copies first, a holder offering before
+  it sends so each copy moves once; all of it paced by a duty share against foreground
+  work: always running, never in the way.
 - **Leases and claimed collections.** A lease with an epoch fence, a keeper that takes
   over from a node the roster has lost after a window measured from when it was last
   heard of, and a collection template whose records merge field group by field group,
@@ -108,10 +110,10 @@ GoogleTest, and an installed Dannan of the pinned minor, at least the pinned pat
 tag from the sibling checkout into the build tree once, then configure against it:
 
 ```bash
-git clone --branch 0.7.0 --depth 1 file://$PWD/../dannan build/deps/dannan-0.7.0
-cmake -S build/deps/dannan-0.7.0 -B build/deps/dannan-0.7.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.9.2 --depth 1 file://$PWD/../dannan build/deps/dannan-0.9.2
+cmake -S build/deps/dannan-0.9.2 -B build/deps/dannan-0.9.2-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.7.0-build -j8 && cmake --install build/deps/dannan-0.7.0-build
+cmake --build build/deps/dannan-0.9.2-build -j8 && cmake --install build/deps/dannan-0.9.2-build
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
   -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
@@ -151,7 +153,7 @@ dannan_node.start();
 auto& store = node.context();
 store.require_version(dagda::context_version);
 dagda::WriteOptions write;
-write.level = dagda::Durability::replicated;  // on disk on k nodes
+write.ack_level = dagda::Durability::replicated;  // on disk on k nodes
 store.objects().write(bytes, write, std::chrono::seconds(10), executor, [](dagda::WriteEvidence evidence) {
   // evidence.id, evidence.replicas (by node id), evidence.ticket
 });
@@ -188,11 +190,14 @@ Macha needs of Dagda, requirement by requirement:
 
 ## Status
 
-Version 0.2.0, on Dannan 0.7.0. Built and tested: the local store and its
+Version 0.2.0, on Dannan 0.7.0; the work for Macha's port (feature/macha-store-gaps) builds on Dannan 0.9.2, the
+Dannan Macha's cutover deploys. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
-evidence, tickets, availability and repair; an instant delete beside the collector's
-per-domain wait; leases and claimed collections; domains with node-local keys, wrapped
+evidence, tickets, availability and repair (on the port's branch redesigned: one queue
+by copies left, an offer before each push, a window of transfers, pulls fetched many to a message); an instant delete beside the collector's
+per-domain wait, which removes a copy only where a complete published inventory does
+not refer to it; leases and claimed collections; domains with node-local keys, wrapped
 domain keys, member and blind roles, and the scope check at the write floor;
 `dagda-migrate`, which moves Macha's v18 disks to v19 in place; and `dagda::Node`, which
 opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`; head
