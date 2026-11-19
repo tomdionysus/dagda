@@ -14,7 +14,7 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-Work goes on `develop` or a feature branch from it; `feature/rejoin-stream` is the open one. Nothing since
+Work goes on `develop` or a feature branch from it. Nothing since
 `8e509cd` is pushed (main, develop, the `0.3.0` tag): pushing needs Tom's "push". Nothing is running on the Pis
 unless the board says so (`claims_list`).
 
@@ -68,10 +68,12 @@ unless the board says so (`claims_list`).
   6. The API changes announced to Core and the clients: `dagda.<name>` registrations, and `offer_bytes` and
      `in_flight` in `/status`.
 - **Repair is redesigned** (`TODO/2026-11-16-repair-redesign.md`). Stages 1 to 4 are done and gated. Small rejoin: 3
-  times faster than stage 3. Rejoin under a viewer: faster. **The unpaced large rejoin: still about 3 s slower than
-  stage 3 (16.7 to 20.9 s against 14.1 to 17.1); explained: repair keeping to `idle_bandwidth_fraction` 0.5 of
-  the link, which stage 3 ran past** (Next 2; Tom's call whether that stands).
-  Macha's live nodes keep today's repair until the cutover.
+  times faster than stage 3. Rejoin under a viewer: faster. **The large rejoin's gap is closed** (2026-11-19, merged
+  from `feature/rejoin-stream`): a fetch of many asks again at once for what its reply left (Tom's fix (b)), and an
+  idle node's repair earns credit at the whole link, its fraction only while a higher class is present (Tom: "Let
+  idle repair use the link"). Against 0.3.0 in one session: the large rejoin about 10% faster (25.3 to 26.7 s against
+  28.1 to 30.3 on a 5.1 MB/s link, about 5 s from the link's own time), the small and the viewer's unchanged. The
+  redesign document, "Tom: Let idle repair use the link". Macha's live nodes keep today's repair until the cutover.
 - **The side-by-side harness** (`TODO/2026-11-15-side-by-side-harness.md`, `tools/harness/`), measured against Macha:
   - At parity or better: publications, the viewer, local reads, recovery (within 2%).
   - Small files: about 6% over Macha's CPU.
@@ -84,22 +86,10 @@ unless the board says so (`claims_list`).
 ## Next (in order): the cutover
 
 1. **Any failure Macha's suite finds in Dagda**, first (it reruns on the 0.3.0 tag).
-2. **The large rejoin's remaining 3 s.** The holder's side is now timed: `06b3960`, `StorageServerOptions::serve_timing`,
-   printed by the harness's `TRACE=1` as `serve-time` lines beside `repair-time`, both with `wall=` for lining the two
-   Pis up.
-   - A traced run is done and not yet read (2026-11-18 18:48-18:51Z): jupiter holding, saturn joining, store
-     `dagda-092` (`/root/harness/build-092`, copied to saturn with `/root/dagda-092/dannan-prefix`), link 13.5 MB/s.
-     Rounds took 16.3, 17.6 and 9.7 s, where the link alone takes about 8 s. Trace:
-     `build/harness/results/2026-11-18-holder/repair-err.txt` (local; the Pis' harness builds went in the wipe).
-   - **Read 2026-11-19** (the redesign document, "The holder's side, traced", "Read"): the holder and the first
-     burst are at the link's pace; the gap is b pulling one object a second. A fetch of many is one call per holder
-     per step, its reply holds one extent, and what it leaves waits for the next step. **Tom chose fix (b)
-     (2026-11-19).** Built and gated on `feature/rejoin-stream`; measured no faster, because the joiner is paced by
-     its credit (half the link estimate), not by the step. Waiting on Tom (below).
-   - The harness on the Pis: `/root/harness/build-tip` (the fix) and `build-030` (0.3.0) on jupiter and saturn,
-     links into `/root/dagda-stream` and `/root/dagda-030` there.
-3. The Debian packages for 0.3.0, if Tom wants them.
-4. After the cutover, not before:
+2. **The next release for the deploy**, when Tom wants it: develop now carries the large rejoin's fix (below) past
+   0.3.0. The Macha session builds from a tag; 0.3.1 with the release gate as 0.3.0's (plain, ASan/UBSan, TSan).
+   The Debian packages too, if Tom wants them.
+3. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
      `migrate/migrate.cpp`, `migrate/manifest.cpp` and its flock; `LocalStoreFiles` becomes an adapter.
@@ -116,13 +106,9 @@ unless the board says so (`claims_list`).
 
 ## Waiting on Tom
 
-- **The large rejoin: repair's share of an idle link.** Fix (b) is built and gated on `feature/rejoin-stream`
-  (1152 of 1155, 0 failed) but measured no faster (16.3 to 16.6 s against 0.3.0's 15.6 to 16.6). The trace shows why:
-  the joiner is paced by its credit, `idle_bandwidth_fraction` 0.5 (the live nodes' value) of its link estimate,
-  about one 4 MiB object a second. The 3 s against stage 3 is repair keeping to that share; stage 3, like Macha's
-  repair, ran past it. Recommended: keep 0.5 as written, call the large rejoin's gap explained and closed, and merge
-  (b) since it is correct and costs nothing; if an idle node should use more of the link, that is Macha's
-  configured fraction to raise, not a code change. The redesign document, "(b) built and measured".
+- **Power-cut cases for `dagda-migrate` before macnessa's migration?** Every crash case kills a process, which
+  keeps the page cache; no case drops unsynced writes. Bringing forward Next 3's syncs through Dannan's
+  `storage::FileSystem` and adding cases on its simulated disk would prove the ordering. Asked 2026-11-19.
 - **A push** of `main`, `develop` and the `0.3.0` tag (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is Tom's call while slices pause.
@@ -161,8 +147,9 @@ merge can collapse it.
   - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
 - **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
   way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it
-  detached (`ssh -n host 'setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`: a plain `nohup ... &` over ssh holds the
-  session open), and wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
+  detached in its own ssh call (`ssh -n host 'cd dir && setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`). That ssh
+  still does not return, so run it as a background command and stop it once `status.txt` shows the start; the job
+  survives. Then wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
 - **Test-first is shown on the Pi:** build at the commit that adds the cases and see them fail, then build the fix
   and run the whole suite once. One whole-suite run at a step's last commit; no rerun without a named reason.
   Sanitizers only for a release or to hunt one named bug.
