@@ -20,9 +20,31 @@ unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **The cutover is under way** (the Macha session, 2026-11-19 afternoon): both nodes stopped together (Tom's
-  ruling), macnessa (5.9 TB) migrating first, both nodes getting Macha 0.95.0 on Dagda 0.3.0. Nothing of Dagda's
-  touches macnessa or inverbeg until the Macha session reports the cutover done (its request).
+- **The cutover is aborted on `dagda-migrate`'s speed** (Tom, 2026-11-19, relayed by the Macha session; both nodes
+  back on 0.94.2, nothing written). macnessa read at 65 MiB/s, about 24 h a pass over 5.9 TB, and the runbook made
+  four passes. **Tom chose B**: the migration moves tags from headers alone, and the before and after proof stays
+  two independent full manifest passes, each at the disk's rate; the dry run leaves the runbook. The plan and what
+  was found: `TODO/2026-11-19-migrate-speed.md`. On `feature/migrate-speed`:
+  - **Built and gated** (merged to develop): an ordered pipeline (`migrate/pipeline.h`); the manifest pass reading
+    loose objects in the device's order (`migrate/disk_order.h`, FIEMAP after a sync, else inode), authenticating
+    on the workers, writing the same manifest, journalled beside the partial for `--resume`; the migration moving
+    records from their headers with a progress record (`<state>/migration-progress`), a resume window read whole,
+    a record read whole at the start of each batch, the file at the record's point checked, and
+    `--read-every-record` for the old way. `docs/migration.md`, "How a run moves records (0.3.1)". Gate on uranus at
+    `f5c52f8`, Dannan 0.9.2, Macha's fixtures: **1172 ran, 1169 passed, 3 skipped, 0 failed, 0 warnings**; the
+    new cases seen failing first on neptune. Found on the way: an order taken before a fresh file's blocks were
+    placed moved between runs (fixed, and guarded); a pre-existing 1-in-256 flake in
+    `MigrateCrash.APackRecordWhoseWriteWasCutShortIsFinished` (its cut can leave the bytes whole; the case now
+    expects that). Three cases that lay a tear or damage on an untouched disk now take `--read-every-record`.
+  - Not measured on a slow disk: the pass rates are the Macha session's figures (about 125 MiB/s whole in device
+    order, about 6 ms a file for a header). A rehearsal on a copy would show them.
+  - The Macha session's disk figures: macnessa 1.54 M loose 4 MiB objects (31 packs), raw 147-229 MB/s, but about
+    45 ms a file read whole one at a time (84 MiB/s), inode order no better, 8 in flight 108 MiB/s; inverbeg 0.90 M
+    loose, 103 MiB/s, concurrency hurts. The per-file cost dominates, so header-only is not 2-4 h either (about
+    10 h at 25 ms a file). **Physical (FIEMAP) order decides it**; the Macha session is measuring it on macnessa
+    (recipe sent). Next: on that number, read loose objects in physical order in both passes (the manifest holding
+    about 100 bytes a record to write in id order), or take it back to Tom.
+  - Nothing of Dagda's touches macnessa or inverbeg; the Macha session measures there.
 - **0.3.0 is tagged for Macha's deploy** (2026-11-19; main `2a58202`, tree identical to the gated `4a4b322`; not
   pushed). Gate in `COMPLETED.md`: plain and ASan/UBSan 1150 of 1153, 3 skipped, 0 failed, no report; TSan no report
   in Dagda's code (one known Boost.Asio fence false positive). The Macha session has the tag, builds its prefix from
@@ -148,9 +170,10 @@ merge can collapse it.
   - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
 - **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
   way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it
-  detached in its own ssh call (`ssh -n host 'cd dir && setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`). That ssh
-  still does not return, so run it as a background command and stop it once `status.txt` shows the start; the job
-  survives. Then wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
+  detached in a subshell, which lets the ssh return at once: `ssh -n host 'cd dir && (setsid nohup sh x.sh > x.out
+  2>&1 < /dev/null &)'` (without the parentheses the ssh stays open). Then wait on a marker line with a background
+  `until ssh -n ... grep -q marker; do sleep 120; done`. Extract a second archive over a built tree with `tar -m`, or
+  make sees nothing newer (git archive stamps the commit's time).
 - **Test-first is shown on the Pi:** build at the commit that adds the cases and see them fail, then build the fix
   and run the whole suite once. One whole-suite run at a step's last commit; no rerun without a named reason.
   Sanitizers only for a release or to hunt one named bug.
