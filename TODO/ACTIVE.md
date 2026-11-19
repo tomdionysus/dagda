@@ -195,7 +195,10 @@ run the release sanitizers, merge, cut `0.3.0` for Macha's deploy, tell the Mach
 large rejoin, the fix where a reply that leaves ids sends the next fetch at once ("yes"), and "clean things up":
 the merged local branches deleted (`feature/bench`, `feature/dannan-070`, `feature/macha-store-gaps`,
 `feature/read-memory`, `feature/slice1`, `release/0.2.0`, which the tag keeps), `build/` cut from 10.2 GB to 0.76 GB
-(the Mac build and sanitizer trees, bundles, the bench's stores; every log, script and note kept).
+(the Mac build and sanitizer trees, bundles, the bench's stores; every log, script and note kept). Then, (b) having
+measured no faster because the joiner kept to `idle_bandwidth_fraction` 0.5: **"Let idle repair use the link"**:
+with nothing of a higher class present, repair's credit accrues at the whole link estimate; the fraction applies
+only while one is, and the duty share still holds repair's turns. The option keeps its name for Macha's mapping.
 
 **The maintainer, 2026-11-18:** the Macha move to Dagda only, until ready for the cutover on live-a and live-b (above). Agreed
 among the three sessions the same day: the cutover deploys on Dannan 0.9.2. The Macha session agreed that Dagda fixes
