@@ -20,31 +20,11 @@ unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **The cutover is aborted on `dagda-migrate`'s speed** (the maintainer, 2026-11-19, relayed by the Macha session; both nodes
-  back on 0.94.2, nothing written). live-a read at 65 MiB/s, about 24 h a pass over 5.9 TB, and the runbook made
-  four passes. **The maintainer chose B**: the migration moves tags from headers alone, and the before and after proof stays
-  two independent full manifest passes, each at the disk's rate; the dry run leaves the runbook. The plan and what
-  was found: `TODO/2026-11-19-migrate-speed.md`. On `feature/migrate-speed`:
-  - **Built and gated** (merged to develop): an ordered pipeline (`migrate/pipeline.h`); the manifest pass reading
-    loose objects in the device's order (`migrate/disk_order.h`, FIEMAP after a sync, else inode), authenticating
-    on the workers, writing the same manifest, journalled beside the partial for `--resume`; the migration moving
-    records from their headers with a progress record (`<state>/migration-progress`), a resume window read whole,
-    a record read whole at the start of each batch, the file at the record's point checked, and
-    `--read-every-record` for the old way. `docs/migration.md`, "How a run moves records (0.3.1)". Gate on node-d at
-    `f5c52f8`, Dannan 0.9.2, Macha's fixtures: **1172 ran, 1169 passed, 3 skipped, 0 failed, 0 warnings**; the
-    new cases seen failing first on node-a. Found on the way: an order taken before a fresh file's blocks were
-    placed moved between runs (fixed, and guarded); a pre-existing 1-in-256 flake in
-    `MigrateCrash.APackRecordWhoseWriteWasCutShortIsFinished` (its cut can leave the bytes whole; the case now
-    expects that). Three cases that lay a tear or damage on an untouched disk now take `--read-every-record`.
-  - Not measured on a slow disk: the pass rates are the Macha session's figures (about 125 MiB/s whole in device
-    order, about 6 ms a file for a header). A rehearsal on a copy would show them.
-  - The Macha session's disk figures: live-a 1.54 M loose 4 MiB objects (31 packs), raw 147-229 MB/s, but about
-    45 ms a file read whole one at a time (84 MiB/s), inode order no better, 8 in flight 108 MiB/s; live-b 0.90 M
-    loose, 103 MiB/s, concurrency hurts. The per-file cost dominates, so header-only is not 2-4 h either (about
-    10 h at 25 ms a file). **Physical (FIEMAP) order decides it**; the Macha session is measuring it on live-a
-    (recipe sent). Next: on that number, read loose objects in physical order in both passes (the manifest holding
-    about 100 bytes a record to write in id order), or take it back to the maintainer.
-  - Nothing of Dagda's touches live-a or live-b; the Macha session measures there.
+- **0.3.1 is tagged and pushed** (2026-11-19 evening; main `2793458`, with main and develop): the faster
+  `dagda-migrate` (the maintainer's B: records from their headers, the manifest pass in device order on workers) and the large
+  rejoin's fix. Gate and story in `COMPLETED.md`. The Macha session has it, reruns its suite there and builds its
+  deploy tarball from it; the cutover is its runbook's (three passes, about 29 h for live-a, 16 h for live-b).
+  Nothing of Dagda's touches live-a or live-b until the Macha session says.
 - **0.3.0 is tagged for Macha's deploy** (2026-11-19; main `2a58202`, tree identical to the gated `4a4b322`; not
   pushed). Gate in `COMPLETED.md`: plain and ASan/UBSan 1150 of 1153, 3 skipped, 0 failed, no report; TSan no report
   in Dagda's code (one known Boost.Asio fence false positive). The Macha session has the tag, builds its prefix from
@@ -111,10 +91,7 @@ unless the board says so (`claims_list`).
 ## Next (in order): the cutover
 
 1. **Any failure Macha's suite finds in Dagda**, first (it reruns on the 0.3.0 tag).
-2. **0.3.1, when the maintainer says** (asked 2026-11-19: "Wait"). develop carries the large rejoin's fix past 0.3.0; the
-   cutover deploys 0.3.0, and Macha takes 0.3.1 in a later release with a suite run, documenting the changed
-   meaning of `maintenance.idle_bandwidth_fraction` there. The release gate as 0.3.0's (plain, ASan/UBSan, TSan);
-   the Debian packages too, if the maintainer wants them.
+2. The Debian packages for 0.3.1, if the maintainer wants them. Whether to push the local tags 0.2.0 and 0.3.0.
 3. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
