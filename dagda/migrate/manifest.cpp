@@ -26,10 +26,12 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/migrate/disk_order.h"
 #include "dagda/migrate/heads_metadata.h"
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/migrate/manifest_format.h"
 #include "dagda/migrate/migrate.h"
+#include "dagda/migrate/pipeline.h"
 #include "dagda/store/local_format.h"
 #include "dagda/store/local_store.h"
 #include "dagda/store/sealing.h"
@@ -236,6 +238,97 @@ class HeldPartial {
 
  private:
   int _fd = -1;
+};
+
+// What a pass has read of one store's loose objects, in the order the device holds
+// them, before it writes their section in id order (TODO/2026-11-19-migrate-speed.md):
+// each object's key and value, made durable at the pass's checkpoints, so a stopped
+// pass goes on without reading them again. Beside the partial; gone once the section
+// is in it. A frame is a u32 length, the key's length, the key, the value, and the first
+// eight bytes of the SHA-256 of what the length covers; a frame cut short, or whose
+// check fails, ends what is read, as a torn tail.
+class LooseJournal {
+ public:
+  explicit LooseJournal(std::filesystem::path path) : _path(std::move(path)) {}
+  ~LooseJournal() {
+    if (_fd >= 0) ::close(_fd);
+  }
+  LooseJournal(const LooseJournal&) = delete;
+  LooseJournal& operator=(const LooseJournal&) = delete;
+
+  // The whole frames a stopped pass left, and keeps only those: what follows them is
+  // cut off before anything is added.
+  std::vector<std::pair<Bytes, Bytes>> take_over() {
+    std::vector<std::pair<Bytes, Bytes>> out;
+    std::error_code ec;
+    if (!std::filesystem::exists(_path, ec)) return out;
+    const auto bytes = read_file(_path);
+    size_t at = 0;
+    while (bytes.size() - at >= 4) {
+      const uint32_t length = (uint32_t{bytes[at]} << 24) | (uint32_t{bytes[at + 1]} << 16) | (uint32_t{bytes[at + 2]} << 8) | uint32_t{bytes[at + 3]};
+      if (length < 4 || bytes.size() - at - 4 < uint64_t{length} + 8) break;
+      const auto body = std::span<const uint8_t>(bytes).subspan(at + 4, length);
+      const auto check = dannan::identity::sha256(body);
+      if (!std::equal(check.bytes.begin(), check.bytes.begin() + 8, bytes.begin() + static_cast<std::ptrdiff_t>(at + 4 + length))) break;
+      const uint32_t key_length = (uint32_t{body[0]} << 24) | (uint32_t{body[1]} << 16) | (uint32_t{body[2]} << 8) | uint32_t{body[3]};
+      if (key_length > length - 4) break;
+      out.emplace_back(Bytes(body.begin() + 4, body.begin() + 4 + key_length), Bytes(body.begin() + 4 + key_length, body.end()));
+      at += 4 + length + 8;
+    }
+    if (at != bytes.size()) std::filesystem::resize_file(_path, at);
+    return out;
+  }
+  void add(const Bytes& key, const Bytes& value) {
+    const auto be32 = [](uint64_t n) {
+      return std::array<uint8_t, 4>{static_cast<uint8_t>(n >> 24), static_cast<uint8_t>(n >> 16), static_cast<uint8_t>(n >> 8), static_cast<uint8_t>(n)};
+    };
+    const uint32_t length = static_cast<uint32_t>(4 + key.size() + value.size());
+    const auto key_length = be32(key.size());
+    Bytes body(key_length.begin(), key_length.end());
+    body.insert(body.end(), key.begin(), key.end());
+    body.insert(body.end(), value.begin(), value.end());
+    const auto frame_length = be32(length);
+    _pending.insert(_pending.end(), frame_length.begin(), frame_length.end());
+    _pending.insert(_pending.end(), body.begin(), body.end());
+    const auto check = dannan::identity::sha256(body);
+    _pending.insert(_pending.end(), check.bytes.begin(), check.bytes.begin() + 8);
+    if (_pending.size() >= (1U << 20)) write_out();
+  }
+  // What was added is on the device.
+  void sync() {
+    write_out();
+    if (_fd >= 0 && ::fsync(_fd) != 0) throw std::runtime_error("cannot sync " + _path.string() + ": " + std::strerror(errno));
+  }
+  void remove() {
+    if (_fd >= 0) ::close(_fd);
+    _fd = -1;
+    _pending.clear();
+    std::error_code ec;
+    std::filesystem::remove(_path, ec);
+  }
+
+ private:
+  void write_out() {
+    if (_pending.empty()) return;
+    if (_fd < 0) {
+      _fd = ::open(_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+      if (_fd < 0) throw std::runtime_error("cannot open " + _path.string() + ": " + std::strerror(errno));
+    }
+    size_t done = 0;
+    while (done < _pending.size()) {
+      const auto wrote = ::write(_fd, _pending.data() + done, _pending.size() - done);
+      if (wrote < 0) {
+        if (errno == EINTR) continue;
+        throw std::runtime_error("cannot write " + _path.string() + ": " + std::strerror(errno));
+      }
+      done += static_cast<size_t>(wrote);
+    }
+    _pending.clear();
+  }
+
+  const std::filesystem::path _path;
+  int _fd = -1;
+  Bytes _pending;
 };
 
 // What a stopped pass left, to go on from.
@@ -509,7 +602,9 @@ class Pass {
         _summary(summary),
         _domain_key(std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_v1(cluster))),
         _node_local(std::make_shared<const domain::StorageKey>(domain::StorageKey::derive_node_local(custody))),
-        _scheme(store::SealingScheme::v19(domain::domain_v1)) {}
+        _scheme(store::SealingScheme::v19(domain::domain_v1)) {
+    _limits.workers = options.workers ? options.workers : pipeline_workers();
+  }
 
   void run(const std::filesystem::path& manifest);
 
@@ -592,6 +687,12 @@ class Pass {
   uint64_t _temporaries = 0;
   std::chrono::steady_clock::time_point _started = std::chrono::steady_clock::now();
   uint64_t _bytes_this_run = 0;
+  // Records read ahead of the manifest's writing: a window of 16, and 64 MiB.
+  PipelineLimits _limits;
+  // `<manifest>.partial`, and the loose journal beside it while a store's loose
+  // objects are read (made durable at each checkpoint).
+  std::filesystem::path _partial;
+  LooseJournal* _journal = nullptr;
 };
 
 void Pass::find_stores() {
@@ -739,6 +840,7 @@ void Pass::checkpoint_if_due(ManifestFile& file) {
   if (_since_checkpoint_records < _options.checkpoint_records && _since_checkpoint_bytes < _options.checkpoint_bytes) return;
   _since_checkpoint_records = 0;
   _since_checkpoint_bytes = 0;
+  if (_journal) _journal->sync();
   file.flush(true);
   if (_options.after_checkpoint) _options.after_checkpoint();
 }
@@ -759,48 +861,129 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
   };
   size_t held = 0;
   if (!closed) file.begin(order, display, SectionKind::loose);
-  for (const auto& loose : store.loose) {
-    if (recorded && held < recorded->size()) {
-      const auto& [key, encoded] = (*recorded)[held];
-      if (key != loose.key) throw changed(store.label + " loose object " + store::to_string(loose.id));
-      const auto value = decode_loose_value(encoded);
-      if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns)
-        throw changed(store.label + " loose object " + store::to_string(loose.id));
-      ++held;
-      continue;
-    }
-    if (closed) throw changed(store.label + " has a loose object it did not have: " + store::to_string(loose.id));
-    const auto path = loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel;
-    const auto bytes = read_file(path);
-    LooseValue value;
-    value.file_size = bytes.size();
-    value.mtime_ns = loose.stat.mtime_ns;
-    if (bytes.empty()) {
-      value.layout = record_empty;
-    } else {
-      try {
-        const auto decoded = decode_loose(bytes);
-        value.plain_size = decoded.plain_size;
-        value.nonce = decoded.nonce;
-        value.tag = decoded.tag;
-        value.layout = open_layout(loose.id, decoded.nonce, decoded.tag, decoded.ciphertext, decoded.plain_size);
-      } catch (const std::exception&) {
-        value.layout = record_unreadable;
-      }
-      if (value.layout == record_unreadable)
-        note_unreadable(path.string());
-      else
-        _proved = true;
-    }
-    file.item(loose.key, encode(value));
-    note_record(bytes.size());
-    checkpoint_if_due(file);
+  // What the partial holds first: checked against the files, not read.
+  for (; recorded && held < recorded->size() && held < store.loose.size(); ++held) {
+    const auto& loose = store.loose[held];
+    const auto& [key, encoded] = (*recorded)[held];
+    if (key != loose.key) throw changed(store.label + " loose object " + store::to_string(loose.id));
+    const auto value = decode_loose_value(encoded);
+    if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns) throw changed(store.label + " loose object " + store::to_string(loose.id));
   }
   if (recorded && held != recorded->size()) throw changed(store.label + " has lost a loose object");
-  if (!closed) {
-    file.end();
+  if (closed && held < store.loose.size()) throw changed(store.label + " has a loose object it did not have: " + store::to_string(store.loose[held].id));
+
+  if (closed) {
+    category(display, recorded ? recorded->size() : store.loose.size());
+    return;
   }
-  category(display, recorded && closed ? recorded->size() : store.loose.size());
+
+  // The rest read where the device holds them (TODO/2026-11-19-migrate-speed.md): one
+  // file at a time in the order their bytes start, authenticated on the workers, each
+  // value kept and made durable beside the partial at the pass's checkpoints; then the
+  // section written in id order, the manifest a serial pass writes.
+  const auto path_of = [&](const Store::Loose& loose) { return loose.rel.empty() ? loose_path(store.root / "objects", loose.id) : store.root / loose.rel; };
+  const auto index_of = [&](const Bytes& key) -> std::optional<size_t> {
+    const auto found =
+        std::lower_bound(store.loose.begin(), store.loose.end(), key, [](const Store::Loose& loose, const Bytes& k) { return BytesOrder{}(loose.key, k); });
+    if (found == store.loose.end() || found->key != key) return std::nullopt;
+    return static_cast<size_t>(found - store.loose.begin());
+  };
+  LooseJournal journal(_partial.string() + ".loose-" + dannan::identity::hex(dannan::identity::sha256(bytes_of(store.label))).substr(0, 16));
+  std::vector<std::optional<LooseValue>> values(store.loose.size());
+  if (_resumed) {
+    for (const auto& [key, encoded] : journal.take_over()) {
+      const auto index = index_of(key);
+      if (!index) throw changed(store.label + " has lost a loose object");
+      if (*index < held) continue;
+      const auto value = decode_loose_value(encoded);
+      const auto& loose = store.loose[*index];
+      if (value.file_size != loose.stat.size || value.mtime_ns != loose.stat.mtime_ns)
+        throw changed(store.label + " loose object " + store::to_string(loose.id));
+      if (value.layout == record_v18 || value.layout == record_v19) _proved = true;
+      if (value.layout == record_unreadable) ++_unreadable;
+      values[*index] = value;
+      // Taken from the pass that stopped, not read again.
+      ++_summary.resumed_items;
+    }
+  } else {
+    journal.remove();
+  }
+  std::vector<size_t> left;
+  std::vector<std::filesystem::path> paths;
+  for (size_t i = held; i < store.loose.size(); ++i)
+    if (!values[i]) {
+      left.push_back(i);
+      paths.push_back(path_of(store.loose[i]));
+    }
+  const auto visit = disk_order(paths);
+
+  struct Loaded {
+    size_t index = 0;
+    Bytes bytes;
+  };
+  struct Read {
+    size_t index = 0;
+    LooseValue value;
+    uint64_t bytes = 0;
+  };
+  size_t next = 0;
+  // Synced at each checkpoint while the section is read; never past this function.
+  const struct Journalling {
+    LooseJournal*& slot;
+    Journalling(LooseJournal*& s, LooseJournal& journal) : slot(s) { slot = &journal; }
+    ~Journalling() { slot = nullptr; }
+  } journalling(_journal, journal);
+  run_ordered<Loaded, Read>(
+      _limits,
+      [&]() -> std::optional<std::pair<Loaded, uint64_t>> {
+        if (next >= visit.size()) return std::nullopt;
+        Loaded loaded;
+        loaded.index = left[visit[next]];
+        loaded.bytes = read_file(paths[visit[next]]);
+        ++next;
+        const uint64_t weight = loaded.bytes.size();
+        return std::pair{std::move(loaded), weight};
+      },
+      [&](Loaded& loaded) {
+        const auto& loose = store.loose[loaded.index];
+        Read out;
+        out.index = loaded.index;
+        out.bytes = loaded.bytes.size();
+        out.value.file_size = loaded.bytes.size();
+        out.value.mtime_ns = loose.stat.mtime_ns;
+        if (loaded.bytes.empty()) {
+          out.value.layout = record_empty;
+          return out;
+        }
+        try {
+          const auto decoded = decode_loose(loaded.bytes);
+          out.value.plain_size = decoded.plain_size;
+          out.value.nonce = decoded.nonce;
+          out.value.tag = decoded.tag;
+          out.value.layout = open_layout(loose.id, decoded.nonce, decoded.tag, decoded.ciphertext, decoded.plain_size);
+        } catch (const std::exception&) {
+          out.value.layout = record_unreadable;
+        }
+        loaded.bytes.clear();
+        return out;
+      },
+      [&](Read& read) {
+        if (read.value.layout == record_unreadable)
+          note_unreadable(path_of(store.loose[read.index]).string());
+        else if (read.value.layout != record_empty)
+          _proved = true;
+        journal.add(store.loose[read.index].key, encode(read.value));
+        values[read.index] = read.value;
+        note_record(read.bytes);
+        checkpoint_if_due(file);
+      });
+
+  for (size_t i = held; i < store.loose.size(); ++i) file.item(store.loose[i].key, encode(*values[i]));
+  file.end();
+  // The section is in the partial, on the device, before what it was made from goes.
+  file.flush(true);
+  journal.remove();
+  category(display, store.loose.size());
 }
 
 void Pass::read_one_pack(const Store::Pack& pack, uint64_t from, ManifestFile& file, Replay& replay) {
@@ -811,57 +994,101 @@ void Pass::read_one_pack(const Store::Pack& pack, uint64_t from, ManifestFile& f
     ~Closing() { ::close(fd); }
   } closing{fd};
   const uint64_t file_size = pack.stat.size;
-  uint64_t offset = from;
-  const auto span = [&](uint8_t kind, uint64_t length) {
+  // The pack walked and each record read here, in order (the kernel streams it); a
+  // put authenticated on the workers; everything written to the manifest by the
+  // caller in the pack's order, as a serial pass writes it.
+  struct Record {
+    uint64_t offset = 0;
+    uint64_t length = 0;
     PackValue value;
-    value.span = kind;
-    value.length = length;
-    value.digest = digest_of_span(fd, offset, length, pack.path);
-    file.item(pack_key(pack.sequence, offset), encode(value));
-    note_record(length);
-    if (kind == span_tail) _summary.tail_bytes += length;
-    offset += length;
+    // A put waiting to be opened: its payload.
+    std::optional<Bytes> payload;
+    // A span: whether it is a damaged one (records follow it) or the tail, and whether
+    // a checkpoint follows it (a header that did not decode, as the serial pass had it).
+    bool damaged = false;
+    bool checkpoint = false;
   };
-  while (offset < file_size) {
-    if (file_size - offset < pack_header_size) {
-      span(span_tail, file_size - offset);
-      break;
-    }
-    const auto bytes = read_at(fd, pack_header_size, offset);
-    if (!bytes) throw std::runtime_error("cannot read " + pack.path.string());
-    const auto header = decode_pack_header(*bytes);
-    if (!header) {
-      // As the store's recovery: a torn tail, or damage with records after it.
-      const auto next = find_next_pack_header(fd, offset + 1, file_size);
-      span(next ? span_damaged : span_tail, (next ? *next : file_size) - offset);
-      if (next) note_unreadable(pack.path.string() + " damaged span");
-      checkpoint_if_due(file);
-      continue;
-    }
-    const uint64_t total = pack_header_size + header->payload_size;
-    if (total > file_size - offset) {
-      span(span_tail, file_size - offset);
-      break;
-    }
-    PackValue value;
-    value.header = *header;
-    if (header->type == pack_put) {
-      const auto payload = read_at(fd, static_cast<size_t>(header->payload_size), offset + pack_header_size);
-      if (!payload) throw std::runtime_error("cannot read " + pack.path.string());
-      value.layout = open_layout(header->id, header->nonce, header->tag, *payload, header->plain_size);
-      if (value.layout == record_unreadable)
-        note_unreadable(pack.path.string() + " record " + store::to_string(header->id) + " at " + std::to_string(offset));
-      else
-        _proved = true;
-      replay.last[header->id] = std::nullopt;
-    } else if (header->type == pack_remove) {
-      replay.last[header->id] = header->touched_ms;
-    }
-    file.item(pack_key(pack.sequence, offset), encode(value));
-    offset += total;
-    note_record(total);
-    checkpoint_if_due(file);
-  }
+  uint64_t offset = from;
+  bool done = false;
+  run_ordered<Record, Record>(
+      _limits,
+      [&]() -> std::optional<std::pair<Record, uint64_t>> {
+        if (done || offset >= file_size) return std::nullopt;
+        Record record;
+        record.offset = offset;
+        const auto span = [&](uint8_t kind, uint64_t length, bool damaged) {
+          record.value.span = kind;
+          record.value.length = length;
+          record.value.digest = digest_of_span(fd, offset, length, pack.path);
+          record.length = length;
+          record.damaged = damaged;
+          offset += length;
+        };
+        if (file_size - offset < pack_header_size) {
+          span(span_tail, file_size - offset, false);
+          done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        const auto bytes = read_at(fd, pack_header_size, offset);
+        if (!bytes) throw std::runtime_error("cannot read " + pack.path.string());
+        const auto header = decode_pack_header(*bytes);
+        if (!header) {
+          // As the store's recovery: a torn tail, or damage with records after it.
+          const auto next = find_next_pack_header(fd, offset + 1, file_size);
+          span(next ? span_damaged : span_tail, (next ? *next : file_size) - offset, next.has_value());
+          record.checkpoint = true;
+          if (!next) done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        const uint64_t total = pack_header_size + header->payload_size;
+        if (total > file_size - offset) {
+          span(span_tail, file_size - offset, false);
+          done = true;
+          return std::pair{std::move(record), uint64_t{0}};
+        }
+        record.value.header = *header;
+        record.length = total;
+        if (header->type == pack_put) {
+          auto payload = read_at(fd, static_cast<size_t>(header->payload_size), offset + pack_header_size);
+          if (!payload) throw std::runtime_error("cannot read " + pack.path.string());
+          record.payload = std::move(*payload);
+        }
+        offset += total;
+        const uint64_t weight = record.payload ? record.payload->size() : 0;
+        return std::pair{std::move(record), weight};
+      },
+      [&](Record& record) {
+        if (record.payload) {
+          const auto& header = record.value.header;
+          record.value.layout = open_layout(header.id, header.nonce, header.tag, *record.payload, header.plain_size);
+          record.payload.reset();
+        }
+        return std::move(record);
+      },
+      [&](Record& record) {
+        const auto key = pack_key(pack.sequence, record.offset);
+        if (record.value.span != span_record) {
+          file.item(key, encode(record.value));
+          note_record(record.length);
+          if (record.value.span == span_tail) _summary.tail_bytes += record.length;
+          if (record.damaged) note_unreadable(pack.path.string() + " damaged span");
+          if (record.checkpoint) checkpoint_if_due(file);
+          return;
+        }
+        const auto& header = record.value.header;
+        if (header.type == pack_put) {
+          if (record.value.layout == record_unreadable)
+            note_unreadable(pack.path.string() + " record " + store::to_string(header.id) + " at " + std::to_string(record.offset));
+          else
+            _proved = true;
+          replay.last[header.id] = std::nullopt;
+        } else if (header.type == pack_remove) {
+          replay.last[header.id] = header.touched_ms;
+        }
+        file.item(key, encode(record.value));
+        note_record(record.length);
+        checkpoint_if_due(file);
+      });
 }
 
 void Pass::read_packs(Store& store, ManifestFile& file, Replay& replay) {
@@ -1281,6 +1508,7 @@ void Pass::run(const std::filesystem::path& manifest) {
   std::error_code ec;
   if (std::filesystem::exists(manifest, ec)) throw MigrationRefused("manifest " + manifest.string() + " exists: a pass never overwrites one");
   const auto partial = std::filesystem::path(manifest.string() + ".partial");
+  _partial = partial;
   const bool had_partial = std::filesystem::exists(partial, ec);
   if (had_partial && !_options.resume)
     throw MigrationRefused(partial.string() + " exists from a pass that stopped: give --resume to go on from it, or remove it to start again");

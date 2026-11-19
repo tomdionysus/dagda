@@ -118,6 +118,10 @@ struct MigrationReport {
   uint64_t pack_records_unreadable = 0;
   // Tombstones and touches: nothing sealed in them.
   uint64_t pack_records_unsealed = 0;
+  // Of those migrated, loose objects and pack records moved from their headers alone,
+  // not read whole or authenticated (TODO/2026-11-19-migrate-speed.md): a damaged one
+  // among them stays damaged, as the manifests on each side say.
+  uint64_t records_header_only = 0;
   // Undecodable spans inside a pack, skipped as the store's recovery skips
   // them, and bytes of a torn tail left for the store to truncate.
   uint64_t pack_regions_skipped = 0;
@@ -199,6 +203,15 @@ struct MigrationOptions {
   // Called after every record, ledger and marker written, with the report
   // so far: a test ends the process here to leave a half-migrated disk.
   std::function<void(const MigrationReport&)> after_step{};
+  // A run moving records from their headers (TODO/2026-11-19-migrate-speed.md): the
+  // records it syncs and records its progress after together, which is also how far
+  // past a stopped run's record a resumed one reads whole, and how often a record is
+  // read whole to check the record. With `after_step` each record is synced on its own.
+  uint64_t batch_records = 256;
+  // Read and authenticate every record, as a run did before records moved from their
+  // headers: slower by the whole disk, and it lists damaged and torn records itself.
+  // `dry_run` always does.
+  bool read_every_record = false;
 };
 
 // Migrates the node's state directory and its DATA backends in place, as
@@ -225,6 +238,11 @@ MigrationReport migrate_state(const std::filesystem::path& state, const std::vec
 MigrationReport migrate_state_back(const std::filesystem::path& state, const std::vector<std::filesystem::path>& backends,
                                    const dannan::identity::ClusterKey& cluster, const dannan::identity::KeyCustody& custody,
                                    const MigrationOptions& options = {});
+
+// Under the state while a run that moves records from their headers is under way: where
+// everything before is moved and on the device (TODO/2026-11-19-migrate-speed.md). Gone
+// when the run ends.
+inline constexpr const char* progress_record_name = "migration-progress";
 
 // Whether a file name is what a crash leaves of a replacement the migration
 // makes (`<name>.tmp.<pid>.<n>` of a marker or a ledger's file). A second run

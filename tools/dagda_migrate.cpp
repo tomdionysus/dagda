@@ -26,6 +26,9 @@
 // too, the port's later stage; a state already v19 runs that pass alone; --space
 // names the head space, macha/namespace unless given. --reverse goes back from
 // v19 to v18, the metadata included, so the node can return to Macha 0.93.x.
+// A run moves each record from its header alone and keeps <state>/migration-progress
+// while it goes; --read-every-record reads and authenticates every record instead, as
+// earlier versions did (slower by the whole disk; it lists damage itself).
 //
 // Exit 0 when the state is v19 (migrated now, or already); 1 when refused
 // or failed, the reason on stderr; 2 for a usage error.
@@ -69,6 +72,7 @@ struct Arguments {
   bool resume = false;
   bool heads = false;
   bool version = false;
+  bool read_every_record = false;
 };
 
 Arguments parse(int argc, char** argv) {
@@ -93,6 +97,10 @@ Arguments parse(int argc, char** argv) {
     }
     if (option == "--heads") {
       out.heads = true;
+      continue;
+    }
+    if (option == "--read-every-record") {
+      out.read_every_record = true;
       continue;
     }
     if (option.rfind("--", 0) != 0 || i + 1 >= argc) throw std::invalid_argument("expected --option value, at " + option);
@@ -130,6 +138,7 @@ dannan::identity::KeySource key_source(const Arguments& arguments) {
 constexpr const char* usage =
     "usage: dagda-migrate --state DIR --node-state DIR --cluster-key FILE (--passphrase-env VAR | --credential NAME [--credentials-dir DIR])\n"
     "                     [--backend DIR]... [--control DIR] [--cache DIR] [--heads] [--space NAME] [--dry-run] [--reverse]\n"
+    "                     [--read-every-record]\n"
     "       dagda-migrate --state DIR --node-state DIR --cluster-key FILE KEY [--backend DIR]... [--control DIR] [--cache DIR]\n"
     "                     [--space NAME] --write-manifest FILE [--resume]\n"
     "       dagda-migrate --compare-before FILE --compare-after FILE [--expect-before 18] [--expect-after 19]\n"
@@ -190,6 +199,7 @@ int main(int argc, char** argv) {
     if (arguments.options.contains("cache")) options.cache = arguments.options.at("cache");
     options.dry_run = arguments.dry_run;
     options.heads = arguments.heads;
+    options.read_every_record = arguments.read_every_record;
     if (arguments.options.contains("space")) options.space_name = arguments.options.at("space");
     // Read, never made: load_or_create would mint an id no disk carries.
     if (!std::filesystem::exists(node_state / "node-id"))

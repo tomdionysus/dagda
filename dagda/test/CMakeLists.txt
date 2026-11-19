@@ -63,6 +63,7 @@ add_executable(dagda_tests
   migrate_heads_test.cpp
   migrate_legacy_v18_test.cpp
   migrate_migrate_test.cpp
+  migrate_pipeline_test.cpp
   migrate_retag_test.cpp
   node_local_maintenance_test.cpp
   maintenance_gates_test.cpp

@@ -756,7 +756,9 @@ TEST(MigrateState, ACrashBetweenLedgersIsResumed) {
 
 // A torn tail on a pack and on a journal, and a damaged record: the tail is
 // left for the store to truncate, the journal's dropped as its replay would
-// drop it, the record listed and left, and the rest migrates.
+// drop it, the record listed and left, and the rest migrates. Listing a damaged
+// record is a run reading every record (a run moving records from their headers
+// leaves that to the manifests on each side).
 TEST(MigrateState, TornTailsAndADamagedRecordAreReportedAndTheRestMigrates) {
   StoreBed bed;
   V18State v18(bed);
@@ -766,7 +768,9 @@ TEST(MigrateState, TornTailsAndADamagedRecordAreReportedAndTheRestMigrates) {
   test::corrupt_object(v18.backend, v18.loose[2].first);
   // A torn journal tail: bytes after the claims' last frame.
   legacy::write_file(v18.state / "retention" / "claims.log", Bytes(7, 0x33), true);
-  const auto report = v18.migrate();
+  MigrationOptions every;
+  every.read_every_record = true;
+  const auto report = v18.migrate(every);
   EXPECT_EQ(report.pack_tail_bytes, 40u);
   EXPECT_EQ(report.pack_records_migrated, 5u);
   EXPECT_EQ(report.loose_migrated, 7u);
@@ -777,6 +781,33 @@ TEST(MigrateState, TornTailsAndADamagedRecordAreReportedAndTheRestMigrates) {
   EXPECT_EQ(report.markers_rewritten, 3u);
   EXPECT_NE(report.summary().find("left as it was"), std::string::npos);
   // The damaged one stays damaged, the rest open.
+  const auto damaged = v18.loose[2];
+  v18.loose.erase(v18.loose.begin() + 2);
+  expect_v19_opens(bed, v18);
+  store::StoragePoolOptions options;
+  options.backends = {{v18.backend, 64 * mib, 0}};
+  options.ledger_key = v18.node_local();
+  store::StoragePool pool(v18.state, v18.node, NodeId::random(), options, bed.key, bed.pool_services());
+  ASSERT_EQ(pool.online_backends(), 1u);
+  EXPECT_FALSE(pool.valid(damaged.first));
+}
+
+// The same disk moved from its headers: the tails as before, the damaged record's tag
+// derived like any other's, so it stays damaged and opens under neither layout, and the
+// rest open. Nothing is listed by the run: the manifests on each side do that.
+TEST(MigrateState, ADamagedRecordMovedFromItsHeaderStaysDamagedAndTheRestOpen) {
+  StoreBed bed;
+  V18State v18(bed);
+  legacy::write_file(legacy::pack_path(v18.backend, 2), Bytes(40, 0x5a), true);
+  test::corrupt_object(v18.backend, v18.loose[2].first);
+  legacy::write_file(v18.state / "retention" / "claims.log", Bytes(7, 0x33), true);
+  const auto report = v18.migrate();
+  EXPECT_EQ(report.pack_tail_bytes, 40u);
+  EXPECT_EQ(report.pack_records_migrated, 5u);
+  EXPECT_EQ(report.loose_migrated + report.loose_unreadable, 8u);
+  EXPECT_GT(report.records_header_only, 0u);
+  EXPECT_EQ(report.ledger_tail_bytes_dropped, 7u);
+  EXPECT_EQ(report.markers_rewritten, 3u);
   const auto damaged = v18.loose[2];
   v18.loose.erase(v18.loose.begin() + 2);
   expect_v19_opens(bed, v18);

@@ -53,6 +53,7 @@ add_library(dagda SHARED
   migrate/legacy_v18.cpp
   migrate/manifest.cpp
   migrate/manifest_format.cpp
+  migrate/disk_order.cpp
   migrate/migrate.cpp
   migrate/retag.cpp
   store/availability.cpp
