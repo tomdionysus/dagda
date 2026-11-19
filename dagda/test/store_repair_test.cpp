@@ -888,6 +888,10 @@ TEST(StoreRepair, ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit) {
   server_options.data_inflight_bytes = 4 * extent;
   server_options.foreground_reserve_bytes = extent;
   server_options.background_concurrency = 4;
+  // The case is about credit; the device's pressure is another gate (its own cases are
+  // StoreIoPressure's), which a device slowed by a sanitizer trips (seen under TSan,
+  // 2026-11-19: 316 to 482% of the expected service time).
+  server_options.device_pressure.slowdown_percent = 0;
   auto& server = cluster.add("server", server_options);
   auto& client = cluster.add("client", options(1));
   cluster.start_all();
@@ -937,7 +941,12 @@ TEST(StoreRepair, ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit) {
   EXPECT_EQ(loaded.reply->type, message::object_reply);
   const auto validated = routes.call_and_wait(target, message::have_object, message::encode_id(id), FrameType::speculative, 2s);
   ASSERT_TRUE(validated.reply);
-  EXPECT_EQ(validated.reply->type, message::bool_reply);
+  const auto refused = dannan::net::refusal_of(*validated.reply);
+  const auto at_refusal = credit.stats();
+  EXPECT_EQ(validated.reply->type, message::bool_reply)
+      << "refused " << (refused ? std::to_string(refused->status) + " " + refused->code + ": " + refused->message : "") << "; pressured "
+      << at_refusal.device_pressured << ", pressure refusals " << at_refusal.pressure_refusals << ", slowdown " << at_refusal.device_slowdown_percent
+      << "%, background " << at_refusal.background_active << " of " << at_refusal.background_limit << ", used " << at_refusal.used_bytes;
 
   const auto stats = credit.stats();
   EXPECT_GE(stats.foreground_admissions, 1u);
