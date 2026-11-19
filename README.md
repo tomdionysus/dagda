@@ -57,7 +57,7 @@ Dagda is Macha's store taken out and generalised, so that it is written once:
 - **Availability and repair.** A survey of what each peer lacks and holds, diff only;
   repair from one queue, the object with fewest copies first, a holder offering before
   it sends so each copy moves once; all of it paced by a duty share against foreground
-  work: always running, never in the way.
+  work: always running, never in the way, and on an idle node at the link's rate.
 - **Leases and claimed collections.** A lease with an epoch fence, a keeper that takes
   over from a node the roster has lost after a window measured from when it was last
   heard of, and a collection template whose records merge field group by field group,
@@ -193,12 +193,15 @@ Macha needs of Dagda, requirement by requirement:
 Version 0.3.1, on Dannan 0.9.2, the Dannan Macha's cutover deploys. Built and tested: the local store and its
 one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
 the ledger and the collector; the distributed store on Dannan with durability levels,
-evidence, tickets, availability and repair (on the port's branch redesigned: one queue
-by copies left, an offer before each push, a window of transfers, pulls fetched many to a message); an instant delete beside the collector's
+evidence, tickets, availability and repair (redesigned: one queue by copies left, an
+offer before each push, a window of transfers, pulls fetched many to a message and asked
+again as they land; an idle node's repair uses the whole link, a busy one its share); an
+instant delete beside the collector's
 per-domain wait, which removes a copy only where a complete published inventory does
 not refer to it; leases and claimed collections; domains with node-local keys, wrapped
 domain keys, member and blind roles, and the scope check at the write floor;
-`dagda-migrate`, which moves Macha's v18 disks to v19 in place; and `dagda::Node`, which
+`dagda-migrate`, which moves Macha's v18 disks to v19 in place, each record from its
+header, with before and after manifests read at the disk's rate (`docs/migration.md`); and `dagda::Node`, which
 opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`; head
 spaces, every-node as Macha's are, and node-local, a node's alone, sealed under its
 node-local key; the change notice (`Heads::watch`, `Heads::changed`); and the in-process

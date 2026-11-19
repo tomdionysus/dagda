@@ -1,5 +1,10 @@
 # dagda-migrate at the disk's rate (2026-11-19)
 
+**Status: built, gated and released in 0.3.1** (tag `0.3.1`, main `2793458`; `COMPLETED.md`, "2026-11-19 (evening)").
+As built, loose objects are ordered by FIEMAP after a sync (not before: a fresh file's blocks moved between runs),
+the progress record names the file at its point, and the manifest pass journals its loose values beside the
+partial. The per-pass figures below are the Macha session's rates; no whole pass has been timed on the nodes.
+
 ## Why
 
 The cutover was aborted (the maintainer, 2026-11-19, relayed by the Macha session): on live-a (a 10 TB USB hard disk, Pi 5)
