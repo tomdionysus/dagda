@@ -43,10 +43,15 @@ std::optional<uint64_t> first_extent(int fd) {
   auto* map = reinterpret_cast<struct fiemap*>(request);
   map->fm_start = 0;
   map->fm_length = std::numeric_limits<uint64_t>::max();
-  map->fm_flags = 0;
+  // Written out first, so a file whose blocks are not yet given (delayed allocation)
+  // has them, and the place found now is the place every later run finds.
+  map->fm_flags = FIEMAP_FLAG_SYNC;
   map->fm_extent_count = 1;
   if (::ioctl(fd, FS_IOC_FIEMAP, map) != 0 || map->fm_mapped_extents == 0) return std::nullopt;
-  return map->fm_extents[0].fe_physical;
+  const auto& extent = map->fm_extents[0];
+  // A place not yet known, or kept with the inode, is no place to order by.
+  if (extent.fe_flags & (FIEMAP_EXTENT_UNKNOWN | FIEMAP_EXTENT_DELALLOC | FIEMAP_EXTENT_DATA_INLINE)) return std::nullopt;
+  return extent.fe_physical;
 }
 #endif
 

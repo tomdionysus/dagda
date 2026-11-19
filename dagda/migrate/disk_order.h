@@ -21,11 +21,13 @@
 namespace dagda::migrate {
 
 // The indexes of `files` in the order their bytes start on the device: the first extent
-// FIEMAP reports, on Linux; elsewhere, or for a file FIEMAP says nothing of, the inode
-// number, after every file it placed. Ties keep the given order, so the same files give
-// the same order on every run. Each file is opened and closed, which brings its inode
-// in. Throws std::runtime_error for a file that cannot be opened. Waits on the device;
-// thread-safe.
+// FIEMAP reports, on Linux, each file written out first so its blocks are given;
+// elsewhere, or for a file whose place is unknown or kept in its inode, the inode
+// number, after every file placed. Ties keep the given order. A run that counts in this
+// order (the migration's progress record) still checks the file at its point, as a
+// file system may move a file between runs. Each file is opened and closed, which
+// brings its inode in. Throws std::runtime_error for a file that cannot be opened.
+// Waits on the device; thread-safe.
 std::vector<size_t> disk_order(const std::vector<std::filesystem::path>& files);
 
 }  // namespace dagda::migrate
