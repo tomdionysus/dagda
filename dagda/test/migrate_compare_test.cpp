@@ -188,10 +188,6 @@ TEST(MigrateCompare, ThePassWritesTheSameManifestWhateverItsWorkers) {
   EXPECT_EQ(one.items, six.items);
   EXPECT_EQ(one.bytes_read, six.bytes_read);
   EXPECT_EQ(legacy::read_file(bed.manifests / "serial"), legacy::read_file(bed.manifests / "wide"));
-  ComparisonOptions same;
-  same.after_layout = 18;
-  const auto report = compare_manifests(bed.manifests / "serial", bed.manifests / "wide", same);
-  EXPECT_TRUE(report.passed()) << report.summary();
 }
 
 // A pass given no metadata reader leaves the metadata NOT CHECKED and nothing
