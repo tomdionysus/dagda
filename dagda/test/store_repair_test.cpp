@@ -935,6 +935,10 @@ TEST(StoreRepair, ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit) {
   const auto loaded = blocked_loader.get();
   ASSERT_TRUE(loaded.reply);
   EXPECT_EQ(loaded.reply->type, message::object_reply);
+  // The server lets the loader's credit go once its reply is sent, which can be after
+  // the reply arrives here; a validation never waits for credit, so it is asked once
+  // only what this case still holds is held (seen under TSan, 2026-11-19).
+  ASSERT_TRUE(wait_until([&] { return credit.stats().used_bytes <= 2 * extent; }, 5s));
   const auto validated = routes.call_and_wait(target, message::have_object, message::encode_id(id), FrameType::speculative, 2s);
   ASSERT_TRUE(validated.reply);
   EXPECT_EQ(validated.reply->type, message::bool_reply);
