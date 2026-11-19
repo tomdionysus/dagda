@@ -774,6 +774,11 @@ class DistributedStore final : public ControlObjectSource {
   // What landed in repair's window leaves to do: the storage event once a drain, and a
   // sample for the link's estimate.
   void repair_landed(const RepairLanding& landing);
+  // A pull of many from `peer`, holding an extent of repair's window until it ends. What
+  // its answer leaves is asked for again at once, on the same extent, while `allowance`
+  // (bytes of the step's credit set aside for it) covers another extent; past that it
+  // is left for the next step. Waits on nothing.
+  void fetch_many_from(dannan::membership::NodeRecord peer, std::vector<ObjectId> ids, uint64_t seq, uint64_t extent, uint64_t allowance);
   // Repair's window: what landed since the last step applied to repair's state and
   // `result`, then the pass ended if everything it started has landed; and a step's
   // figures added to the counters.

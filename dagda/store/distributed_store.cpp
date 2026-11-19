@@ -3446,6 +3446,95 @@ void DistributedStore::repair_landed(const RepairLanding& landing) {
   if (landing.drained) _context.events().notify(_storage_event);
 }
 
+void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> ids, uint64_t seq, uint64_t extent, uint64_t allowance) {
+  time_repair("fetch " + std::to_string(seq) + " asked " + std::to_string(ids.size()));
+  auto payload = message::encode_ids(ids);
+  _context.routes().call(
+      peer, message::get_objects, std::move(payload), FrameType::speculative, _options.object_transfer_call, _executor,
+      [weak = std::weak_ptr<Shared>(_shared), peer, ids = std::move(ids), seq, extent, allowance](CallOutcome outcome) {
+        const auto shared = weak.lock();
+        if (!shared) return;
+        ReadLock alive(shared->alive);
+        auto* store = shared->store;
+        if (!store) return;
+        store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
+        std::vector<message::FetchedObject> objects;
+        if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
+          try {
+            objects = message::decode_fetched(outcome.reply->payload, ids.size());
+          } catch (const std::exception& error) {
+            store->_logger.debug("repair fetch peer=" + peer.host + " error=" + error.what());
+          }
+        } else {
+          store->_logger.debug("repair fetch peer=" + peer.host + " error=" + outcome_text(outcome));
+        }
+        uint64_t brought = 0;
+        for (const auto& object : objects) brought += object.data.size();
+        auto job = [store, peer, ids, objects = std::move(objects), seq, extent, allowance, brought] {
+          std::vector<RepairLanded> landed;
+          std::vector<ObjectId> left;
+          bool stored = false;
+          // What it left is asked for again now, on this fetch's extent, while the
+          // credit set aside covers another extent and the store is not stopping.
+          const bool again_now = allowance >= extent && !store->_stopping.load(std::memory_order_relaxed);
+          for (size_t i = 0; i < ids.size(); ++i) {
+            RepairLanded item;
+            item.seq = seq;
+            item.id = ids[i];
+            item.pull = true;
+            if (i < objects.size() && objects[i].as == message::Fetched::left) {
+              if (again_now) {
+                left.push_back(ids[i]);
+                continue;
+              }
+              item.again = true;
+            } else if (i < objects.size() && objects[i].as == message::Fetched::sent && object_id(objects[i].data) == ids[i]) {
+              if (const auto admitted = store->admit_data(FrameType::speculative, objects[i].data.size(), no_caller_deadline)) {
+                if (store->_data.put(ids[i], objects[i].data)) {
+                  item.ok = true;
+                  item.answer = FetchAnswer::ok;
+                  item.bytes = objects[i].data.size();
+                  store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
+                  store->note_acknowledged(ids[i], store->_self);
+                  stored = true;
+                }
+              }
+            }
+            // Anything else (absent here, unavailable, damaged, no answer) is tried
+            // again alone, which asks every owner.
+            landed.push_back(std::move(item));
+          }
+          if (stored) store->_context.events().notify(store->_storage_event);
+          store->time_repair("fetch " + std::to_string(seq) + " stored");
+          if (left.empty()) {
+            store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
+            return;
+          }
+          // The extent stays in the window for the fetch that follows; what landed is
+          // applied by the owner's next step as before, and what is still moving stays
+          // marked moving.
+          store->repair_landed(store->_repair->land_all(0, brought, extent, std::move(landed)));
+          if (left.size() == ids.size()) {
+            // Nothing came: asking again at once would only repeat it.
+            std::vector<RepairLanded> again;
+            for (const auto& id : left) {
+              RepairLanded item;
+              item.seq = seq;
+              item.id = id;
+              item.pull = true;
+              item.again = true;
+              again.push_back(std::move(item));
+            }
+            store->repair_landed(store->_repair->land_all(extent, 0, extent, std::move(again)));
+            return;
+          }
+          store->fetch_many_from(peer, std::move(left), seq, extent, allowance - extent);
+        };
+        (void)store->submit(std::move(job));
+      },
+      peer_call_watch());
+}
+
 void DistributedStore::report_repair(RepairResult& result) {
   auto& state = *_repair;
   state.push_examined.fetch_add(result.push_examined, std::memory_order_relaxed);
@@ -3965,75 +4054,21 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
     std::vector<ObjectId> ids;
   };
   std::map<NodeId, Many> fetching_many;
-  const auto send_many = [&](Many& many) {
+  const auto send_many = [&](Many& many, uint64_t allowance) {
     if (many.ids.size() == 1) {
       fetch_one(many.ids.front());
       return;
     }
     const auto seq = state.started++;
     ++result.remote_operations;
-    time_repair("fetch " + std::to_string(seq) + " asked " + std::to_string(many.ids.size()));
-    _context.routes().call(
-        many.peer, message::get_objects, message::encode_ids(many.ids), FrameType::speculative, _options.object_transfer_call, _executor,
-        [weak = std::weak_ptr<Shared>(_shared), ids = many.ids, host = many.peer.host, seq, extent](CallOutcome outcome) {
-          const auto shared = weak.lock();
-          if (!shared) return;
-          ReadLock alive(shared->alive);
-          auto* store = shared->store;
-          if (!store) return;
-          store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
-          std::vector<message::FetchedObject> objects;
-          if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
-            try {
-              objects = message::decode_fetched(outcome.reply->payload, ids.size());
-            } catch (const std::exception& error) {
-              store->_logger.debug("repair fetch peer=" + host + " error=" + error.what());
-            }
-          } else {
-            store->_logger.debug("repair fetch peer=" + host + " error=" + outcome_text(outcome));
-          }
-          uint64_t brought = 0;
-          for (const auto& object : objects) brought += object.data.size();
-          auto job = [store, ids, objects = std::move(objects), seq, extent, brought] {
-            std::vector<RepairLanded> landed;
-            bool stored = false;
-            for (size_t i = 0; i < ids.size(); ++i) {
-              RepairLanded item;
-              item.seq = seq;
-              item.id = ids[i];
-              item.pull = true;
-              if (i < objects.size() && objects[i].as == message::Fetched::left) {
-                item.again = true;
-              } else if (i < objects.size() && objects[i].as == message::Fetched::sent && object_id(objects[i].data) == ids[i]) {
-                if (const auto admitted = store->admit_data(FrameType::speculative, objects[i].data.size(), no_caller_deadline)) {
-                  if (store->_data.put(ids[i], objects[i].data)) {
-                    item.ok = true;
-                    item.answer = FetchAnswer::ok;
-                    item.bytes = objects[i].data.size();
-                    store->_repair->pulled_copies.fetch_add(1, std::memory_order_relaxed);
-                    store->note_acknowledged(ids[i], store->_self);
-                    stored = true;
-                  }
-                }
-              }
-              // Anything else (absent here, unavailable, damaged, no answer) is tried
-              // again alone, which asks every owner.
-              landed.push_back(std::move(item));
-            }
-            if (stored) store->_context.events().notify(store->_storage_event);
-            store->time_repair("fetch " + std::to_string(seq) + " stored");
-            store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
-          };
-          (void)store->submit(std::move(job));
-        },
-        peer_call_watch());
+    fetch_many_from(many.peer, std::move(many.ids), seq, extent, allowance);
   };
   const auto pull_many = [&](const ObjectId& id, OfferBook::Fetch& marked) {
     const auto* holder = holder_of(id);
     if (!holder) return pull(id, marked);
     auto open = fetching_many.find(holder->id);
     if (open != fetching_many.end() && open->second.ids.size() >= message::max_fetch_batch) {
-      send_many(open->second);
+      send_many(open->second, 0);
       fetching_many.erase(open);
       open = fetching_many.end();
     }
@@ -4220,6 +4255,11 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
   // fetches as the credit and the window still cover, an extent each beside the one
   // already held, so a step brings a window's worth of large objects and not one
   // extent's; a part of one id is a fetch of one.
+  struct Part {
+    Many many;
+    uint64_t allowance = 0;
+  };
+  std::vector<Part> parts_out;
   for (auto& [peer, many] : fetching_many) {
     size_t parts = 1;
     while (parts < many.ids.size() && spent + extent <= byte_budget && fits(0, extent)) {
@@ -4228,13 +4268,23 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       ++parts;
     }
     for (size_t part = 0; part < parts; ++part) {
-      Many one{many.peer, {}};
+      Part out{Many{many.peer, {}}, 0};
       const size_t first = many.ids.size() * part / parts;
       const size_t end = many.ids.size() * (part + 1) / parts;
-      one.ids.assign(many.ids.begin() + static_cast<std::ptrdiff_t>(first), many.ids.begin() + static_cast<std::ptrdiff_t>(end));
-      send_many(one);
+      out.many.ids.assign(many.ids.begin() + static_cast<std::ptrdiff_t>(first), many.ids.begin() + static_cast<std::ptrdiff_t>(end));
+      parts_out.push_back(std::move(out));
     }
   }
+  // The credit the window left unspent goes to what the answers leave, an extent at a
+  // time, so a fetch of many asks again as it lands instead of a step later: the window
+  // stays full between steps (the redesign document, "The holder's side, traced").
+  for (auto& part : parts_out) {
+    // Every id past the first extent's worth may be left.
+    const size_t extents = std::min<uint64_t>(part.many.ids.size() - 1, (byte_budget - std::min(spent, byte_budget)) / extent);
+    part.allowance = extents * extent;
+    spent += part.allowance;
+  }
+  for (auto& part : parts_out) send_many(part.many, part.allowance);
 
   finish_repair_pass(result);
   report_repair(result);
