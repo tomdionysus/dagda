@@ -50,9 +50,11 @@ struct RepairOptions {
   // repair as this node's own does: repair shares their links (Macha's
   // three telemetry intervals, at least 3 s).
   std::chrono::milliseconds peer_window{3000};
-  // Repair's byte credit accrues at this fraction of the link's estimated
-  // rate (initial_bandwidth until one is measured, at most max_bandwidth
-  // when set), banked to five seconds of the link or an extent.
+  // Repair's byte credit accrues at the link's estimated rate (initial_bandwidth
+  // until one is measured, at most max_bandwidth when set) while nothing of a
+  // higher class is present, here or at a peer, and at this fraction of it while
+  // something is; banked to five seconds of the link or an extent. Macha's key of
+  // the name maps here (the maintainer, 2026-11-19: an idle node's repair uses the link).
   double idle_bandwidth_fraction = 0.10;
   uint64_t initial_bandwidth = 32ULL * 1024 * 1024;
   uint64_t max_bandwidth = 0;
