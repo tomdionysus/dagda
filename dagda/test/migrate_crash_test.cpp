@@ -90,13 +90,18 @@ TEST(MigrateCrash, APackRecordWhoseWriteWasCutShortIsFinished) {
     const auto old_bytes = std::span<const uint8_t>(file).first(pack_header_size).subspan(pack_tag_offset);
     const auto new_header = encode_pack_header(moved);
     const auto new_bytes = std::span<const uint8_t>(new_header).subspan(pack_tag_offset);
-    write_at(pack, pack_tag_offset, torn(old_bytes, new_bytes, cut));
+    const auto on_disk = torn(old_bytes, new_bytes, cut);
+    write_at(pack, pack_tag_offset, on_disk);
+    // The bytes the cut left old can equal the new ones by chance (the last checksum
+    // byte, at a cut of 47, about one run in 256): then the record is whole and moved,
+    // which is what the run must find.
+    const bool whole = std::equal(on_disk.begin(), on_disk.end(), new_bytes.begin(), new_bytes.end());
 
     const auto report = v18.migrate();
     EXPECT_EQ(report.pack_regions_skipped, 0u);
     EXPECT_EQ(report.pack_records_unreadable, 0u);
-    EXPECT_EQ(report.pack_records_torn_finished, 1u);
-    EXPECT_EQ(report.pack_records_migrated, 5u);
+    EXPECT_EQ(report.pack_records_torn_finished, whole ? 0u : 1u);
+    EXPECT_EQ(report.pack_records_migrated, whole ? 4u : 5u);
     EXPECT_EQ(hex(legacy::read_file(pack)).substr(0, 2 * pack_header_size), hex(new_header));
     expect_v19_opens(bed, v18);
   }
