@@ -225,9 +225,13 @@ same order. Its objects are 64 bytes, so its times are what the per-file and
 per-record work costs and say nothing of the bytes. On a Mac's disk: before pass 19.4
 minutes, migration 19.7, after pass 17.8, comparison 32 seconds.
 
-A pass is as slow as the disk, since it reads every byte: 4 TB at 150 MiB/s, if a
-node's USB disk gives that, is about 7.5 hours, more for a million opens on a
-spinning disk, and the node is stopped throughout. What makes that bearable:
+A manifest pass is as slow as the disk, since it reads every byte, and the node is
+stopped throughout. On the live nodes' USB hard disks (the Macha session's figures,
+2026-11-19) the cost is per file, not per byte: a 4 MiB loose object read whole took
+about 45 ms in id order, inode order was no better, and several reads at once helped
+little or hurt; with the inodes read first and the files visited where their bytes
+start, about 25 to 33 ms, some 125 MiB/s. So a pass reads loose objects in that order,
+and the migration reads only headers (about 6 ms a file). What makes it bearable:
 
 - **It resumes.** `--resume` goes on from `<manifest>.partial`, which is made durable
   every 256 records or 1 GiB, so a stopped pass reads again at most that much (a Pi's
@@ -240,15 +244,19 @@ spinning disk, and the node is stopped throughout. What makes that bearable:
 - **Progress with an end:** the total is known from listing the stores, so every 4096
   records a line gives records, MiB of the total, the rate and the minutes left. The
   listing itself is a stat of each file; measure it on the day.
-- **It holds little:** a record at a time, and one listing and one replay a store.
-  The comparison is a merge of two streams and its memory does not grow with them.
-- **One thread.** A Pi 5 has AES and SHA-2 instructions, so the disk should be the
-  bound and threads would buy nothing. This has not been measured on the nodes.
-- **No sampling and no skipping,** by design: nothing is there to trade for time.
+- **It holds little:** one listing and one replay a store, a store's loose values
+  (about 100 bytes an object, some 150 MB for macnessa's 1.5 M) until its section is
+  written, and a window of records read ahead (16, at most 64 MiB). The comparison is
+  a merge of two streams and its memory does not grow with them.
+- **Reading and checking overlap.** One thread reads, in the device's order, one file
+  at a time; the cores less one authenticate (`migrate/pipeline.h`).
+- **No sampling and no skipping** in a manifest pass, by design: it is the proof.
 
-Three reads in all, then, with the node stopped: before, the migration's own, after.
-On macnessa, at that guessed rate, about 22 hours, plus 1.03M fsyncs for the
-migration. No figure here has been measured on that disk.
+Three passes in all, then, with the node stopped: before, the migration (from
+headers, with a sync each 256 records), after. From the figures above, about 13 hours
+a manifest pass and under 3 for the migration on macnessa's 5.9 TB (about 29 in all),
+and about 16 in all on inverbeg's 3.3 TB. Measured as rates on those disks with the
+nodes serving; not yet as a whole pass.
 
 ## Going back
 
@@ -323,7 +331,8 @@ Nothing is copied and no second copy of the data is needed. For each
 backend, then the control store, then the cache:
 
 - every loose object (`objects/xx/yy/<id>.obj`) has its 16-byte GCM tag
-  overwritten at its fixed offset in the header;
+  overwritten at its fixed offset in the header (from the header alone since 0.3.1:
+  "How a run moves records" above);
 - every pack put record has its tag and the SHA-256 over its header prefix
   overwritten, 48 bytes in one write; touches and tombstones carry nothing
   sealed and are untouched;
