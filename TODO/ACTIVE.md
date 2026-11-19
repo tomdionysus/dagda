@@ -157,8 +157,9 @@ merge can collapse it.
   - All on WiFi, kernel 6.18.62-v8-va48+, 4K pages; all report past under-voltage (`throttled=0x50000`).
 - **Shipping a commit:** `git archive --format=tar.gz -o build/<name>.tar.gz <commit>` (and Dannan's tag the same
   way from `../dannan`), copied with rsync; a gate script like `build/pi-release030.sh` writes `status.txt`. Start it
-  detached (`ssh -n host 'setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`: a plain `nohup ... &` over ssh holds the
-  session open), and wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
+  detached in its own ssh call (`ssh -n host 'cd dir && setsid nohup sh x.sh > x.out 2>&1 < /dev/null &'`). That ssh
+  still does not return, so run it as a background command and stop it once `status.txt` shows the start; the job
+  survives. Then wait on a marker line with a background `until ssh -n ... grep -q marker; do sleep 120; done`.
 - **Test-first is shown on the Pi:** build at the commit that adds the cases and see them fail, then build the fix
   and run the whole suite once. One whole-suite run at a step's last commit; no rerun without a named reason.
   Sanitizers only for a release or to hunt one named bug.
