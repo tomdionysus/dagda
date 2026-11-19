@@ -279,13 +279,16 @@ class LooseJournal {
     return out;
   }
   void add(const Bytes& key, const Bytes& value) {
+    const auto be32 = [](uint64_t n) {
+      return std::array<uint8_t, 4>{static_cast<uint8_t>(n >> 24), static_cast<uint8_t>(n >> 16), static_cast<uint8_t>(n >> 8), static_cast<uint8_t>(n)};
+    };
     const uint32_t length = static_cast<uint32_t>(4 + key.size() + value.size());
-    Bytes body;
-    body.reserve(length);
-    for (const int shift : {24, 16, 8, 0}) body.push_back(static_cast<uint8_t>(key.size() >> shift));
+    const auto key_length = be32(key.size());
+    Bytes body(key_length.begin(), key_length.end());
     body.insert(body.end(), key.begin(), key.end());
     body.insert(body.end(), value.begin(), value.end());
-    for (const int shift : {24, 16, 8, 0}) _pending.push_back(static_cast<uint8_t>(length >> shift));
+    const auto frame_length = be32(length);
+    _pending.insert(_pending.end(), frame_length.begin(), frame_length.end());
     _pending.insert(_pending.end(), body.begin(), body.end());
     const auto check = dannan::identity::sha256(body);
     _pending.insert(_pending.end(), check.bytes.begin(), check.bytes.begin() + 8);
