@@ -319,9 +319,15 @@ struct CrashBed {
   MigrationOptions run_options() const {
     MigrationOptions options;
     options.cache = v18.cache;
+    options.batch_records = batch;
     return options;
   }
   MigrationReport back() const { return migrate_state_back(v18.state, {v18.backend}, v18.cluster(), v18.custody(), run_options()); }
+  MigrationReport forward() const { return migrate_state(v18.state, {v18.backend}, v18.cluster(), v18.custody(), run_options()); }
+
+  // A run's batch and resume window (MigrationOptions::batch_records); two, so a run over
+  // these few records meets both.
+  uint64_t batch = 256;
 
   // A child that runs `direction` and ends the process when `step` steps have
   // been done, as a kill would, with no teardown. Secure memory is not inherited
@@ -637,6 +643,111 @@ TEST(MigrateCrashPhases, AManifestOfAHalfMigratedStateIsRefusedOrNamesItsRecords
   const auto as_v18 = compare_manifests(crash.manifests / "before", crash.manifests / "half", same);
   EXPECT_FALSE(as_v18.passed());
   EXPECT_TRUE(as_v18.names("is v19 in a manifest of layout v18: not migrated")) << as_v18.summary();
+}
+
+// ---- Moved from their headers (TODO/2026-11-19-migrate-speed.md) --------------------------
+
+// A whole v18 state is moved from its records' headers: only the first record of each
+// store's loose objects and of each pack is read whole (to check the record), the rest
+// from their headers, and the record of where the run got to is gone at the end. The
+// comparison passes and the store reads every byte back.
+TEST(MigrateHeaderOnly, AWholeStateIsMovedFromItsHeaders) {
+  CrashBed crash;
+  const auto report = crash.forward();
+  EXPECT_EQ(report.loose_migrated, 8u);
+  EXPECT_EQ(report.pack_records_migrated, 5u);
+  // Of 8 loose objects in three stores and 5 puts in two packs, at most five read whole.
+  EXPECT_GE(report.records_header_only, 8u);
+  EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+  EXPECT_FALSE(std::filesystem::exists(crash.v18.state / progress_record_name));
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// At every step, with a batch of two: the second run passes what the record says is done
+// without reading it, reads the next two whole (a tear or a record moved last is found
+// there) and moves the rest from their headers.
+TEST(MigrateHeaderOnly, AProcessThatDiesAfterAnyStepIsFinishedFromTheRecord) {
+  size_t died = 0;
+  for (size_t step = 1;; ++step) {
+    SCOPED_TRACE("died after step " + std::to_string(step));
+    CrashBed crash;
+    crash.batch = 2;
+    if (!crash.die_after(step, false)) break;
+    ++died;
+    EXPECT_TRUE(std::filesystem::exists(crash.v18.state / progress_record_name));
+    const auto report = crash.forward();
+    EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+    EXPECT_FALSE(std::filesystem::exists(crash.v18.state / progress_record_name));
+    crash.expect_comparison_passes(19, "after");
+    expect_v19_opens(crash.bed, crash.v18);
+  }
+  EXPECT_EQ(died, forward_steps);
+}
+
+// The same going back, from a whole v19 state.
+TEST(MigrateHeaderOnly, AProcessThatDiesGoingBackAfterAnyStepIsFinishedFromTheRecord) {
+  size_t died = 0;
+  for (size_t step = 1;; ++step) {
+    SCOPED_TRACE("died after step " + std::to_string(step));
+    CrashBed crash;
+    crash.batch = 2;
+    (void)crash.forward();
+    if (!crash.die_after(step, true)) break;
+    ++died;
+    (void)crash.back();
+    EXPECT_EQ(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
+    EXPECT_FALSE(std::filesystem::exists(crash.v18.state / progress_record_name));
+    crash.expect_comparison_passes(18, "back");
+  }
+  EXPECT_EQ(died, forward_steps);
+}
+
+// A record that says less than the disk holds (set back by hand here) is caught by the
+// record read whole at the start of a batch past the window: from there every record of
+// the store is read whole, and nothing is moved twice. Without the check, a record moved
+// already and moved again from its header would be back in v18 under a v19 marker.
+TEST(MigrateHeaderOnly, ARecordBehindTheDiskIsCaughtAndNothingIsMovedTwice) {
+  CrashBed crash;
+  crash.batch = 2;
+  ASSERT_TRUE(crash.die_after(5, false));
+  // The backend's five loose objects are moved; the record says none are.
+  std::ofstream(crash.v18.state / progress_record_name, std::ios::trunc) << "dagda-migrate progress 1\nforward\n3\n"
+                                                                         << crash.v18.backend.string() << "\n"
+                                                                         << (crash.v18.state / "metadata-objects").string() << "\n"
+                                                                         << crash.v18.cache.string() << "\n0 0 0 0 end\n";
+  std::vector<std::string> said;
+  auto options = crash.run_options();
+  options.say = [&](std::string_view line) { said.emplace_back(line); };
+  const auto report = migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
+  EXPECT_TRUE(std::any_of(said.begin(), said.end(), [](const std::string& line) { return line.find("moved already") != std::string::npos; }));
+  EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// A state left part way with no record (a run of an earlier version, or the record lost)
+// is moved reading every record whole, as before.
+TEST(MigrateHeaderOnly, AStateLeftPartWayWithNoRecordIsReadWhole) {
+  CrashBed crash;
+  ASSERT_TRUE(crash.die_after(3, false));
+  std::filesystem::remove(crash.v18.state / progress_record_name);
+  const auto report = crash.forward();
+  EXPECT_EQ(report.records_header_only, 0u);
+  EXPECT_EQ(report.loose_unreadable + report.pack_records_unreadable, 0u);
+  crash.expect_comparison_passes(19, "after");
+  expect_v19_opens(crash.bed, crash.v18);
+}
+
+// A dry run reads every record whole and writes nothing, the record included.
+TEST(MigrateHeaderOnly, ADryRunReadsEveryRecordWholeAndWritesNoRecord) {
+  CrashBed crash;
+  auto options = crash.run_options();
+  options.dry_run = true;
+  const auto report = migrate_state(crash.v18.state, {crash.v18.backend}, crash.v18.cluster(), crash.v18.custody(), options);
+  EXPECT_EQ(report.records_header_only, 0u);
+  EXPECT_FALSE(std::filesystem::exists(crash.v18.state / progress_record_name));
+  EXPECT_EQ(read_text(crash.v18.state / "storage-layout"), "macha-state-layout-v18\n");
 }
 
 }  // namespace
