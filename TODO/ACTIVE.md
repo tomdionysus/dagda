@@ -20,6 +20,9 @@ unless the board says so (`claims_list`).
 
 ## Where it stands
 
+- **The cutover is under way** (the Macha session, 2026-11-19 afternoon): both nodes stopped together (the maintainer's
+  ruling), live-a (5.9 TB) migrating first, both nodes getting Macha 0.95.0 on Dagda 0.3.0. Nothing of Dagda's
+  touches live-a or live-b until the Macha session reports the cutover done (its request).
 - **0.3.0 is tagged for Macha's deploy** (2026-11-19; main `2a58202`, tree identical to the gated `4a4b322`; not
   pushed). Gate in `COMPLETED.md`: plain and ASan/UBSan 1150 of 1153, 3 skipped, 0 failed, no report; TSan no report
   in Dagda's code (one known Boost.Asio fence false positive). The Macha session has the tag, builds its prefix from
@@ -86,9 +89,10 @@ unless the board says so (`claims_list`).
 ## Next (in order): the cutover
 
 1. **Any failure Macha's suite finds in Dagda**, first (it reruns on the 0.3.0 tag).
-2. **The next release for the deploy**, when the maintainer wants it: develop now carries the large rejoin's fix (below) past
-   0.3.0. The Macha session builds from a tag; 0.3.1 with the release gate as 0.3.0's (plain, ASan/UBSan, TSan).
-   The Debian packages too, if the maintainer wants them.
+2. **0.3.1, when the maintainer says** (asked 2026-11-19: "Wait"). develop carries the large rejoin's fix past 0.3.0; the
+   cutover deploys 0.3.0, and Macha takes 0.3.1 in a later release with a suite run, documenting the changed
+   meaning of `maintenance.idle_bandwidth_fraction` there. The release gate as 0.3.0's (plain, ASan/UBSan, TSan);
+   the Debian packages too, if the maintainer wants them.
 3. After the cutover, not before:
    - Route Dagda's raw syncs through Dannan's `storage::FileSystem`: `ledger/sealed_journal.cpp`, the durability
      domain and pool barriers, `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`,
@@ -106,9 +110,6 @@ unless the board says so (`claims_list`).
 
 ## Waiting on the maintainer
 
-- **Power-cut cases for `dagda-migrate` before live-a's migration?** Every crash case kills a process, which
-  keeps the page cache; no case drops unsynced writes. Bringing forward Next 3's syncs through Dannan's
-  `storage::FileSystem` and adding cases on its simulated disk would prove the ordering. Asked 2026-11-19.
 - **A push** of `main`, `develop` and the `0.3.0` tag (nothing pushed since `8e509cd`): the Macha session
   builds from this machine's repository, so nothing waits on it, but the remote is behind. 0.3.0 also carries slice
   1 (0.2.0's content), which Lugh asked for on 2026-11-16; telling Lugh and Lir is the maintainer's call while slices pause.
@@ -199,6 +200,8 @@ the merged local branches deleted (`feature/bench`, `feature/dannan-070`, `featu
 measured no faster because the joiner kept to `idle_bandwidth_fraction` 0.5: **"Let idle repair use the link"**:
 with nothing of a higher class present, repair's credit accrues at the whole link estimate; the fraction applies
 only while one is, and the duty share still holds repair's turns. The option keeps its name for Macha's mapping.
+Asked after: 0.3.1 "Wait"; the migration's power-cut cases (syncs through Dannan's `storage::FileSystem`, cases on
+its simulated disk) "after the cutover as planned".
 
 **The maintainer, 2026-11-18:** the Macha move to Dagda only, until ready for the cutover on live-a and live-b (above). Agreed
 among the three sessions the same day: the cutover deploys on Dannan 0.9.2. The Macha session agreed that Dagda fixes
