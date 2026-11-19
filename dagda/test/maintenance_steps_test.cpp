@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -507,7 +507,19 @@ class MachaLoop {
           enter("walks");
           const auto walks = repair.claim_walks(turn);
           enter("transfer");
-          const auto step = repair.transfer(turn, repair.lists());
+          // Macha's pass waited for its transfers, and these traces are its: the
+          // transfer's window is let land and reported with it (the repair redesign,
+          // stage 4, where a turn stopped waiting).
+          auto step = repair.transfer(turn, repair.lists());
+          const auto landed = repair.drain(std::chrono::seconds(60));
+          step.bytes_transferred += landed.bytes_transferred;
+          step.offer_bytes += landed.offer_bytes;
+          step.credit_spent += landed.credit_spent;
+          step.push_examined += landed.push_examined;
+          step.pull_examined += landed.pull_examined;
+          step.pull_unsourceable += landed.pull_unsourceable;
+          step.complete = step.complete || landed.complete;
+          step.in_flight = landed.in_flight;
           enter("settle");
           settled = repair.settle(walks, step);
           if (settled == store::RepairSettled::credit) repair.note_gate(store::RepairGate::credit, paced);
@@ -1388,7 +1400,8 @@ TEST(MaintenanceStepsPeers, ATurnKeepsThePeerReadingItBeganWithWhenAsked) {
     seen = wait_until([&] { return (repair.paced_by() & store::paced_by_peer_foreground) != 0; });
     if (seen) kept = repair.transfer(turn, first_lists);
   }
-  sent = peer.data().has(first);
+  // The turn does not wait for its copy (the repair redesign, stage 4): it lands.
+  sent = wait_until([&] { return peer.data().has(first); });
   if (seen) {
     auto turn = repair.begin_turn(time.now(), uint8_t{0});
     reading = repair.transfer(turn, second_lists);

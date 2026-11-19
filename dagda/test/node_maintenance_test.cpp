@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -195,6 +195,83 @@ TEST(NodeMaintenance, TheNodesThreadRunsThePassesOnItsOwn) {
   const auto asked = owner.inventories + owner.releases;
   EXPECT_TRUE(test::wait_until([&] { return figure(a, "dagda.gc.skipped") >= 2; }));
   EXPECT_EQ(owner.inventories + owner.releases, asked);
+  a.stop();
+}
+
+// A provider registered once the node runs is read at once, not when the collector's
+// rest ends: the loop's first pass found no provider, which rests the collector as a
+// settled sweep does. Until it is read nothing is referenced, so repair has nothing to
+// work towards (seen as five minutes on the harness's repair workload, 2026-11-16).
+TEST(NodeMaintenance, AProviderRegisteredLaterIsReadWhileTheCollectorRests) {
+  test::TestProvider owner;
+  refer_to_nothing(owner);
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  options.maintenance.interval = 20ms;
+  options.maintenance.gc_interval = 1h;
+  auto& a = cluster.add("a", options);
+  a.start();
+  // The loop has passed with no provider.
+  ASSERT_TRUE(test::wait_until([&] { return figure(a, "dagda.gc.skipped") >= 1; }));
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  EXPECT_TRUE(test::wait_until([&] { return a.ledger().inventory() != nullptr; }, 10s));
+  a.dagda_node().unregister_reachability(domain::domain_v1);
+  a.stop();
+}
+
+// A new reference reaches the inventory in the pass that sees the owner's generation
+// move, not when the collector's rest ends: the survey and repair work from it, so a
+// copy a write could not make would otherwise wait out the rest. Macha's pass runs its
+// inventory stage whenever repair is due and rebuilds on a generation change
+// (maintenance.cpp:611-627 at f0597a4). Here the collector rests an hour. (Before the
+// fix this case stopped in its setup, the case above's defect: no GC pass ever ran.)
+TEST(NodeMaintenance, ANewGenerationIsReadWhileTheCollectorRests) {
+  test::TestProvider owner;
+  refer_to_nothing(owner);
+  Cluster cluster;
+  ClusterNodeOptions options;
+  options.maintenance.automatic = true;
+  options.maintenance.interval = 20ms;
+  options.maintenance.gc_interval = 1h;
+  options.maintenance.collector.retry_window = 0ms;
+  auto& a = cluster.add("a", options);
+  a.start();
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  // The sweep settles and the collector rests: repair's turns go by with no GC pass.
+  uint64_t passes = 0;
+  uint64_t turns_then = 0;
+  ASSERT_TRUE(test::wait_until(
+      [&] {
+        const auto now = figure(a, "dagda.gc.passes");
+        const auto gates = a.repair().gates();
+        const auto turns = gates.ran + gates.share + gates.quiescent + gates.credit;
+        if (now != passes) {
+          passes = now;
+          turns_then = turns;
+          return false;
+        }
+        return passes >= 2 && turns >= turns_then + 10;
+      },
+      30s));
+  ASSERT_NE(a.ledger().inventory(), nullptr);
+  ASSERT_EQ(a.ledger().inventory()->generation(), 1u);
+
+  // The owner's state moves on: it refers to one object more. Re-registered, so the
+  // provider is never changed under a pass.
+  a.dagda_node().unregister_reachability(domain::domain_v1);
+  owner.answer.data = {store::object_id(test::numbered(30))};
+  owner.current_generation = 2;
+  owner.known = 2;
+  a.dagda_node().register_reachability(domain::domain_v1, owner);
+  EXPECT_TRUE(test::wait_until(
+      [&] {
+        const auto inventory = a.ledger().inventory();
+        return inventory && inventory->generation() == 2;
+      },
+      10s))
+      << "gc passes " << figure(a, "dagda.gc.passes");
+  a.dagda_node().unregister_reachability(domain::domain_v1);
   a.stop();
 }
 

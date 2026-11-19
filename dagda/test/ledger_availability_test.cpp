@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -176,6 +176,64 @@ TEST(LedgerAvailability, TheSurveyByDiffFindsWhatNoNodeHolds) {
   EXPECT_EQ(diffs[1].why, "peer went away");
 }
 
+// The repair redesign's stage 1 (TODO/2026-11-16-repair-redesign.md): the survey keeps,
+// for each peer that answered, what it holds of what is referenced and this node lacks.
+// The diff has always learnt it and kept only whether some peer did; repair needs who,
+// to count an object's copies and to know where to fetch it. What a peer holds that
+// nothing refers to is not listed.
+TEST(LedgerAvailability, TheSurveyKeepsWhoHoldsWhatThisNodeLacks) {
+  std::set<ObjectId> referenced;
+  for (uint32_t i = 0; i < 600; ++i) referenced.insert(numbered_id(i * 7919));
+  const auto pick = [&](auto keep) {
+    std::set<ObjectId> out;
+    size_t i = 0;
+    for (const auto& id : referenced)
+      if (keep(i++)) out.insert(id);
+    return out;
+  };
+  const auto mine = pick([](size_t i) { return i % 3 != 0; });
+  auto first = pick([](size_t i) { return i % 5 != 0; });
+  auto second = pick([](size_t i) { return i % 2 == 0; });
+  // Garbage each peer holds that nothing refers to.
+  first.insert(numbered_id(0xfffffff1));
+  second.insert(numbered_id(0xfffffff2));
+
+  std::vector<ObjectId> missing_here;
+  for (const auto& id : referenced)
+    if (!mine.contains(id)) missing_here.push_back(id);
+  const auto holding = [&](const std::set<ObjectId>& peer) {
+    std::vector<ObjectId> out;
+    for (const auto& id : missing_here)
+      if (peer.contains(id)) out.push_back(id);
+    return out;
+  };
+  ASSERT_FALSE(holding(first).empty());
+  ASSERT_NE(holding(first), holding(second));
+
+  dannan::test::TempDir dir;
+  auto here_trie = held_trie(dir.path() / "here", mine);
+  const auto here = std::make_shared<const TrieUnion>(std::vector{here_trie->snapshot()});
+  auto one = held_trie(dir.path() / "one", first);
+  auto two = held_trie(dir.path() / "two", second);
+  SnapshotSource one_source(one->snapshot());
+  SnapshotSource two_source(two->snapshot());
+  std::vector<TrieSource*> peers{&one_source, &two_source};
+  const std::vector<ObjectId> referenced_list(referenced.begin(), referenced.end());
+  std::vector<PeerDiff> diffs;
+  (void)survey_by_diff(here, missing_here, contract::IdLookup(referenced_list), peers, diffs);
+  ASSERT_EQ(diffs.size(), 2u);
+  EXPECT_EQ(diffs[0].holds, holding(first));
+  EXPECT_EQ(diffs[1].holds, holding(second));
+
+  // A peer that fails mid-diff says nothing of what it holds.
+  FailingSource failing(two->snapshot());
+  std::vector<TrieSource*> broken{&one_source, &failing};
+  (void)survey_by_diff(here, missing_here, contract::IdLookup(referenced_list), broken, diffs);
+  EXPECT_EQ(diffs[0].holds, holding(first));
+  EXPECT_FALSE(diffs[1].answered);
+  EXPECT_TRUE(diffs[1].holds.empty());
+}
+
 // Macha: test_what_this_node_lacks_is_the_referenced_set_less_every_disk.
 // What this node lacks: the referenced set, a trie and a list beside it, less
 // what any of its disks holds, for none to three disks.
@@ -211,6 +269,35 @@ TEST(LedgerAvailability, WhatThisNodeLacksIsTheReferencedSetLessEveryDisk) {
     disks.push_back(held_trie(dir.path() / ("disk" + std::to_string(count)), next));
     held.push_back(next);
   }
+}
+
+// Macha's test_what_is_not_held_pauses_over_the_ids_beside_the_view
+// (test_availability.cpp): the join pauses between pages over the ids beside the
+// held view too, so a stop asked for there ends it at the next page, not after
+// every id.
+TEST(LedgerAvailability, WhatIsNotHeldPausesOverTheIdsBesideTheView) {
+  const std::set<ObjectId> viewed{numbered_id(1), numbered_id(2)};
+  std::vector<ObjectId> others;
+  for (uint32_t i = 0; i < 10000; ++i) others.push_back(numbered_id(1000 + i));
+  std::sort(others.begin(), others.end());
+  dannan::test::TempDir dir;
+  auto view = held_trie(dir.path() / "view", viewed);
+  const contract::ReferencedSets sets(contract::ReferencedSets::Views{view->snapshot(), std::nullopt}, others, {});
+  const std::vector<ObjectTrie::Snapshot> parts;
+
+  size_t pauses = 0;
+  const auto all = sets.not_held(contract::RetentionClass::data, parts, [&] { ++pauses; });
+  EXPECT_EQ(all.size(), viewed.size() + others.size());
+  EXPECT_GE(pauses, others.size() / 4096);
+
+  size_t before_stop = 0;
+  EXPECT_THROW((void)sets.not_held(contract::RetentionClass::data, parts,
+                                   [&] {
+                                     ++before_stop;
+                                     throw MaintenanceStopping();
+                                   }),
+               MaintenanceStopping);
+  EXPECT_EQ(before_stop, 1u);
 }
 
 }  // namespace

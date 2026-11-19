@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -10,8 +10,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <utility>
 
+#include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/status/log.h"
 
@@ -64,8 +66,8 @@ struct DiskServiceSample {
 // backend. The control store is not observed: it is a different device and
 // must not be gated by DATA pressure.
 //
-// Cost: two time reads and a few relaxed atomics per operation; no locks, no
-// timer thread.
+// Cost: two time reads and a few relaxed atomics per operation; no locks but on
+// the operation that releases pressure, which tells its listener; no timer thread.
 //
 // Only operations through the pool are observed: a device saturated by
 // another process raises the signal only once the store's own I/O slows.
@@ -92,6 +94,10 @@ class DiskServiceMonitor {
   // without a lock. Not assignment: the counters are atomics and the monitor
   // is owned in place.
   void configure(Thresholds thresholds) noexcept { _thresholds = thresholds; }
+  // Told, on the thread whose operation released it, each time pressure ends: what
+  // stood aside for it may look again. Replaces the last; none: nobody is told.
+  // Thread-safe.
+  void on_release(std::function<void()> released);
 
   // Records one completed DATA read or write, whatever class of work issued
   // it. Waits on nothing; thread-safe.
@@ -125,6 +131,9 @@ class DiskServiceMonitor {
   std::atomic<uint64_t> _slowdown_percent{0};
   std::atomic<uint64_t> _pressure_onsets{0};
   std::atomic<bool> _pressured{false};
+  // Taken only to set the listener and on a release, never on the hot path.
+  dannan::contract::Mutex _listener_mutex;
+  std::function<void()> _on_release DANNAN_GUARDED_BY(_listener_mutex);
 };
 
 // Times one local store operation on the injected time and reports it on

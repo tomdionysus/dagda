@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -42,7 +42,8 @@ const std::vector<dannan::net::MessageType>& StorageServer::served() {
       message::have_object,        message::get_object,         message::put_object,           message::delete_object,
       message::get_control_object, message::put_control_object, message::put_object_deferred,  message::object_durability_barrier,
       message::retain_objects,     message::have_objects,       message::have_control_objects, message::have_valid_objects,
-      message::trie_diff,          message::durability_covered, message::remove_objects,
+      message::trie_diff,          message::durability_covered, message::remove_objects,       message::offer_objects,
+      message::get_objects,
   };
   return types;
 }
@@ -54,6 +55,7 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _claims(stores.claims),
       _cache(stores.cache),
       _ledger(stores.ledger),
+      _offers(stores.offers),
       _options(options),
       _admission(admission),
       _logger(context.logger("dagda.server")),
@@ -94,7 +96,20 @@ void StorageServer::set_hosts_extents(bool hosts) {
 void StorageServer::advertise() {
   auto& nodes = _context.nodes();
   nodes.advertise(capacity_advert, dannan::membership::u64_advert(_data.limit()));
-  nodes.advertise(used_advert, dannan::membership::u64_advert(_data.used()));
+  StoreFigures figures;
+  figures.used = _data.used();
+  figures.backends_online = _data.online_backends();
+  if (_cache) {
+    const auto extent = static_cast<uint64_t>(_options.extent_size);
+    const auto stats = _cache->stats();
+    figures.has_cache = true;
+    figures.cache_capacity = static_cast<uint64_t>(_cache->max_blocks()) * extent;
+    figures.cache_used = static_cast<uint64_t>(_cache->blocks()) * extent;
+    figures.cache_hits = stats.hits;
+    figures.cache_misses = stats.misses;
+    figures.cache_evictions = stats.evictions;
+  }
+  nodes.advertise(figures_advert, encode_figures(figures));
   if (_hosts_extents.load(std::memory_order_relaxed))
     nodes.advertise(extents_advert, Bytes{1});
   else
@@ -200,6 +215,31 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       for (const auto& id : ids) present.push_back(_data.has(id));
       return reply(message::have_objects_reply, message::encode_presence(present));
     }
+    if (type == message::offer_objects) {
+      // Repair's offer: what is held from the index, then whether a copy could be
+      // stored, then the book's say. One admission for the batch, as a presence.
+      const auto ids = message::decode_ids(request.payload, message::max_offer_batch);
+      std::optional<DataAdmission> admitted;
+      if (!control_frame) {
+        admitted = admit_data(frame, extent, false);
+        if (!admitted) return busy();
+      }
+      const auto limit = _data.limit();
+      const bool room = _data.online_backends() > 0 && (!limit || _data.used() + extent <= limit);
+      std::vector<message::OfferAnswer> answers;
+      answers.reserve(ids.size());
+      for (const auto& id : ids) {
+        if (_data.has(id))
+          answers.push_back(message::OfferAnswer::held);
+        else if (!room)
+          answers.push_back(message::OfferAnswer::no_room);
+        else if (_offers && !_offers->want(peer.id, id))
+          answers.push_back(message::OfferAnswer::fetching);
+        else
+          answers.push_back(message::OfferAnswer::wanted);
+      }
+      return reply(message::offer_objects_reply, message::encode_offer_answers(answers));
+    }
     if (type == message::have_valid_objects) {
       const auto ids = message::decode_ids(request.payload, message::max_valid_batch);
       // Per id: absence is an index lookup, final with every disk online; a
@@ -225,17 +265,66 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     }
     if (type == message::get_object) {
       const auto id = message::decode_id(request.payload);
+      const auto timing = [&](std::string_view stage, uint64_t bytes) {
+        if (_options.serve_timing) _options.serve_timing("get_object " + std::string(stage) + " peer=" + peer.host + " bytes=" + std::to_string(bytes));
+      };
+      timing("arrived", 0);
       auto admitted = admit_data(frame, extent, true);
       if (!admitted) return gave_up();
+      timing("admitted", 0);
       // Not found is final only when no offline backend could hold it.
       const bool every_backend = _data.every_backend_online();
       auto data = _data.get(id);
       admitted.reset();
+      timing("read", data ? data->size() : 0);
       if (!data)
         return every_backend && _data.every_backend_online() ? Handled::failed(404, "not_found", "object not found")
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
       _activity.note(frame, data->size());
       return reply(message::object_reply, message::encode_object(id, *data));
+    }
+    if (type == message::get_objects) {
+      // Repair's fetch of many: one admission of an extent, then the objects in order
+      // while the reply stays within it, each sized from the index before it is read.
+      const auto ids = message::decode_ids(request.payload, message::max_fetch_batch);
+      const auto timing = [&](std::string_view stage, uint64_t bytes) {
+        if (_options.serve_timing)
+          _options.serve_timing("get_objects " + std::string(stage) + " peer=" + peer.host + " ids=" + std::to_string(ids.size()) +
+                                " bytes=" + std::to_string(bytes));
+      };
+      timing("arrived", 0);
+      auto admitted = admit_data(frame, extent, true);
+      if (!admitted) return gave_up();
+      timing("admitted", 0);
+      std::vector<message::FetchedObject> objects(ids.size());
+      uint64_t sent = 0;
+      bool full = false;
+      for (size_t i = 0; i < ids.size(); ++i) {
+        auto& object = objects[i];
+        if (full) continue;
+        // Not found is final only when no offline backend could hold it.
+        const bool every_backend = _data.every_backend_online();
+        if (!_data.has(ids[i])) {
+          object.as = every_backend && _data.every_backend_online() ? message::Fetched::absent : message::Fetched::unavailable;
+          continue;
+        }
+        if (sent && sent + _data.payload_size(ids[i]) > extent) {
+          full = true;
+          continue;
+        }
+        auto data = _data.get(ids[i]);
+        if (!data) {
+          object.as = message::Fetched::unavailable;
+          continue;
+        }
+        sent += data->size();
+        object.as = message::Fetched::sent;
+        object.data = std::move(*data);
+      }
+      admitted.reset();
+      _activity.note(frame, sent);
+      timing("read", sent);
+      return reply(message::get_objects_reply, message::encode_fetched(objects));
     }
     if (type == message::get_control_object) {
       const auto id = message::decode_id(request.payload);
@@ -263,10 +352,12 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
         // later barrier for a covered generation waits on nothing.
         const auto ticket = _data.put_deferred(object.id, object.data);
         if (!ticket) return Handled::failed(507, "storage_full", "storage limit reached");
+        if (_offers) _offers->arrived(object.id);
         advertise();
         return reply(dannan::net::message::ok, message::encode_ticket(*ticket));
       }
       if (!_data.put(object.id, object.data)) return Handled::failed(507, "storage_full", "storage limit reached");
+      if (_offers) _offers->arrived(object.id);
       advertise();
       return Handled::processed();
     }
@@ -280,12 +371,14 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     }
     if (type == message::delete_object) {
       const auto id = message::decode_id(request.payload);
-      const auto admitted = admit_data(frame, extent, false);
-      if (!admitted) return busy();
       {
-        // The claim check marks the object for the delete.
+        // The claim check first, as Macha's handler (storage_server.cpp:393-410 at
+        // f0597a4): a claimed object is claimed whatever the node's load. It marks the
+        // object for the delete; admission is tried once under the mark, never waited for.
         const auto deletion = _data.claim_locks().deletion(id, [&] { return _claims.retained(contract::RetentionClass::data, id); });
         if (deletion.claimed()) return Handled::failed(409, "claimed", "object has an active retention claim");
+        const auto admitted = admit_data(frame, extent, false);
+        if (!admitted) return busy();
         (void)_data.remove(id);
       }
       if (_cache) (void)_cache->remove(id);
@@ -309,7 +402,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
         }
         message::BarrierProbeAnswer answer{epoch, {}};
         for (const auto& id : barrier.probe)
-          if (auto ticket = _data.reassert_durable(id)) answer.present.emplace_back(id, *ticket);
+          if (auto ticket = _data.reassert_durable(id, barrier.ticket)) answer.present.emplace_back(id, *ticket);
         _logger.info("object durability re-derived after epoch change present=" + std::to_string(answer.present.size()) + "/" +
                      std::to_string(barrier.probe.size()) + " expected=" + expected + " current=" + current);
         advertise();

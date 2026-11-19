@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -14,7 +15,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -36,6 +39,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/ledger/retention_ledger.h"
 #include "dagda/ledger/unreferenced_since.h"
+#include "dagda/maintenance_gates.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
 #include "dagda/store/cpu_pacing.h"
@@ -216,7 +220,8 @@ struct MaintenanceReport {
 // the node-local key, and the one ledger cache is divided as Macha divides it.
 struct NodeOptions {
   // Dagda's state: the layout marker, the ledgers and, by default, the
-  // control store. A directory of its own, never Dannan's state path.
+  // control store. For Macha the one state directory, Dannan's too (Macha's
+  // operator ruling, 2026-11-13: one state directory, Macha's state_path).
   std::filesystem::path state;
   // The domain this node's store holds and its key; until the catalogue
   // (step 4) a node holds one domain, v1 (Macha's), whose key is
@@ -258,6 +263,13 @@ struct NodeOptions {
   // node. An open stage is told before its work, and the node waits for the
   // call: Macha's StartupStageHook, which may hold a stage to stall a startup.
   std::function<void(std::string_view)> trace;
+  // Macha's StartupStageHook in Macha's stage names: "data-storage" on the thread
+  // recovering the DATA pool, and "control-storage", "cache", "retention" and,
+  // with heads, "metadata" on the thread opening the node, the two recovering side
+  // by side (Macha's local_state.cpp:57-79 at f0597a4). Each is told before its
+  // plane's work and the node waits for the call, so a stage may be held. Called
+  // from both threads at once: it must be thread-safe.
+  std::function<void(std::string_view)> startup_stage;
   // Ticked by each unit of recovery as the stores open: an owner's, outliving
   // the node, for its stall gate over the construction (Macha's
   // service_startup_no_progress). Nothing: only the node sees them.
@@ -347,7 +359,8 @@ class Node {
   Node& operator=(const Node&) = delete;
 
   // Closes the node; idempotent. Waits on the devices and on requests in
-  // flight.
+  // flight, and on an open_store() running on another thread, which then ends
+  // refused at its next startup stage.
   void stop();
   bool running() const noexcept { return _server != nullptr; }
 
@@ -372,8 +385,9 @@ class Node {
   store::DataResourceArbiter* credit() noexcept { return _credit.get(); }
   // Null with no device reserve.
   store::IoReserve* io() noexcept { return _io.get(); }
-  // When object work of each class was last present: the store's own, in Macha's
-  // meaning. Valid while running().
+  // When work of each class was last present, in Macha's meaning: the object work the
+  // store notes and what the owner notes through Context::activity() (an API request is
+  // a viewer present), never Dannan's inbound traffic. Valid while running().
   dannan::status::ActivityClocks& activity() noexcept { return *_activity; }
   const domain::WrapKey& wrap_key() const noexcept { return *_wrap; }
   lease::LeaseKeeper& lease_keeper() noexcept { return *_keeper; }
@@ -450,6 +464,13 @@ class Node {
   LocalTurn begin_local_stages(const LocalTurnOptions& options = {});
   // Thread-safe; waits on nothing.
   MaintenanceEvents maintenance_events() const noexcept;
+  // When the local stages next have work, on the pass's clock, for an owner's pass that
+  // parks until then as Macha's did (maintenance.cpp:1306-1321 and :1366 at main):
+  // rebalance's credit reaching an extent at the last turn's rate, unless it rests until
+  // an event; while a scrub campaign is due, the scrub's credit reaching an extent at its
+  // share; otherwise the next campaign's date. None: only an event gives them work. Read
+  // after a turn's stages. Serialised with the thread's passes; waits on nothing else.
+  std::optional<dannan::contract::TimePoint> local_due();
   void local_rebalance(LocalTurn& turn);
   void retention_compact(LocalTurn& turn);
   void compact_packs(LocalTurn& turn);
@@ -512,17 +533,23 @@ class Node {
   };
 
   void refusing(const std::function<void()>& part);
+  // A plane's failure, logged in Macha's words and marked on readiness, from the
+  // failing plane's own thread as it fails. Thread-safe.
+  void tell_failure(bool data, const std::string& why);
   void prepare();
   void open();
   void step(std::string_view what);
   void ready(const std::string& plane);
+  // NodeOptions::startup_stage, when given.
+  void startup_stage(std::string_view stage);
   void arm_status();
   void maintenance_loop(std::stop_token stop);
   void stop_maintenance();
-  // One GC pass on the provider registered now. `forced`: due whatever the
-  // node's activity. Whether the collector is settled: its sweep complete
+  // One GC pass on the provider registered now. `forced`: due whatever the node's
+  // activity and quiet window; `metadata_dirty` holds garbage marking either way
+  // (Macha's !metadata_dirty). Whether the collector is settled: its sweep complete
   // with nothing deferred, or nothing to run.
-  bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}) DANNAN_REQUIRES(_maintenance_mutex);
+  bool gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop = {}, bool metadata_dirty = false) DANNAN_REQUIRES(_maintenance_mutex);
   contract::ReachabilityProvider* registered_provider() const;
   // The collector over `provider`, made when there is none or it is over another.
   void ensure_collector_locked(contract::ReachabilityProvider& provider) DANNAN_REQUIRES(_maintenance_mutex);
@@ -552,15 +579,32 @@ class Node {
   dannan::Context& _context;
   // The DATA pool is opening: a refusal now is Macha's data storage recovery failing.
   bool _opening_data = false;
+  // A plane has told its failure as it failed: the refusal does not tell it again.
+  std::atomic<bool> _failure_told{false};
+  // Held for the whole of open_store(), whose thread is `_opener` meanwhile: a stop from
+  // another thread takes it, so waits for the open; a stop begun ends the open refused
+  // at its next startup stage. Taken with no other lock held.
+  std::mutex _open_mutex;
+  std::atomic<std::thread::id> _opener{};
+  std::atomic<bool> _stop_requested{false};
   NodeOptions _options;
   const dannan::status::ScopedLogger _logger;
   dannan::supervise::StartupProgress _progress;
   std::vector<std::string> _opened;
 
+  // Takes `root`'s StorageLock once and keeps it until stop; throws if another holds
+  // it. Never called for a path that is not a directory: the lock would make it.
+  void hold_root(const std::filesystem::path& root) DANNAN_EXCLUDES(_root_locks_mutex);
+
   std::vector<std::unique_ptr<store::StorageLock>> _locks;
-  // The roots a reload can change, by path: written at open and under
-  // _maintenance_mutex, released with the rest at stop.
-  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks;
+  // The roots a reload can change, by path: the cache's, and each backend's once its
+  // directory is there (the pool takes one through hold_root as a disk comes
+  // online). Released with the rest at stop. A leaf lock: the pool calls hold_root
+  // under a reload's _maintenance_mutex.
+  mutable dannan::contract::Mutex _root_locks_mutex;
+  std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> _reloadable_locks DANNAN_GUARDED_BY(_root_locks_mutex);
+  // The roots configured now: hold_root takes no other.
+  std::set<std::filesystem::path> _wanted_roots DANNAN_GUARDED_BY(_root_locks_mutex);
   std::shared_ptr<const domain::StorageKey> _node_local;
   std::optional<domain::WrapKey> _wrap;
   std::unique_ptr<store::StoragePool> _data;
@@ -596,6 +640,12 @@ class Node {
   dannan::status::NodeEvents::Kind _metadata_event = 0;
   dannan::status::NodeEvents::Kind _claims_event = 0;
 
+  // Reloads, one at a time, beside any maintenance pass (Macha's reload touched only
+  // the pool's locks). The cache's configured size, which Status reads, is the one
+  // option a reload changes that anything reads after the open.
+  dannan::contract::IoMutex _reload_mutex;
+  std::atomic<uint64_t> _cache_max_blocks{0};
+
   dannan::contract::IoMutex _maintenance_mutex;
   std::unique_ptr<ledger::UnreferencedSince> _data_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
   std::unique_ptr<ledger::UnreferencedSince> _control_sightings DANNAN_GUARDED_BY(_maintenance_mutex);
@@ -603,6 +653,9 @@ class Node {
   // registered.
   std::unique_ptr<ledger::Collector> _collector DANNAN_GUARDED_BY(_maintenance_mutex);
   contract::ReachabilityProvider* _collector_provider DANNAN_GUARDED_BY(_maintenance_mutex) = nullptr;
+  // The loop's destructive gates (maintenance_gates.h), made at open with the repair's
+  // foreground quiet.
+  std::unique_ptr<MaintenanceGates> _gates DANNAN_GUARDED_BY(_maintenance_mutex);
 
   mutable dannan::contract::Mutex _gc_figures_mutex;
   GcFigures _gc_figures DANNAN_GUARDED_BY(_gc_figures_mutex);
@@ -612,6 +665,8 @@ class Node {
   std::optional<store::CpuPacer> _local_cpu DANNAN_GUARDED_BY(_maintenance_mutex);
   std::optional<dannan::contract::TimePoint> _local_at DANNAN_GUARDED_BY(_maintenance_mutex);
   double _local_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
+  // The rate the last turn earned at, bytes a second, for local_due().
+  double _local_rate DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
   double _scrub_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
   uint64_t _scrub_due_unix_ms DANNAN_GUARDED_BY(_maintenance_mutex) = 0;
   // Rebalance found nothing to do at this event count, and waits for another.

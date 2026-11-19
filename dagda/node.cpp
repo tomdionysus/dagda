@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -8,9 +8,12 @@
 #include "dagda/node.h"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -84,7 +87,26 @@ Node::Node(dannan::Context& context, NodeOptions options, OpenLater) : _context(
 
 void Node::open_store() {
   if (_server) throw std::logic_error("the store is open already");
-  refusing([this] { open(); });
+  // A stop from another thread waits for this open, which ends refused at its next stage.
+  std::unique_lock opening(_open_mutex);
+  _opener.store(std::this_thread::get_id(), std::memory_order_release);
+  struct Opened {
+    std::atomic<std::thread::id>& opener;
+    ~Opened() { opener.store(std::thread::id{}, std::memory_order_release); }
+  } opened{_opener};
+  refusing([this] {
+    if (_stop_requested.load(std::memory_order_acquire)) throw NodeRefused("the node was stopped before its store opened");
+    open();
+  });
+}
+
+void Node::tell_failure(bool data, const std::string& why) {
+  // Macha's words for the part that failed (local_state.cpp:127, :183 at 98b816d), from
+  // the failing plane's own thread as it fails, so a node with one plane failed and the
+  // other still recovering already says failed, and why. Readiness keeps the first.
+  _logger.error(std::string(data ? "node data storage recovery failed: " : "node local state recovery failed: ") + why);
+  _context.readiness().fail("dagda: " + why);
+  _failure_told.store(true, std::memory_order_release);
 }
 
 void Node::refusing(const std::function<void()>& part) {
@@ -92,9 +114,8 @@ void Node::refusing(const std::function<void()>& part) {
     part();
   } catch (const std::exception& error) {
     const std::string why = error.what();
-    // Macha's words for the part that failed (local_state.cpp:127, :183 at 98b816d).
-    _logger.error(std::string(_opening_data ? "node data storage recovery failed: " : "node local state recovery failed: ") + why);
-    _context.readiness().fail("dagda: " + why);
+    // Unless a plane told it as it failed.
+    if (!_failure_told.load(std::memory_order_acquire)) tell_failure(_opening_data, why);
     stop();
     if (dynamic_cast<const NodeRefused*>(&error)) throw;
     throw NodeRefused(why);
@@ -110,6 +131,11 @@ void Node::step(std::string_view what) {
 }
 
 void Node::ready(const std::string& plane) { _context.readiness().ready(plane); }
+
+void Node::startup_stage(std::string_view stage) {
+  if (_options.startup_stage) _options.startup_stage(stage);
+  if (_stop_requested.load(std::memory_order_acquire)) throw NodeRefused("the node was stopped while its store opened (at " + std::string(stage) + ")");
+}
 
 void Node::prepare() {
   if (_context.version() != dannan::context_version)
@@ -178,16 +204,35 @@ void Node::open() {
   }
   const auto lock_reloadable = [&](const std::filesystem::path& root) {
     try {
-      _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
+      hold_root(root);
     } catch (const std::exception& error) {
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   };
+  {
+    dannan::contract::Lock roots(_root_locks_mutex);
+    _wanted_roots.clear();
+    for (const auto& backend : _options.pool.backends) _wanted_roots.insert(backend.path);
+    if (!_options.cache.path.empty()) _wanted_roots.insert(_options.cache.path);
+  }
   _opening_data = true;
-  for (const auto& backend : _options.pool.backends) lock_reloadable(backend.path);
+  // A backend whose directory is not there is a disk not mounted: nothing is made in
+  // its place (the lock would make it), and the pool leaves it offline until it is.
+  for (const auto& backend : _options.pool.backends)
+    if (std::error_code ec; std::filesystem::is_directory(backend.path, ec)) lock_reloadable(backend.path);
   _opening_data = false;
   lock(store::control_store_path(_options.state, _options.control));
-  if (!_options.cache.path.empty()) lock_reloadable(_options.cache.path);
+  // A cache that cannot be had is a cache turned off, not a node refused (Macha's
+  // "persistent cache disabled: ", persistent_cache.cpp:73-84 at f0597a4).
+  bool cache_disabled = false;
+  if (!_options.cache.path.empty()) {
+    try {
+      hold_root(_options.cache.path);
+    } catch (const std::exception& error) {
+      _logger.warn("persistent cache disabled: " + std::string(error.what()));
+      cache_disabled = true;
+    }
+  }
 
   step("open node-local-key");
   try {
@@ -211,70 +256,120 @@ void Node::open() {
 
   _activity = std::make_unique<dannan::status::ActivityClocks>(&pass_time());
 
+  // The DATA pool and the control chain recover side by side, as Macha's do
+  // (local_state.cpp:57-79 at f0597a4): a large pool takes a while, and one plane
+  // stalled or failed leaves the other to come up and be reported ready. The
+  // pool's thread touches only the pool; what reads it waits for its join below.
   step("open storage-pool");
-  _opening_data = true;
   auto pool = _options.pool;
   pool.sealing = scheme;
   pool.role = _options.domain.role;
   pool.ledger_key = _node_local;
   pool.ledger_cache_bytes = ledger_cache_share(cache_bytes, LedgerShare::data_held);
+  pool.lock_root = [this](const std::filesystem::path& root) { hold_root(root); };
   if (_options.admission && _options.admission->device_pressure.slowdown_percent) pool.service_thresholds = _options.admission->device_pressure;
-  _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, services("dagda.pool"));
-  // A pool whose every backend is offline holds nothing it should: ready, but
-  // degraded, and it says so (the maintainer, 2026-11-05), so a node whose only disk is
-  // offline does not crash-loop on its startup timeout.
-  if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
-    const auto& gate = _options.admission->device_pressure;
-    _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
-                 "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
-                 " outlier_percent=" + std::to_string(gate.outlier_percent) +
-                 " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+  auto pool_services = services("dagda.pool");
+  auto data_recovery = std::async(std::launch::async, [this, &pool, &pool_services, &self] {
+    try {
+      startup_stage("data-storage");
+      _data = std::make_unique<store::StoragePool>(_options.state, self.id(), self.durability_epoch(), pool, _options.key, pool_services);
+      // A pool whose every backend is offline holds nothing it should: ready, but
+      // degraded, and it says so (the maintainer, 2026-11-05), so a node whose only disk is
+      // offline does not crash-loop on its startup timeout.
+      if (_options.admission && _options.admission->device_pressure.slowdown_percent) {
+        const auto& gate = _options.admission->device_pressure;
+        _logger.info("data io pressure gate enabled expected_ms=" + std::to_string(gate.overhead.count()) + "+" + std::to_string(gate.per_mib.count()) +
+                     "/MiB slowdown_percent=" + std::to_string(gate.slowdown_percent) + " release_percent=" + std::to_string(gate.release_percent) +
+                     " outlier_percent=" + std::to_string(gate.outlier_percent) +
+                     " min_background=" + std::to_string(_options.admission->min_background_under_pressure));
+      }
+      // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
+      // empty pool, and says so, or capacity=0 reads like a missing disk.
+      _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
+                   (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
+      if (_data->degraded())
+        _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) +
+                     "; running without one until it returns");
+      ready(plane_data);
+    } catch (const std::exception& error) {
+      // Told from this thread as it fails, not at the join (Macha's, local_state.cpp:127).
+      tell_failure(true, error.what());
+      throw;
+    }
+  });
+  // The control chain's failure is the one thrown when both fail, as Macha's; each is
+  // told as it happens.
+  std::exception_ptr chain_failure;
+  try {
+    if (_options.admission) {
+      step("open admission");
+      const auto& admission = *_options.admission;
+      const auto quiet = _options.repair.foreground_quiet;
+      auto& activity = *_activity;
+      _credit = std::make_unique<store::DataResourceArbiter>(
+          admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
+          [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
+          _context.time().source());
+      // When that window closes, so a waiter turned away for the user looks again then.
+      _credit->foreground_presence_ends([&activity, quiet]() -> std::optional<std::chrono::milliseconds> {
+        const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(activity.idle_for(dannan::sched::WorkClass::foreground));
+        const auto window = std::chrono::duration_cast<std::chrono::milliseconds>(quiet);
+        if (idle >= window) return std::nullopt;
+        return window - idle;
+      });
+      // Device-pressure admission (observing the pool once it is open, below).
+      if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
+    }
+
+    step("open control-store");
+    startup_stage("control-storage");
+    auto control = _options.control;
+    control.sealing = scheme;
+    _control = store::open_control_store(_options.state, control, _options.key, _node_local, services("dagda.control"),
+                                         ledger_cache_share(cache_bytes, LedgerShare::control_held));
+    ready(plane_control);
+
+    step("open cache");
+    startup_stage("cache");
+    auto cache = _options.cache;
+    cache.sealing = scheme;
+    if (cache_disabled) cache.path.clear();
+    _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
+    _cache_max_blocks.store(_options.cache.max_blocks, std::memory_order_relaxed);
+    ready(plane_cache);
+
+    step("open claims");
+    startup_stage("retention");
+    _claims = std::make_unique<ledger::RetentionStore>(_options.state, _node_local, _context.logger("dagda.claims"),
+                                                       ledger_cache_share(cache_bytes, LedgerShare::claims));
+
+    step("open reference-counts");
+    _references = std::make_unique<ledger::ReferenceCounts>(_options.state / "ledger" / "referenced", _node_local,
+                                                            ledger_cache_share(cache_bytes, LedgerShare::references), _context.logger("dagda.references"));
+  } catch (const std::exception& error) {
+    // Told as it fails, while the pool may still be recovering (local_state.cpp:183).
+    tell_failure(false, error.what());
+    chain_failure = std::current_exception();
+  } catch (...) {
+    chain_failure = std::current_exception();
   }
-  // Macha's lines (local_state.cpp:117-123 at 98b816d). An edge node runs an
-  // empty pool, and says so, or capacity=0 reads like a missing disk.
-  _logger.info("node data storage ready used=" + std::to_string(_data->used()) + " capacity=" + std::to_string(_data->limit()) +
-               (_options.pool.backends.empty() ? " (hosts no extents)" : ""));
-  if (_data->degraded())
-    _logger.warn("node data storage degraded: no disk online of " + std::to_string(_options.pool.backends.size()) + "; running without one until it returns");
-  _opening_data = false;
-  ready(plane_data);
-
-  if (_options.admission) {
-    step("open admission");
-    const auto& admission = *_options.admission;
-    const auto quiet = _options.repair.foreground_quiet;
-    auto& activity = *_activity;
-    _credit = std::make_unique<store::DataResourceArbiter>(
-        admission.data_inflight_bytes, admission.foreground_reserve_bytes, admission.background_concurrency, admission.no_progress,
-        [&activity, quiet] { return activity.recently_active(dannan::sched::WorkClass::foreground, quiet); }, _context.logger("dagda.credit"),
-        _context.time().source());
-    // Device-pressure admission; a zero target turns it off, as Macha's does.
-    if (admission.device_pressure.slowdown_percent) _credit->observe_device(&_data->service_monitor(), admission.min_background_under_pressure);
-    if (admission.device_reserve) _io = std::make_unique<store::IoReserve>(admission.io, _context.time().source());
+  // Both joined before either failure is told, so nothing runs on after the open.
+  try {
+    data_recovery.get();
+  } catch (...) {
+    if (!chain_failure) {
+      _opening_data = true;
+      throw;
+    }
   }
+  if (chain_failure) std::rethrow_exception(chain_failure);
 
-  step("open control-store");
-  auto control = _options.control;
-  control.sealing = scheme;
-  _control = store::open_control_store(_options.state, control, _options.key, _node_local, services("dagda.control"),
-                                       ledger_cache_share(cache_bytes, LedgerShare::control_held));
-  ready(plane_control);
-
-  step("open cache");
-  auto cache = _options.cache;
-  cache.sealing = scheme;
-  _cache = std::make_unique<store::PersistentBlockCache>(cache, _options.key, services("dagda.cache"));
-  ready(plane_cache);
-
-  step("open claims");
-  _claims = std::make_unique<ledger::RetentionStore>(_options.state, _node_local, _context.logger("dagda.claims"),
-                                                     ledger_cache_share(cache_bytes, LedgerShare::claims));
+  // What reads both.
   _ledger = std::make_unique<ledger::RetentionLedger>(*_claims, *_data, *_control, _context.time().source());
-
-  step("open reference-counts");
-  _references = std::make_unique<ledger::ReferenceCounts>(_options.state / "ledger" / "referenced", _node_local,
-                                                          ledger_cache_share(cache_bytes, LedgerShare::references), _context.logger("dagda.references"));
   ready(plane_retention);
+  // Device-pressure admission; a zero target turns it off, as Macha's does.
+  if (_credit && _options.admission->device_pressure.slowdown_percent)
+    _credit->observe_device(&_data->service_monitor(), _options.admission->min_background_under_pressure);
 
   step("open distributed-store");
   auto store_options = _options.store;
@@ -287,6 +382,7 @@ void Node::open() {
     // A space replays with the owner's codec, so its plane cannot be marked until it
     // has: no peer is asked unless a node of the tree is missing here.
     step("open heads");
+    startup_stage("metadata");
     auto exchange = _options.exchange;
     // Both hear of a stage: the owner's pass and the exchange's own.
     exchange.stage = [this, own = exchange.stage](std::string_view stage) {
@@ -329,9 +425,9 @@ void Node::open() {
   auto server = _options.server;
   server.extent_size = store_options.extent_size;
   server.domain = _options.domain;
-  _server =
-      std::make_unique<store::StorageServer>(_context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get(), _activity.get()},
-                                             server, store::StorageServerAdmission{_credit.get(), _io.get()});
+  _server = std::make_unique<store::StorageServer>(
+      _context, store::StorageServer::Stores{*_data, *_control, *_claims, _cache.get(), _ledger.get(), _activity.get(), &_store->offers()}, server,
+      store::StorageServerAdmission{_credit.get(), _io.get()});
   if (_options.front) {
     // The server outlives its routes: its destructor unbinds them, waiting
     // for the calls in flight, before it goes.
@@ -363,6 +459,7 @@ void Node::open() {
     _control_sightings =
         std::make_unique<ledger::UnreferencedSince>(_options.state / "retention" / "unreferenced-control.bin", _node_local, _context.logger("dagda.gc"));
     _local_cpu.emplace(_options.maintenance.cpu);
+    _gates = std::make_unique<MaintenanceGates>(_options.repair.foreground_quiet);
     // The scrub's next campaign: kept across a restart, and from a date
     // Macha's maintenance left. A schedule that cannot be read starts afresh.
     {
@@ -386,6 +483,11 @@ void Node::open() {
 }
 
 void Node::stop() {
+  // An open in progress on another thread ends first, refused at its next stage, so
+  // nothing is torn down under it; on its own thread, the open's refusal is this stop.
+  _stop_requested.store(true, std::memory_order_release);
+  std::unique_lock opening(_open_mutex, std::defer_lock);
+  if (_opener.load(std::memory_order_acquire) != std::this_thread::get_id()) opening.lock();
   // The maintenance thread first: nothing it reaches has gone yet.
   stop_maintenance();
   {
@@ -410,6 +512,8 @@ void Node::stop() {
     part.reset();
     step("stop " + std::string(what));
   };
+  // A reload in progress finishes before what it changes goes, and none starts after.
+  dannan::contract::Lock reloading(_reload_mutex);
   _api.reset();
   _keeper.reset();
   _membership.reset();
@@ -430,10 +534,21 @@ void Node::stop() {
   _node_local.reset();
   close("node-local-key", _wrap);
   if (!_locks.empty()) {
-    _reloadable_locks.clear();
+    {
+      dannan::contract::Lock roots(_root_locks_mutex);
+      _reloadable_locks.clear();
+    }
     _locks.clear();
     step("stop state-layout");
   }
+}
+
+void Node::hold_root(const std::filesystem::path& root) {
+  dannan::contract::Lock lock(_root_locks_mutex);
+  if (_reloadable_locks.contains(root)) return;
+  // A refresh racing a reload that let this root go does not take it back.
+  if (!_wanted_roots.contains(root)) throw std::runtime_error(root.string() + " is no longer configured");
+  _reloadable_locks.emplace(root, std::make_unique<store::StorageLock>(root));
 }
 
 void Node::arm_status() {
@@ -529,7 +644,7 @@ bool Node::higher_class_active() const {
   return activity.recently_active(dannan::sched::WorkClass::foreground, quiet) || activity.recently_active(dannan::sched::WorkClass::loader, quiet);
 }
 
-bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop) {
+bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_token stop, bool metadata_dirty) {
   auto* provider = registered_provider();
   const auto note = [&](const std::function<void(GcFigures&)>& change) {
     dannan::contract::Lock lock(_gc_figures_mutex);
@@ -548,10 +663,12 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
   }
   ensure_collector_locked(*provider);
   const bool busy = !forced && higher_class_active();
-  ledger::PassDue due;
-  due.garbage_due = !busy;
-  due.gc_due = !busy;
-  due.busy = busy;
+  // The loop's gates (Macha's): garbage waits for metadata to converge, the sweep for
+  // the quiet window. A forced pass is due whatever the activity and the window, but
+  // dirty metadata holds its marking all the same.
+  const auto now = pass_time().now();
+  ledger::PassDue due =
+      forced || !_gates ? MaintenanceGates(std::chrono::milliseconds(0)).due(now, false, metadata_dirty) : _gates->due(now, busy, metadata_dirty);
   if (!forced) due.should_yield = [this] { return higher_class_active(); };
   due.pause = [stop] {
     if (stop.stop_requested()) throw contract::MaintenanceStopping{};
@@ -570,6 +687,8 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
     return false;
   }
   const auto& pass = *report.gc;
+  // Never swept in the pass that built it (Macha's maintenance.cpp:649-652).
+  if (pass.rebuilt_inventory && _gates) _gates->rebuilt_inventory(pass_time().now());
   note([&](GcFigures& figures) {
     ++figures.passes;
     figures.inventories += pass.rebuilt_inventory ? 1 : 0;
@@ -588,34 +707,64 @@ bool Node::gc_pass_locked(bool forced, MaintenanceReport& report, std::stop_toke
 }
 
 void Node::reconfigure(const NodeReload& reload) {
-  dannan::contract::Lock lock(_maintenance_mutex);
+  // Reloads one at a time, beside any maintenance pass: Macha's reload touched only
+  // the pool's locks (local_state.cpp:189-193 at f0597a4), and the pool, the cache
+  // and the root locks each guard themselves.
+  dannan::contract::Lock lock(_reload_mutex);
   if (!_data) throw NodeRefused("the node is not running");
   std::set<std::filesystem::path> wanted;
+  std::set<std::filesystem::path> named;
   for (const auto& backend : reload.backends) {
+    // Refused before anything changes, as the pool would refuse it after.
+    if (!named.insert(backend.path.lexically_normal()).second) throw NodeRefused("duplicate storage backend: " + backend.path.lexically_normal().string());
     if (const auto why = store::backend_refusal_v18(_options.state, backend.path)) throw NodeRefused(*why);
     wanted.insert(backend.path);
   }
   if (!reload.cache.path.empty()) wanted.insert(reload.cache.path);
-  // Every new root locked before anything changes.
+  // Every new root locked before anything changes; a backend's only if its directory
+  // is there (a missing one is a disk not mounted, and the lock would make it).
   std::map<std::filesystem::path, std::unique_ptr<store::StorageLock>> added;
+  bool cache_refused = false;
   for (const auto& root : wanted) {
-    if (_reloadable_locks.contains(root)) continue;
+    {
+      dannan::contract::Lock roots(_root_locks_mutex);
+      if (_reloadable_locks.contains(root)) continue;
+    }
+    std::error_code ec;
+    if (root != reload.cache.path && !std::filesystem::is_directory(root, ec)) continue;
     try {
       added.emplace(root, std::make_unique<store::StorageLock>(root));
     } catch (const std::exception& error) {
+      // The cache is turned off, as at open; a disk held elsewhere refuses the reload.
+      if (root == reload.cache.path) {
+        _logger.warn("persistent cache disabled: " + std::string(error.what()));
+        cache_refused = true;
+        continue;
+      }
       throw NodeRefused(root.string() + " is in use (another node, or dagda-migrate, holds it): " + error.what());
     }
   }
-  _reloadable_locks.merge(added);
+  {
+    // From here the new roots are the configured ones: a refresh still activating a
+    // root let go cannot take its lock back.
+    dannan::contract::Lock roots(_root_locks_mutex);
+    _reloadable_locks.merge(added);
+    _wanted_roots = wanted;
+  }
   _data->reconfigure(reload.backends);
   _data->refresh();
   auto cache = reload.cache;
   cache.sealing = store::SealingScheme::v19(_options.domain.id);
+  if (cache_refused) cache.path.clear();
   _cache->reconfigure(cache);
   // What has been let go, its lock with it.
-  std::erase_if(_reloadable_locks, [&](const auto& entry) { return !wanted.contains(entry.first); });
+  {
+    dannan::contract::Lock roots(_root_locks_mutex);
+    std::erase_if(_reloadable_locks, [&](const auto& entry) { return !wanted.contains(entry.first); });
+  }
   _options.pool.backends = reload.backends;
   _options.cache = reload.cache;
+  _cache_max_blocks.store(reload.cache.max_blocks, std::memory_order_relaxed);
   _context.events().notify(dannan::status::NodeEvents::topology);
   _logger.info("reloaded: " + std::to_string(_data->online_backends()) + " backends online, cache " + (_cache->enabled() ? "on" : "off"));
 }
@@ -666,6 +815,7 @@ LocalTurn Node::begin_local_locked(bool forced, const LocalTurnOptions& options,
   if (bandwidth <= 0.0) bandwidth = static_cast<double>(_options.repair.initial_bandwidth);
   if (_options.repair.max_bandwidth) bandwidth = std::min(bandwidth, static_cast<double>(_options.repair.max_bandwidth));
   const double rate = bandwidth * (turn.busy ? policy.busy_bandwidth_fraction : policy.idle_bandwidth_fraction) * _local_cpu->scale(seconds, policy.cpu_target);
+  _local_rate = rate;
   const double extent = static_cast<double>(_options.store.extent_size);
   const double burst = std::max(extent, bandwidth * 5.0);
   _local_credit = forced ? burst : std::min(burst, _local_credit + rate * seconds);
@@ -684,6 +834,8 @@ void Node::local_rebalance_locked(LocalTurn& turn) {
   auto& out = turn.stages;
   if (_local_quiescent_events && *_local_quiescent_events != turn.events) _local_quiescent_events.reset();
   if (turn.busy || _local_quiescent_events || _local_credit < static_cast<double>(_options.store.extent_size)) return;
+  // Macha's stage name (maintenance.cpp:1102 at f0597a4).
+  enter_stage("local-rebalance");
   out.rebalance_ran = true;
   const auto started = dannan::contract::Clock::now();
   out.rebalance = _data->rebalance_step(static_cast<uint64_t>(_local_credit), 64, local_yield(turn));
@@ -799,6 +951,7 @@ void Node::compact_packs_locked(LocalTurn& turn) {
 void Node::local_scrub_locked(LocalTurn& turn) {
   throw_if_stopped(turn);
   if (turn.busy || !turn.scrub_due || _scrub_credit < static_cast<double>(_options.store.extent_size)) return;
+  enter_stage("scrub");
   auto& out = turn.stages;
   out.scrub_ran = true;
   const auto started = dannan::contract::Clock::now();
@@ -832,6 +985,7 @@ void Node::ledger_verify_locked(LocalTurn& turn) {
   const auto directories = static_cast<size_t>(_verify_credit);
   if (!directories) return;
   _verify_credit -= static_cast<double>(directories);
+  enter_stage("ledger-verify");
   auto& out = turn.stages;
   out.verify_ran = true;
   const auto data = _data->verify_step(directories);
@@ -895,6 +1049,34 @@ LocalTurn Node::begin_local_stages(const LocalTurnOptions& options) {
   return begin_local_locked(false, options, maintenance_events().total());
 }
 
+std::optional<dannan::contract::TimePoint> Node::local_due() {
+  dannan::contract::Lock lock(_maintenance_mutex);
+  if (!_repair) return std::nullopt;
+  const auto now = pass_time().now();
+  const double extent = static_cast<double>(_options.store.extent_size);
+  std::optional<dannan::contract::TimePoint> due;
+  const auto earliest = [&](dannan::contract::TimePoint at) { due = due ? std::min(*due, at) : at; };
+  // The time to earn `credit` up to an extent at `rate`, as Macha's credit deadlines.
+  const auto when_earned = [&](double credit, double rate) {
+    if (rate <= 0.0 || credit >= extent) return;
+    const double seconds = (extent - credit) / rate;
+    if (std::isfinite(seconds) && seconds > 0.0)
+      earliest(now + std::chrono::duration_cast<dannan::contract::TimePoint::duration>(std::chrono::duration<double>(seconds)));
+  };
+  // Macha's scrub (maintenance.cpp:1306-1321 at main): its credit while a campaign is due,
+  // else the campaign's date on the wall clock, carried onto the pass's clock.
+  const auto& policy = _options.maintenance;
+  const auto wall_ms = pass_wall().unix_ms();
+  if (_scrub_due_unix_ms <= wall_ms) {
+    if (policy.scrub_fraction > 0.0) when_earned(_scrub_credit, _local_rate * policy.scrub_fraction);
+  } else {
+    earliest(now + std::chrono::milliseconds(_scrub_due_unix_ms - wall_ms));
+  }
+  // Rebalance's credit (:1366), unless it rests until an event.
+  if (!_local_quiescent_events) when_earned(_local_credit, _local_rate);
+  return due;
+}
+
 void Node::local_rebalance(LocalTurn& turn) {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (_repair) local_rebalance_locked(turn);
@@ -925,12 +1107,14 @@ MaintenanceReport Node::run_maintenance_once() {
   dannan::contract::Lock lock(_maintenance_mutex);
   if (!_repair) return report;
   report.metadata = metadata_repair_locked({}, true);
+  bool metadata_dirty = false;
   for (const auto& turn : report.metadata) {
+    metadata_dirty = metadata_dirty || turn.dirty;
     if (!turn.hold_pass) continue;
     report.gc_skipped = "metadata repair failed with no head to stand on: " + turn.why;
     return report;
   }
-  (void)gc_pass_locked(true, report);
+  (void)gc_pass_locked(true, report, {}, metadata_dirty);
   try {
     report.repair = _repair->pass();
   } catch (const std::exception& error) {
@@ -949,29 +1133,64 @@ void Node::maintenance_loop(std::stop_token stop) {
   while (!stop.stop_requested()) {
     const auto now = time.now();
     bool hold_pass = false;
+    bool metadata_dirty = false;
     std::optional<dannan::contract::TimePoint> metadata_due;
     {
       dannan::contract::Lock lock(_maintenance_mutex);
       _maintenance_kicked.store(false, std::memory_order_release);
       try {
-        for (const auto& turn : metadata_repair_locked(stop, false)) hold_pass = hold_pass || turn.hold_pass;
+        for (const auto& turn : metadata_repair_locked(stop, false)) {
+          hold_pass = hold_pass || turn.hold_pass;
+          metadata_dirty = metadata_dirty || turn.dirty;
+        }
       } catch (const contract::MaintenanceStopping&) {
         return;
       }
+      uint64_t generations = 0;
       if (_spaces)
-        for (auto* exchange : _spaces->exchanges())
+        for (auto* exchange : _spaces->exchanges()) {
           if (const auto due = exchange->turn_due()) metadata_due = metadata_due ? std::min(*metadata_due, *due) : *due;
+          generations += exchange->space().replica().committed_generation();
+        }
+      // An event or a generation move since the last pass starts the sweep's quiet window.
+      _gates->observe(now, _context.events().total(), generations);
       if (hold_pass) {
         // Recovery required, or no head yet: nothing that depends on the head proceeds.
       } else if (now >= next_gc) {
         MaintenanceReport report;
         try {
-          next_gc = now + (gc_pass_locked(false, report, stop) ? gc_interval : interval);
+          next_gc = now + (gc_pass_locked(false, report, stop, metadata_dirty) ? gc_interval : interval);
         } catch (const contract::MaintenanceStopping&) {
           return;
         }
       }
       if (!hold_pass && now >= next_repair) {
+        // The inventory the survey and repair read follows the owner's generation in the
+        // pass that sees it move, whether or not the collector's sweep is due (Macha's
+        // maintenance.cpp:611-627 at f0597a4): a new reference must not wait out the
+        // collector's rest. Held back while metadata is not ready for it, never the first.
+        if (auto* provider = registered_provider()) {
+          ensure_collector_locked(*provider);
+          try {
+            const auto step = _collector->inventory_step(
+                [&stop] {
+                  if (stop.stop_requested()) throw contract::MaintenanceStopping{};
+                },
+                !metadata_dirty);
+            if (step.rebuilt) {
+              // Never swept in the pass that built it, and the sweep is due again after
+              // its quiet window: what is referenced has changed.
+              if (_gates) _gates->rebuilt_inventory(time.now());
+              next_gc = std::min(next_gc, now + interval);
+              dannan::contract::Lock figures(_gc_figures_mutex);
+              ++_gc_figures.inventories;
+            }
+          } catch (const contract::MaintenanceStopping&) {
+            return;
+          } catch (const std::exception& error) {
+            _logger.debug(std::string("inventory: the reachability provider could not answer: ") + error.what());
+          }
+        }
         try {
           (void)_repair->pass(stop);
         } catch (const store::MaintenanceStopping&) {
@@ -1159,7 +1378,7 @@ void Node::publish_status() {
   const auto cache = _cache->stats();
   put("cache.enabled", _cache->enabled());
   put("cache.blocks", u64(_cache->blocks()));
-  put("cache.capacity_bytes", u64(_options.cache.max_blocks * _options.store.extent_size));
+  put("cache.capacity_bytes", u64(_cache_max_blocks.load(std::memory_order_relaxed) * _options.store.extent_size));
   put("cache.used_bytes", u64(_cache->blocks() * _options.store.extent_size));
   put("cache.hits", u64(cache.hits));
   put("cache.misses", u64(cache.misses));

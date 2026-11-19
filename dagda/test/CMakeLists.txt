@@ -1,5 +1,5 @@
 #
-# Dagda - The Store
+# Dagda - The Distributed Object Store
 #
 # Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 # Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -65,6 +65,7 @@ add_executable(dagda_tests
   migrate_migrate_test.cpp
   migrate_retag_test.cpp
   node_local_maintenance_test.cpp
+  maintenance_gates_test.cpp
   maintenance_steps_test.cpp
   node_maintenance_test.cpp
   node_seams_test.cpp
@@ -119,4 +120,14 @@ add_dependencies(dagda_tests dagda-migrate)
 # Linux.
 if(NOT APPLE)
   target_link_libraries(dagda_tests PRIVATE util)
+endif()
+
+# The side-by-side harness's Dagda half (tools/harness/; TODO/2026-11-15-side-by-side-harness.md):
+# figures recorded, never asserted; not in the gate. Its nodes are the fixture's, so its
+# state is under the build tree's test-tmp.
+add_executable(harness-dagda ${PROJECT_SOURCE_DIR}/tools/harness/harness_dagda.cpp)
+target_include_directories(harness-dagda PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tools/harness)
+target_link_libraries(harness-dagda PRIVATE dagda dagda_test_fixtures dagda_warnings)
+if(NOT APPLE)
+  target_link_libraries(harness-dagda PRIVATE util)
 endif()

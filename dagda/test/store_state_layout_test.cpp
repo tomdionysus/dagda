@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -21,6 +21,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 #include "dagda/store/state_layout.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -79,6 +80,50 @@ TEST(StoreStateLayout, AFreshStateIsMarkedWithLayoutV19sBytes) {
   // A missing directory is an empty one.
   open_state_layout(dir.path() / "new", v1);
   EXPECT_EQ(read_all(dir.path() / "new" / "storage-layout"), "dagda-state-layout-v19 827b07101d79d9d84a433d8e9cb262ca\n");
+}
+
+// For Macha the state directory is the node's one, Dannan's too (NodeOptions::state):
+// before the store opens, its host has written there (Dannan's node id and custody,
+// Macha's accounts and its playback figures). A fresh store is begun beside them, and
+// they are left as they were. Found by Macha's port (its first full suite, 2026-11-17):
+// every fresh node was refused.
+TEST(StoreStateLayout, AFreshStateBesideItsHostsFilesIsBegun) {
+  dannan::test::TempDir dir;
+  const auto state = dir.path() / "state";
+  std::filesystem::create_directories(state / "identity");
+  std::filesystem::create_directories(state / "playback");
+  const std::vector<std::filesystem::path> host{
+      state / "node-id",    state / "identity" / "custody", state / "users", state / "initial-root-password", state / "playback" / "transcode-rates.json",
+      state / ".macha.lock"};
+  for (const auto& path : host) std::ofstream(path) << "the host's: " << path.filename().string();
+  open_state_layout(state, v1);
+  EXPECT_EQ(read_all(state / "storage-layout"), "dagda-state-layout-v19 827b07101d79d9d84a433d8e9cb262ca\n");
+  for (const auto& path : host) EXPECT_EQ(read_all(path), "the host's: " + path.filename().string());
+  open_state_layout(state, v1);
+}
+
+// What a store keeps in its state directory, a file or a directory, with no marker is
+// refused, beside its host's files or alone: Dagda's own (its ledgers, claims, CONTROL
+// objects, backend identities, maintenance figures, heads) and an older store's
+// (Macha's metadata, its survey and repair position, an older namespace's file). It is
+// never read as v19, and the state is left as it was.
+TEST(StoreStateLayout, AnUnmarkedStateHoldingAStoresFilesIsRefused) {
+  for (const std::string name :
+       {"ledger", "retention", "metadata-objects", "backend-identities", "maintenance", "heads", "metadata", "availability", "repair", "metadata.bin"}) {
+    for (const bool as_directory : {false, true}) {
+      dannan::test::TempDir dir;
+      const auto state = dir.path() / "state";
+      std::filesystem::create_directories(state);
+      std::ofstream(state / "node-id") << "0123";
+      if (as_directory)
+        std::filesystem::create_directories(state / name);
+      else
+        std::ofstream(state / name) << "a store's";
+      EXPECT_TRUE(refused_for_a_fresh_namespace(state)) << name << (as_directory ? "/" : "") << ": " << refusal(state);
+      EXPECT_NE(refusal(state).find(name), std::string::npos) << name;
+      EXPECT_FALSE(std::filesystem::exists(state / "storage-layout")) << name;
+    }
+  }
 }
 
 // A marker naming another layout is refused.

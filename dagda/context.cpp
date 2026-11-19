@@ -1,5 +1,5 @@
 //
-// Dagda - The Store
+// Dagda - The Distributed Object Store
 //
 // Copyright (C) 2026 Tom Cully <mail@tomcully.com>
 // Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
@@ -82,7 +82,8 @@ std::optional<WriteEvidence> known(WriteEvidence evidence) {
 
 // ---- Version ----------------------------------------------------------------
 
-Context::Context(Node& node) : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node) {}
+Context::Context(Node& node)
+    : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node), _control(node), _devices(node) {}
 
 uint32_t Context::version() const noexcept { return context_version; }
 
@@ -140,7 +141,39 @@ ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options, std::
                            [&](boost::asio::any_io_executor executor, ReadDone done) { read(id, options, deadline, std::move(executor), std::move(done)); });
 }
 
+void Context::Objects::write(const ObjectId& id, store::Bytes data, WriteOptions options, boost::asio::any_io_executor executor, WriteDone done) {
+  _node.store().write(id, std::move(data), std::move(options), std::move(executor), std::move(done));
+}
+
+WriteEvidence Context::Objects::write(const ObjectId& id, std::span<const uint8_t> data, WriteOptions options) {
+  return _node.store().write(id, data, std::move(options));
+}
+
+ReadResult Context::Objects::read(const ObjectId& id, ReadOptions options) { return _node.store().read(id, std::move(options)); }
+
+bool Context::Objects::put_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame) {
+  return _node.store().put_here(id, data, frame);
+}
+
+WriteEvidence Context::Objects::put_deferred_here(const ObjectId& id, std::span<const uint8_t> data, dannan::sched::FrameType frame) {
+  return _node.store().put_deferred_here(id, data, frame);
+}
+
+bool Context::Objects::locally_available(const ObjectId& id) const { return _node.store().locally_available(id); }
+
+bool Context::Objects::cache_local(const ObjectId& id, std::span<const uint8_t> data) { return _node.store().cache_local(id, data); }
+
+bool Context::Objects::hydration_available() const { return _node.store().hydration_available(); }
+
+bool Context::Objects::hydrate(const ObjectId& id, ReadOptions options) { return _node.store().hydrate(id, std::move(options)); }
+
+bool Context::Objects::ensure_local(const ObjectId& id, bool foreground) { return _node.store().ensure_local(id, foreground); }
+
+uint64_t Context::Objects::reachability_epoch() const { return _node.store().reachability_epoch(); }
+
 bool Context::Objects::has(const ObjectId& id) const { return _node.store().has(id); }
+
+store::DistributedStore::LogicalCapacity Context::Objects::logical_capacity() const { return _node.store().logical_capacity(); }
 
 void Context::Objects::remove(std::vector<ObjectId> ids, contract::RetentionClock observed, WriteScope writer, std::chrono::milliseconds deadline,
                               boost::asio::any_io_executor executor, RemoveDone done) {
@@ -211,6 +244,10 @@ ClaimEvidence Context::Claims::retain(contract::RetentionClass type, std::vector
 }
 
 bool Context::Claims::retained(contract::RetentionClass type, const ObjectId& id) const { return _node.claims().retained(type, id); }
+
+std::vector<ObjectId> Context::Claims::retain_data_here(const std::vector<ObjectId>& ids, const contract::RetentionDot& dot) {
+  return _node.store().retain_data_here(ids, dot);
+}
 
 // ---- Leases -----------------------------------------------------------------
 
@@ -443,5 +480,51 @@ std::optional<WriteEvidence> Context::Tickets::wait_complete(Ticket ticket, std:
   return await<std::optional<WriteEvidence>>(
       _node, deadline, [&](boost::asio::any_io_executor executor, Done done) { wait_complete(ticket, deadline, std::move(executor), std::move(done)); });
 }
+
+void Context::Tickets::wait(std::vector<Ticket> tickets, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, ManyDone done) {
+  check_deadline(deadline);
+  _node.store().wait(std::move(tickets), deadline, std::move(executor), std::move(done));
+}
+
+std::vector<WriteEvidence> Context::Tickets::wait(const std::vector<Ticket>& tickets, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return _node.store().wait(tickets, deadline);
+}
+
+// ---- Activity ---------------------------------------------------------------
+
+void Context::Activity::note(dannan::sched::WorkClass work) { _node.activity().note(work); }
+
+void Context::Activity::note(dannan::sched::FrameType frame, uint64_t bytes) { _node.activity().note(frame, bytes); }
+
+std::chrono::milliseconds Context::Activity::idle_for(dannan::sched::WorkClass work) const { return _node.activity().idle_for(work); }
+
+uint64_t Context::Activity::take_bytes(dannan::sched::FrameType frame) { return _node.activity().take_bytes(frame); }
+
+// ---- Control ----------------------------------------------------------------
+
+bool Context::Control::has(const ObjectId& id) const { return _node.control().has(id); }
+
+std::optional<store::Bytes> Context::Control::get(const ObjectId& id) const { return _node.control().get(id); }
+
+bool Context::Control::put(const ObjectId& id, std::span<const uint8_t> data) { return _node.control().put(id, data); }
+
+bool Context::Control::ensure_local(const ObjectId& id) { return _node.store().ensure_control_local(id); }
+
+store::ControlOffer Context::Control::offer(const std::vector<ObjectId>& ids) { return _node.store().offer_control(ids); }
+
+// ---- Devices ----------------------------------------------------------------
+
+std::optional<store::DataAdmission> Context::Devices::admit_data(dannan::sched::FrameType frame, uint64_t bytes, std::optional<std::chrono::milliseconds> wait,
+                                                                 std::shared_ptr<std::atomic_bool> cancelled) {
+  // Held here for the whole wait, so the flag outlives it whatever the caller does.
+  return store::admit_data(_node.credit(), _node.io(), frame, bytes, wait, cancelled.get());
+}
+
+void Context::Devices::note_io(std::chrono::nanoseconds elapsed, uint64_t bytes) noexcept { _node.data().service_monitor().note(elapsed, bytes); }
+
+bool Context::Devices::pressured() const noexcept { return _node.data().service_monitor().pressured(); }
+
+store::DiskServiceSample Context::Devices::sample() const noexcept { return _node.data().service_monitor().sample(); }
 
 }  // namespace dagda
