@@ -208,6 +208,10 @@ struct MigrationOptions {
   // past a stopped run's record a resumed one reads whole, and how often a record is
   // read whole to check the record. With `after_step` each record is synced on its own.
   uint64_t batch_records = 256;
+  // Read and authenticate every record, as a run did before records moved from their
+  // headers: slower by the whole disk, and it lists damaged and torn records itself.
+  // `dry_run` always does.
+  bool read_every_record = false;
 };
 
 // Migrates the node's state directory and its DATA backends in place, as
