@@ -2239,7 +2239,13 @@ TEST(StoreDistributedStore, PromptReplicationKeepsAtMost4096Retries) {
     ASSERT_TRUE(a.store().put_here(object_id(bytes), bytes));
   }
   // A failure is counted before its retry is queued and the cap applied: the drop follows it.
-  ASSERT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().failures == objects; }, 300s));
+  // Time stands still, so a put whose reply never came would wait for good (its deadline is
+  // on this node's clock): the stats at the end say how far the loop got (the 0.4.0 TSan gate,
+  // once, in the full suite only).
+  const bool all_tried = wait_until([&] { return a.store().prompt_replication_stats().failures == objects; }, 300s);
+  const auto reached = a.store().prompt_replication_stats();
+  ASSERT_TRUE(all_tried) << "failures " << reached.failures << " of " << objects << ", queued " << reached.queued << ", copies " << reached.copies
+                         << ", dropped " << reached.dropped;
   EXPECT_TRUE(wait_until([&] { return a.store().prompt_replication_stats().dropped >= 1; }));
   const auto stats = a.store().prompt_replication_stats();
   EXPECT_EQ(stats.dropped, 1u);
