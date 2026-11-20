@@ -1,5 +1,9 @@
 # Dagda - The Distributed Object Store
 
+[![CI](https://github.com/tomdionysus/dagda/actions/workflows/ci.yml/badge.svg)](https://github.com/tomdionysus/dagda/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/tomdionysus/dagda?sort=semver&label=release)](https://github.com/tomdionysus/dagda/tags)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 Dagda is the store for a cluster of trusted machines. It is a C++20 library that keeps
 objects, claims, leases and shared state across a set of nodes, sealed at rest, with
 every write carrying a durability level the caller chooses and every answer saying which

@@ -1,0 +1,53 @@
+#
+# Dagda - The Distributed Object Store
+#
+# Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+# Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+#
+# tools/ci.sh's steps on Debian 13, as the nodes have it: the header and format
+# check; the release build and the whole suite on x86-64 and on arm64, as a Pi
+# builds it; ASan and UBSan; TSan under clang. Dannan comes from its public
+# repository at the pinned tag. The gates of record run on the Pi cluster.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: ${{ matrix.step }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { step: check, arch: x86-64, runner: ubuntu-24.04 }
+          - { step: release, arch: x86-64, runner: ubuntu-24.04 }
+          - { step: release, arch: arm64, runner: ubuntu-24.04-arm }
+          - { step: asan, arch: x86-64, runner: ubuntu-24.04 }
+          - { step: tsan, arch: x86-64, runner: ubuntu-24.04 }
+    container:
+      image: debian:trixie
+      # LeakSanitizer needs ptrace to stop the process's threads.
+      options: --cap-add SYS_PTRACE --security-opt seccomp=unconfined
+    steps:
+      - name: Install packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            g++ clang clang-format cmake ninja-build git ca-certificates openssl \
+            libboost-dev libssl-dev libyaml-cpp-dev libgtest-dev libgmock-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: ${{ matrix.step }}
+        run: tools/ci.sh ${{ matrix.step }}
