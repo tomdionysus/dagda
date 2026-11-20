@@ -10,10 +10,18 @@
 # repository at the pinned tag. The gates of record run on the Pi cluster.
 name: CI
 
+# Push to develop and main only (a feature branch's gate runs on the Pis), and never for
+# notes and documents alone. A newer push to the same ref cancels the run before it.
 on:
   push:
-    branches: [main, develop]
+    branches: [develop, main]
+    paths-ignore: ['TODO/**', 'docs/**', '**/*.md']
   pull_request:
+    paths-ignore: ['TODO/**', 'docs/**', '**/*.md']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
