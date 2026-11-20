@@ -274,6 +274,54 @@ C. Constraints:
   loose objects.
 - Never blocks: control work, viewer reads, FUSE request threads, metadata reads.
 
-## Awaited
+## Lir (2026-11-20; full text in lir TODO/2026-11-20-requirements.md, "To Dagda", feature/rewrite acc0887)
 
-Lir.
+A. Nothing linked yet. It will FetchContent Dagda with tools off and use:
+- Heads (open, read, mutate, watch, changed);
+- Objects (write and read, for payloads past the inline limit);
+- D6 (spec, put with expiry and refs, remove, get, list, now());
+- D5, D9 and caught-up;
+- the installed fixture on dannan::testing (D13).
+
+B. Needs:
+- **D6** as reviewed, a capable(lir) space. It blocks retained values; meanwhile Retain Available is 0.
+- **D5:** acquire, holder, standing, takeover at epoch+1. It blocks client-id uniqueness and wills, with no
+  stand-in.
+- **Caught-up:** the per-space query and its notice. CONNACK's Session Present and SUBSCRIBE's retained read wait
+  on it.
+- **Key reads for a space this node does not hold.** Every node matches every session's filters, and the session
+  space is replicas(3). So Lir needs `watch_keys` (keys-changed notices by prefix) and forwarded paged `entries`
+  for non-held spaces: the three-systems design's ruled shape, with replicas placement (slice 2).
+- **D9 with (stream, dot):** append, ack with stage, retire, read, scan, live, watch, and a 10,000 bound per stream.
+  It blocks QoS 1 and 2; meanwhile Maximum QoS is 0.
+- **D1/D2:** sessions on replicas(3) per shard with k = 2. "Replicated" is waited on for every QoS 1/2
+  acknowledgement, retained write and session change.
+- **Store health; FetchContent.**
+
+Not used: the AcceptorStore, retire and drain, the catalogue, Macha's items.
+
+C. Constraints:
+- Asynchronous forms only, from strands. QoS 0 is ephemeral and never touches Dagda; the rest is replicated at k = 2.
+- **A PUBACK's commit within 50 ms p99 at replicated k = 2, and a retained read within 1 s.** These go to the D8
+  measurement.
+- 40,000 sessions and about 100,000 retained topics.
+
+## Reconciled: what the six need, in Dagda's order
+
+| Item | Users |
+|---|---|
+| D6 register map | Louhi, Lugh (incl. node_local), Kvasir, Mimir (checkpoints), Lir, Macha (later) |
+| D5 head-backed leases, with epoch fencing | Lir, Macha |
+| Durable AcceptorStore | Louhi, Lugh, Kvasir, Mimir (value-less) |
+| Caught-up, uniform | Louhi, Lugh, Kvasir, Mimir, Lir, Macha |
+| Key reads and changed | Louhi, Lugh, Kvasir, Lir; for non-held spaces, Lir (slice 2) |
+| FetchContent, `TARGET dannan::dannan`, tools off | Louhi, Lugh, Kvasir, Mimir, Lir |
+| Retire and drain, with a drain-start notice | Macha, Kvasir, Lugh (indirectly) |
+| Store health into readiness | Louhi, Lugh, Kvasir, Macha, Lir |
+| A set-aside head never dropped silently | Kvasir, Macha |
+| Space takes Macha's rules; heads migration | Macha |
+| DataWorkContext co-owning | Macha |
+| Group commit generalised | Kvasir, Macha, Mimir (through the AcceptorStore) |
+| D9 logs | Lugh (node-local audit), Lir; Mimir and Kvasir later |
+| D1/D2 placement and k-level | Lir, Lugh, Kvasir; Macha possibly |
+| Catalogue readers (slice 5) | Lugh |
