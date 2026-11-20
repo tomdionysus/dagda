@@ -60,14 +60,17 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **Louhi's asks** (Decisions, 2026-11-20), test first, in a release after 0.3.2. Its answers on the shape (read
-   view, page size and cursor, caught-up per space or per node, query or watch) are asked and go in a design note
-   before the cases:
+2. **Louhi's asks** (Decisions, 2026-11-20), test first, in a release after 0.3.2. Its answers and the shapes are in
+   `TODO/2026-11-20-louhi-reads.md`; open for the maintainer there: the caught-up advert carries the head identity, not the
+   clock (the 1024-byte advert bound):
    - Context v2: read one key; list by key prefix with paging, over a head space.
    - The caught-up signal: the view's clock against the clocks the active peers advertise.
    - Dagda consumable by FetchContent beside a FetchContent'd Dannan 0.9.2 (today `find_package(dannan)` at
      `CMakeLists.txt:32` needs Dannan's `OVERRIDE_FIND_PACKAGE`; `install(EXPORT)` as a subproject untested).
-3. No longer held for the cutover (the maintainer, 2026-11-20):
+3. **Lir's two needs** (asked 2026-11-20; Lir waits and builds no stand-in): queuing for an offline session, one
+   appender per message, against D9's log; and acting once cluster-wide when a key's time ends (a will at session
+   expiry), Dagda's notice at expiry or Dannan's cross-node timer, settled with the Dannan session, then to the maintainer.
+4. No longer held for the cutover (the maintainer, 2026-11-20):
    - **Space follows Macha's short-file rules** (b0b037c), test first, with its
      `test_a_set_aside_head_leaves_the_view` as the model:
      - `cache_record` never moves the view off a record covering this node's latest commit onto one that does not;
