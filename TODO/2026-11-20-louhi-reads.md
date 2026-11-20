@@ -179,6 +179,9 @@ the owner's stamp and it is built.
 
 ## 4. The durable AcceptorStore (Tom, 2026-11-20, confirmed in this session: the next release)
 
+**Value bound (confirmed by Louhi and Kvasir):** up to 256 MiB per value held, and the same per delta. A whole
+record is appended in pieces under one durable step. The value-less form holds none.
+
 Kvasir, on `need_whole`: the store reports the indices only and never falls back to its own replay. The whole value
 comes from outside, through Agreement or Kvasir's catch-up, and replay is for loading at start.
 
