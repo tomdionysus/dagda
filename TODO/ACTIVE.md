@@ -60,7 +60,7 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through Lir Development Cluster:
+2. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
    - the register map (D6);
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1;
    - the AcceptorStore;
@@ -77,7 +77,7 @@ unless the board says so (`claims_list`).
      feature lands with its own code covered.
 
    **The stack's converged plan** (2026-11-20, agreed by Dagda): Dagda's full list is "The converged plan" ->
-   "Dagda" in `../lir-develop-cluster/TODO/2026-11-20-cluster-stack-placement.md`, items 1-13. Besides the above,
+   "Dagda" in the coordinating session's `TODO/2026-11-20-cluster-stack-placement.md`, items 1-13. Besides the above,
    it holds:
    - retire and drain (evacuate objects and claims; the joiner's survey over the peers that answered);
    - the catalogue's admitted readers (slice 5);

@@ -1,6 +1,6 @@
 # Duplication audit: what the maintainer's rule means for Dagda
 
-The maintainer, 2026-11-20, to the stack (relayed by Lir Development Cluster): "Any functionality that is required by two or
+The maintainer, 2026-11-20, to the stack (relayed by the coordinating session): "Any functionality that is required by two or
 more projects that share a project dependency, that functionality goes into the shared dependency." Dannan is the
 root. Dagda depends on Dannan. Macha, Lugh, Louhi, Lir, Kvasir and Mimir depend on Dagda, or will for storage.
 

@@ -1,7 +1,7 @@
 # The register map (D6): the design to build from
 
 The first item of Dagda's next release in the stack's converged plan
-(`../lir-develop-cluster/TODO/2026-11-20-cluster-stack-placement.md`, "Dagda", item 2). Its users:
+(the coordinating session's `TODO/2026-11-20-cluster-stack-placement.md`, "Dagda", item 2). Its users:
 - Louhi's records;
 - Lir's retained values;
 - Lugh's JWKS, lugh/scope and lugh/secrets (Lugh deletes its own `merge::winner` once this exists);

@@ -1,6 +1,6 @@
 # Special roles audit: what the maintainer's rule means for Dagda
 
-The maintainer, 2026-11-20 (relayed by Lir Development Cluster): "There is to be no concept of a special role or node. Any node
+The maintainer, 2026-11-20 (relayed by the coordinating session): "There is to be no concept of a special role or node. Any node
 may disappear at any time, have patchy connectivity, may be permanently retired, be slow, or be degraded in some
 other way. The purpose of every one of your projects is so that is never the user's problem except in exceptional
 circumstances."
@@ -13,7 +13,7 @@ places marked "checked".
 | Role | Where | Verdict |
 |---|---|---|
 | The lowest node id forms a virgin space | `heads/exchange.cpp:1328-1335` (checked) | A role, in background repair only. A foreground read or write forms the space on any founding node without it (`discover_or_form`, `:946`). A space nobody writes can stay unformed if the lowest node never opens it. Remove it: founding is deterministic, so any node may form, as the foreground path already does |
-| Joiner and founder asymmetry, including the one explicit single-node branch (`active.size() == 1` throws "waiting for bootstrap peer"; the maintainer's reminder, 2026-11-20: no special-case code for a single node) | `exchange.cpp:939-948` (checked), `ExchangeOptions::joiner` | A joiner alone waits for a "bootstrap peer". It forms only once **every** active peer answers the checkpoint survey (`survey.complete = failed == 0`), so one gossip-active but unreachable peer blocks a fresh joiner. Goes with founding as an explicit once-only act (Lir Development Cluster's proposal) |
+| Joiner and founder asymmetry, including the one explicit single-node branch (`active.size() == 1` throws "waiting for bootstrap peer"; the maintainer's reminder, 2026-11-20: no special-case code for a single node) | `exchange.cpp:939-948` (checked), `ExchangeOptions::joiner` | A joiner alone waits for a "bootstrap peer". It forms only once **every** active peer answers the checkpoint survey (`survey.complete = failed == 0`), so one gossip-active but unreachable peer blocks a fresh joiner. Goes with founding as an explicit once-only act (the coordinating session's proposal) |
 | Leases | `context.h:307-312`, `lease/local_records.h` | Held in one node's memory. Two nodes acquiring the same lease both get it. The keeper's logic is symmetric; the records are not shared. Head-backed leases (D5) fix it |
 | "Repair owner" | `exchange.h:99` | Not a role: each node's own maintenance thread |
 | Collector and GC | `ledger/collector.*` | Not a role: per node, on local gates |
@@ -61,7 +61,7 @@ What holds today:
 - An explicit once-only founding act.
 - Readiness and a health advert Dagda can feed.
 
-## Lir Development Cluster's six items for Dagda (2026-11-20): Dagda's answers
+## The coordinating session's six items for Dagda (2026-11-20): Dagda's answers
 
 1. Retire and drain: agreed, Dagda's. It evacuates a node's objects and claims before Dannan retires the identity.
    Head spaces are every-node, so they need no evacuation, but a retired node's author ids fold into a base and its

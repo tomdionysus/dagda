@@ -228,7 +228,7 @@ Settled by the stack's goals, without the maintainer (his instruction of 2026-11
 no-values form is needed by Mimir alone. But without it Mimir writes its own durable acceptor log, a second copy of
 what Dagda's store does, which "no duplication" forbids. So Dagda's durable store serves it.
 - The memory-only level moves to Dannan: a production in-memory AcceptorStore in `dannan::agree`, for Mimir, Kvasir
-  and Louhi, proposed by Dannan through Lir Development Cluster.
+  and Louhi, proposed by Dannan through the coordinating session.
 - Dagda's store is durable only (persisted, replicated).
 
 Consequences for the shape:
