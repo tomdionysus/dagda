@@ -1,0 +1,15 @@
+# Dagda - The Distributed Object Store
+#
+# Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+# Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+#
+# ThreadSanitizer suppressions, each a proven false positive; TSAN_OPTIONS=suppressions=<this file>.
+#
+# Boost.Asio's type-erased executor counts its references with a release fetch_sub and an
+# acquire std::atomic_thread_fence before the delete (boost/asio/detail/atomic_count.hpp,
+# ref_count_down), the correct pattern. TSan does not model atomic_thread_fence, so when two
+# copies of one strand are dropped on two threads (a session's socket on the thread stopping
+# the node, its aborted read's handler on an io thread) it reports the last one's delete as a
+# race with the other's decrement. Reproduced and symbolized on arm64, 2026-11-20
+# (HeadsExchange cases pinned to one core); the same frames as CI's unsymbolized report.
+race:boost::asio::execution::detail::shared_target_executor::~shared_target_executor
