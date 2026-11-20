@@ -204,6 +204,76 @@ C. Constraints:
   1 to dozens of nodes.
 - Replicated means a majority of acceptor keeps, through agreement, not D2.
 
+## Macha (2026-11-20; 0.3.2, port/dannan-dagda)
+
+A. **The widest user: the set not to break.**
+- `node.h`:
+  - `Node`, `NodeOptions`, `NodeReload`, `AdmissionOptions`, `LocalTurnOptions`, `MaintenanceEvents`,
+    `Node::OpenLater`;
+  - `open_store`, `stop`, `context`, `server().set_hosts_extents`, `data`, `control`, `cache`, `claims`, `ledger`;
+  - the collector's steps (inventory, tombstone, release, control, data), `begin_local_stages`,
+    `local_rebalance`, `retention_compact`;
+  - the options in `src/cluster/store_node.cpp:43-131`: heads off, automatic maintenance off, admission's device
+    pressure, and the rest.
+- `context.h`:
+  - Objects: write, read, put_here, put_deferred_here, has, cache_local, hydrate, hydration_available,
+    locally_available, reachability_epoch, logical_capacity. Not remove.
+  - Claims: retain_data_here, and retain(class, ids, dot, {}, deadline, here or every_node).
+  - Tickets::wait.
+  - Control: put, get, has, ensure_local, offer.
+  - Devices::admit_data.
+  - Activity.
+  - No Heads.
+- `store/`:
+  - `LocalStore` and its options;
+  - Write/ReadOptions, ReadEnd, Durability, ReplicaEvidence, BarrierLoss, ObjectData, WriteEvidence,
+    StorageUnavailable;
+  - repair's lists, gate, settled, readings and diagnostics; DataResourceStats; figures and adverts;
+    AvailabilitySnapshot.
+- `ledger/`: ObjectTrie::Snapshot, ReferenceCounts, InventoryStep, PassDue.
+- `contract/`: retention types, the reachability provider and its horizons, ObjectLedger.
+- `domain/`: `StorageKey::derive_v1`, `domain_v1`.
+- Tests use the store's message registration and figures; no Dagda fixtures.
+- `dagda-migrate` is run by the cutover kit and must stay buildable from the tag.
+
+B. Needs:
+- **D6** for users and sessions (replacing Macha's gossip, unless sign-on moves to Lugh first), and later ingest
+  jobs and cluster policy.
+  - **Uniqueness of usernames is not D6's:** the conditional write is one node's view. That needs an agreement
+    register, as Lugh does. Moot if sign-on moves to Lugh.
+- **D5** for torrent claims, the catalogue scanner and the tombstone sweeper, each among capable nodes.
+  - **Fencing is required:** a deposed holder's write to the record must be refused or lose. So D5's design states
+    how the lease epoch fences writes: the record's writes carry the epoch, and a write expecting an older epoch
+    is refused.
+  - Case: the holder is killed mid-job, another takes it within the lease, and the old holder's late write cannot
+    win.
+- **Caught-up** for formation and FUSE's initial-namespace wait.
+  - Macha asked for "no peers" distinct from "caught up". The group settled on one uniform answer (the maintainer's
+    no-single-node rule), with founding as Dannan's explicit once-only act (T4). To tell Macha.
+- **Key reads and changed:** once its metadata is on heads; changed() may serve FUSE's adoption diffs.
+- **Retire and drain** (new to Macha). Case: retire a node holding sole copies; every object is elsewhere first,
+  and health is ok after.
+- **Store health** into readiness, replacing `data_storage_degraded`.
+- **A set-aside head never dropped silently** (Macha only warns at expiry, `metadata_manager.cpp:966`).
+- **Space taking Macha's rules and the heads migration:** the cache ordering with the own-commit refusal and the
+  sole-head displacement (b0b037c), own_head, mutate_delta's identity and dots, the publication claims barrier
+  order, history truncation, and set-aside. FUSE's adoption rules stay Macha's.
+- **DataWorkContext co-owning:** Macha passes `shared_ptr<const atomic_uint64_t>` through `WriteOptions.progress`.
+- **Group commit**, keeping payload files synced before the shared descriptor.
+- **D1/D2:** possibly; unverified.
+
+Not used: the durable AcceptorStore, FetchContent (CI installs the tag), D9, the catalogue's readers.
+
+C. Constraints:
+- Called from FUSE publication and extent workers, the maintenance thread, HTTP and playback readers, the
+  hydrator, libtorrent disk I/O (admit_data in 1 s slices), ingest and catalogue workers, the claims barrier and
+  the store-open recovery.
+- Every write at persisted, made durable by a tickets wait at the barrier; a BarrierLoss re-puts.
+- DATA no-progress 120 s; a viewer reserve of 32 of 128 MiB, never pressure-gated.
+- Extent 4 MiB live; packing 1 MiB into 64 MiB; control store 8 GiB; garbage_grace 30 days; 1.54 M and 0.90 M
+  loose objects.
+- Never blocks: control work, viewer reads, FUSE request threads, metadata reads.
+
 ## Awaited
 
-Macha, Lir.
+Lir.
