@@ -145,7 +145,13 @@ be dropped, so a check on a channel must re-read on a gap (a stream channel repo
 Consequence: the query is no longer free. It waits on the network, bounded by its deadline, and answers from the
 last survey younger than a bound when there is one. The notice comes from the survey loop.
 
-Awaited: Lir, Mimir.
+**Mimir** (2026-11-20): no need now.
+- It uses no head space before its persistence stage (stage 5). A restarted node catches up through agreement
+  (`catch_up()`).
+- If stage 5's checkpoints live in a head space, it wants a per-node query, "is this node caught up in space S",
+  with no notice. Until then it neither serves nor votes for shards loaded from that space.
+
+Awaited: Lir.
 
 ## Register map additions (Tom: built only if Louhi and at least one other project needs them)
 
@@ -178,8 +184,36 @@ What the users need:
     sync.
   - No order across slots.
   - A slot's log trimmable later, to a manifest reference plus a tail: not to be ruled out.
+- **Mimir** (provisional: Tom has not ruled how Mimir persists):
+  - It uses the store for ballots, promises and the durable log of accepted changes, but holds its values itself.
+    `load()` answers value-less (`has_value`, no bytes) and `value()` is served from Mimir's keyspace. So the store
+    must work without ever holding a value, keeping ballots, summaries and deltas only.
+  - Millions of names per node. Values are mostly 10 B to 10 KB, with collections up to hundreds of MB (512 MB at
+    most).
+  - 10^4 to 10^5 changes a second per node, mostly small deltas against large values, in group commits. A write
+    never costs O(value size) on disk.
+  - Durability:
+    - `ephemeral`: nothing synced, and a restart is a new epoch that catches up.
+    - `persisted` and `replicated`: promise, accepted ballot and delta are durable before keep() completes, in one
+      append.
+  - The log never rolls back: a restored older segment must not let an acceptor forget a promise.
+  - need_whole:
+    - nothing is kept when any index needs whole;
+    - a keep already at the ballot is not applied again;
+    - a delta that does not apply cleanly answers need_whole;
+    - never answered routinely for a base it holds.
+  - A store-level checkpoint and truncation hook, called by the owner, for compaction against its checkpoint.
 - **Lir, Lugh:** to ask.
-- **Mimir:** asked; it may hold its values its own way.
+
+Consequences for the shape:
+- Values are optional per agreement space: a space either holds them (Louhi, Kvasir) or holds deltas and ballots
+  only (Mimir).
+- An index of millions of names with no per-name file: one log per space, an in-memory index from name to tip
+  record, rebuilt at load from the last checkpoint.
+- A durability level per space, `ephemeral` included.
+- An owner-called checkpoint and truncate, which also serves Kvasir's later trim.
+- Never rolling back means the log's head is fenced. A segment older than the recorded tip refuses to open and says
+  why, as the retention marker does.
 
 Shape (to design after the answers): a node-local log per agreement space (D3 and D9's node-local form), records
 as Kvasir describes, with one group-commit fsync per batch across slots. That makes it slice 4's log in its
