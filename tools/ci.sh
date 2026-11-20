@@ -48,6 +48,16 @@ dagda() { # build type, then extra cmake arguments; warnings are errors unless a
   cmake --build "$WORK/dagda" -j "$JOBS"
 }
 
+instrumented() { # a sanitizer's symbol prefix: both libraries the suite loads must carry it
+  for name in dannan dagda; do
+    lib=$(find "$WORK/$name" -name "lib$name.so.*" -type f | sort | sed -n 1p)
+    [ -n "$lib" ] || { echo "no lib$name.so under $WORK/$name" >&2; exit 1; }
+    count=$(nm -D "$lib" | grep -c "$1" || true)
+    echo "$lib: $count $1 symbols"
+    [ "$count" -gt 0 ] || { echo "not instrumented: $lib" >&2; exit 1; }
+  done
+}
+
 suite() {
   (cd "$WORK/dagda" && "$@" ./dagda_tests)
 }
@@ -72,11 +82,15 @@ case "$STEP" in
     ;;
   asan)
     flags="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g"
-    dannan RelWithDebInfo
+    link="-fsanitize=address,undefined"
+    # Every library a sanitizer build links is built with that sanitizer (the
+    # maintainer, 2026-11-20): Dannan too, or only Dagda's own code is checked.
+    dannan RelWithDebInfo "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$link" "-DCMAKE_SHARED_LINKER_FLAGS=$link"
     # GCC 14's std::regex raises -Wmaybe-uninitialized under the sanitizers (the
     # 14 known warnings of every ASan gate), so warnings are not errors here.
-    dagda RelWithDebInfo -DDAGDA_WARNINGS_AS_ERRORS=OFF "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined" \
-      "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined"
+    dagda RelWithDebInfo -DDAGDA_WARNINGS_AS_ERRORS=OFF "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$link" \
+      "-DCMAKE_SHARED_LINKER_FLAGS=$link"
+    instrumented __asan_
     suite env ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
     ;;
   tsan)
@@ -88,6 +102,7 @@ case "$STEP" in
     # shellcheck disable=SC2086
     dagda RelWithDebInfo $clang "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread" \
       "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread"
+    instrumented __tsan_
     # The two cases that hold more locks than the deadlock detector tracks run
     # alone with it off, as the release gates do.
     two="DistributedStore.AControlGraphLargerThanTheConnectionBudgetStillPublishes:StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime"
