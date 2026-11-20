@@ -70,6 +70,22 @@ unless the board says so (`claims_list`).
    - then D-5 (parallel head replication, a durable write's bound past the slowest member) and D-2's interim
      (tombstone maturity on Dannan's hybrid clock), both released by the group.
 
+   **The stack's converged plan** (2026-11-20, agreed by Dagda): Dagda's full list is "The converged plan" ->
+   "Dagda" in `../lir-develop-cluster/TODO/2026-11-20-cluster-stack-placement.md`, items 1-13. Besides the above,
+   it holds:
+   - retire and drain (evacuate objects and claims; the joiner's survey over the peers that answered);
+   - the catalogue's admitted readers (slice 5);
+   - store health into Dannan's readiness;
+   - a set-aside head never dropped silently;
+   - Space taking Macha's short-file fix, and a heads migration for Macha;
+   - `DataWorkContext` co-owning its counters;
+   - group commit generalised;
+   - raw syncs through `storage::FileSystem`, the RecordingSink copy gone, Dannan's callback vocabulary;
+   - keep owning what Macha aliases.
+
+   D6's stamp kind is the one open choice (the maintainer's Q2, hlc or Lamport); for hlc, Dannan's `HlcClock::admit` (a stamp
+   with `merged=false` is refused, never applied).
+
    Audits: `TODO/2026-11-20-duplication-audit.md`, `TODO/2026-11-20-special-roles-audit.md`.
    `feature/dannan-reuse` (`97a079e`): Dannan's CPU pacing and RetryState replace Dagda's copies.
 
