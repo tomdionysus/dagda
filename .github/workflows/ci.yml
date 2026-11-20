@@ -32,6 +32,7 @@ jobs:
           - { step: release, arch: arm64, runner: ubuntu-24.04-arm }
           - { step: asan, arch: x86-64, runner: ubuntu-24.04 }
           - { step: tsan, arch: x86-64, runner: ubuntu-24.04 }
+          - { step: tidy, arch: x86-64, runner: ubuntu-24.04 }
     container:
       image: debian:trixie
       # LeakSanitizer needs ptrace to stop the process's threads.
@@ -43,7 +44,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             g++ clang clang-format cmake ninja-build git ca-certificates openssl \
             libboost-dev libssl-dev libyaml-cpp-dev libgtest-dev libgmock-dev \
-            libclang-rt-19-dev  # clang's sanitizer runtimes, for TSan
+            libclang-rt-19-dev clang-tidy  # clang's sanitizer runtimes, for TSan; clang-tidy for tidy
 
       - uses: actions/checkout@v4
 
