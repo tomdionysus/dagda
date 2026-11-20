@@ -106,7 +106,19 @@ Consequence for the shape: the answer becomes three-valued, `caught_up`, `behind
 `alone` (no peer advertises the space). It carries the count of peers compared, and `alone` is never folded into
 `caught_up`.
 
-Awaited: Lir, Kvasir, Mimir, Dannan (the advert budget, and whether one packed advert is better).
+**Dannan** (2026-11-20): **pack the heads into one advert.**
+- `max_adverts = 64` per node is one budget for every hosted system and Dannan's own users: channel interests,
+  agreement's `agree.slots/<space>`, Lir's shared-subscription groups. The 65th is refused, not coarsened.
+- So: one key, `dagda/heads`, 40 bytes a space (about 25 spaces), paged into `dagda/heads/1` and on past that.
+- Cost: any advert change makes the whole node record newer, and it travels whole in gossip. So the change is
+  rate-limited to the advert interval, and the push form (advertise with a deadline) is never used per commit.
+
+Consequence for the shape:
+- One packed advert of (space id prefix, generation, hash) entries, written at most once per advert interval.
+- "Peers that do not open the space" means peers whose packed advert has no entry for it.
+- A head older than the peer's latest, because of the rate limit, is fine: covering it is enough (Lugh's point).
+
+Awaited: Lir, Kvasir, Mimir.
 
 ## 3. FetchContent beside a fetched Dannan
 
