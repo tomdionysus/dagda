@@ -116,12 +116,20 @@ unless the board says so (`claims_list`).
        - `contract::AckLevel` is {ephemeral, persisted, decided, replicated}; Dagda's `Durability`
          (`store/distributed_store.h:65`) is {ephemeral, persisted, replicated, durable}. The shared names mean
          the same (replicated: a majority of the replication set on disk); Dagda adds durable and has no
-         decided. Proposed to Dannan for 0.11.0: Durability carries AckLevel for the shared names, durable as
-         Dagda's extension, decided only on the agreement path (heads, registers).
-       - `Completion<T>`/`Outcome<T>`/`Fault` against Dagda's completions and evidence: a contract version.
-         Proposed to Dannan: Outcome<T> keeps the evidence beside a Fault (a write that reached two of three
-         says which); Fault gains `cancelled`; timed_out means the outcome is unknown. The untyped `why` of
-         Context's evidence structs becomes a Fault.
+         decided. **Agreed with Dannan for 0.11.0** (2026-11-20): Durability carries AckLevel for the four
+         shared names, parsed and printed through `ack_level_name`/`parse_ack_level`; durable is Dagda's own,
+         never under an AckLevel name; decided only on writes through agreement (heads, registers), never for
+         objects. Whether a store may offer a subset is Kvasir's standard's: asked of Kvasir.
+       - `Completion<T>`/`Outcome<T>`/`Fault` against Dagda's completions and evidence: Dagda's matching minor.
+         **Agreed with Dannan for 0.11.0:** `Outcome::failure(Fault, message, T evidence)` keeps the evidence
+         beside the fault (a failure's value is evidence, never a result); Fault gains `cancelled` (last, the
+         caller or the owner stopped it); timed_out reads "the outcome is unknown, and a write may yet land".
+         Dagda's public results become Outcome<T> by the mapping sent to Dannan: ReadEnd and FetchAnswer one
+         to one (cancelled to cancelled, try_later to unavailable); WriteEvidence, RemoveEvidence and
+         BarrierLoss stay inside T; the evidence structs' `why` becomes a Fault (deadline timed_out, scope
+         refused, space not open not_found, a lost commit conflict, a stopping store unavailable); exceptions
+         StorageUnavailable unavailable, ContextVersionMismatch and MigrationRefused refused, NodeRefused and a
+         corrupt read failed.
        - `agree::MemoryStore`: with the AcceptorStore item (Next, 2), Dagda's durable store beside it.
        Nothing to do: `RandomId` (no hand-rolled random ids in `dagda/`), `sha1`, base64/32, `SwappableSink`,
        `listen::Prefix` (not used, so its stricter parse changes nothing here).
