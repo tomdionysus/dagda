@@ -23,6 +23,7 @@
 #include "dannan/context.h"
 #include "dannan/contract/published.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/sched/retry.h"
 
 namespace dagda::store {
 
@@ -131,7 +132,9 @@ class AvailabilityService {
   contract::HeldIdentity _joined_identity;
   dannan::contract::TimePoint _surveyed_at{};
   dannan::contract::Clock::duration _surveyed_cost{};
-  dannan::contract::Clock::duration _retry_backoff{};
+  // A survey a peer could not finish: retried from retry_floor, doubling to
+  // retry_ceiling, never parked; an answer clears it.
+  dannan::sched::RetryState _retry;
   std::optional<dannan::contract::TimePoint> _retry_at;
   std::optional<dannan::contract::TimePoint> _due;
   // NodeEvents::membership at the last survey: joins, leaves, place,
