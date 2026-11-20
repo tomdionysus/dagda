@@ -68,6 +68,25 @@
 
 namespace dagda::test {
 
+// A node's injected clock as its Dannan node sees it: the same time, looked at every `poll`
+// of real time while waiting rather than TimeSource's 5 ms. Every wait a node arms on a stepped
+// clock (a call's watchdog, a liveness probe, a timer) wakes at that rate to look again; at
+// 5 ms, thousands of a node's calls on a frozen clock flood the io threads both nodes share,
+// and on one loaded core under TSan the peer's real-clock liveness gives up and closes the
+// routes, a put then waiting minutes behind the churn (the 0.4.0 hunt, 2026-11-20: 1480 of
+// 4097 refusals at 150 s, 1789 at 300 s). Steps still go through the test's SteppedTime; one
+// is seen within `poll`. Dannan's next release takes the poll on SteppedTime itself.
+class CoarseTime final : public dannan::contract::TimeSource {
+ public:
+  CoarseTime(const dannan::contract::TimeSource& inner, std::chrono::milliseconds poll) : _inner(inner), _poll(poll) {}
+  dannan::contract::TimePoint now() const noexcept override { return _inner.now(); }
+  std::chrono::milliseconds wake_within(std::chrono::milliseconds remaining) const noexcept override { return std::min(remaining, _poll); }
+
+ private:
+  const dannan::contract::TimeSource& _inner;
+  const std::chrono::milliseconds _poll;
+};
+
 // The io context every node of a cluster runs on, on four threads.
 struct ClusterIo {
   boost::asio::io_context context;
@@ -291,6 +310,8 @@ class ClusterNode {
   const uint16_t _port;
   dannan::identity::NodeId _id;
   std::shared_ptr<RecordingSink> _sink = std::make_shared<RecordingSink>();
+  // The node's clock as its Dannan node sees it; outlives the node.
+  std::unique_ptr<CoarseTime> _coarse;
   std::unique_ptr<dannan::Node> _node;
   std::unique_ptr<dagda::Node> _dagda;
   mutable dannan::contract::Mutex _mutex;
@@ -556,8 +577,10 @@ inline void ClusterNode::open() {
   config.connect_timeout = std::chrono::milliseconds(1000);
   config.version = "dagda-test";
   config.log = _sink;
-  if (_options.time) config.time = _options.time;
-  if (_options.time) config.time = _options.time;
+  if (_options.time) {
+    _coarse = std::make_unique<CoarseTime>(*_options.time, std::chrono::milliseconds(250));
+    config.time = _coarse.get();
+  }
   // Custody made once, the certificate issued over its key for this start.
   if (_options.custody) {
     const auto source = Cluster::custody_source();
