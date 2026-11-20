@@ -2,8 +2,8 @@
 
 Dagda is packaged for Debian trixie, on x86-64 and arm64, as Dannan is:
 
-- `libdagda<version>` (for example `libdagda0.3.1`): the shared library. Its
-  SONAME is the whole version, `libdagda.so.0.3.1`, because no release
+- `libdagda<version>` (for example `libdagda0.3.2`): the shared library. Its
+  SONAME is the whole version, `libdagda.so.0.3.2`, because no release
   promises another's ABI yet; each release is its own package, so two can be
   installed side by side and a host built against one refuses to load another.
 - `libdagda-dev`: the headers, the `libdagda.so` link and the CMake package
@@ -53,11 +53,11 @@ The packages are written to `build-deb/`. The tests run inside the build;
 
 ## Versions
 
-The version comes from `git describe`. The tag `0.3.1` gives `0.3.1`; a build
-three commits later gives `0.3.1+git3.gabc1234`, which sorts after `0.3.1` and
-before `0.3.2`. Release tags sit on `main`, so a build on `develop`, where
+The version comes from `git describe`. The tag `0.3.2` gives `0.3.2`; a build
+three commits later gives `0.3.2+git3.gabc1234`, which sorts after `0.3.2` and
+before `0.3.3`. Release tags sit on `main`, so a build on `develop`, where
 none is reachable, gives the tree's version and the commit,
-`0.3.1+git.gabc1234`. Uncommitted changes add `.dirty`. A build of a tag must
+`0.3.2+git.gabc1234`. Uncommitted changes add `.dirty`. A build of a tag must
 match `project(dagda VERSION ...)` in `CMakeLists.txt`, and the library's
 package named in `debian/control` must be `libdagda` and that version, or the
 script refuses it. A release's version commit changes all three. Only builds of
