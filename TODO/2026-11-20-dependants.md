@@ -307,6 +307,18 @@ C. Constraints:
   measurement.
 - 40,000 sessions and about 100,000 retained topics.
 
+## Confirmations
+
+- Mimir: confirmed, with its key-read fix.
+- Louhi: confirmed.
+- Macha: confirmed. A note: Space's list also carries any cache-ordering change from the leading-view fix if it
+  moves into Space. As designed, the `data_running` deferral is FUSE's and stays Macha's.
+- Awaited: Lugh, Kvasir, Lir.
+
+Dannan, item 13: Dagda's `durable` stays its own value, not a fifth member of the stack's enum (Tom, 2026-11-15).
+It means every available member of the replication set on disk, which is stronger than replicated's majority; it
+is never offered under the stack's names.
+
 ## Reconciled: what the six need, in Dagda's order
 
 | Item | Users |
