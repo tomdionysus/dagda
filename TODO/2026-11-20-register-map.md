@@ -10,7 +10,14 @@ The first item of Dagda's next release in the stack's converged plan
 - the domain catalogue (slice 5).
 
 Ruled first on 2026-11-13 (the three-systems design, "Built-in merges for heads", ruled item 4). The shape was
-settled by the group on 2026-11-20. Open: the stamp's kind (Tom's Q2, hlc or Lamport).
+settled by the group on 2026-11-20.
+
+**Tom, 2026-11-20 (Q2, in Dannan's session, relayed): D6 orders by (hlc stamp, node id).**
+- Dannan's hold stands (Q7), so `HlcClock::admit` is not coming yet. D6 is built on the stamp seam: the HLC form is
+  the target, and is shipped when Dannan's minor lands.
+- The Lamport form exists only as the seam's stand-in for the cases until then; no space is opened on it in a
+  release.
+- Q4: absent nodes are never removed automatically. Retirement is one operator command, cluster-wide.
 
 ## What it is
 

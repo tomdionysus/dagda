@@ -83,7 +83,13 @@ unless the board says so (`claims_list`).
    - raw syncs through `storage::FileSystem`, the RecordingSink copy gone, Dannan's callback vocabulary;
    - keep owning what Macha aliases.
 
-   D6's stamp kind is the one open choice (Tom's Q2, hlc or Lamport); for hlc, Dannan's `HlcClock::admit` (a stamp
+   Tom, 2026-11-20 (relayed from Dannan's session):
+   - **Q2:** D6 orders by (hlc stamp, node id).
+   - **Q4:** no automatic removal of absent nodes; retirement is one operator command, cluster-wide.
+   - **Q6 is not confirmed:** where the Dagda/Macha pairs live (write_behind, convergence demand, replica selector,
+     dots and clocks, group commit) is open until Tom settles it, and is not to be treated as Dagda's.
+
+   D6's stamp kind was the one open choice; for hlc, Dannan's `HlcClock::admit` (a stamp
    with `merged=false` is refused, never applied). That arrives in Dannan's next minor, which has not started: Tom
    told Dannan, "Stop here until I have answered all the issues for other agents." So D6 is built against Dannan
    0.9.2 with the stamp behind one seam, and the hlc form waits for that minor.
