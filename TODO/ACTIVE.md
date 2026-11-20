@@ -67,6 +67,9 @@ unless the board says so (`claims_list`).
    - the caught-up signal;
    - reads and listings;
    - FetchContent;
+   - config (the maintainer, 2026-11-20): YAML is the source of truth; flags and environment variables
+     override any key through `dannan::config`, YAML key `a.b` as `--a-b` and `<PREFIX>_A_B`. For
+     `dagda-tools` when their config is next touched (`dagda-migrate` takes flags only today);
    - then D-5 (parallel head replication, a durable write's bound past the slowest member) and D-2's interim
      (tombstone maturity on Dannan's hybrid clock), both released by the group.
 
