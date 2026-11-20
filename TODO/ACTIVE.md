@@ -105,6 +105,9 @@ unless the board says so (`claims_list`).
        `HlcClock::admit`, which D6's HLC form needs). Small items go in between, including
        `RetryPolicy::unbounded`.
      - Dagda pins 0.10.0 when it is tagged. The plan is `../dannan/TODO/2026-11-20-stack-plan.md`.
+     - Next repin, Dannan 0.10.2 (feature/0.10.2, `911901d`, awaiting its gate): `test::SteppedTime(poll)` replaces
+       the cluster fixture's `CoarseTime` (`SteppedTime(250ms)`); the scheduler's ordered and background marks
+       exception-safe. 0.10.1 changed nothing Dagda uses, so 0.4.0 stays on 0.10.0.
      - **Adopting 0.10.0 (Dagda 0.4.0), read against Dannan's CHANGELOG** (the maintainer, 2026-11-20: on a new
        dependency version, re-examine our own code for what it now replaces). Source compiles unchanged by the
        header diff; the pin (`DAGDA_DANNAN_MINIMUM`, the installed config, `debian/control`) is the one forced
