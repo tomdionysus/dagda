@@ -101,6 +101,60 @@ Reads:
 Stamp seam:
 15. The stamp kind is recorded in the space's head, and a node opening it with another kind is refused.
 
+## Additions from the users' review (Lugh, Lir, Louhi, 2026-11-20)
+
+Settled by the goals. Each one, if left out, would make a user keep its own copy of what D6 does.
+
+**Order and tombstones:**
+- **Tombstone wins (Lugh: the maintainer's P8 ruling, "removal over edit and never resurrected").** A per-space option, used
+  with "never". A tombstone is greater than any value register for its key, and `(stamp, node id)` orders only
+  value against value and tombstone against tombstone. It is still a pure per-key function.
+  - Case 16: a remove on A and a newer write on B; after the fold, a tombstone on both.
+- **Never reuse a removed key (Lugh).** Under never plus tombstone-wins, a put onto a tombstone is refused on this
+  node's view, and `expect absent` fails against a tombstone.
+  - `get_register(view, key)` answers the register with its tombstone flag (Lugh's 410, not 404). `get` stays
+    absent for a tombstone.
+  - Case 17.
+- **The window's default is `garbage_grace` (30 days), Dannan's `forget_after` (Louhi, 4).**
+  - A fold inside the window never revives a removed key.
+  - A node away longer than the window, coming back with an old write of a removed key, does revive it. This is a
+    stated limit: such a node is also past Dannan's forget and rejoins as new.
+  - A space that must never revive uses "never" (Lugh), or keeps a key that absorbs, as Louhi's stop-key does.
+  - Case 18: a branch older than the window revives, stated.
+
+**Reads and writes:**
+- **Before and after on change (Lugh 3, Louhi 1).**
+  - `changed(view_before, view_after, prefix, cursor, budget)` pages `(key, before?, after?)` registers, over the
+    tree's own diff. It costs the change, not the map.
+  - It reads any view the node holds, which includes a notice's `before` and `after`.
+  - Case 19: the keys a commit or a fold changed are listed, with both sides, and nothing else.
+- **A write names what it wrote (Louhi 2).** The commit's outcome carries each key's new `(stamp, node id)`, for
+  the next conditional write.
+- **The value bound: 64 KiB per value, refused at put** (Lugh 4, Louhi 3).
+  - Values are inline in leaf records. A leaf holds at most 128 entries, so a leaf is at most about 8 MiB, inside a
+    CONTROL object and a Dannan message (128 MiB).
+  - Anything larger is a Dagda object named in the register (next point).
+
+**Objects named by a register (Lir 3).**
+- A register may name objects (`refs`, ids, alongside its bytes). A commit claims them under its dot (`Introduced`).
+- The space's reachability (`ReachabilityProvider`) names every object the current head's registers refer to. So
+  the collector frees an object once no register in the head names it, after any put, remove or fold. The owner
+  tracks nothing.
+- Case 20: an object named by a register, superseded on another node and folded, is released by the collector,
+  and one still named is kept.
+
+**Placement and acknowledgement (Lir 1, 2), stated:**
+- D6 opens under every policy Space supports: today every-node; `capable(lir)` when D1 (slice 2) exists.
+- On a node holding the space, `get` and `list` read the local view. They ask a peer only for a tree node not yet
+  arrived, as every space's reads do.
+- put and remove commit through `Heads::mutate`. Waiting on "replicated" for that commit is D2's per-space
+  k-level, slice 2, not in D6. Until then a commit is accepted here and replicated after, as today.
+
+**The expiry clock (Lir 4).**
+- For a Lamport space, expiry is judged on the reading node's wall clock (`SpaceServices::wall`), and the map
+  exposes it (`RegisterMap::now()`), so an owner computes "time left" on the same clock.
+- For HLC, it is the HLC's physical time.
+
 ## Order of work
 
 `feature/register-map`, off `develop`, test first. Cases 1-15 fail first on a Pi, then the code. Then the whole
