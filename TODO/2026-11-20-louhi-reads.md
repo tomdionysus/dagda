@@ -213,6 +213,13 @@ What the users need:
   - A store-level checkpoint and truncation hook, called by the owner, for compaction against its checkpoint.
 - **Lir, Lugh:** to ask.
 
+Settled by the stack's goals, without the maintainer (his instruction of 2026-11-20 to settle what the goals answer). The
+no-values form is needed by Mimir alone. But without it Mimir writes its own durable acceptor log, a second copy of
+what Dagda's store does, which "no duplication" forbids. So Dagda's durable store serves it.
+- The memory-only level moves to Dannan: a production in-memory AcceptorStore in `dannan::agree`, for Mimir, Kvasir
+  and Louhi, proposed by Dannan through Lir Development Cluster.
+- Dagda's store is durable only (persisted, replicated).
+
 Consequences for the shape:
 - Values are optional per agreement space: a space either holds them (Louhi, Kvasir) or holds deltas and ballots
   only (Mimir).
