@@ -70,7 +70,8 @@ B. Needs:
    Shaped at stage 4.
 5. **FetchContent**, tools off.
 
-Not used: D6 key reads, D5, Leases, Tickets, Control, Devices, Activity, retire, Macha's items, D1/D2, the catalogue.
+Not used: D6 change watches (changed(before, after)) and list (it uses get_register at restart), D5, Leases,
+Tickets, Control, Devices, Activity, retire, Macha's items, D1/D2, the catalogue. **Confirmed by Mimir.**
 
 C. Constraints:
 - It calls from Dannan's agreement executor; checkpoints run as speculative-class work.
