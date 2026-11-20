@@ -98,6 +98,29 @@ unless the board says so (`claims_list`).
        `HlcClock::admit`, which D6's HLC form needs). Small items go in between, including
        `RetryPolicy::unbounded`.
      - Dagda pins 0.10.0 when it is tagged. The plan is `../dannan/TODO/2026-11-20-stack-plan.md`.
+     - **Adopting 0.10.0 (Dagda 0.4.0), read against Dannan's CHANGELOG** (the maintainer, 2026-11-20: on a new
+       dependency version, re-examine our own code for what it now replaces). Source compiles unchanged by the
+       header diff; the pin (`DAGDA_DANNAN_MINIMUM`, the installed config, `debian/control`) is the one forced
+       change. In the repin, as no-duplication:
+       - `RetryPolicy::unbounded` replaces the hand-built never-parking policy in `heads/exchange.cpp:94-101`;
+         check `store/availability.cpp:245` for the same.
+       - `identity::durable_sync_directory` and `durable_create_directories` replace Dagda's own directory syncs:
+         `heads/replica.cpp:53`, `heads/node_pack.cpp:38`, `migrate/heads_metadata.cpp:64`,
+         `store/local_store.cpp:288`, `migrate/manifest.cpp:1554`; `store/durability_domain.cpp:153-183` keeps its
+         batching and calls Dannan's sync.
+       - `test::RecordingSink` (now with scopes, `lines()`, `text()`) replaces `test/fixtures/ledger.h:43`.
+       - `encoding::hex`/`unhex` for `identity::hex`/`unhex` at every call site; the forwarders last one minor.
+       - Fuzz targets for Dagda's decoders on `dannan::testing` (the store's messages, ledger and head records,
+         sealed files, the migration manifest), in the release's gate.
+       Not in 0.4.0, to the group with a recommendation:
+       - `contract::AckLevel` is {ephemeral, persisted, decided, replicated}; Dagda's `Durability`
+         (`store/distributed_store.h:65`, `store/durability_domain.h:30`) is {ephemeral, persisted, replicated,
+         durable}. The same names mean different things (Dannan's replicated is a majority on disk). Converging
+         is a contract version.
+       - `Completion<T>`/`Outcome<T>`/`Fault` against Dagda's completions and evidence: a contract version.
+       - `agree::MemoryStore`: with the AcceptorStore item (Next, 2), Dagda's durable store beside it.
+       Nothing to do: `RandomId` (no hand-rolled random ids in `dagda/`), `sha1`, base64/32, `SwappableSink`,
+       `listen::Prefix` (not used, so its stricter parse changes nothing here).
    - **Q6, settled:** where two projects need something and one already depends on the other, the lower one keeps
      it. So write_behind, convergence demand, replica selection, dots and clocks, and group commit stay in Dagda, and
      Macha uses Dagda's.
