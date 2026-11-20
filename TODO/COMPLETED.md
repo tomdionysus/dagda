@@ -3,6 +3,48 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-19 (night): the short file; 0.3.2 tagged
+
+A two-node cutover rehearsal (Macha 0.94.2, then 0.95.0 on Dagda 0.3.1) committed a large file short with no
+error: r4/big/f2.bin at 84,410,368 of 100,663,296 bytes, r5/big/f6.bin at 93,847,552. Read here from Macha's code
+(read only) and proven by the Macha session with a deterministic failing test. The mechanism:
+- A peer's head arrives at a higher generation while this node commits a mid-write publication. The decoded cache
+  is ordered by generation and then hash, so it keeps the peer's head and refuses this node's own commit.
+- FUSE adopts that view. `adopt_entry`'s dirty clause takes any content difference as a replacement and detaches the
+  writing inode. The no-path branch of `replay_data_quantum` then retires the rest of the writes silently.
+- It is Macha's own MetadataManager: 0.95.0 does not use Dagda's heads. Dagda's Space has the same ordering
+  (`space.cpp:29-31`, `:268`, `:349-358`, `:439`; `exchange.cpp:1213-1221`), so any hosted system on heads could
+  meet it.
+
+Macha's fix (Tom's rulings in its session; `port/dannan-dagda` b0b037c, 547 of 547; record in its
+`TODO/2026-11-19-short-file.md`), reviewed here:
+- The view never goes backwards and never drops this node's latest commit.
+- FUSE treats a view that does not cover an inode's last publication dot as lagging, and adopts only forward.
+- A set-aside or dropped peer head is displaced by the sole usable head. This is the one place the view goes back,
+  by design, and it logs a warn.
+- The no-path branch logs what it retires.
+
+Dagda 0.3.2 (Tom: "both you and macha should cut a new version, and restart the cutover plan from there"):
+- `Space::covers(view, dot)` (`heads/space.h`): whether a view's clock covers a commit's dot. Case
+  `HeadsSpace.AViewSaysWhetherItHoldsACommit`, which also proves the gap in Space: with a peer's head ahead, a commit
+  here stays out of `current()` until a fold carries it.
+- Shown failing first on jupiter (no member `covers`). No behaviour, wire, layout or migration change.
+- `feature/view-covers` `64f81f0` merged to develop `9c5f3c4`; `release/0.3.2` with `40fb9fb Version 0.3.2`. My first
+  version commit dropped a space in `project()`, and the gate stopped at configure; amended before tagging.
+- Merged to main `a24db42`, tagged `0.3.2` there (tree identical to `40fb9fb`), main merged to develop `2bad56d`. Not
+  pushed.
+
+Gate (`build/pi-release032.sh`, Dannan 0.9.2 from its tag, Macha's fixtures):
+- jupiter, GCC 14 Release, warnings as errors: **1173 ran, 1170 passed, 3 skipped, 0 failed, 0 warnings**;
+  `dagda-migrate --version` "0.3.2 (dannan 0.9.2)".
+- jupiter, ASan and UBSan: **1173 ran, 1170 passed, 3 skipped, 0 failed, no report**; the 14 known `std::regex`
+  `-Wmaybe-uninitialized` warnings.
+- saturn, clang 19, Dannan and Dagda under TSan: **1171 ran, 1168 passed, 3 skipped, 0 failed, no report**; the two
+  past the deadlock detector, 2 passed.
+
+The tag was sent to the Macha session. Its next version goes on Dagda 0.3.2 and Dannan 0.9.2, and the rehearsals R1
+to R4 restart, with the two-writer round.
+
 ## 2026-11-19 (evening): 0.3.1 tagged and pushed; dagda-migrate at the disk's rate
 
 The cutover was aborted on `dagda-migrate`'s speed (65 MiB/s on macnessa, four passes, about 4 days down). Tom chose
