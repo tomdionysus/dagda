@@ -215,6 +215,11 @@ at 0.1.4 and still served, for Macha's port on 0.1.5; version 2 grows slice by s
 (`TODO/2026-11-13-three-systems-design.md`) and is frozen at slice 4. Every step ends
 green in `dagda_tests`, with sanitizers before a release.
 
+## Code of conduct
+
+Everyone taking part in Dagda's issues, pull requests and discussions follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Licence
 
 Copyright (C) 2026 Tom Cully. Licensed under the GNU GPLv3; see `LICENSE`.
