@@ -239,6 +239,11 @@ Proposed:
   fetched Dannan need not install an export set, and Dagda's `install(EXPORT)` names it.
 - `DAGDA_BUILD_TESTING` stays off by default.
 
+Louhi (2026-11-20, node-a, g++ Release, warnings as errors): Dagda 0.3.2 fetched with `EXCLUDE_FROM_ALL` and
+`DAGDA_BUILD_TESTING` off, beside Dannan 0.9.2 fetched with `OVERRIDE_FIND_PACKAGE`, configures, builds and links.
+`install(EXPORT)` raised nothing at configure or generate. This proves the fetch and the link, not the use. So
+today's workaround works; the next release makes it work without one, and adds `DAGDA_BUILD_TOOLS`.
+
 Lugh (2026-11-20, starting P8.0 on a fetched Dagda 0.3.2): as a subproject, `tools/` always builds `dagda-migrate`
 and `dagda-bench` and installs `dagda-migrate` and its man page into the consumer's install. Wanted:
 `DAGDA_BUILD_TOOLS`, as Dannan's `DANNAN_BUILD_TOOLS`, default ON at top level. Louhi and Lugh both fetch, so this
