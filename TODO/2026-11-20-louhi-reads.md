@@ -137,9 +137,20 @@ one slow key, `dagda.spaces`: a digest of which spaces it holds, not their gener
   not from an advert.
 - This goes to Tom before the shape is fixed.
 
+**Tom, 2026-11-20: survey.** A node learns its peers' heads by asking the peers that hold the space, as the
+exchange's survey does. This happens on each query, rate-limited, and again on roster and head changes. There is no
+advert and no wire change. It moves onto the notify channel when slice 2 builds one. Dannan noted that a notify can
+be dropped, so a check on a channel must re-read on a gap (a stream channel reports gaps).
+
+Consequence: the query is no longer free. It waits on the network, bounded by its deadline, and answers from the
+last survey younger than a bound when there is one. The notice comes from the survey loop.
+
 Awaited: Lir, Mimir.
 
-## 4. The durable AcceptorStore (Tom's ruling, relayed by Louhi; to confirm in this session)
+## 4. The durable AcceptorStore (Tom, 2026-11-20, confirmed in this session: the next release)
+
+Kvasir, on `need_whole`: the store reports the indices only and never falls back to its own replay. The whole value
+comes from outside, through Agreement or Kvasir's catch-up, and replay is for loading at start.
 
 `dannan::agree::AcceptorStore` at 0.9.2 (`dannan/agree/agreement.h:41-96`, frozen for 0.9.x per Dannan), with
 `test::sim::Store`'s durable layer as the reference behaviour. The header's contract text is stricter in two places:
