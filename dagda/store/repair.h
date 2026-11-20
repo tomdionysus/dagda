@@ -21,10 +21,10 @@
 #include "dagda/contract/object_ledger.h"
 #include "dagda/ledger/claim_walk.h"
 #include "dagda/store/availability.h"
-#include "dagda/store/cpu_pacing.h"
 #include "dagda/store/distributed_store.h"
 #include "dannan/context.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/sched/cpu_pacing.h"
 #include "dannan/sched/duty_share.h"
 
 namespace dagda::store {
@@ -61,7 +61,7 @@ struct RepairOptions {
   // Above this share of a CPU in the rest of the process, repair's credit
   // shrinks in proportion (Macha's cpu_target). No source: not paced by CPU.
   double cpu_target = 0.10;
-  CpuSource cpu = system_cpu_sample;
+  dannan::sched::CpuSource cpu = dannan::sched::system_cpu_sample;
   // The credit's burst is the larger of this and five seconds of the link; it is
   // also the window of transfers a turn keeps in flight (the repair redesign, stage 4,
   // where the 16-call count a step went).
@@ -281,7 +281,7 @@ class Repair {
   dannan::sched::DutyShare _share;
   ledger::ClaimWalk _data_walk;
   ledger::ClaimWalk _control_walk;
-  CpuPacer _cpu;
+  dannan::sched::CpuPacer _cpu;
   double _credit = 0.0;
   // What this turn's claim walks restored, for the transfer's figures.
   size_t _walks_restored = 0;

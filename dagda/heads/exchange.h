@@ -35,6 +35,7 @@
 #include "dannan/contract/time_source.h"
 #include "dannan/membership/node_record.h"
 #include "dannan/net/session.h"
+#include "dannan/sched/retry.h"
 #include "dannan/sched/work.h"
 #include "dannan/status/log.h"
 
@@ -436,7 +437,12 @@ class Exchange {
   std::vector<NodeId> _last_active;
   dannan::contract::TimePoint _retry_due{};
   dannan::contract::TimePoint _formation_settle_due{};
-  std::chrono::milliseconds _retry_backoff{0};
+  // A failed run's backoff, doubling from retry_backoff to retry_backoff_most and never
+  // parked: repair is retried for as long as there is demand.
+  dannan::sched::RetryState _retry;
+  dannan::sched::RetryPolicy retry_policy() const noexcept;
+  // What a run that waits (a virgin space, a follower) waits: the backoff as it stands.
+  std::chrono::milliseconds waited_backoff() const noexcept;
   std::optional<dannan::contract::TimePoint> _retry_first;
   dannan::contract::TimePoint _retry_last{};
   bool _failed = false;

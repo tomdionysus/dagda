@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -241,11 +242,16 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   _snapshot.publish(std::move(next));
   if (!ask) return false;
   if (retry_needed) {
-    _retry_backoff = std::clamp<Clock::duration>(_retry_backoff * 2, _options.retry_floor, _options.retry_ceiling);
-    _retry_at = now + _retry_backoff;
+    dannan::sched::RetryPolicy policy;
+    policy.initial_backoff = _options.retry_floor;
+    policy.max_backoff = _options.retry_ceiling;
+    policy.max_failures_in_window = std::numeric_limits<size_t>::max();
+    policy.failure_window = std::chrono::milliseconds(1);
+    policy.max_failing_duration = std::chrono::milliseconds(0);
+    _retry_at = now + _retry.failed(policy, now).value_or(_options.retry_ceiling);
     later(*_retry_at);
   } else {
-    _retry_backoff = {};
+    _retry.succeeded();
     _retry_at.reset();
   }
   _surveyed = true;

@@ -87,10 +87,22 @@ Exchange::Exchange(Services services)
       _options(_services.options),
       _context(_services.context),
       _time(_services.time ? *_services.time : _context.time().source()),
-      _logger(_context.logger("dagda.heads")),
-      _retry_backoff(_options.retry_backoff) {}
+      _logger(_context.logger("dagda.heads")) {}
 
 Exchange::~Exchange() { stop(); }
+
+dannan::sched::RetryPolicy Exchange::retry_policy() const noexcept {
+  dannan::sched::RetryPolicy policy;
+  policy.initial_backoff = _options.retry_backoff;
+  policy.max_backoff = _options.retry_backoff_most;
+  // Never parked: no failure budget, no failing-duration backstop.
+  policy.max_failures_in_window = std::numeric_limits<size_t>::max();
+  policy.failure_window = std::chrono::milliseconds(1);
+  policy.max_failing_duration = std::chrono::milliseconds(0);
+  return policy;
+}
+
+std::chrono::milliseconds Exchange::waited_backoff() const noexcept { return std::max(_retry.current_backoff(), _options.retry_backoff); }
 
 void Exchange::attach(Space& space) {
   _space = &space;
@@ -1317,7 +1329,7 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
   // A space its owner founds elsewhere, or by hand, has no virgin run to wait for.
   if (virgin && !_space->spec().founding && !established_peer) {
     turn.waited = true;
-    _retry_due = now + _retry_backoff;
+    _retry_due = now + waited_backoff();
     return turn;
   }
   if (virgin && !established_peer && !forced && now < _formation_settle_due) {
@@ -1330,7 +1342,7 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
   // last connectivity event.
   if (virgin && !established_peer && !_last_active.empty() && self() != *std::min_element(_last_active.begin(), _last_active.end())) {
     turn.waited = true;
-    _retry_due = _time.now() + _retry_backoff;
+    _retry_due = _time.now() + waited_backoff();
     return turn;
   }
 
@@ -1354,8 +1366,8 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
     turn.ran = true;
     turn.failed = true;
     turn.why = why.empty() ? validation : why;
-    _retry_due = _time.now() + _retry_backoff;
-    _retry_backoff = std::min(_options.retry_backoff_most, std::max(_retry_backoff * 2, _options.retry_backoff));
+    const auto failed_at = _time.now();
+    _retry_due = failed_at + _retry.failed(retry_policy(), failed_at).value_or(_options.retry_backoff_most);
     // Failing to reconcile every active head must not stall non-destructive repair: a
     // locally committed branch is still a valid reachability source.
     if (replica.recovery_required() || replica.committed_generation() <= 1)
@@ -1370,7 +1382,7 @@ RepairTurn Exchange::repair_turn(std::stop_token stop, bool forced) {
     turn.dirty = _demand.complete(*run);
     turn.ran = true;
     _retry_due = {};
-    _retry_backoff = _options.retry_backoff;
+    _retry.succeeded();
   } catch (const MaintenanceStopping&) {
     throw;
   } catch (const std::exception& error) {

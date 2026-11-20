@@ -23,10 +23,10 @@
 #include <variant>
 
 #include "dagda/node.h"
-#include "dagda/store/cpu_pacing.h"
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/reachability.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/sched/cpu_pacing.h"
 #include "dannan/test/fixtures/gate.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
@@ -69,11 +69,11 @@ ClusterNodeOptions fast_link() {
 }
 
 TEST(NodeLocalMaintenance, TheCpuScaleIsMachas) {
-  EXPECT_EQ(store::background_cpu_scale(5, 0, 0, 0.1), 1.0);
-  EXPECT_EQ(store::background_cpu_scale(0.05, 0, 1, 0.1), 1.0);
-  EXPECT_DOUBLE_EQ(store::background_cpu_scale(1.0, 0, 1, 0.1), 0.1);
+  EXPECT_EQ(dannan::sched::background_cpu_scale(5, 0, 0, 0.1), 1.0);
+  EXPECT_EQ(dannan::sched::background_cpu_scale(0.05, 0, 1, 0.1), 1.0);
+  EXPECT_DOUBLE_EQ(dannan::sched::background_cpu_scale(1.0, 0, 1, 0.1), 0.1);
   // The stage's own CPU does not pace it.
-  EXPECT_EQ(store::background_cpu_scale(1.0, 1.0, 1, 0.1), 1.0);
+  EXPECT_EQ(dannan::sched::background_cpu_scale(1.0, 1.0, 1, 0.1), 1.0);
 }
 
 TEST(NodeLocalMaintenance, TheVerifysRateIsMachas) {
@@ -303,7 +303,7 @@ TEST(NodeLocalMaintenance, BusyHoldsTheGatedStages) {
 // The rest of the process's CPU takes rebalance's and repair's credit away.
 TEST(NodeLocalMaintenance, CpuElsewhereShrinksTheCredit) {
   auto burning = std::make_shared<std::atomic<double>>(0.0);
-  const store::CpuSource hot = [burning] { return store::CpuSample{burning->fetch_add(1000.0), 0.0}; };
+  const dannan::sched::CpuSource hot = [burning] { return dannan::sched::CpuSample{burning->fetch_add(1000.0), 0.0}; };
   auto options = fast_link();
   options.repair.initial_bandwidth = 1ULL << 30;
   options.maintenance.cpu = hot;

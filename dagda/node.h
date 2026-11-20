@@ -42,7 +42,6 @@
 #include "dagda/maintenance_gates.h"
 #include "dagda/store/availability.h"
 #include "dagda/store/control_store.h"
-#include "dagda/store/cpu_pacing.h"
 #include "dagda/store/data_work.h"
 #include "dagda/store/distributed_store.h"
 #include "dagda/store/local_store.h"
@@ -53,6 +52,7 @@
 #include "dannan/context.h"
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
+#include "dannan/sched/cpu_pacing.h"
 #include "dannan/supervise/startup.h"
 
 namespace dagda {
@@ -118,7 +118,7 @@ struct MaintenanceOptions {
   // migration postpones it.
   std::chrono::milliseconds scrub_interval{std::chrono::hours(24 * 30)};
   double cpu_target = 0.10;
-  store::CpuSource cpu = store::system_cpu_sample;
+  dannan::sched::CpuSource cpu = dannan::sched::system_cpu_sample;
   // The clocks a pass runs on, for an owner with its own (Macha's MaintenanceClock,
   // which its trace fixtures move by hand): the steady one is what the pass's
   // schedule and credit, the collector, repair (unless RepairOptions::time says
@@ -662,7 +662,7 @@ class Node {
   LocalFigures _local_figures DANNAN_GUARDED_BY(_gc_figures_mutex);
 
   // The local stages' pacing.
-  std::optional<store::CpuPacer> _local_cpu DANNAN_GUARDED_BY(_maintenance_mutex);
+  std::optional<dannan::sched::CpuPacer> _local_cpu DANNAN_GUARDED_BY(_maintenance_mutex);
   std::optional<dannan::contract::TimePoint> _local_at DANNAN_GUARDED_BY(_maintenance_mutex);
   double _local_credit DANNAN_GUARDED_BY(_maintenance_mutex) = 0.0;
   // The rate the last turn earned at, bytes a second, for local_due().
