@@ -57,9 +57,14 @@ B. Needs:
    - Done when a three-node cluster at replicated survives SIGKILL of every node with every acknowledged write
      read back, and a restored older log refuses to open.
 2. **Value checkpoints:** chunks as Objects, and one small head per space naming each shard's latest checkpoint.
-   - **Reconcile:** Mimir names "Claims retain and release". Dagda has no release call. Objects are kept by
-     what a head names and freed by the collector. So the checkpoint head should be a D6 register map with one key
-     per shard whose refs name its chunks. Mimir then tracks nothing, as for Lir and Kvasir. To confirm with Mimir.
+   - **Reconciled (Mimir agreed):** the checkpoint head is a D6 register map.
+     - Key `<node id>/<shard>`, since replicas checkpoint at different versions and each node needs its own values
+       back. Its refs name the chunks, and its value holds the agreed versions per range.
+     - Sequence: chunks written, put (durable on this node at completion), then store checkpoint(up_to) and
+       truncate.
+     - The collector frees superseded chunks. A retired node's keys are removed by the retire, or by Mimir as it
+       leaves.
+     - So D6 is used by Mimir: put, get_register, remove; one writer per key.
 3. **Caught-up:** a per-node query over the checkpoint space; no notice.
 4. **D9 logs** for its merge class (stage 4), possibly. It prefers one log shared with the AcceptorStore.
    Shaped at stage 4.
