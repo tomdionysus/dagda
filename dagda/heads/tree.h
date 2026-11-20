@@ -729,6 +729,24 @@ class Tree : public TreeShape {
     return out;
   }
 
+  // The leaf that holds `key`, or would: its id and every entry in it, without child
+  // records. One descent; no child node is read. What an owner sweeping a leaf it is
+  // about to rewrite reads.
+  struct Leaf {
+    ObjectId id{};
+    std::vector<Item> items;
+  };
+  Leaf leaf_holding(const ObjectId& root, std::string_view key, const TreeNodeStore& store) const {
+    auto run = leaf_run_from(root, store, key, true);
+    return {run.leaf, std::move(run.items)};
+  }
+
+  // Each entry at or after `from` in key order, child records read, until `take`
+  // returns false. A subtree ending before `from` is not read.
+  void walk_from(const ObjectId& root, const TreeNodeStore& store, std::string_view from, const std::function<bool(Item&&)>& take) const {
+    (void)walk_subtree_after(root, store, std::string(from), take, true);
+  }
+
  private:
   using EntryRef = std::pair<const std::string*, const Value*>;
 
@@ -904,10 +922,11 @@ class Tree : public TreeShape {
     }
   }
 
-  // Feeds entries after `after` to `take` until it returns false; returns whether
-  // it stopped. A child whose successor starts at or before `after` is not read.
-  bool walk_subtree_after(const ObjectId& id, const TreeNodeStore& store, const std::optional<std::string>& after,
-                          const std::function<bool(Item&&)>& take) const {
+  // Feeds entries after `after` (at or after it when `inclusive`) to `take` until it
+  // returns false; returns whether it stopped. A child whose successor starts at or
+  // before `after` is not read.
+  bool walk_subtree_after(const ObjectId& id, const TreeNodeStore& store, const std::optional<std::string>& after, const std::function<bool(Item&&)>& take,
+                          bool inclusive = false) const {
     auto encoded = store.get(id);
     if (!encoded) throw DecodeError("tree node unavailable: " + store::to_string(id));
     dannan::net::Reader reader(*encoded);
@@ -916,7 +935,7 @@ class Tree : public TreeShape {
       const auto count = reader.u32();
       for (uint32_t i = 0; i < count; ++i) {
         auto item = decode_record(reader, store, true);
-        if (after && item.first <= *after) continue;
+        if (after && (inclusive ? item.first < *after : item.first <= *after)) continue;
         if (!take(std::move(item))) return true;
       }
       reader.finish();
@@ -927,19 +946,21 @@ class Tree : public TreeShape {
     const auto children = read_branch_keys(reader);
     for (size_t i = 0; i < children.size(); ++i) {
       if (after && i + 1 < children.size() && children[i + 1].first <= *after) continue;
-      if (walk_subtree_after(children[i].second, store, after, take)) return true;
+      if (walk_subtree_after(children[i].second, store, after, take, inclusive)) return true;
     }
     return false;
   }
 
-  // The entries at or after `from` in the leaf that would hold it, without child
-  // records, and the first key of the leaf after: one descent.
+  // The entries at or after `from` in the leaf that would hold it (every entry in it
+  // when `whole`), without child records, the leaf's id, and the first key of the leaf
+  // after: one descent.
   struct LeafRun {
     std::vector<Item> items;
     std::optional<std::string> next;
+    ObjectId leaf{};
   };
 
-  LeafRun leaf_run_from(const ObjectId& root, const TreeNodeStore& store, std::string_view from) const {
+  LeafRun leaf_run_from(const ObjectId& root, const TreeNodeStore& store, std::string_view from, bool whole = false) const {
     LeafRun run;
     ObjectId current = root;
     for (;;) {
@@ -951,9 +972,10 @@ class Tree : public TreeShape {
         const auto count = reader.u32();
         for (uint32_t i = 0; i < count; ++i) {
           auto item = decode_record(reader, store, false);
-          if (item.first >= from) run.items.push_back(std::move(item));
+          if (whole || item.first >= from) run.items.push_back(std::move(item));
         }
         reader.finish();
+        run.leaf = current;
         return run;
       }
       if (magic != _form.branch_magic) throw DecodeError("not a tree node");

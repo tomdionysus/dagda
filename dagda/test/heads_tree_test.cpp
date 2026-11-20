@@ -16,6 +16,7 @@
 #include <atomic>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -103,6 +104,92 @@ std::vector<NeutralTree::Item> by_pages(const NeutralTree& tree, const ObjectId&
       return out;
     }
   }
+}
+
+// A key's leaf, for an owner that sweeps the leaf it is about to rewrite: one descent,
+// every entry of that leaf and no other, the leaf's id stable for keys that share it,
+// no child record read. A key past every entry falls in the last leaf.
+TEST(HeadsTree, LeafHoldingIsTheWholeLeafAKeyFallsIn) {
+  const auto tree = neutral_tree(small_limits());
+  MemoryTreeNodeStore store;
+  auto entries = paged_entries(300);
+  entries["d3/f42"] = make_item(42, 600);
+  const auto root = tree.build(entries, store);
+
+  std::map<ObjectId, std::vector<std::string>> by_leaf;
+  for (const auto& [key, item] : entries) {
+    (void)item;
+    store.forget_reads();
+    const auto leaf = tree.leaf_holding(root, key, store);
+    std::vector<std::string> keys;
+    for (const auto& held : leaf.items) keys.push_back(held.first);
+    EXPECT_TRUE(std::find(keys.begin(), keys.end(), key) != keys.end()) << key;
+    EXPECT_TRUE(std::is_sorted(keys.begin(), keys.end()));
+    auto [found, inserted] = by_leaf.emplace(leaf.id, keys);
+    if (!inserted) {
+      EXPECT_EQ(found->second, keys) << "one leaf, two answers";
+    }
+    // Root to leaf only: no child sequence is read, even for the long item.
+    EXPECT_LE(store.reads(), 8u);
+  }
+  // The leaves partition the keys: every key in exactly one.
+  size_t total = 0;
+  for (const auto& [id, keys] : by_leaf) total += keys.size();
+  EXPECT_EQ(total, entries.size());
+  EXPECT_GT(by_leaf.size(), 1u);
+
+  // The long item comes back without its child records.
+  const auto long_leaf = tree.leaf_holding(root, "d3/f42", store);
+  const auto it = std::find_if(long_leaf.items.begin(), long_leaf.items.end(), [](const auto& held) { return held.first == "d3/f42"; });
+  ASSERT_NE(it, long_leaf.items.end());
+  EXPECT_TRUE(it->second.refs.empty());
+
+  // A key past every entry falls in the last leaf.
+  const auto past = tree.leaf_holding(root, "zzz", store);
+  ASSERT_FALSE(past.items.empty());
+  EXPECT_EQ(past.items.back().first, entries.rbegin()->first);
+}
+
+// A walk from a key: every entry at or after it in key order, read whole, until the
+// visitor stops it. The key itself is included when held; a subtree before it is not read.
+TEST(HeadsTree, WalkFromIsEveryEntryAtOrAfterAKeyReadWhole) {
+  const auto tree = neutral_tree(small_limits());
+  MemoryTreeNodeStore store;
+  auto entries = paged_entries(300);
+  entries["d3/f42"] = make_item(42, 600);
+  const auto root = tree.build(entries, store);
+
+  for (const std::string from : {"", "d0", "d3/f42", "d3/f420", "d6/f99", "zzz"}) {
+    std::vector<NeutralTree::Item> walked;
+    tree.walk_from(root, store, from, [&](NeutralTree::Item&& item) {
+      walked.push_back(std::move(item));
+      return true;
+    });
+    std::vector<NeutralTree::Item> expected;
+    for (auto at = entries.lower_bound(from); at != entries.end(); ++at) expected.emplace_back(at->first, at->second);
+    EXPECT_EQ(walked, expected) << "from " << from;
+  }
+
+  // Child records are read: the long item comes back whole.
+  std::optional<NeutralItem> long_item;
+  tree.walk_from(root, store, "d3/f42", [&](NeutralTree::Item&& item) {
+    long_item = std::move(item.second);
+    return false;
+  });
+  ASSERT_TRUE(long_item);
+  EXPECT_EQ(long_item->refs.size(), 600u);
+
+  // The visitor stops it, and a walk from late in the keys reads fewer nodes than one
+  // from the start.
+  size_t seen = 0;
+  tree.walk_from(root, store, "", [&](NeutralTree::Item&&) { return ++seen < 5; });
+  EXPECT_EQ(seen, 5u);
+  store.forget_reads();
+  tree.walk_from(root, store, "", [](NeutralTree::Item&&) { return true; });
+  const auto whole = store.reads();
+  store.forget_reads();
+  tree.walk_from(root, store, "d6", [](NeutralTree::Item&&) { return true; });
+  EXPECT_LT(store.reads(), whole);
 }
 
 // Macha: test_the_tree_round_trips_every_namespace_it_is_given (NT:78).

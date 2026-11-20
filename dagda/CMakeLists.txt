@@ -22,6 +22,7 @@ add_library(dagda SHARED
   heads/exchange.cpp
   heads/messages.cpp
   heads/record.cpp
+  heads/register_map.cpp
   heads/replica.cpp
   heads/node_pack.cpp
   heads/retirement.cpp
