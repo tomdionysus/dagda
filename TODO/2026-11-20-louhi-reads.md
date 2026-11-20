@@ -147,6 +147,14 @@ last survey younger than a bound when there is one. The notice comes from the su
 
 Awaited: Lir, Mimir.
 
+## Register map additions (the maintainer: built only if Louhi and at least one other project needs them)
+
+- **Lugh: no to both.**
+  - JWKS is a register map keyed by kid, written once and retired by tombstone or expiry, so last-writer by
+    (Lamport, node id) is enough.
+  - lugh/scope and lugh/secrets use Lugh's own merge, with its version in the value.
+- Lir: awaited.
+
 ## 4. The durable AcceptorStore (the maintainer, 2026-11-20, confirmed in this session: the next release)
 
 Kvasir, on `need_whole`: the store reports the indices only and never falls back to its own replay. The whole value
@@ -188,6 +196,11 @@ Proposed:
 - As a subproject (`NOT PROJECT_IS_TOP_LEVEL`), install and export only when `DAGDA_INSTALL` is on, default off. A
   fetched Dannan need not install an export set, and Dagda's `install(EXPORT)` names it.
 - `DAGDA_BUILD_TESTING` stays off by default.
+
+Lugh (2026-11-20, starting P8.0 on a fetched Dagda 0.3.2): as a subproject, `tools/` always builds `dagda-migrate`
+and `dagda-bench` and installs `dagda-migrate` and its man page into the consumer's install. Wanted:
+`DAGDA_BUILD_TOOLS`, as Dannan's `DANNAN_BUILD_TOOLS`, default ON at top level. Louhi and Lugh both fetch, so this
+meets the two-project rule.
 
 Case: `test/package/fetch`, a consumer that FetchContents Dannan and Dagda from local paths, builds, and runs the
 same version check as `test/package`. It runs on a Pi with the gate.
