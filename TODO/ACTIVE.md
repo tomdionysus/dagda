@@ -86,8 +86,9 @@ unless the board says so (`claims_list`).
    Tom, 2026-11-20 (relayed from Dannan's session):
    - **Q2:** D6 orders by (hlc stamp, node id).
    - **Q4:** no automatic removal of absent nodes; retirement is one operator command, cluster-wide.
-   - **Q6 is not confirmed:** where the Dagda/Macha pairs live (write_behind, convergence demand, replica selector,
-     dots and clocks, group commit) is open until Tom settles it, and is not to be treated as Dagda's.
+   - **Q6, settled:** where two projects need something and one already depends on the other, the lower one keeps
+     it. So write_behind, convergence demand, replica selection, dots and clocks, and group commit stay in Dagda, and
+     Macha uses Dagda's.
 
    D6's stamp kind was the one open choice; for hlc, Dannan's `HlcClock::admit` (a stamp
    with `merged=false` is refused, never applied). That arrives in Dannan's next minor, which has not started: Tom
