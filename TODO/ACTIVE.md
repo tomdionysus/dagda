@@ -102,7 +102,12 @@ unless the board says so (`claims_list`).
    - **The offline queue** is served by D9 as designed: the publisher matches the filters and appends under its own
      dot, any node may append, and a second append of a dot is the same entry. One change: a log's identity is
      (stream key, dot), so one message lands once in each matching session's stream, and acks and retire name
-     (stream, dot). It is folded into D9 when D9 is built; Lir to agree.
+     (stream, dot). It is folded into D9 when D9 is built. Lir agreed 2026-11-20 (the converged plan's 12a,
+     fallback included).
+   - Lir's working figures for slice 0's measurement of the filter index (Tom has set no target):
+     - 10,000 sessions per node on 4 nodes (40,000), a third offline at any time;
+     - about 5 filters per session, a quarter of them wildcards;
+     - 10,000 messages a second cluster-wide.
    - **The will** is Lir's own, on Dagda's head-backed leases (D5): no second project needs it.
 4. No longer held for the cutover (Tom, 2026-11-20):
    - **Space follows Macha's short-file rules** (b0b037c), test first, with its
