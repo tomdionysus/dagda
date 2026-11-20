@@ -14,6 +14,8 @@
 #   tools/ci.sh release   GCC Release, warnings as errors, the whole suite
 #   tools/ci.sh asan      GCC with ASan and UBSan, the whole suite
 #   tools/ci.sh tsan      clang with TSan, Dannan under TSan too, the whole suite
+#   tools/ci.sh coverage  GCC Debug with --coverage, the whole suite, lcov over
+#                         dagda/ less its tests, to build-ci/coverage.info
 #
 # The gates of record still run on the Pi cluster (CLAUDE.md, "Tests"); this is
 # the public build's check.
@@ -87,6 +89,21 @@ case "$STEP" in
     two="DistributedStore.AControlGraphLargerThanTheConnectionBudgetStillPublishes:StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime"
     suite env TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 sh -c "./dagda_tests --gtest_filter=-$two"
     suite env TSAN_OPTIONS=halt_on_error=1:detect_deadlocks=0 sh -c "./dagda_tests --gtest_filter=$two"
+    ;;
+  coverage)
+    # The maintainer, 2026-11-20: about 100% coverage on all code. Measured over the library,
+    # not its tests or fixtures.
+    dannan Release
+    dagda Debug -DDAGDA_WARNINGS_AS_ERRORS=OFF -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
+      -DCMAKE_SHARED_LINKER_FLAGS=--coverage
+    find "$WORK/dagda" -name '*.gcda' -delete
+    suite
+    ignore=inconsistent,inconsistent,mismatch,negative,unused
+    lcov --quiet --capture --directory "$WORK/dagda" --ignore-errors "$ignore" --output-file "$WORK/all.info"
+    lcov --quiet --extract "$WORK/all.info" "$ROOT/dagda/*" --ignore-errors "$ignore" --output-file "$WORK/library.info"
+    lcov --quiet --remove "$WORK/library.info" "$ROOT/dagda/test/*" --ignore-errors "$ignore" --output-file "$WORK/coverage.info"
+    rm "$WORK/all.info" "$WORK/library.info"
+    lcov --summary "$WORK/coverage.info" --ignore-errors "$ignore"
     ;;
   *)
     echo "unknown step: $STEP" >&2
