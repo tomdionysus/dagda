@@ -1,7 +1,7 @@
 # Dagda - Active Work
 
-Last updated: 2026-11-19 (night). `COMPLETED.md` is the record; its newest handoff is "2026-11-19 (evening): 0.3.1
-tagged and pushed; dagda-migrate at the disk's rate".
+Last updated: 2026-11-20. `COMPLETED.md` is the record; its newest handoff is "2026-11-19 (night): the short file;
+0.3.2 tagged".
 
 ## Start here (a fresh session)
 
@@ -14,13 +14,20 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-Work goes on `develop` or a feature branch from it. `main`, `develop` and the `0.3.1` tag are pushed (the maintainer,
-2026-11-19); the tags `0.2.0` and `0.3.0` are local only. Push only on the maintainer's "push". Nothing is running on the Pis
+Work goes on `develop` or a feature branch from it. `main`, `develop` and the `0.3.1` tag were pushed (the maintainer,
+2026-11-19); `0.3.2` and the merges around it, and the tags `0.2.0` and `0.3.0`, are local only. Push only on the maintainer's "push". Nothing is running on the Pis
 unless the board says so (`claims_list`).
 
 ## Where it stands
 
-- **0.3.1 is the release for the cutover** (main `2793458`, pushed). It carries, past 0.3.0:
+- **0.3.2 is the release for the cutover** (the maintainer, 2026-11-19 night: "both you and macha should cut a new version, and
+  restart the cutover plan from there"). Tagged on main `a24db42`, not pushed. It is 0.3.1 plus `Space::covers(view,
+  dot)`. Gate in `COMPLETED.md`: plain 1170 of 1173, 0 failed; ASan and TSan 0 failed, no report. The cutover plan
+  restarts from Macha's next version on it: the rebuild, then rehearsals R1 to R4 and the two-writer round.
+- **The short file** (`COMPLETED.md`, 2026-11-19 night): Macha's cached view kept a peer's head over this node's
+  own commit, and FUSE took the lagging view as a replacement. It is fixed in Macha (`port/dannan-dagda` b0b037c).
+  Dagda's Space has the same ordering and follows Macha's fixed rules after the cutover (Next 2).
+- 0.3.1 (main `2793458`, pushed) carries, past 0.3.0:
   - `dagda-migrate` at the disk's rate (the maintainer's B): records moved from their headers with a progress record; the
     manifest pass reading loose objects in the device's order on worker threads; `--read-every-record`.
     `docs/migration.md`, "How a run moves records (0.3.1)"; the plan and findings `TODO/2026-11-19-migrate-speed.md`.
@@ -55,6 +62,12 @@ unless the board says so (`claims_list`).
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
 2. After the cutover, not before:
+   - **Space follows Macha's short-file rules** (b0b037c), test first, with its
+     `test_a_set_aside_head_leaves_the_view` as the model:
+     - `cache_record` never moves the view off a record covering this node's latest commit onto one that does not;
+     - the sole usable head displaces a cached record not in its past, set aside or dropped;
+     - a view-ordering contract in clocks for `watch()` and `current_generation()`.
+     Then tell Lugh and Lir that `covers()` is how to compare a view with what they wrote.
    - **Power-cut cases for `dagda-migrate`** (the maintainer, 2026-11-19: after the cutover): route Dagda's raw syncs through
      Dannan's `storage::FileSystem` (`ledger/sealed_journal.cpp`, the durability domain and pool barriers,
      `heads/replica.cpp`, `heads/node_pack.cpp`, `store/local_store.cpp`, `migrate/migrate.cpp`,
@@ -71,6 +84,7 @@ unless the board says so (`claims_list`).
 ## Waiting on the maintainer
 
 - The Debian packages and lintian for 0.3.1 (they need Dannan 0.9.2's packages on a shared Pi), if wanted.
+- Whether to push `0.3.2` (main, develop and the tag), which Macha's next version builds on.
 - Whether to push the local tags `0.2.0` (held since 2026-11-14) and `0.3.0`.
 - Telling Lugh and Lir that 0.3.1 carries slice 1, while the slices pause.
 
