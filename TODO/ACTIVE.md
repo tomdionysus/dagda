@@ -5,13 +5,12 @@ Last updated: 2026-11-20. `COMPLETED.md` is the record; its newest handoff is "2
 
 ## Start here (a fresh session)
 
-**Tom, 2026-11-18, to Macha, Dannan and Dagda: "work together and focus on the Macha move to Dagda. Work on nothing
-else until this is done. Work autonomously until you're ready to do the cutover on macnessa and inverbeg."** Everything
-below serves that; the slices, Lugh and the rest wait.
+**Tom, 2026-11-20: the cutover is no longer Dagda's concern** (Decisions). Macha builds on 0.3.2 by version; the
+2026-11-18 rule of working on nothing else is lifted.
 
 1. Read "Where it stands" and "Next" here.
-2. Ask the Macha session (`Macha Server` in ListAgents) for any port failure it holds for Dagda. A Dagda-caused
-   failure comes first, test-first, gated on a Pi, the commit sent back.
+2. A failure the Macha session reports in a Dagda release still comes first, test-first, gated on a Pi, the commit
+   sent back.
 3. Then "Next" in order.
 
 Work goes on `develop` or a feature branch from it. `main`, `develop` and the `0.3.1` and `0.3.2` tags are pushed
@@ -61,7 +60,14 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. After the cutover, not before:
+2. **Louhi's asks** (Decisions, 2026-11-20), test first, in a release after 0.3.2. Its answers on the shape (read
+   view, page size and cursor, caught-up per space or per node, query or watch) are asked and go in a design note
+   before the cases:
+   - Context v2: read one key; list by key prefix with paging, over a head space.
+   - The caught-up signal: the view's clock against the clocks the active peers advertise.
+   - Dagda consumable by FetchContent beside a FetchContent'd Dannan 0.9.2 (today `find_package(dannan)` at
+     `CMakeLists.txt:32` needs Dannan's `OVERRIDE_FIND_PACKAGE`; `install(EXPORT)` as a subproject untested).
+3. No longer held for the cutover (Tom, 2026-11-20):
    - **Space follows Macha's short-file rules** (b0b037c), test first, with its
      `test_a_set_aside_head_leaves_the_view` as the model:
      - `cache_record` never moves the view off a record covering this node's latest commit onto one that does not;
@@ -155,6 +161,13 @@ no change in data, functionality, reliability and performance?", answered Yes wi
 nodes; the Macha session reviews, builds the port, and pauses it for a defect Dagda must fix with tests.
 
 ## Decisions
+
+**Tom, 2026-11-20, in this repository's session:** the cutover is no longer Dagda's concern: "Macha keys on version
+for cutover, it's no longer your problem"; "Cutover has ceased to be your concern." This supersedes 2026-11-18's
+"work on nothing else": Macha builds on 0.3.2 by version, and Dagda's queue and the hosted systems' asks are open
+again. On Louhi's asks (a new hosted system: its records in an every-node head space under `louhi/`, on 0.3.2):
+**a node is caught up when its view's clock covers the clocks its active peers advertise for the space**, not a
+timer or a flag. Context v2 reads and prefix listings, and FetchContent beside a fetched Dannan, are ordinary work.
 
 The rulings of 2026-11-13 and 2026-11-14 are in the design's "Ruled" section; those below stand where it does not
 supersede them.
