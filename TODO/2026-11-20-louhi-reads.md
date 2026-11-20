@@ -118,7 +118,53 @@ Consequence for the shape:
 - "Peers that do not open the space" means peers whose packed advert has no entry for it.
 - A head older than the peer's latest, because of the rate limit, is fine: covering it is enough (Lugh's point).
 
-Awaited: Lir, Kvasir, Mimir.
+**Kvasir** (2026-11-20; its storage design is still Proposed): yes, for one space, the head space holding every
+range's manifest.
+- Its correctness does not rest on it: rows are read through agreement. What it guards is destructive action:
+  releasing chunk claims, or dropping versions past the restore window, on a view that may lack a newer manifest.
+- Shape: per space, a query before any release and a notice to resume deferred releases.
+- Not caught up: it defers releases and folding's drops, and keeps serving.
+- Acceptor state's catch-up is its own, through agreement. The head-identity advert suits it.
+
+**Against a ruling: the advert.** The three-systems design, ruled by the maintainer on 2026-11-13 (item 4; "Adverts",
+`2026-11-13-three-systems-design.md:245-263`), says adverts are for slow facts. Every space but Macha's every-node
+one advertises nothing of its own. Its generation moves on a notify channel named for the space. The node advertises
+one slow key, `dagda.spaces`: a digest of which spaces it holds, not their generations.
+- A packed advert of heads changing every advert interval is a commit-driven change, even rate-limited. It is the
+  gossip-and-disk churn that ruling avoids, at a smaller rate.
+- Within the ruling, the caught-up comparison reads each peer's head from the space's notify channel (slice 2,
+  not built), or asks the peers that `dagda.spaces` names for their heads (the survey the exchange already makes),
+  not from an advert.
+- This goes to the maintainer before the shape is fixed.
+
+Awaited: Lir, Mimir.
+
+## 4. The durable AcceptorStore (the maintainer's ruling, relayed by Louhi; to confirm in this session)
+
+`dannan::agree::AcceptorStore` at 0.9.2 (`dannan/agree/agreement.h:41-96`, frozen for 0.9.x per Dannan), with
+`test::sim::Store`'s durable layer as the reference behaviour. The header's contract text is stricter in two places:
+a keep is one durable step, and done is never called inline from lengthy work on the caller's strand.
+
+What the users need:
+- **Louhi:** short names under `louhi/`, values under 1 KiB, no deltas; ancestry, so a retried change can tell.
+- **Kvasir:**
+  - Deltas applied to their exact base, with the new ballot, in one durable all-or-nothing step, answering
+    `Kept{kept, need_whole}`.
+  - Per slot, an append-only log of `whole(ballot, value)` or `delta(ballot, base ballot, delta)` records. Load
+    replays from the last whole record. A later accept may branch from an accepted-but-undecided tip, so every record
+    carries its ballot and base.
+  - The last 16 ballots of ancestry kept with each accepted state.
+  - Values up to 256 MiB, with deltas the common case and whole records rare.
+  - Group commit across slots and with promises, which are frequent and small; the answer always comes after the
+    sync.
+  - No order across slots.
+  - A slot's log trimmable later, to a manifest reference plus a tail: not to be ruled out.
+- **Lir, Lugh:** to ask.
+- **Mimir:** asked; it may hold its values its own way.
+
+Shape (to design after the answers): a node-local log per agreement space (D3 and D9's node-local form), records
+as Kvasir describes, with one group-commit fsync per batch across slots. That makes it slice 4's log in its
+node-local form, built for this first.
 
 ## 3. FetchContent beside a fetched Dannan
 
