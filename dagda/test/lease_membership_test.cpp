@@ -79,14 +79,14 @@ class RosterNodes final : public dannan::Nodes {
   std::vector<NodeRecord> placement(std::span<const uint8_t>, size_t, const dannan::placement::Scheme&, const std::string&) const override { return {}; }
   void advertise(const std::string&, dannan::net::Bytes) override {}
   void withdraw(const std::string&) override {}
-  // Dannan 0.9's pushed advert, which membership does not send.
+  // Dannan 0.9.0's pushed advert, which membership does not send.
   void advertise(const std::string&, std::optional<dannan::net::Bytes>, std::chrono::milliseconds, boost::asio::any_io_executor,
                  std::function<void(dannan::membership::Pushed)>) override {}
-  // Dannan 0.7's partition view and agreed roster, which membership does not read.
+  // Dannan 0.7.0's partition view and agreed roster, which membership does not read.
   dannan::membership::Partition partition() const override { return {}; }
   uint64_t watch_partition(boost::asio::any_io_executor, std::function<void(dannan::membership::Partition)>) override { return 0; }
   void unwatch_partition(uint64_t) override {}
-  // Dannan 0.8's advert watch, which membership does not read.
+  // Dannan 0.8.0's advert watch, which membership does not read.
   uint64_t watch_advert(const std::string&, std::chrono::milliseconds, boost::asio::any_io_executor, std::function<void(dannan::AdvertChange)>) override {
     return 0;
   }

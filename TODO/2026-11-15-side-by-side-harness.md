@@ -28,7 +28,7 @@ handling DHT storage AT LEAST AS WELL as Macha"), after the call-by-call map.
 - One Pi, one disk, one store at a time: Macha's, then Dagda's, then Macha's again (the second Macha run says how
   much a run varies). Cold (page cache dropped, `echo 3 > /proc/sys/vm/drop_caches`) and warm where Macha asks.
 - Nodes in one process, each on its own loopback port and state directory, one cluster key, bootstrap at node 0:
-  Macha's `BareNode`s over Dannan 0.5, Dagda's `Node`s over Dannan 0.8, configured alike (replicas 2, write_copies 1,
+  Macha's `BareNode`s over Dannan 0.5.3, Dagda's `Node`s over Dannan 0.8.0, configured alike (replicas 2, write_copies 1,
   extent 4 MiB, packing 1 MiB / 64 MiB packs, Macha's defaults for everything else; Dagda's facade values as the port
   sets them).
 - Two Pis only where a link matters (workload 3's remote reads and 7's repair): shaped with `tc netem` on the two Pis'

@@ -125,7 +125,7 @@ The tag sent to the Macha session, with `maintenance.idle_bandwidth_fraction`'s 
 ## 2026-11-14 (05:25Z): develop on Dannan 0.7.0 (`feature/dannan-070`, merged)
 
 Lir and Lugh run Dannan 0.7.0 and can link only one Dannan, so slice 1's tag must be on 0.7 for them to link Dagda
-(the Lir session, 2026-11-14). Macha stays on `0.1.5` (Dannan 0.6); a defect its port finds is fixed on a `0.1.x`
+(the Lir session, 2026-11-14). Macha stays on `0.1.5` (Dannan 0.6.0); a defect its port finds is fixed on a `0.1.x`
 branch from that tag. The move: `DAGDA_DANNAN_MINIMUM` 0.7.0, `libdannan-dev (>= 0.7.0), (<< 0.8~)`,
 `Version.BuiltAgainstTheDannanItLinks` at minor 7, the build notes; the library needed nothing, and three test doubles
 took 0.7's new pure virtuals (`Routes::bind_deferred`; `Nodes::partition`, `watch_partition`, `unwatch_partition`,
@@ -193,7 +193,7 @@ The maintainer (2026-11-13): Dagda serves Macha, Lugh and Lir as first-class. Th
 (`TODO/2026-11-13-three-systems-design.md`) was written with the Lir and Lugh sessions, reviewed by both and by
 Macha's for what Macha sees, and ruled by the maintainer point by point ("Ruled", 1 to 7): the log as a noun; a 10-minute
 tombstone window as QoS 2's stated limit; the slice order, slice 0 first; built-in merges and the advert aggregate;
-0.1.5 on Dannan 0.6; the x86-64 gate suspended and every build on the Pis; group commit for heads in slice 2.
+0.1.5 on Dannan 0.6.0; the x86-64 gate suspended and every build on the Pis; group commit for heads in slice 2.
 Raised with Dannan and taken there: the advert aggregate is Dagda's (adverts are for slow facts); the version rule
 (Dannan 0.6.0's ABI promise); CPU pacing moving into Dannan; a deferred reply (Dannan 0.7.0, accepted by the bench);
 the per-connection call path (Dannan's P5).
@@ -210,11 +210,11 @@ Slice 0 on the Mac (`feature/bench`; figures in the design, "What slice 0 has me
 
 No gate: measurement code only; `dagda_tests` is unchanged outside the disabled `BenchHeads.*` cases.
 
-## 2026-11-14: 0.1.5: on Dannan 0.6, packaged for Debian, clean under GCC Release
+## 2026-11-14: 0.1.5: on Dannan 0.6.0, packaged for Debian, clean under GCC Release
 
 The maintainer: the Debian packages; then Dannan's ABI promise (0.6.0, renumbered from 0.5.7 because 0.5.4 had already changed
 `libdannan.so.0.5`), which 0.1.5 builds on; the x86-64 gate suspended (2026-11-14: "use only the cluster").
-- Dannan 0.6 (`find_package(dannan 0.6.0 CONFIG)`, SameMinorVersion; `Version.BuiltAgainstTheDannanItLinks` pins
+- Dannan 0.6.0 (`find_package(dannan 0.6.0 CONFIG)`, SameMinorVersion; `Version.BuiltAgainstTheDannanItLinks` pins
   the minor, now 6). Packaged as Dannan is: `libdagda0.1.5` (SONAME the whole version), `libdagda-dev` (exactly its
   library, and `libdannan-dev (>= 0.6.0), (<< 0.7~)`), `dagda-tools` (`dagda-migrate` and its manual page);
   `tools/build-deb.sh`, `docs/packaging.md`.
@@ -3316,7 +3316,7 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
 
 ## Where it stands
 
-- **`0.1.5` is tagged and pushed** (main `c20f88c`): on Dannan 0.6, packaged for Debian, clean under GCC Release with
+- **`0.1.5` is tagged and pushed** (main `c20f88c`): on Dannan 0.6.0, packaged for Debian, clean under GCC Release with
   warnings as errors. It is what Macha's port builds on through its flag day (stage S, then 8a and 8b; 8b is empty for
   Macha). The capability report (`TODO/2026-11-10-dagda-capabilities.md`) is brought to it.
 - **Dagda serves Macha, Lugh and Lir as first-class** (the maintainer, 2026-11-13). The design is ruled: head spaces with
@@ -3350,7 +3350,7 @@ The plan this file held until 2026-11-12 is at the end of `COMPLETED.md`, "Archi
   collections for allocating task addresses. Nothing is asked of Dagda now.
 - **Slice 0 (the measurement) is done but for two figures that need later slices** (the channel cost per space,
   Lugh's leases as such). The bench is merged to develop (`d424572`, not pushed): `tools/dagda_bench.cpp` (the log
-  prototype; builds standalone against Dannan 0.7 for the deferred reply, `build/bench070/CMakeLists.txt`) and
+  prototype; builds standalone against Dannan 0.7.0 for the deferred reply, `build/bench070/CMakeLists.txt`) and
   `dagda/test/bench_heads_test.cpp` (`BenchHeads.*`, disabled). The figures, Mac and Pi, are in the design, "What
   slice 0 has measured". The verdict: the log passes the maintainer's PUBACK target on the Pi (p99 12.5 ms at a 10 ms tick, 23.5
   ms at 20 ms); heads fall short twice, a node's 85-95 commits a second (group commit) and a follower that falls
@@ -3436,9 +3436,9 @@ rates on a Pi and a disable is seen on another node within about a second.
    commit (`CMakeLists.txt`, `debian/control`, the migrate tool's version case, `README.md` with its status,
    `docs/packaging.md`, `tools/build-deb.sh`). On the maintainer's word: merge it to `main`, tag `0.2.0` annotated with the message
    below, build the Debian packages from the tag on a Pi with Dannan 0.7.0's packages (installing them there replaces
-   the Pi's Dannan 0.6 dev package: agree a Pi first), lintian, install and consume, update the capability report, push
+   the Pi's Dannan 0.6.0 dev package: agree a Pi first), lintian, install and consume, update the capability report, push
    `main`, `develop` and the tag, and tell Lugh and Lir the number. The tag's message:
-   "0.2.0: slice 1 on Dannan 0.7: node-local head spaces, the change notice, the installed cluster fixture; contract
+   "0.2.0: slice 1 on Dannan 0.7.0: node-local head spaces, the change notice, the installed cluster fixture; contract
    version 2 served beside version 1, frozen at 0.1.4". What it holds:
    - D13, the fixture installed (`90f2411`): seven fixture headers under `dagda/test/fixtures/`, `dagda::test_fixtures`,
      and `test/package/fixture_consumer.cpp`.

@@ -28,7 +28,7 @@
 // sends one call per log per tick, --group node one per replica node per tick carrying
 // every log's entries (the Lir session's proposal). --files per-log gives each log its
 // own segment, synced one by one; shared puts every log in one segment, one sync a group.
-// --deferred yes (built against Dannan 0.7, DAGDA_BENCH_DEFERRED) answers each append
+// --deferred yes (built against Dannan 0.7.0 or later, DAGDA_BENCH_DEFERRED) answers each append
 // from the committer after its sync, holding no worker while it waits; no, the default,
 // waits for the sync in the handler.
 //
@@ -138,7 +138,7 @@ Options parse(int argc, char** argv) {
     } else if (option == "--deferred") {
       out.deferred = value == "yes";
 #if !defined(DAGDA_BENCH_DEFERRED)
-      if (out.deferred) usage("--deferred needs a build against Dannan 0.7 (DAGDA_BENCH_DEFERRED)");
+      if (out.deferred) usage("--deferred needs a build against Dannan 0.7.0 or later (DAGDA_BENCH_DEFERRED)");
 #endif
     } else if (option == "--files") {
       if (value != "shared" && value != "per-log") usage("--files is shared or per-log");
