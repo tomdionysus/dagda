@@ -104,8 +104,11 @@ were asked.
 
 **Reshaped (the maintainer's reminder, 2026-11-20: no special-case code for a single node).** There is no "alone" branch. The
 check is one loop over the peers holding the space, and reports `{covers_all, peers_compared, behind[]}`. With none,
-`covers_all` is vacuously true and `peers_compared` is 0. A consumer that needs evidence from peers (Lugh) decides
-from the count. The text below is superseded where it says three-valued.
+`covers_all` (named `caught_up`) is vacuously true and `peers_compared` is 0.
+- Agreed by Louhi, Lugh and the group: consumers act only on `caught_up`, and `peers_compared` is evidence for
+  Status and audit, branched on by nobody.
+- Founding is Dannan's once-only act (T4), so two lone nodes cannot each found a cluster.
+- The text below is superseded where it says three-valued.
 
 Consequence for the shape: the answer becomes three-valued, `caught_up`, `behind` (naming peers and heads) and
 `alone` (no peer advertises the space). It carries the count of peers compared, and `alone` is never folded into
