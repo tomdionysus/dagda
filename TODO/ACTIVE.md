@@ -204,6 +204,14 @@ nodes; the Macha session reviews, builds the port, and pauses it for a defect Da
 
 ## Decisions
 
+**The maintainer, 2026-11-20, on the short file** (relayed by Macha, "this is a Dagda problem. Assist Dagda to diagnose and fix
+it"; then in this session): Dagda leads the diagnosis, and designs the fix and its failing tests. The Macha session
+makes every change in its own tree, and Dagda reviews the diff. `../macha` stays read-only here.
+- R1 reproduced it on a single fresh 0.94.2 node: r1/big/f0.bin at 95,420,416 of 100,663,296 bytes, a linear
+  history, no peer.
+- Hypothesis, unproven: a stale snapshot is adopted after a mid-write commit.
+- The decisive run, asked of Macha: R1's load on a fresh 0.95.1 node (b0b037c).
+
 **The maintainer, 2026-11-20, in this repository's session:** the cutover is no longer Dagda's concern: "Macha keys on version
 for cutover, it's no longer your problem"; "Cutover has ceased to be your concern." This supersedes 2026-11-18's
 "work on nothing else": Macha builds on 0.3.2 by version, and Dagda's queue and the hosted systems' asks are open
