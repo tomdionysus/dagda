@@ -42,7 +42,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             g++ clang clang-format cmake ninja-build git ca-certificates openssl \
-            libboost-dev libssl-dev libyaml-cpp-dev libgtest-dev libgmock-dev
+            libboost-dev libssl-dev libyaml-cpp-dev libgtest-dev libgmock-dev \
+            libclang-rt-19-dev  # clang's sanitizer runtimes, for TSan
 
       - uses: actions/checkout@v4
 
@@ -81,4 +82,4 @@ jobs:
           files: build-ci/coverage.info
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          fail_ci_if_error: true

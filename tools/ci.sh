@@ -38,7 +38,7 @@ dannan() { # build type, then extra cmake arguments
   cmake --install "$WORK/dannan-build"
 }
 
-dagda() { # build type, then extra cmake arguments
+dagda() { # build type, then extra cmake arguments; warnings are errors unless an argument says otherwise
   type=$1
   shift
   cmake -S "$ROOT" -B "$WORK/dagda" -G Ninja -DCMAKE_BUILD_TYPE="$type" -DDAGDA_BUILD_TESTING=ON \
@@ -71,7 +71,9 @@ case "$STEP" in
   asan)
     flags="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g"
     dannan RelWithDebInfo
-    dagda RelWithDebInfo "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined" \
+    # GCC 14's std::regex raises -Wmaybe-uninitialized under the sanitizers (the
+    # 14 known warnings of every ASan gate), so warnings are not errors here.
+    dagda RelWithDebInfo -DDAGDA_WARNINGS_AS_ERRORS=OFF "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined" \
       "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined"
     suite env ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
     ;;
