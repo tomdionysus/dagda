@@ -31,7 +31,7 @@ Each needed by two or more consumers. All ruled or confirmed for Dagda on 2026-1
 | Consumable by FetchContent, library only | Louhi, Lugh | Next release (`DAGDA_BUILD_TOOLS`) |
 | Leases in a head space (D5) | Lir, Lugh, Louhi; Lir's will needs it | Slice 3; not yet scheduled |
 | A replicated or node-local log (D9) | Lir (inflight, queues), Lugh (audit), Kvasir and Mimir (acceptor logs) | The AcceptorStore is its first node-local form |
-| An action once a key's time ends | Lir (will). Louhi: no (node-local timers, or agreement on its placement registers, settle every lapse). Lugh: asked | Dagda's on a lease, at least once (Dannan and Dagda's joint recommendation to the maintainer). With Lir alone so far, it meets the two-project rule only if Lugh needs it |
+| An action once a key's time ends | Lir (will). Louhi: no (node-local timers, or agreement on its placement registers, settle every lapse). Lugh: no (every expiry is checked on read; an idempotent sweep of lugh/secrets would use it if built, but is not a need) | Lir alone: it fails the two-project rule. So it is Lir's own, built on Dagda's head-backed leases (D5), which Lir, Lugh and Louhi need. Dannan and Dagda's joint recommendation to the maintainer said Dagda's; this corrects it |
 
 Nothing in this table was asked of Dannan that Dagda should hold instead, or the reverse, except the timed action.
 Dannan and Dagda agree that it is Dagda's: it is durable state, and Dannan stores nothing.
