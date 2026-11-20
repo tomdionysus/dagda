@@ -63,7 +63,10 @@ unless the board says so (`claims_list`).
 2. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
    - the register map (D6);
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1;
-   - the AcceptorStore;
+   - the AcceptorStore: durable, beside Dannan's `agree::MemoryStore` under its interface. Kvasir waits on it
+     (2026-11-20): its commit path runs on `MemoryStore` meanwhile, and swaps to Dagda's store and puts its
+     manifests on the register map once it lands. Send Kvasir the design and the date when they exist;
+     Kvasir pins the release that carries it;
    - the caught-up signal;
    - reads and listings;
    - FetchContent;
