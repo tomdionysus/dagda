@@ -523,12 +523,11 @@ struct DistributedStore::RepairLanded {
 };
 
 // What a landing in repair's window leaves to do: raise the storage event (the window
-// has just drained to half or less, once a drain), and teach the link's estimate a
-// sample of what the window moved.
+// has just drained to half or less, once a drain). The link's sample is taught inside
+// the landing itself (RepairState::teach), so a drain never sees the window empty before
+// the estimate has what the window moved.
 struct DistributedStore::RepairLanding {
   bool drained = false;
-  uint64_t sample_bytes = 0;
-  std::chrono::steady_clock::duration sample_time{};
 };
 
 // Repair's place and counters. The cursors and lists belong to the one
@@ -610,6 +609,10 @@ struct DistributedStore::RepairState {
   // these instead, when the window drains and at each window's worth moved.
   std::chrono::steady_clock::time_point span_start DANNAN_GUARDED_BY(window_mutex){};
   uint64_t span_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
+  // Teaches the link's estimate a sample: called under window_mutex, in the same step that
+  // lowers in_flight, so whoever sees the window drained sees the sample taught. It must
+  // take no lock (the store's note_network touches one atomic). Set once, before repair.
+  std::function<void(uint64_t, std::chrono::steady_clock::duration)> teach;
   // The owner's: transfers started, objects with one in flight (not started again
   // until it lands), and copies that did not arrive (sent again first; the pass is not
   // complete while there is one).
@@ -652,8 +655,7 @@ struct DistributedStore::RepairState {
       span_bytes += moved;
       if (span_bytes && (span_bytes >= std::max(window, extent) || !in_flight)) {
         const auto now = std::chrono::steady_clock::now();
-        out.sample_bytes = span_bytes;
-        out.sample_time = now - span_start;
+        if (teach) teach(span_bytes, now - span_start);
         span_start = now;
         span_bytes = 0;
       }
@@ -718,6 +720,7 @@ DistributedStore::DistributedStore(dannan::Context& context, Stores stores, Dist
       _repair(std::make_unique<RepairState>()),
       _shared(std::make_shared<Shared>()) {
   if (!_options.replication) throw std::invalid_argument("the store needs at least one replica");
+  _repair->teach = [this](uint64_t bytes, std::chrono::steady_clock::duration elapsed) { note_network(bytes, elapsed); };
   {
     WriteLock lock(_shared->alive);
     _shared->store = this;
@@ -3442,7 +3445,6 @@ void DistributedStore::finish_repair_pass(RepairResult& result) {
 }
 
 void DistributedStore::repair_landed(const RepairLanding& landing) {
-  if (landing.sample_bytes) note_network(landing.sample_bytes, landing.sample_time);
   if (landing.drained) _context.events().notify(_storage_event);
 }
 
