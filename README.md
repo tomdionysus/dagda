@@ -36,7 +36,7 @@ passed, and a read that finds nothing succeeds with an empty value.
 Dagda needs a C++20 compiler, CMake 3.24 or later, Boost 1.83 or newer (Asio), OpenSSL 3,
 and an installed Dannan of the pinned minor (`find_package(dannan 0.9.2 CONFIG)`);
 GoogleTest for the tests. Dannan is packaged for Debian 13; see
-[its README](https://github.com/tomdionysus/dannan#install-and-link).
+[its README](https://github.com/tomdionysus/dannan#install).
 
 From a release tag:
 
