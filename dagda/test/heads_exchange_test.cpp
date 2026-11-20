@@ -139,6 +139,23 @@ bool sees(ClusterNode& node, const std::string& key, std::chrono::milliseconds w
   return wait_until([&] { return holds(node, key); }, within);
 }
 
+// Where `node`'s convergence on `peer`'s commits stands, for a case it did not reach: whether it
+// heard of the peer's generation, whether a run is due or ran, and what its exchange logged.
+std::string convergence_of(ClusterNode& node, ClusterNode& peer) {
+  const auto demand = exchange_on(node).demand();
+  std::string out = "known_generation " + std::to_string(exchange_on(node).known_generation()) + ", remote_generation " +
+                    std::to_string(exchange_on(node).remote_generation()) + ", committed " + std::to_string(replica_on(node).committed_generation()) +
+                    ", peer committed " + std::to_string(replica_on(peer).committed_generation()) + ", peer announcements made " +
+                    std::to_string(exchange_on(peer).announcements()) + "; demand: events " + std::to_string(demand.events_received) + ", runs " +
+                    std::to_string(demand.runs_scheduled) + " scheduled / " + std::to_string(demand.runs_completed) + " completed, epochs " +
+                    std::to_string(demand.requested_epoch) + " requested / " + std::to_string(demand.completed_epoch) + " completed, scheduled now " +
+                    (demand.scheduled ? "yes" : "no") + "\n";
+  for (const auto& line : node.log().lines())
+    if (line.find("metadata") != std::string::npos || line.find("convergence") != std::string::npos || line.find("repair") != std::string::npos)
+      out += "  " + line + "\n";
+  return out;
+}
+
 bool one_shared_head(ClusterNode& a, ClusterNode& b, std::chrono::milliseconds within = 30s) {
   return wait_until(
       [&] {
@@ -879,7 +896,7 @@ TEST(HeadsExchange, ANodeTruncatesItsHistoryWithItsPeerAwayAndThePeerConverges) 
   ASSERT_TRUE(writes(a, "a"));
   ASSERT_TRUE(sees(b, "a"));
   ASSERT_TRUE(writes(b, "b"));
-  ASSERT_TRUE(sees(a, "b"));
+  ASSERT_TRUE(sees(a, "b")) << convergence_of(a, b);
   ASSERT_TRUE(one_shared_head(a, b));
   const auto before = replica_on(a).accepted_heads().front().hash;
   const auto local_key = std::make_shared<const domain::StorageKey>(b.node_local_key());
