@@ -84,7 +84,9 @@ unless the board says so (`claims_list`).
    - keep owning what Macha aliases.
 
    D6's stamp kind is the one open choice (Tom's Q2, hlc or Lamport); for hlc, Dannan's `HlcClock::admit` (a stamp
-   with `merged=false` is refused, never applied).
+   with `merged=false` is refused, never applied). That arrives in Dannan's next minor, which has not started: Tom
+   told Dannan, "Stop here until I have answered all the issues for other agents." So D6 is built against Dannan
+   0.9.2 with the stamp behind one seam, and the hlc form waits for that minor.
 
    Audits: `TODO/2026-11-20-duplication-audit.md`, `TODO/2026-11-20-special-roles-audit.md`.
    `feature/dannan-reuse` (`97a079e`): Dannan's CPU pacing and RetryState replace Dagda's copies.
