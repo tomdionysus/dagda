@@ -3,6 +3,39 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-19 (evening): 0.3.1 tagged and pushed; dagda-migrate at the disk's rate
+
+The cutover was aborted on `dagda-migrate`'s speed (65 MiB/s on live-a, four passes, about 4 days down). The maintainer chose
+B: the migration moves records from their headers, and the proof stays two independent full manifest passes at the
+disk's rate. Built on `feature/migrate-speed` (`TODO/2026-11-19-migrate-speed.md`, `docs/migration.md` "How a run
+moves records (0.3.1)"):
+- `migrate/pipeline.h`, an ordered pipeline; the manifest pass on it, reading loose objects in the device's order
+  (`migrate/disk_order.h`: FIEMAP after a sync, else inode), authenticating on the workers, writing the same manifest
+  byte for byte, journalled beside the partial so `--resume` holds.
+- The migration from headers: the progress record (`<state>/migration-progress`), the resume window read whole, the
+  first record of each batch read whole, the file at the record's point checked, `--read-every-record`.
+- Found on the way: an order taken before a fresh file's blocks were placed moved between runs (fixed and guarded);
+  a 1-in-256 flake in `MigrateCrash.APackRecordWhoseWriteWasCutShortIsFinished` (the cut can leave the bytes whole);
+  `StoreRepair.ServedRequestsKeepForegroundHeadroomAndControlOutsideCredit` failing under sanitizers because the
+  device pressure gate rightly turns away its last speculative validation on a device a sanitizer slows (316-482%
+  of the expected service time, shown under TSan); the case now turns that gate off and says why when refused.
+- The Macha session's disk figures decided the order: per-file cost dominates; inode order no help; device order
+  with the inodes read first about 125 MiB/s whole and about 6 ms a file for a header (live-a 1.54 M loose
+  objects, live-b 0.90 M). Expected: about 29 h for live-a, 16 h for live-b, three passes.
+
+Feature gate on node-d at `f5c52f8`: 1172 ran, 1169 passed, 3 skipped, 0 failed, 0 warnings. **0.3.1** (the maintainer: cut it,
+then "we will push"): `release/0.3.1` = develop `fb48fce` + `5602d63 Version 0.3.1` + the headroom case's fix
+(`cef8015`, `80544a6`); merged to main `2793458`, tagged `0.3.1` there, main merged to develop `78ec24a`; **pushed:
+main, develop and the 0.3.1 tag** (0.2.0 and 0.3.0 stay local). Gate (`build/pi-release031.sh`, Dannan 0.9.2 from its
+tag):
+- node-d, GCC 14 Release, warnings as errors: **1172 ran, 1169 passed, 3 skipped, 0 failed, 0 warnings**;
+  `dagda-migrate --version` "0.3.1 (dannan 0.9.2)".
+- node-a, clang 19, Dannan and Dagda under TSan, at the tagged tree: **1170 ran, 1167 passed, 3 skipped, 0 failed,
+  no report**; the two past the deadlock detector, 2 passed. The headroom case 20 of 20 alone.
+- node-d, ASan and UBSan, at `5602d63` (before the headroom case's fix): **no report**; 1172 ran, 1168 passed, 3
+  skipped, 1 failed, the headroom case at the same validation (its reason not printed by that tree).
+The tag sent to the Macha session, with `maintenance.idle_bandwidth_fraction`'s changed meaning for its release notes.
+
 ## 2026-11-19: the read asks the active peers; 0.3.0 cut for the deploy
 
 - **The read fix** (`b997ba1`, the maintainer's choice over a test-only fix in Macha). Macha's

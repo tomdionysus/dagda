@@ -13,10 +13,10 @@
 #   sudo apt install dpkg-dev && sudo apt build-dep ./
 #   tools/build-deb.sh [dpkg-buildpackage options]
 #
-# The version comes from `git describe`: the tag 0.3.1 gives 0.3.1, and a build
-# three commits later 0.3.1+git3.gabc1234, which sorts after 0.3.1 and before
-# 0.3.2; where no tag is reachable (develop), the tree's version and the commit,
-# 0.3.1+git.gabc1234. Uncommitted changes add .dirty. DEB_BUILD_OPTIONS=nocheck skips the
+# The version comes from `git describe`: the tag 0.3.2 gives 0.3.2, and a build
+# three commits later 0.3.2+git3.gabc1234, which sorts after 0.3.2 and before
+# 0.3.3; where no tag is reachable (develop), the tree's version and the commit,
+# 0.3.2+git.gabc1234. Uncommitted changes add .dirty. DEB_BUILD_OPTIONS=nocheck skips the
 # tests. debian/control names the library's package for the CMake version.
 
 set -eu
