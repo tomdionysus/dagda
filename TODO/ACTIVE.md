@@ -60,11 +60,14 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **Louhi's asks** (Decisions, 2026-11-20), test first, in a release after 0.3.2. Its answers and the shapes are in
-   `TODO/2026-11-20-louhi-reads.md`; open for the maintainer there: the caught-up advert carries the head identity, not the
-   clock (the 1024-byte advert bound):
+2. **The next release** (Decisions, 2026-11-20), test first. The shapes and every system's answers are in
+   `TODO/2026-11-20-louhi-reads.md`:
+   - The durable AcceptorStore: a node-local log per agreement space, whole or delta records, group commit (section
+     4).
+   - The register map (D6), and its two additions only if Lir or Lugh needs one.
    - Context v2: read one key; list by key prefix with paging, over a head space.
-   - The caught-up signal: the view's clock against the clocks the active peers advertise.
+   - The caught-up signal: per space, a query and a notice. It is three-valued: caught up, behind and alone, with
+     the count compared. Peers' heads come from a survey of the peers holding the space.
    - Dagda consumable by FetchContent beside a FetchContent'd Dannan 0.9.2 (today `find_package(dannan)` at
      `CMakeLists.txt:32` needs Dannan's `OVERRIDE_FIND_PACKAGE`; `install(EXPORT)` as a subproject untested).
 3. **Lir's two needs** (asked 2026-11-20; Lir waits and builds no stand-in): queuing for an offline session, one
@@ -171,6 +174,16 @@ for cutover, it's no longer your problem"; "Cutover has ceased to be your concer
 again. On Louhi's asks (a new hosted system: its records in an every-node head space under `louhi/`, on 0.3.2):
 **a node is caught up when its view's clock covers the clocks its active peers advertise for the space**, not a
 timer or a flag. Context v2 reads and prefix listings, and FetchContent beside a fetched Dannan, are ordinary work.
+Then, the same day, three answers:
+- **The durable AcceptorStore** for `dannan::agree` goes in Dagda's next release, as relayed by Louhi.
+- **Peers' heads for caught up come from a survey** of the peers holding the space, not an advert. The ruling of
+  2026-11-13 stands: adverts carry slow facts only.
+- **A feature is built if Louhi and at least one other project need it.** In Louhi's session: "Dagda only does
+  this if other projects that use Dagda can use this feature."
+  - So the ruled register map (D6) comes into the next release: Lir's retained, Lugh's JWKS, the catalogue and the
+    leases use it.
+  - Its two possible additions, an owner's ordering stamp and a per-record value-merge hook, go in only if Lir or
+    Lugh needs one (asked).
 
 The rulings of 2026-11-13 and 2026-11-14 are in the design's "Ruled" section; those below stand where it does not
 supersede them.
