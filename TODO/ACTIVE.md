@@ -70,6 +70,12 @@ unless the board says so (`claims_list`).
    - then D-5 (parallel head replication, a durable write's bound past the slowest member) and D-2's interim
      (tombstone maturity on Dannan's hybrid clock), both released by the group.
 
+   **Coverage** (Tom, 2026-11-20, to the stack: "You will maintain ~100% code coverage on all code").
+   - First figure, GitHub CI at 9300f62, library only: **93.7% of lines (20,110 of 21,451), 96.3% of functions
+     (2,431 of 2,525)**. Uploaded to Codecov.
+   - Backlog: the 1,341 uncovered lines, by file from Codecov, closed with cases written from the design. Each new
+     feature lands with its own code covered.
+
    **The stack's converged plan** (2026-11-20, agreed by Dagda): Dagda's full list is "The converged plan" ->
    "Dagda" in `../lir-develop-cluster/TODO/2026-11-20-cluster-stack-placement.md`, items 1-13. Besides the above,
    it holds:
