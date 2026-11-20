@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/tomdionysus/dagda/actions/workflows/ci.yml/badge.svg)](https://github.com/tomdionysus/dagda/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/tag/tomdionysus/dagda?sort=semver&label=release)](https://github.com/tomdionysus/dagda/tags)
+[![codecov](https://codecov.io/gh/tomdionysus/dagda/graph/badge.svg)](https://codecov.io/gh/tomdionysus/dagda)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 Dagda is the store for a cluster of trusted machines. It is a C++20 library that keeps
