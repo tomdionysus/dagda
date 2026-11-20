@@ -115,11 +115,15 @@ TEST(LedgerSealedJournal, ADamagedOrRefusedFrameEndsTheReplayThere) {
     second_frame_end = journal.bytes();
     journal.append(frame_text(2));
   }
-  // A flipped byte in the third frame's ciphertext: two frames survive.
+  // A flipped byte in the third frame's ciphertext: two frames survive. Flipped, not set:
+  // the byte is random and is the set value once in 256 runs, which left the frame whole.
   {
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
-    file.seekp(static_cast<std::streamoff>(std::filesystem::file_size(path) - 1));
-    file.put('\x55');
+    const auto last = static_cast<std::streamoff>(std::filesystem::file_size(path) - 1);
+    file.seekg(last);
+    const auto byte = static_cast<char>(file.get() ^ 0x01);
+    file.seekp(last);
+    file.put(byte);
   }
   const auto sink = std::make_shared<test::RecordingSink>();
   SealedJournal damaged(path, key_of(3), test_aad, 1U << 20, test::logger_into(sink));

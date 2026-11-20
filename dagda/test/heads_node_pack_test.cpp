@@ -102,9 +102,13 @@ TEST(HeadsNodePack, DamageBeforeTheEndIsRefused) {
   }
   const auto path = NodePack::file(dir.path());
   {
+    // Flipped, not set: byte 10 is in the first frame's random nonce, which is any given
+    // value once in 256 runs.
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    file.seekg(10);
+    const auto byte = static_cast<char>(file.get() ^ 0x01);
     file.seekp(10);
-    file.put('\x5a');
+    file.put(byte);
   }
   EXPECT_THROW(NodePack(dir.path(), key_of(7), aad(), test::quiet_logger()), std::runtime_error);
 }
