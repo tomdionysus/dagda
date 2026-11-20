@@ -146,6 +146,64 @@ C. Constraints:
   - TOTP and rotation: decided, through agreement.
 - Never blocks: token verification and the sign-in hot path.
 
+## Kvasir (2026-11-20; pin 0.3.2 on Dannan 0.9.2; a leaderless cluster that may be one node)
+
+**Changed:** a SQL commit is made durable by agreement on the range's register, with the durable AcceptorStore
+as its log, from step 2b. The D6 manifest is only folding's output. A manifest commit per transaction would have
+needed one writer per range, which is single-node code. So 2b needs the AcceptorStore and D6.
+
+A. Nothing linked yet.
+
+A'. At 2b:
+- `Node` and `NodeOptions`;
+- `Context` Objects (write at persisted, read, remove), `Claims::retain` (restore window, step 5), Heads (open,
+  read local, mutate, watch);
+- `SpaceSpec`/`Policy` every-node;
+- D6 (`RegisterMap::spec`, put and remove with expect, get, get_register, list, changed, refs);
+- the durable AcceptorStore;
+- the Cluster fixture.
+
+B. Needs:
+- **D6.**
+  - Space "kvasir/manifests", key `manifest/<table>/<range>` (never reused, so the window policy is fine), value a
+    header of a few KiB.
+  - **refs up to 1,024 per register**: about 4 snapshot chunks plus fewer than 256 unfolded deltas.
+  - put with expect by the range's folder, several ranges per commit; list at start; changed on notices. HLC only.
+  - Done when a fold's crash between chunks and manifest leaves the old manifest, with the new chunks collected, and
+    a stale folder's put is refused.
+  - **Reconcile:** refs are a register's child records, not its inline bytes. Above the tree's
+    `child_inline_max` (8) they go to a child sequence of their own (`TreeChildWriter`), so a leaf stays small
+    however many refs a register names. The bound is stated as **4,096 refs per register**, separate from the
+    64 KiB value bound. To add to D6's design.
+- **Durable AcceptorStore**, values held, a level per agreement space; its recorded needs stand.
+  - Done when, on SimNodes with SimDisk, a kill mid group commit loses no acknowledged keep, load replays to the
+    tip, and a restored older segment refuses to open.
+- **Caught-up** on "kvasir/manifests": a query with a deadline and a watch; it acts on caught_up only, deferring
+  releases and drops.
+- **FetchContent** with Dannan fetched without `OVERRIDE_FIND_PACKAGE`: "if `TARGET dannan::dannan` exists, use
+  it", with tools, testing and install off as a subproject. That is section 3's plan.
+  - Done when Kvasir's GitHub CI configures and links.
+- **Retire and drain** (step 4): drain's start as a notice, so Kvasir moves ranges off first.
+- **Store health** into readiness: "Dagda store ready".
+- **A set-aside manifest head** reported, never dropped.
+- **Group commit:** one fsync per batch across slots and promises, batching 10-20 ms per range.
+- **D1/D2:** chunk copies per the table's replica count (ruling 29), and the manifest space at k-level before old
+  chunks are released (step 4).
+- **N1, objects at persisted in a batch with one sync.**
+  - **Reconcile:** this exists in contract v2. `Objects::put_deferred_here(id, bytes)` writes each object here
+    with its sync deferred, and `Tickets::wait(tickets, deadline)` makes them all durable with one barrier per
+    place. A fold writes its chunks deferred, waits once, then puts the manifest.
+
+Not used: store/*, Leases, D5, Tickets beyond N1, Control, Devices, Activity, D9 (maybe at step 6), Macha's items,
+the catalogue.
+
+C. Constraints:
+- Calls from a range's strand; completions posted; nothing blocks an io thread.
+- A keep answers within the group window plus one fsync.
+- Objects up to 16 MiB; acceptor values up to 256 MiB, mostly KiB-to-MiB deltas; about 16,000 ranges a TB;
+  1 to dozens of nodes.
+- Replicated means a majority of acceptor keeps, through agreement, not D2.
+
 ## Awaited
 
-Macha, Kvasir, Lir.
+Macha, Lir.

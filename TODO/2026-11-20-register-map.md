@@ -142,6 +142,11 @@ Settled by the goals. Each one, if left out, would make a user keep its own copy
     CONTROL object and a Dannan message (128 MiB).
   - Anything larger is a Dagda object named in the register (next point).
 
+**Refs bound (Kvasir).** A register's refs are child records, not inline bytes. Above the tree's
+`child_inline_max` they live in a child sequence of their own, so the leaf stays small. The bound is **4,096 refs
+per register**, separate from the 64 KiB value bound. Case 21: a register naming 4,096 refs round-trips, and its
+leaf is under the inline size.
+
 **Objects named by a register (Lir 3).**
 - A register may name objects (`refs`, ids, alongside its bytes). A commit claims them under its dot (`Introduced`).
 - The space's reachability (`ReachabilityProvider`) names every object the current head's registers refer to. So
