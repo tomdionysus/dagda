@@ -220,6 +220,15 @@ makes every change in its own tree, and Dagda reviews the diff. `../macha` stays
   history, no peer.
 - Hypothesis, unproven: a stale snapshot is adopted after a mid-write commit.
 - The decisive run, asked of Macha: R1's load on a fresh 0.95.1 node (b0b037c).
+- **Result: a second mechanism.** Round 8 on 0.95.1 committed r1/big/f18.bin short (99,090,432 of 100,663,296), and
+  b0b037c's no-path line fired.
+  - Reading (Macha's, agreed here): the reverse race. `replay_data_quantum`'s commit moves the view to G2, and the
+    refresh adopts it during `journal_data_published`'s fsync, before `base = G2`. `adopt_entry` sees the content
+    differ on a dirty inode and detaches it. The view covers `published_dot`, so b0b037c lets it through.
+  - Fix shape (Dagda's choice): an inode with a data publication in flight is never replaced by an adoption; it is
+    deferred to the next refresh. b0b037c's guard is kept.
+  - Asked of Macha: a second seam between `commit()` and `base` for a deterministic failing case, the f18 frame trace
+    from r8's evidence, then nine single-node rounds on the fix.
 
 **Tom, 2026-11-20, in this repository's session:** the cutover is no longer Dagda's concern: "Macha keys on version
 for cutover, it's no longer your problem"; "Cutover has ceased to be your concern." This supersedes 2026-11-18's
