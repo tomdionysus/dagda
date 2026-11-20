@@ -14,14 +14,14 @@ below serves that; the slices, Lugh and the rest wait.
    failure comes first, test-first, gated on a Pi, the commit sent back.
 3. Then "Next" in order.
 
-Work goes on `develop` or a feature branch from it. `main`, `develop` and the `0.3.1` tag were pushed (the maintainer,
-2026-11-19); `0.3.2` and the merges around it, and the tags `0.2.0` and `0.3.0`, are local only. Push only on the maintainer's "push". Nothing is running on the Pis
+Work goes on `develop` or a feature branch from it. `main`, `develop` and the `0.3.1` and `0.3.2` tags are pushed
+(the maintainer, 2026-11-19 and 2026-11-20); the tags `0.2.0` and `0.3.0` are local only. Push only on the maintainer's "push". Nothing is running on the Pis
 unless the board says so (`claims_list`).
 
 ## Where it stands
 
 - **0.3.2 is the release for the cutover** (the maintainer, 2026-11-19 night: "both you and macha should cut a new version, and
-  restart the cutover plan from there"). Tagged on main `a24db42`, not pushed. It is 0.3.1 plus `Space::covers(view,
+  restart the cutover plan from there"). Tagged on main `a24db42`; pushed (the maintainer, 2026-11-20). It is 0.3.1 plus `Space::covers(view,
   dot)`. Gate in `COMPLETED.md`: plain 1170 of 1173, 0 failed; ASan and TSan 0 failed, no report. The cutover plan
   restarts from Macha's next version on it: the rebuild, then rehearsals R1 to R4 and the two-writer round.
 - **The short file** (`COMPLETED.md`, 2026-11-19 night): Macha's cached view kept a peer's head over this node's
@@ -84,7 +84,6 @@ unless the board says so (`claims_list`).
 ## Waiting on the maintainer
 
 - The Debian packages and lintian for 0.3.1 (they need Dannan 0.9.2's packages on a shared Pi), if wanted.
-- Whether to push `0.3.2` (main, develop and the tag), which Macha's next version builds on.
 - Whether to push the local tags `0.2.0` (held since 2026-11-14) and `0.3.0`.
 - Telling Lugh and Lir that 0.3.1 carries slice 1, while the slices pause.
 

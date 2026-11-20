@@ -31,8 +31,8 @@ Dagda 0.3.2 (the maintainer: "both you and macha should cut a new version, and r
 - Shown failing first on node-b (no member `covers`). No behaviour, wire, layout or migration change.
 - `feature/view-covers` `64f81f0` merged to develop `9c5f3c4`; `release/0.3.2` with `40fb9fb Version 0.3.2`. My first
   version commit dropped a space in `project()`, and the gate stopped at configure; amended before tagging.
-- Merged to main `a24db42`, tagged `0.3.2` there (tree identical to `40fb9fb`), main merged to develop `2bad56d`. Not
-  pushed.
+- Merged to main `a24db42`, tagged `0.3.2` there (tree identical to `40fb9fb`), main merged to develop `2bad56d`.
+  **Pushed** (the maintainer, 2026-11-20: "Yes, push and tag, inform Macha"): main, develop and the `0.3.2` tag.
 
 Gate (`build/pi-release032.sh`, Dannan 0.9.2 from its tag, Macha's fixtures):
 - node-b, GCC 14 Release, warnings as errors: **1173 ran, 1170 passed, 3 skipped, 0 failed, 0 warnings**;
