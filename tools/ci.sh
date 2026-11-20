@@ -106,9 +106,11 @@ case "$STEP" in
     # The two cases that hold more locks than the deadlock detector tracks run
     # alone with it off, as the release gates do.
     two="DistributedStore.AControlGraphLargerThanTheConnectionBudgetStillPublishes:StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime"
-    # tools/tsan.supp: proven false positives only, each with its reason.
-    suite env TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:suppressions=$ROOT/tools/tsan.supp" sh -c "./dagda_tests --gtest_filter=-$two"
-    suite env TSAN_OPTIONS="halt_on_error=1:detect_deadlocks=0:suppressions=$ROOT/tools/tsan.supp" sh -c "./dagda_tests --gtest_filter=$two"
+    # Dannan's suppressions, the stack's one list (proven false positives, each with its
+    # reason): Boost.Asio's executor reference count, whose acquire is a fence TSan cannot see.
+    supp="$WORK/dannan-src/dannan/test/tsan-suppressions.txt"
+    suite env TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:suppressions=$supp" sh -c "./dagda_tests --gtest_filter=-$two"
+    suite env TSAN_OPTIONS="halt_on_error=1:detect_deadlocks=0:suppressions=$supp" sh -c "./dagda_tests --gtest_filter=$two"
     ;;
   tidy)
     # Argument order is unspecified, so a value moved into one argument and read in
