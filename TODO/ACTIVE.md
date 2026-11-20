@@ -119,7 +119,9 @@ unless the board says so (`claims_list`).
          decided. **Agreed with Dannan for 0.11.0** (2026-11-20): Durability carries AckLevel for the four
          shared names, parsed and printed through `ack_level_name`/`parse_ack_level`; durable is Dagda's own,
          never under an AckLevel name; decided only on writes through agreement (heads, registers), never for
-         objects. Whether a store may offer a subset is Kvasir's standard's: asked of Kvasir.
+         objects. Kvasir (2026-11-20): a store may offer a subset; a name offered keeps its meaning exactly; a
+         level not offered is refused naming it (Fault::invalid), never served as another; a structural reason
+         is said in the refusal and the docs ("objects have no agreement step: ask for replicated").
        - `Completion<T>`/`Outcome<T>`/`Fault` against Dagda's completions and evidence: Dagda's matching minor.
          **Agreed with Dannan for 0.11.0:** `Outcome::failure(Fault, message, T evidence)` keeps the evidence
          beside the fault (a failure's value is evidence, never a result); Fault gains `cancelled` (last, the
