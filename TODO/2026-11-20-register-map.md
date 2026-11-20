@@ -64,6 +64,17 @@ Per space, chosen at open:
   order. It prevents stale overwrites through one node. It is not a lock, and anything that must be unique
   cluster-wide stays on agreement registers (Lugh's uid allocation, Louhi's revisions).
 
+## HLC admission (Dannan's item 6, agreed 2026-11-20)
+
+- `HlcClock::admit(stamp, peer)` is applied when a peer's commit is offered for acceptance, never inside the merge.
+  The merge must stay a pure function of its two heads, and admit depends on this node's clock.
+- A commit carrying any stamp admitted with `merged=false` is refused whole, with the reason in the evidence and a
+  Status line, and never enters the head set. It is retried when the sender's offset is back in bounds.
+- A node whose own clock is out of bounds: `hlc().now()` throws, so a mutation is refused with that reason, never
+  a wait. The collector treats the throw as "not matured" (D-2).
+- Case 22: a commit stamped beyond the bound is refused at acceptance, and the heads of the nodes that accepted
+  everything else still fold to the same commit.
+
 ## The interface (for the cases)
 
 - `RegisterMap::spec(name, options)` gives a `SpaceSpec` with the codec, the merge and the tree.
