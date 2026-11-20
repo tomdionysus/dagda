@@ -98,9 +98,12 @@ unless the board says so (`claims_list`).
      the count compared. Peers' heads come from a survey of the peers holding the space.
    - Dagda consumable by FetchContent beside a FetchContent'd Dannan 0.9.2 (today `find_package(dannan)` at
      `CMakeLists.txt:32` needs Dannan's `OVERRIDE_FIND_PACKAGE`; `install(EXPORT)` as a subproject untested).
-3. **Lir's two needs** (asked 2026-11-20; Lir waits and builds no stand-in): queuing for an offline session, one
-   appender per message, against D9's log; and acting once cluster-wide when a key's time ends (a will at session
-   expiry), Dagda's notice at expiry or Dannan's cross-node timer, settled with the Dannan session, then to the maintainer.
+3. **Lir's two needs**, answered 2026-11-20:
+   - **The offline queue** is served by D9 as designed: the publisher matches the filters and appends under its own
+     dot, any node may append, and a second append of a dot is the same entry. One change: a log's identity is
+     (stream key, dot), so one message lands once in each matching session's stream, and acks and retire name
+     (stream, dot). It is folded into D9 when D9 is built; Lir to agree.
+   - **The will** is Lir's own, on Dagda's head-backed leases (D5): no second project needs it.
 4. No longer held for the cutover (the maintainer, 2026-11-20):
    - **Space follows Macha's short-file rules** (b0b037c), test first, with its
      `test_a_set_aside_head_leaves_the_view` as the model:
