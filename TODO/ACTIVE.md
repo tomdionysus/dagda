@@ -60,8 +60,20 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **The next release** (Decisions, 2026-11-20), test first. The shapes and every system's answers are in
-   `TODO/2026-11-20-louhi-reads.md`:
+2. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through Lir Development Cluster:
+   - the register map (D6);
+   - head-backed leases (D5) on it, which closes the special-roles audit's D-1;
+   - the AcceptorStore;
+   - the caught-up signal;
+   - reads and listings;
+   - FetchContent;
+   - then D-5 (parallel head replication, a durable write's bound past the slowest member) and D-2's interim
+     (tombstone maturity on Dannan's hybrid clock), both released by the group.
+
+   Audits: `TODO/2026-11-20-duplication-audit.md`, `TODO/2026-11-20-special-roles-audit.md`.
+   `feature/dannan-reuse` (`97a079e`): Dannan's CPU pacing and RetryState replace Dagda's copies.
+
+   The shapes and every system's answers are in `TODO/2026-11-20-louhi-reads.md`:
    - The durable AcceptorStore: a node-local log per agreement space, whole or delta records, group commit (section
      4).
    - The register map (D6), and its two additions only if Lir or Lugh needs one.
