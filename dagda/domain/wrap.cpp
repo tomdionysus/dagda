@@ -181,26 +181,34 @@ WrapAdvertCheck verify_wrap_advert(const dannan::membership::NodeRecord& peer, c
     out.why = std::string("wrap advert certificate unreadable: ") + error.what();
     return out;
   }
-  if (certificate->node_id() != peer.id) {
-    out.why = "wrap advert certificate names another node";
-    return out;
-  }
-  if (ca) {
-    if (const auto refused = dannan::identity::check_node_certificate(*certificate, *ca, now_unix_ms); !refused.empty()) {
-      out.why = "wrap advert certificate refused: " + refused;
+  // A certificate that parses may still hold a name or a key that does not decode, and
+  // Dannan throws for those when asked: an answer here, never a throw.
+  try {
+    if (certificate->node_id() != peer.id) {
+      out.why = "wrap advert certificate names another node";
       return out;
     }
-    for (const auto& revocation : revocations)
-      if (revocation.covers(*certificate)) {
-        out.why = "wrap advert certificate revoked: " + revocation.reason;
+    if (ca) {
+      if (const auto refused = dannan::identity::check_node_certificate(*certificate, *ca, now_unix_ms); !refused.empty()) {
+        out.why = "wrap advert certificate refused: " + refused;
         return out;
       }
-    out.issuer_checked = true;
-  }
-  const auto public_key = certificate->public_key();
-  const auto algorithm = dannan::identity::algorithm_of_public_key(public_key);
-  if (!algorithm || !dannan::identity::verify(*algorithm, public_key, wrap_advert_message(peer.id, advert->public_key), advert->signature)) {
-    out.why = "wrap advert signature does not verify under the certificate";
+      for (const auto& revocation : revocations)
+        if (revocation.covers(*certificate)) {
+          out.why = "wrap advert certificate revoked: " + revocation.reason;
+          return out;
+        }
+      out.issuer_checked = true;
+    }
+    const auto public_key = certificate->public_key();
+    const auto algorithm = dannan::identity::algorithm_of_public_key(public_key);
+    if (!algorithm || !dannan::identity::verify(*algorithm, public_key, wrap_advert_message(peer.id, advert->public_key), advert->signature)) {
+      out.why = "wrap advert signature does not verify under the certificate";
+      return out;
+    }
+  } catch (const std::runtime_error& error) {
+    out.issuer_checked = false;
+    out.why = std::string("wrap advert certificate unreadable: ") + error.what();
     return out;
   }
   out.ok = true;

@@ -25,6 +25,7 @@
 
 #include "dagda/domain/storage_key.h"
 #include "dagda/domain/wrap.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/argon2.h"
 #include "dannan/identity/certificate.h"
 #include "dannan/identity/crypto.h"
@@ -38,11 +39,11 @@
 namespace dagda::domain {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::NodeId;
 using dannan::identity::Secret;
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 Secret secret_of(const std::string& hex_text) { return Secret(unhex(hex_text)); }
 
@@ -224,6 +225,48 @@ TEST(DomainWrap, TheAdvertIsSignedByTheCertificateKeyAndChecked) {
   EXPECT_TRUE(verify_wrap_advert(peer, ca.certificate(), now, {ca.revoke(node, 8, now, "another serial")}).ok);
   peer.adverts.erase(wrap_advert);
   EXPECT_FALSE(verify_wrap_advert(peer, ca.certificate(), now).ok);
+}
+
+// A certificate that parses, names the node and carries a key that does not decode is
+// refused with a reason, with the CA and without: the check answers, never throws (the
+// fuzz smoke test's finding, 2026-11-20). Every byte of the certificate is flipped in
+// turn to find such keys, so the case does not depend on where the key sits.
+TEST(DomainWrap, ACertificateWhoseKeyDoesNotDecodeIsRefusedNotThrown) {
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+  const auto ca = dannan::identity::CertificateAuthority::create("dagda test", now - 60000);
+  const auto node = node_of(0x10);
+  const auto signing = dannan::identity::SigningKey::generate(dannan::identity::SigningAlgorithm::es256);
+  const auto der = ca.issue(node, signing.public_key(), 7, now - 1000).der();
+  const auto wrapper = WrapKey::from_private(secret_of(wrapper_seed_hex));
+  WrapAdvert advert;
+  std::copy(wrapper.public_key().begin(), wrapper.public_key().end(), advert.public_key.begin());
+  advert.signature = signing.sign(wrap_advert_message(node, wrapper.public_key()));
+  size_t keyless = 0;
+  for (size_t at = 0; at < der.size(); ++at) {
+    auto flipped = der;
+    flipped[at] ^= 0x01;
+    std::optional<dannan::identity::Certificate> parsed;
+    try {
+      parsed = dannan::identity::Certificate::from_der(flipped);
+      if (parsed->node_id() != node) continue;
+      (void)parsed->public_key();
+      continue;
+    } catch (const std::runtime_error&) {
+      if (!parsed) continue;
+    }
+    ++keyless;
+    advert.certificate = flipped;
+    dannan::membership::NodeRecord peer;
+    peer.id = node;
+    peer.adverts[wrap_advert] = encode_wrap_advert(advert);
+    for (const auto& with : {std::optional<dannan::identity::Certificate>(ca.certificate()), std::optional<dannan::identity::Certificate>()}) {
+      WrapAdvertCheck checked;
+      ASSERT_NO_THROW(checked = verify_wrap_advert(peer, with, now)) << "byte " << at;
+      EXPECT_FALSE(checked.ok) << "byte " << at;
+      EXPECT_FALSE(checked.why.empty()) << "byte " << at;
+    }
+  }
+  EXPECT_GT(keyless, 0u);
 }
 
 // A node's keys come from its custody through the Context: the node-local
