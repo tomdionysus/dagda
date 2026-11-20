@@ -119,7 +119,7 @@ with an empty value.
 - `snake_case` for functions, methods, variables and files; `PascalCase` for
   types; private and protected members prefixed with `_`. Namespaces are
   `<project>::<subsystem>`.
-- Every source file starts with the Dagda header block (`CLAUDE.md` has it).
+- Every source file starts with the Dagda header block; copy it from any existing source file.
 - No emoji anywhere.
 - Dependency injection over globals; the only process global is the io context.
 - Each component logs through its own scoped logger.
