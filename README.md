@@ -8,141 +8,66 @@
 Dagda is the store for a cluster of trusted machines. It is a C++20 library that keeps
 objects, claims, leases and shared state across a set of nodes, sealed at rest, with
 every write carrying a durability level the caller chooses and every answer saying which
-nodes took part. It is the middle of a stack: it runs on Dannan, the network, and is the
-datastore for everything above it.
+nodes took part. It runs on [Dannan](https://github.com/tomdionysus/dannan), the network,
+and is the datastore for the systems hosted above it.
 
-## Why it exists
+## What it gives a hosted system
 
-Macha, a media filesystem that runs across several machines, grew its own distributed
-store: a DHT of immutable extents and control objects, a claims ledger and a garbage
-collector that never removes what someone still needs, a Merkle trie over what each node
-holds, repair by diff, opaque heads whose merge the filesystem supplies, and leases that
-let one node own a job until it falls away. It works, and it has been in use for a long
-time. It is also welded to Macha: its transport, its crypto, its logging and its clock
-are Macha's, and nothing else can use it.
+- **Domains and sealing.** Named domains, each with its own keys; node-local spaces sealed
+  under the node's own key.
+- **Objects.** Immutable and content-addressed, placed by rendezvous over the cluster's
+  roster, written at a durability level (ephemeral, persisted, replicated or durable). The
+  answer is evidence: which nodes acknowledged, which are pending, and a ticket that
+  reports again when they land.
+- **Claims and collection.** Reference-counted claims; the collector removes only what the
+  ledger proves unreferenced, and an instant delete beside it.
+- **Repair.** Each node learns by difference what its peers lack and sends each copy once,
+  paced so it never gets in the way of foreground work.
+- **Heads.** Shared values in spaces, on every node or on one node alone, whose merge the
+  owner supplies; a change notice; and a register map, keyed values with conditional
+  writes, listed and paged in key order.
+- **Leases.** A lease with an epoch fence, taken over from a node the cluster has lost.
 
-The other systems in the same cluster need exactly that store. Lugh, the directory and
-single sign-on, has records that must be on every node and secrets that must be on a few,
-with merge rules of its own. Lir, the event system, has retained messages and
-subscriptions that must survive a node. Each would otherwise write its own store, and
-each would get it a little wrong.
+No call waits without a deadline, every completion is posted to the executor the caller
+passed, and a read that finds nothing succeeds with an empty value.
 
-Dagda is Macha's store taken out and generalised, so that it is written once:
+## Install
 
-- **It is Macha's.** Macha is ported onto Dagda with no loss of function, gated by
-  named tests; its existing disks are migrated in place by a tool that needs no extra
-  storage; and Dagda handles the small values of the other systems as well as Macha's
-  media extents.
-- **It runs on Dannan.** Transport, node identity, crypto, secure memory, durable files,
-  logging, time and the thread-safety contracts are Dannan's. Dagda writes none of its
-  own, so there is one copy of each in the stack.
-- **It is honest about what happened.** A write names its durability level: ephemeral,
-  persisted, replicated or durable. The answer is evidence, never a bare boolean: which
-  nodes acknowledged, which are pending, and a ticket that reports again when they land.
-  No call waits without a deadline, and a read that finds nothing succeeds with an empty
-  value.
-- **It never loses a claim.** Garbage collection runs from an owner's reachability and
-  removes only what the ledger proves unreferenced; a claim walk repairs what a claim
-  names.
+Dagda needs a C++20 compiler, CMake 3.24 or later, Boost 1.83 or newer (Asio), OpenSSL 3,
+and an installed Dannan of the pinned minor (`find_package(dannan 0.9.2 CONFIG)`);
+GoogleTest for the tests. Dannan is packaged for Debian 13; see
+[its README](https://github.com/tomdionysus/dannan#install-and-link).
 
-## What it does
-
-- **Domains and sealing.** Named domains, each with its own keys, sealed with Dannan's
-  primitives; node-local spaces whose keys are sealed under the node's key custody.
-- **Objects.** Immutable, content-addressed, on one or more DATA backends per node with
-  a CONTROL store beside them; packed or loose; written through admission that keeps a
-  reserve of credit and device operations for control work so a bulk load cannot queue
-  a commit behind it.
-- **Placement and durability.** Rendezvous placement over Dannan's roster; per-write
-  durability levels with evidence and tickets; prompt replication of the copies a write
-  still owes; a write-behind path for a provisional copy.
-- **The ledger.** Claims with reference counts, a held trie per node, the union and
-  diff of tries across nodes, retention and the collector, and node horizons so a node
-  that was away catches up by difference, never by scan.
-- **Availability and repair.** A survey of what each peer lacks and holds, diff only;
-  repair from one queue, the object with fewest copies first, a holder offering before
-  it sends so each copy moves once; all of it paced by a duty share against foreground
-  work: always running, never in the way, and on an idle node at the link's rate.
-- **Leases and claimed collections.** A lease with an epoch fence, a keeper that takes
-  over from a node the roster has lost after a window measured from when it was last
-  heard of, and a collection template whose records merge field group by field group,
-  each group on its own clock.
-- **Heads** (next). Opaque values with a replica policy, whose merge the owner supplies
-  and whose common ancestor the merge is given when held.
-
-## The stack
-
-Dagda is one of four projects written to one set of conventions, each its own library
-and repository, with no code duplicated between them: a piece needed by more than one
-lives in exactly one, the lowest that needs it, and the others link it.
-
-```
-   Lugh            Lir             Macha, AthenaSIP, ...      hosted systems
-     |               |                  |
-   Dagda: the store  (domains, sealing, objects, heads, leases)
-     |
-   Dannan: the network  (reachability, routes, channels, membership,
-                         identity, placement, work classes, status)
-```
-
-- **[Dannan](../dannan)** is the network: it makes a set of nodes, on any mix of home
-  and rented machines and behind any NAT, behave as one network, and knows who the
-  nodes are. Dagda is a hosted system on it, a peer of the others, not a floor under
-  them: a node may run Dannan alone. Dagda takes from it the node and its roster, the
-  transport and message registration, node identity and the scope check, key custody,
-  secure memory, the crypto primitives, durable files, work classes and the duty share,
-  logging, time, the thread-safety contracts and the test fixtures. Dagda is pinned to
-  a Dannan release in `CMakeLists.txt`.
-- **[Lugh](../lugh)** is the directory and single sign-on. It keeps everything it
-  persists in Dagda, in two domains: `lugh/scope` on every node and `lugh/secrets` on
-  Lugh's, under its own merge rules. Lugh is also where Dannan's scope check looks up
-  who may write what.
-- **[Lir](../lir)** is the event system, a distributed multimaster MQTT broker on
-  Dannan and Dagda: retained messages and subscriptions live in Dagda.
-- **Macha** is the media filesystem Dagda was extracted from, and the first system
-  ported onto it. Ingest, the catalogue and the filesystem stay Macha's; the store is
-  Dagda's.
-
-Hosted systems never address one another. They exchange frames through Dannan, share
-state through Dagda, and learn who someone is from Lugh.
-
-## How to use it
-
-### Build
-
-A C++20 compiler, CMake 3.24 or later, Boost 1.83 or newer (Asio), OpenSSL 3 and
-GoogleTest, and an installed Dannan of the pinned minor, at least the pinned patch. Build the pinned Dannan
-tag from the sibling checkout into the build tree once, then configure against it:
+From a release tag:
 
 ```bash
-git clone --branch 0.9.2 --depth 1 file://$PWD/../dannan build/deps/dannan-0.9.2
-cmake -S build/deps/dannan-0.9.2 -B build/deps/dannan-0.9.2-build -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.9.2-build -j8 && cmake --install build/deps/dannan-0.9.2-build
-
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
-  -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
+git clone --branch 0.4.0 --depth 1 https://github.com/tomdionysus/dagda.git
+cd dagda
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<dannan prefix>
 cmake --build build -j8
+cmake --install build --prefix /opt/dagda
 ```
 
 Add your Boost and OpenSSL prefixes to `CMAKE_PREFIX_PATH` where they are not on the
-default path. Warnings are errors in that configuration, and the lock annotations are
-checked, not decorative.
+default path. Dannan, Dagda and the system that links them must be built against the same
+Boost.
 
-`cmake --install build` installs the library, its headers, its CMake package and
-`dagda-migrate` under `CMAKE_INSTALL_PREFIX`; [docs/packaging.md](docs/packaging.md) says
-what goes where and how a consumer finds it.
+`cmake --install` installs the library, its headers, its CMake package, the in-process
+cluster test fixture and `dagda-migrate`. On Debian 13, `tools/build-deb.sh` builds the
+packages `libdagda<version>`, `libdagda-dev` and `dagda-tools`;
+[docs/packaging.md](docs/packaging.md) says what goes where.
 
-### Link it
+## Use
 
-A hosted system links `dagda::dagda`, opens a `dagda::Node` on its Dannan node before
-that node starts (the node registers its message types and declares its readiness
-planes itself), and holds the node's `dagda::Context`:
+Link `dagda::dagda`, naming the exact version (each release is its own ABI):
 
 ```cmake
-find_package(dagda 0.3.2 CONFIG REQUIRED)  # the exact version; Dannan comes with it
+find_package(dagda 0.4.0 CONFIG REQUIRED)  # Dannan comes with it
 target_link_libraries(my_system PRIVATE dagda::dagda)
 ```
+
+Open a `dagda::Node` on your Dannan node before that node starts, and use its
+`dagda::Context`:
 
 ```cpp
 #include "dagda/context.h"
@@ -164,56 +89,53 @@ store.objects().write(bytes, write, std::chrono::seconds(10), executor, [](dagda
 });
 ```
 
-Every completion is posted to the executor the caller passes, never called inline. A
-ticket outlives the call: `wait(ticket, deadline, ...)` reports again when the pending
-copies land. The contract is versioned and asynchronous from its first version; a hosted
-system built against another version is refused.
+A ticket outlives the call: `wait(ticket, deadline, ...)` reports again when the pending
+copies land. The contract is versioned; a hosted system built against another version is
+refused.
 
-### Test
+### Migrating a Macha node
+
+`dagda-migrate` moves a Macha node's layout v18 store to Dagda's layout in place, without
+needing twice the storage, and proves the data survived with before and after manifests:
+[docs/migration.md](docs/migration.md).
+
+## Test
 
 ```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DCMAKE_PREFIX_PATH=<dannan prefix>
+cmake --build build -j8
 ./build/dagda_tests
 ```
 
-GoogleTest only, one binary, no Python. Time is injected and stepped, never slept.
-Macha's own tests are the port gate and stay Macha's.
+GoogleTest, one binary. Time is injected and stepped, never slept.
 
-## Repository layout
+## The stack
 
-```text
-dagda/<subsystem>/  the library: headers and sources side by side
-                    (domain, store, ledger, lease, contract; heads next)
-dagda/test/         GoogleTest, flat, one binary (dagda_tests); fixtures in dagda/test/fixtures/
-docs/               how it works, and the map from Macha's foundations to Dannan's
-TODO/               now and next (ACTIVE.md), designs, and what shipped (COMPLETED.md)
-```
+Dagda is one of a set of projects written to one set of conventions, with no code
+duplicated between them: a piece more than one needs lives once, in the lowest project that
+needs it.
 
-Conventions, shared with the stack: [CONTRIBUTING.md](CONTRIBUTING.md). What each
-project of the stack owns: [TODO/2026-11-03-stack.md](TODO/2026-11-03-stack.md). What
-Macha needs of Dagda, requirement by requirement:
-[TODO/2026-11-03-macha-store-requirements.md](TODO/2026-11-03-macha-store-requirements.md).
+- [Dannan](https://github.com/tomdionysus/dannan): the network. Reachability, routes,
+  channels, membership, node identity, key custody, crypto, durable files, logging and time.
+- Dagda: the store, on Dannan.
+- Systems hosted on both: [Lugh](https://github.com/tomdionysus/lugh), the directory and
+  single sign-on; [Lir](https://github.com/tomdionysus/lir), a multimaster MQTT broker;
+  [Macha](https://github.com/tomdionysus/macha), the media filesystem Dagda was extracted
+  from; [Louhi](https://github.com/tomdionysus/louhi),
+  [Mimir](https://github.com/tomdionysus/mimir) and
+  [Kvasir](https://github.com/tomdionysus/kvasir); and
+  [AthenaSIP](https://github.com/blackravenltd/athenasip).
 
-## Status
+Hosted systems never address one another: they exchange frames through Dannan and share
+state through Dagda.
 
-Version 0.3.2, on Dannan 0.9.2, the Dannan Macha's cutover deploys. Built and tested: the local store and its
-one layout (v19, the domain in every seal), the pool, the CONTROL store and the cache;
-the ledger and the collector; the distributed store on Dannan with durability levels,
-evidence, tickets, availability and repair (redesigned: one queue by copies left, an
-offer before each push, a window of transfers, pulls fetched many to a message and asked
-again as they land; an idle node's repair uses the whole link, a busy one its share); an
-instant delete beside the collector's
-per-domain wait, which removes a copy only where a complete published inventory does
-not refer to it; leases and claimed collections; domains with node-local keys, wrapped
-domain keys, member and blind roles, and the scope check at the write floor;
-`dagda-migrate`, which moves Macha's v18 disks to v19 in place, each record from its
-header, with before and after manifests read at the disk's rate (`docs/migration.md`); and `dagda::Node`, which
-opens all of it on a Dannan node, runs maintenance and serves `dagda::Context`; head
-spaces, every-node as Macha's are, and node-local, a node's alone, sealed under its
-node-local key; the change notice (`Heads::watch`, `Heads::changed`); and the in-process
-cluster fixture installed as `dagda::test_fixtures`. `dagda::Context` version 1 is frozen
-at 0.1.4 and still served, for Macha's port on 0.1.5; version 2 grows slice by slice
-(`TODO/2026-11-13-three-systems-design.md`) and is frozen at slice 4. Every step ends
-green in `dagda_tests`, with sanitizers before a release.
+## Documentation
+
+- [docs/packaging.md](docs/packaging.md): the Debian packages and the install layout.
+- [docs/migration.md](docs/migration.md): moving a Macha node's store.
+- [docs/principles-and-laws.md](docs/principles-and-laws.md): the laws and disciplines
+  every change follows.
+- [CONTRIBUTING.md](CONTRIBUTING.md): conventions, shared with the stack.
 
 ## Code of conduct
 

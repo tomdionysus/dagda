@@ -5,17 +5,20 @@ Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Read first
 
 `TODO/ACTIVE.md` is the plan and `TODO/COMPLETED.md` is the record. Dagda is
-the store of a stack of three projects with one set of conventions: Dannan
-the network layer (`../dannan`), Dagda (`../dagda`) and Lugh the directory
-(`../lugh`). `TODO/2026-11-03-stack.md` says what each owns. Dagda and Lugh
-use Dannan as their network layer, Lugh uses Dagda as its datastore, and no
-code is duplicated between the three (the maintainer, 2026-11-03). Macha (`../macha`)
-is the first customer: Macha is ported onto Dannan and Dagda with no loss of
-function. Dagda is written from the design, never transcribed from Macha.
+the store of a stack of projects with one set of conventions:
+[Dannan](https://github.com/tomdionysus/dannan) the network layer, Dagda, and
+[Lugh](https://github.com/tomdionysus/lugh) the directory.
+`TODO/2026-11-03-stack.md` says what each owns. Dagda and Lugh use Dannan as
+their network layer, Lugh uses Dagda as its datastore, and no code is
+duplicated between them (the maintainer, 2026-11-03).
+[Macha](https://github.com/tomdionysus/macha) is the first customer: Macha is
+ported onto Dannan and Dagda with no loss of function. Dagda is written from
+the design, never transcribed from Macha.
 
-`../dannan/CONTRIBUTING.md` is the reference text for the conventions all
-three share; this file is kept identical to it in everything but the
-project's name, its build line and its "Read first".
+[Dannan's CONTRIBUTING.md](https://github.com/tomdionysus/dannan/blob/main/CONTRIBUTING.md)
+is the reference text for the conventions the stack shares; this file is kept
+identical to it in everything but the project's name, its build line and its
+"Read first".
 
 The four laws and five disciplines (`docs/principles-and-laws.md`, a verbatim copy
 of Macha's) govern every change here, cited by number. A change that touches
@@ -47,15 +50,14 @@ which discipline it follows.
 ## Building and testing
 
 Dagda links an installed Dannan of the pinned minor, at least the pinned patch
-(`find_package(dannan 0.9.2 CONFIG)`; Dannan keeps its ABI across a minor's patches, and only within a minor, so an
-installed 0.8 is never taken for it). Once per checkout, build the pinned tag
-from the sibling repository into `build/deps/` (this reads `../dannan` and
-writes nothing there):
+(`find_package(dannan 0.9.2 CONFIG)`; Dannan keeps its ABI across a minor's
+patches, and only within a minor). Once per checkout, build the pinned tag into
+`build/deps/`:
 
 ```
-git clone --branch 0.9.2 --depth 1 file://$PWD/../dannan build/deps/dannan-0.9.2
+git clone --branch 0.9.2 --depth 1 https://github.com/tomdionysus/dannan.git build/deps/dannan-0.9.2
 cmake -S build/deps/dannan-0.9.2 -B build/deps/dannan-0.9.2-build -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix -DCMAKE_PREFIX_PATH="/opt/local/libexec/boost/1.88;/opt/local"
+  -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
 cmake --build build/deps/dannan-0.9.2-build -j8 && cmake --install build/deps/dannan-0.9.2-build
 ```
 
@@ -63,16 +65,17 @@ Then:
 
 ```
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDAGDA_BUILD_TESTING=ON -DDAGDA_WARNINGS_AS_ERRORS=ON \
-  -DCMAKE_PREFIX_PATH="$PWD/build/deps/prefix;/opt/local/libexec/boost/1.88;/opt/local"
+  -DCMAKE_PREFIX_PATH=$PWD/build/deps/prefix
 cmake --build build -j8
 ./build/dagda_tests
 ```
 
-Run the test binary rather than `ctest`. Everything runs on a developer machine
-(MacPorts for every dependency on the laptop); there is no hosted CI.
-Sanitizers run before a release, or to hunt a bug that cannot be pinned any
-other way. Multi-node beds (`test/compose/`) are run by hand, never in the
-per-commit gate.
+Add your Boost and OpenSSL prefixes to `CMAKE_PREFIX_PATH` where they are not on
+the default path. Run the test binary rather than `ctest`. GitHub CI
+(`tools/ci.sh`) runs the format check, the Release suite on x86-64 and arm64,
+ASan/UBSan, TSan, clang-tidy and coverage on every push and pull request.
+Sanitizers also run before a release. Multi-node beds (`test/compose/`) are run
+by hand, never in the per-commit gate.
 
 Write tests from the design, the laws and the function inventory, not from the
 current behaviour.
@@ -85,8 +88,7 @@ really is the right call.
 
 ## Layout
 
-One layout for all three projects, as `../dannan/CONTRIBUTING.md` "Layout"
-gives it, with `<p>` = `dagda`: the library target `dagda` in `dagda/`,
+One layout for the stack, as Dannan's CONTRIBUTING.md "Layout" gives it, with `<p>` = `dagda`: the library target `dagda` in `dagda/`,
 public headers in `dagda/include/dagda/`, subsystems in
 `dagda/<subsystem>/` (`domain`, `store`, `ledger`, `heads`, `lease`),
 interfaces in `dagda/contract/`, tests in `dagda/test/` (one binary
