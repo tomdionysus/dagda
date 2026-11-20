@@ -31,7 +31,7 @@ Each needed by two or more consumers. All ruled or confirmed for Dagda on 2026-1
 | Consumable by FetchContent, library only | Louhi, Lugh | Next release (`DAGDA_BUILD_TOOLS`) |
 | Leases in a head space (D5) | Lir, Lugh, Louhi; Lir's will needs it | Slice 3; not yet scheduled |
 | A replicated or node-local log (D9) | Lir (inflight, queues), Lugh (audit), Kvasir and Mimir (acceptor logs) | The AcceptorStore is its first node-local form |
-| An action once a key's time ends | Lir (will); Louhi's task timeouts and Lugh's session expiry may be the same need | Dagda's on a lease, at least once (Dannan and Dagda's joint recommendation to Tom); to ask Louhi and Lugh |
+| An action once a key's time ends | Lir (will). Louhi: no (node-local timers, or agreement on its placement registers, settle every lapse). Lugh: asked | Dagda's on a lease, at least once (Dannan and Dagda's joint recommendation to Tom). With Lir alone so far, it meets the two-project rule only if Lugh needs it |
 
 Nothing in this table was asked of Dannan that Dagda should hold instead, or the reverse, except the timed action.
 Dannan and Dagda agree that it is Dagda's: it is durable state, and Dannan stores nothing.
@@ -45,6 +45,10 @@ The rule does not forbid these. They are listed so nothing is mistaken for share
 - The no-values AcceptorStore form (Mimir only; Tom asked).
 
 ## 4. To check with Dannan (down)
+
+Dannan, 2026-11-20: both added to its own audit, answered from searches of Lir, Lugh, Louhi, Mimir and Kvasir, not
+from memory. Its prior view: agreement uses ballots and the HLC, and no Dannan user but Dagda and Macha keeps causal
+dots.
 
 Candidates where Dagda may hold what Dannan's other users need. Not yet confirmed:
 - **Version clocks and dots:** `HeadClock` and `Dot`, `clock_covers`, and the claim `RetentionDot`. Macha keeps a
