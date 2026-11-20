@@ -114,10 +114,14 @@ unless the board says so (`claims_list`).
          sealed files, the migration manifest), in the release's gate.
        Not in 0.4.0, to the group with a recommendation:
        - `contract::AckLevel` is {ephemeral, persisted, decided, replicated}; Dagda's `Durability`
-         (`store/distributed_store.h:65`, `store/durability_domain.h:30`) is {ephemeral, persisted, replicated,
-         durable}. The same names mean different things (Dannan's replicated is a majority on disk). Converging
-         is a contract version.
+         (`store/distributed_store.h:65`) is {ephemeral, persisted, replicated, durable}. The shared names mean
+         the same (replicated: a majority of the replication set on disk); Dagda adds durable and has no
+         decided. Proposed to Dannan for 0.11.0: Durability carries AckLevel for the shared names, durable as
+         Dagda's extension, decided only on the agreement path (heads, registers).
        - `Completion<T>`/`Outcome<T>`/`Fault` against Dagda's completions and evidence: a contract version.
+         Proposed to Dannan: Outcome<T> keeps the evidence beside a Fault (a write that reached two of three
+         says which); Fault gains `cancelled`; timed_out means the outcome is unknown. The untyped `why` of
+         Context's evidence structs becomes a Fault.
        - `agree::MemoryStore`: with the AcceptorStore item (Next, 2), Dagda's durable store beside it.
        Nothing to do: `RandomId` (no hand-rolled random ids in `dagda/`), `sha1`, base64/32, `SwappableSink`,
        `listen::Prefix` (not used, so its stricter parse changes nothing here).
