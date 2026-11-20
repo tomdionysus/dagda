@@ -313,7 +313,17 @@ C. Constraints:
 - Louhi: confirmed.
 - Macha: confirmed. A note: Space's list also carries any cache-ordering change from the leading-view fix if it
   moves into Space. As designed, the `data_running` deferral is FUSE's and stays Macha's.
-- Awaited: Lugh, Kvasir, Lir.
+- Kvasir: confirmed.
+- Lir: confirmed. If D8 measures the PUBACK path above 50 ms p99 at k = 2, the figure goes to Lir and the path's
+  design is looked at again with it, not worked around.
+- Lugh: confirmed.
+- **All six confirmed (2026-11-20).**
+
+**The AcceptorStore's value bound, once for every user:** a value, held whole, may be up to 256 MiB
+(Kvasir's ranges before a split; Louhi's admission sets are far under it).
+- A delta record is bounded by the same figure.
+- A whole record is written in pieces under one append, so no single write is 256 MiB of memory at once.
+- In the value-less form (Mimir) the store holds no value at all, so the bound does not apply.
 
 Dannan, item 13: Dagda's `durable` stays its own value, not a fifth member of the stack's enum (the maintainer, 2026-11-15).
 It means every available member of the replication set on disk, which is stronger than replicated's majority; it
