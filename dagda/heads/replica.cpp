@@ -25,6 +25,7 @@
 #endif
 
 #include "dagda/contract/stopping.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/durable_file.h"
 
@@ -33,7 +34,7 @@ namespace {
 
 using contract::MaintenanceStopping;
 using dannan::contract::Lock;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::net::Reader;
 using dannan::net::Writer;
 
@@ -50,16 +51,9 @@ Bytes read_whole(const std::filesystem::path& path) {
   return Bytes(std::istreambuf_iterator<char>(stream), {});
 }
 
+// The directory holding `path`.
 void sync_directory(const std::filesystem::path& path) {
-  const auto directory = path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
-  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) throw std::runtime_error("cannot open metadata directory " + directory.string() + ": " + std::strerror(errno));
-  if (::fsync(fd) != 0) {
-    const auto error = errno;
-    ::close(fd);
-    throw std::runtime_error("cannot sync metadata directory " + directory.string() + ": " + std::strerror(error));
-  }
-  if (::close(fd) != 0) throw std::runtime_error("cannot close metadata directory " + directory.string() + ": " + std::strerror(errno));
+  dannan::identity::durable_sync_directory(path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path());
 }
 
 void truncate_durable(const std::filesystem::path& path, uint64_t size) {
@@ -836,7 +830,7 @@ void Replica::load_heads() {
         // The certificate is durable evidence of acceptance and any peer can supply
         // the immutable record: keep it, flag the head, repair it live.
         const auto reason = diagnose_unreconstructable_locked(value.hash);
-        _logger.error("metadata accepted head is not reconstructible locally; keeping it for live repair from peers hash=" + hex(value.hash) +
+        _logger.error("metadata accepted head is not reconstructible locally; keeping it for live repair from peers hash=" + hex(value.hash.bytes) +
                       " generation=" + std::to_string(value.generation) + " reason=" + reason);
         _unreconstructable_retry_at[value.hash] = _time.now() + unreconstructable_retry_cooldown;
         const auto hash = value.hash;
@@ -976,7 +970,7 @@ bool Replica::refresh_materialized_head_in_memory_locked() {
     auto record = historical_locked(hash);
     if (!record) {
       const auto reason = flag_unreconstructable_locked(hash, now, "materialized head refresh");
-      throw std::runtime_error("accepted metadata head cannot be reconstructed hash=" + hex(hash) + " reason=" + reason);
+      throw std::runtime_error("accepted metadata head cannot be reconstructed hash=" + hex(hash.bytes) + " reason=" + reason);
     }
     _unreconstructable_retry_at.erase(hash);
     if (!selected || record->generation > selected->generation || (record->generation == selected->generation && record->hash > selected->hash))
@@ -1427,7 +1421,7 @@ std::string Replica::flag_unreconstructable_locked(const Hash256& hash, dannan::
   if (first_failure) {
     uint64_t generation = 0;
     if (const auto head = _accepted_heads.find(hash); head != _accepted_heads.end()) generation = head->second.generation;
-    _logger.warn("metadata accepted head cannot be reconstructed locally; excluded from reads pending live repair hash=" + hex(hash) +
+    _logger.warn("metadata accepted head cannot be reconstructed locally; excluded from reads pending live repair hash=" + hex(hash.bytes) +
                  " generation=" + std::to_string(generation) + " during=" + std::string(context) + " reason=" + reason);
   }
   return reason;
@@ -1435,7 +1429,7 @@ std::string Replica::flag_unreconstructable_locked(const Hash256& hash, dannan::
 
 std::string Replica::diagnose_unreconstructable_locked(const Hash256& target) const {
   const auto describe = [](const HistoryIndexEntry& entry) {
-    return "gen=" + std::to_string(entry.generation) + " hash=" + hex(entry.hash) +
+    return "gen=" + std::to_string(entry.generation) + " hash=" + hex(entry.hash.bytes) +
            " body=" + std::string(entry.body == HistoryEntry::Body::delta ? "delta" : "full");
   };
   const auto found = _history.find(target);
@@ -1448,7 +1442,7 @@ std::string Replica::diagnose_unreconstructable_locked(const Hash256& target) co
     if (!cursor.previous_known) return "delta " + describe(cursor) + " has no known predecessor";
     chain.push_back(cursor);
     const auto parent = _history.find(cursor.previous);
-    if (parent == _history.end()) return "delta " + describe(cursor) + " primary parent hash=" + hex(cursor.previous) + " absent from local history";
+    if (parent == _history.end()) return "delta " + describe(cursor) + " primary parent hash=" + hex(cursor.previous.bytes) + " absent from local history";
     if (!delta_succession_valid(parent->second.generation, cursor.generation))
       return "delta " + describe(cursor) + " violates succession over parent gen=" + std::to_string(parent->second.generation);
     cursor = parent->second;
@@ -1521,14 +1515,14 @@ bool Replica::reanchor_history(const HistoryEntry& input) {
     // Verify against the record just cached, not a fresh reconstruction.
     if (!acceptance_matches_record_policy_locked(head->second, *value)) {
       // Drop only this certificate.
-      _logger.error("metadata accepted head certificate does not match its repaired record; dropping the certificate hash=" + hex(entry.hash) +
+      _logger.error("metadata accepted head certificate does not match its repaired record; dropping the certificate hash=" + hex(entry.hash.bytes) +
                     " generation=" + std::to_string(head->second.generation));
       _accepted_heads.erase(head);
       persist_heads_locked();
     }
   }
-  _logger.info(std::string("metadata history re-anchored ") + (superseded ? "superseding unreplayable frame" : "with new record") + " hash=" + hex(entry.hash) +
-               " generation=" + std::to_string(entry.generation) + " bytes=" + std::to_string(frame.size()));
+  _logger.info(std::string("metadata history re-anchored ") + (superseded ? "superseding unreplayable frame" : "with new record") +
+               " hash=" + hex(entry.hash.bytes) + " generation=" + std::to_string(entry.generation) + " bytes=" + std::to_string(frame.size()));
   if (prune_accepted_heads_locked()) persist_heads_locked();
   // Another flagged head may make the refresh throw; this repair still succeeded.
   std::optional<Record> pending_checkpoint;

@@ -191,7 +191,7 @@ TEST(HeadsCommit, ADeltaThatOmitsAChangeFallsBackToTheWholeRecord) {
   ASSERT_TRUE(history);
   EXPECT_EQ(history->body, HistoryEntry::Body::full);
   EXPECT_EQ(committed.body, HistoryEntry::Body::full);
-  EXPECT_TRUE(bed.sink->saw("local metadata delta rejected; retrying full record generation=3"));
+  EXPECT_TRUE(test::saw(*bed.sink, "local metadata delta rejected; retrying full record generation=3"));
 }
 
 // C5. The first publish throws once the commit is accepted; the second attempt keeps
@@ -520,8 +520,8 @@ TEST(HeadsCommit, AnObjectNobodyPresentHoldsRefusesTheCommitAndSaysWhich) {
   EXPECT_EQ(space->replica().committed().hash, before.hash);
   EXPECT_EQ(space->replica().history_entry(before.hash)->hash, before.hash);
   EXPECT_EQ(space->owed_commits(), 0U);
-  EXPECT_TRUE(bed.sink->saw("data_objects=1"));
-  EXPECT_TRUE(bed.sink->saw("outcome=data-unheld"));
+  EXPECT_TRUE(test::saw(*bed.sink, "data_objects=1"));
+  EXPECT_TRUE(test::saw(*bed.sink, "outcome=data-unheld"));
 }
 
 TEST(HeadsCommit, ACommitWhoseControlClaimDoesNotHoldIsRefused) {
@@ -537,7 +537,7 @@ TEST(HeadsCommit, ACommitWhoseControlClaimDoesNotHoldIsRefused) {
     EXPECT_EQ(std::string(error.what()), Space::control_unclaimed_refusal);
   }
   EXPECT_EQ(space->replica().committed().hash, before.hash);
-  EXPECT_TRUE(bed.sink->saw("outcome=control-claim-failed"));
+  EXPECT_TRUE(test::saw(*bed.sink, "outcome=control-claim-failed"));
 }
 
 // test_a_commit_claims_the_nodes_it_introduced_and_prunes_the_rest (NT:1191), assertion
@@ -952,7 +952,7 @@ TEST(HeadsSpace, AReadClearsASetAsideOnceTheMembershipMoves) {
   EXPECT_TRUE(space->set_aside(left, "cannot be merged now"));
   EXPECT_EQ(space->usable_heads().size(), 1U);
   EXPECT_NE(space->replica().set_aside_generation(), 0U);
-  EXPECT_TRUE(bed.sink->saw("metadata head set aside until membership changes"));
+  EXPECT_TRUE(test::saw(*bed.sink, "metadata head set aside until membership changes"));
   // The only head left is not set aside.
   EXPECT_FALSE(space->set_aside(right, "the last"));
   EXPECT_EQ(space->heads().usable.size(), 1U);
@@ -1013,7 +1013,7 @@ TEST(HeadsSpace, TheOwnersReconfigureRunsOnAReadAndOnAMutationWithNoDot) {
   EXPECT_EQ(seen.generation, before + 1);
   EXPECT_EQ(head_of(seen).clock, parent);
   EXPECT_EQ(head_of(seen).notes.get().at("policy/copies"), "2");
-  EXPECT_TRUE(bed.sink->saw("metadata policy transition committed generation=3"));
+  EXPECT_TRUE(test::saw(*bed.sink, "metadata policy transition committed generation=3"));
 
   wanted = "3";
   const auto outcome = reopened->mutate_delta(neutral_mutation([](NeutralEditing&) {}));

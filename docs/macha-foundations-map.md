@@ -49,8 +49,8 @@ is the label `macha/storage/v1` and the AAD rule, both in Dagda.
 | `NodeId`, `NodeIdHash`, `to_string(NodeId)` | `dannan::identity::NodeId`, `NodeIdHash`, `to_string` (`identity/node_id.h`): same 16 bytes, same order |
 | `Hash256` | `dannan::identity::Hash256` (`identity/crypto.h`) |
 | `ObjectId` | Dagda's own name for Dannan's `Hash256`: `dagda::store::ObjectId` (`dagda/store/object_id.h`) |
-| `to_string(ObjectId)` | `dagda::store::to_string` over `dannan::identity::hex` |
-| `hex`, `unhex` | `dannan::identity::hex`, `unhex` |
+| `to_string(ObjectId)` | `dagda::store::to_string` over `dannan::encoding::hex` |
+| `hex`, `unhex` | `dannan::encoding::hex`, `unhex` (`dannan/encoding/base.h`, Dannan 0.10.0) |
 | `unix_ms()` | `dannan::contract::WallClock::unix_ms()` (`contract/time_source.h`), injected |
 | `Endpoint`, `NodeInfo`, node flags, `IdentityAssociationReset` and its keys | Dannan's membership (`membership/node_record.h`, `membership/identity_reset.h`); not the store's |
 | `SessionIdentity` | Macha's (HTTP sessions); not the store's |

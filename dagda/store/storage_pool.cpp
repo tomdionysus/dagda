@@ -21,6 +21,7 @@
 
 #include "dagda/store/placement.h"
 #include "dagda/store/state_layout.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/durable_file.h"
 
@@ -98,7 +99,7 @@ std::string backend_key_check(const domain::StorageKey& key, const domain::Domai
   message.insert(message.end(), domain.bytes.begin(), domain.bytes.end());
   message.insert(message.end(), token.bytes.begin(), token.bytes.end());
   const auto mac = dannan::identity::hmac_sha256(key.bytes(), message);
-  return dannan::identity::hex(std::span<const uint8_t>(mac.data(), 16));
+  return dannan::encoding::hex(std::span<const uint8_t>(mac.data(), 16));
 }
 
 std::string backend_marker_text(const SealingScheme& sealing, const NodeId& node, const NodeId& token, const std::string& check) {
@@ -109,7 +110,7 @@ std::string backend_marker_text(const SealingScheme& sealing, const NodeId& node
 std::filesystem::path backend_identity_path(const std::filesystem::path& state, const std::filesystem::path& backend) {
   const auto text = backend.lexically_normal().string();
   const auto hash = dannan::identity::sha256({reinterpret_cast<const uint8_t*>(text.data()), text.size()});
-  return state / "backend-identities" / (dannan::identity::hex(hash) + ".id");
+  return state / "backend-identities" / (dannan::encoding::hex(hash.bytes) + ".id");
 }
 
 namespace {}  // namespace

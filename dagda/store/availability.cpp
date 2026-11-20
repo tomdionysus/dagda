@@ -242,12 +242,7 @@ bool AvailabilityService::refresh(const std::function<void()>& pause) {
   _snapshot.publish(std::move(next));
   if (!ask) return false;
   if (retry_needed) {
-    dannan::sched::RetryPolicy policy;
-    policy.initial_backoff = _options.retry_floor;
-    policy.max_backoff = _options.retry_ceiling;
-    policy.max_failures_in_window = std::numeric_limits<size_t>::max();
-    policy.failure_window = std::chrono::milliseconds(1);
-    policy.max_failing_duration = std::chrono::milliseconds(0);
+    const auto policy = dannan::sched::RetryPolicy::unbounded(_options.retry_floor, _options.retry_ceiling);
     _retry_at = now + _retry.failed(policy, now).value_or(_options.retry_ceiling);
     later(*_retry_at);
   } else {

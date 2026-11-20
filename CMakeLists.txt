@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 # The tag, this number and --version are the same.
-project(dagda VERSION 0.3.2 LANGUAGES CXX)
+project(dagda VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,11 +25,25 @@ option(DAGDA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer where the compiler has it)" OFF)
 
 # The network layer by minor, at least the patch Dagda was built and tested on: from 0.6.0 Dannan keeps its ABI across a
-# minor's patches (SONAME libdannan.so.0.9 from 0.9.0, SameMinorVersion), and only a new minor changes it: a request
-# for 0.8 would never find 0.9, nor the reverse. 0.9.2: the retained-memory lease and the new directory's sync fixed.
+# minor's patches (SONAME libdannan.so.0.10 from 0.10.0, SameMinorVersion), and only a new minor changes it: a request
+# for 0.9.2 would never find 0.10.0, nor the reverse. 0.10.0: the stack's first minor (CHANGELOG, "Adopting 0.10.0").
 # One number for the build and the installed package's config, which a consumer meets (test/package).
-set(DAGDA_DANNAN_MINIMUM 0.9.2)
+set(DAGDA_DANNAN_MINIMUM 0.10.0)
 find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
+
+# Dannan's one sanitizer switch, honoured by name for Dagda's own targets (Dannan's docs/building.md): `address` (ASan
+# with UBSan) or `thread` (TSan). An installed Dannan never carries the flags, so the Dannan this links must itself be
+# built with the same DANNAN_SANITIZE; tools/ci.sh does both and checks each library with nm.
+set(DANNAN_SANITIZE "" CACHE STRING "Sanitizer for Dagda's targets: empty, address or thread")
+if(DANNAN_SANITIZE STREQUAL "address")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+  add_link_options(-fsanitize=address,undefined)
+elseif(DANNAN_SANITIZE STREQUAL "thread")
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
+elseif(NOT DANNAN_SANITIZE STREQUAL "")
+  message(FATAL_ERROR "DANNAN_SANITIZE is address, thread or empty, not '${DANNAN_SANITIZE}'")
+endif()
 # Where an install puts things; before any target names its install paths.
 include(GNUInstallDirs)
 
@@ -47,6 +61,12 @@ configure_file(dagda/include/dagda/version.h.in ${PROJECT_BINARY_DIR}/generated/
 
 add_subdirectory(dagda)
 add_subdirectory(tools)
+
+# Fuzz targets on Dannan's harness (dannan::testing): compiled into dagda_tests's smoke test, and with
+# DAGDA_BUILD_FUZZING each subsystem's as its own binary.
+if(DAGDA_BUILD_TESTING OR DAGDA_BUILD_FUZZING)
+  add_subdirectory(dagda/fuzz)
+endif()
 
 if(DAGDA_BUILD_TESTING)
   find_package(GTest 1.14 CONFIG REQUIRED)

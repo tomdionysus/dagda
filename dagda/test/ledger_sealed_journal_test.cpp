@@ -25,6 +25,7 @@
 
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/test/fixtures/temp_dir.h"
 
@@ -47,7 +48,7 @@ std::vector<std::string> replay_all(SealedJournal& journal) {
   return seen;
 }
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 void write_file(const std::filesystem::path& path, const Bytes& bytes) {
   std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -130,7 +131,7 @@ TEST(LedgerSealedJournal, ADamagedOrRefusedFrameEndsTheReplayThere) {
   EXPECT_EQ(replay_all(damaged).size(), 2u);
   EXPECT_EQ(std::filesystem::file_size(path), second_frame_end);
   // Said where it stopped, as Macha logs it.
-  EXPECT_TRUE(sink->saw("test journal recovered path=" + path.string() + " offset=" + std::to_string(second_frame_end)));
+  EXPECT_TRUE(test::saw(*sink, "test journal recovered path=" + path.string() + " offset=" + std::to_string(second_frame_end)));
 
   // A frame the reader refuses ends the replay as a damaged one does.
   SealedJournal refusing(path, key_of(3), test_aad, 1U << 20, quiet_logger());
@@ -190,11 +191,11 @@ TEST(LedgerSealedJournal, ReplaysAFrameMachaWrote) {
   std::vector<Bytes> seen;
   journal.replay([&](std::span<const uint8_t> plain) { seen.emplace_back(plain.begin(), plain.end()); }, 4U << 20, "test journal");
   ASSERT_EQ(seen.size(), 1u);
-  EXPECT_EQ(dannan::identity::hex(seen.front()), known_plaintext);
+  EXPECT_EQ(dannan::encoding::hex(seen.front()), known_plaintext);
   EXPECT_EQ(journal.frames(), 1u);
   EXPECT_EQ(journal.bytes(), 32u + 120u);
   // And by offset, as the trie reads its nodes.
-  EXPECT_EQ(dannan::identity::hex(journal.read_at(0)), known_plaintext);
+  EXPECT_EQ(dannan::encoding::hex(journal.read_at(0)), known_plaintext);
 }
 
 // What Dagda appends is that frame: under the same nonce, the same bytes.
@@ -211,7 +212,7 @@ TEST(LedgerSealedJournal, AppendsMachasFraming) {
   std::ifstream in(path, std::ios::binary);
   const Bytes written{std::istreambuf_iterator<char>(in), {}};
   ASSERT_EQ(written.size(), 32u + plain.size());
-  EXPECT_EQ(dannan::identity::hex(std::span(written).first(4)), "00000078");
+  EXPECT_EQ(dannan::encoding::hex(std::span(written).first(4)), "00000078");
   const auto nonce = std::span<const uint8_t, 12>(written.data() + 4, 12);
   const auto tag = std::span<const uint8_t, 16>(written.data() + 16, 16);
   const auto ciphertext = std::span(written).subspan(32);
@@ -224,7 +225,7 @@ TEST(LedgerSealedJournal, AppendsMachasFraming) {
   frame.insert(frame.end(), sealed.nonce.begin(), sealed.nonce.end());
   frame.insert(frame.end(), sealed.tag.begin(), sealed.tag.end());
   frame.insert(frame.end(), sealed.ciphertext.begin(), sealed.ciphertext.end());
-  EXPECT_EQ(dannan::identity::hex(frame), known_frame);
+  EXPECT_EQ(dannan::encoding::hex(frame), known_frame);
 }
 
 }  // namespace

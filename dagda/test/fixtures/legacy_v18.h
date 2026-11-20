@@ -30,6 +30,7 @@
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/store/local_format.h"
 #include "dagda/store/object_id.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/node_id.h"
 
@@ -70,7 +71,7 @@ inline void write_backend_marker_v18(const std::filesystem::path& state, const s
   const auto text = backend.lexically_normal().string();
   const auto hash = dannan::identity::sha256({reinterpret_cast<const uint8_t*>(text.data()), text.size()});
   std::filesystem::create_directories(state / "backend-identities");
-  std::ofstream(state / "backend-identities" / (dannan::identity::hex(hash) + ".id"), std::ios::binary) << backend_marker_v18(node, token);
+  std::ofstream(state / "backend-identities" / (dannan::encoding::hex(hash.bytes) + ".id"), std::ios::binary) << backend_marker_v18(node, token);
 }
 
 // Sealed as Macha sealed: the id alone as the associated data, under the
@@ -129,7 +130,7 @@ inline std::map<std::filesystem::path, std::string> tree_digest(const std::files
   std::map<std::filesystem::path, std::string> out;
   for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
     if (entry.is_regular_file() && entry.path().filename() != ".macha.lock")
-      out[entry.path()] = dannan::identity::hex(dannan::identity::sha256(read_file(entry.path())));
+      out[entry.path()] = dannan::encoding::hex(dannan::identity::sha256(read_file(entry.path())).bytes);
   return out;
 }
 

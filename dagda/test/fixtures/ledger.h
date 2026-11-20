@@ -28,10 +28,11 @@
 
 #include "dagda/domain/storage_key.h"
 #include "dagda/ledger/object_trie.h"
-#include "dannan/contract/thread_safety.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/secure_memory.h"
 #include "dannan/status/log.h"
+#include "dannan/test/fixtures/recording_sink.h"
 
 namespace dagda::test {
 
@@ -39,36 +40,14 @@ using ledger::Bytes;
 using ledger::ObjectId;
 using ledger::ObjectTrie;
 
-// Keeps every record it is given, at every level. Thread-safe.
-class RecordingSink final : public dannan::status::LogSink {
- public:
-  bool enabled(dannan::status::LogLevel) const noexcept override { return true; }
-  void write(dannan::status::LogLevel level, std::string_view scope, std::string_view message) override {
-    dannan::contract::Lock lock(_mutex);
-    _lines.push_back(std::string(scope) + ": " + std::string(message));
-    _levels.push_back(level);
-  }
-  std::vector<std::string> lines() {
-    dannan::contract::Lock lock(_mutex);
-    return _lines;
-  }
-  bool saw(std::string_view text) {
-    const auto all = lines();
-    return std::any_of(all.begin(), all.end(), [&](const std::string& line) { return line.find(text) != std::string::npos; });
-  }
-  // A line holding `text`, written at `level`.
-  bool saw(dannan::status::LogLevel level, std::string_view text) {
-    dannan::contract::Lock lock(_mutex);
-    for (size_t i = 0; i < _lines.size(); ++i)
-      if (_levels[i] == level && _lines[i].find(text) != std::string::npos) return true;
-    return false;
-  }
+// The stack's one capture sink is Dannan's.
+using RecordingSink = dannan::test::RecordingSink;
 
- private:
-  dannan::contract::Mutex _mutex;
-  std::vector<std::string> _lines DANNAN_GUARDED_BY(_mutex);
-  std::vector<dannan::status::LogLevel> _levels DANNAN_GUARDED_BY(_mutex);
-};
+// A record holding `text`, its scope included.
+inline bool saw(const RecordingSink& sink, std::string_view text) { return sink.text().find(text) != std::string::npos; }
+
+// A record written at `level` whose message holds `text`.
+inline bool saw(const RecordingSink& sink, dannan::status::LogLevel level, std::string_view text) { return sink.count(level, text) > 0; }
 
 inline dannan::status::ScopedLogger logger_into(std::shared_ptr<RecordingSink> sink) { return dannan::status::ScopedLogger(std::move(sink), "ledger"); }
 
@@ -84,7 +63,7 @@ inline std::shared_ptr<const domain::StorageKey> key_of(uint8_t fill) {
 // Domain v1's storage key from 1a's known-answer cluster key file
 // ("dagda known-answer cluster key\r\n"), pinned in domain_storage_key_test.
 inline std::shared_ptr<const domain::StorageKey> known_answer_key() {
-  const auto bytes = dannan::identity::unhex("879277d5274170fabe955dd8b14c14edbd54533790e24617b7cff11a9679bbd8").value();
+  const auto bytes = dannan::encoding::unhex("879277d5274170fabe955dd8b14c14edbd54533790e24617b7cff11a9679bbd8").value();
   return std::make_shared<const domain::StorageKey>(dannan::identity::Secret(bytes));
 }
 

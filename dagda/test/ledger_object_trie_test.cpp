@@ -46,6 +46,7 @@
 #include "dagda/ledger/sealed_journal.h"
 #include "dagda/store/object_id.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -53,7 +54,7 @@
 namespace dagda::ledger {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::sha256;
 using dannan::net::Writer;
 using test::check_matches;
@@ -67,7 +68,7 @@ using test::small_options;
 using test::trie_of;
 using test::value_of;
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 Bytes read_file(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
@@ -672,7 +673,7 @@ TEST(LedgerObjectTrie, PublishesMachasRootForAFixedSet) {
     std::reverse(changes.begin(), changes.end());
     for (size_t from = 0; from < changes.size(); from += 7)
       trie.apply(std::span<const ObjectTrie::Change>(changes).subspan(from, std::min<size_t>(7, changes.size() - from)));
-    EXPECT_EQ(hex(trie.root_hash()), hash);
+    EXPECT_EQ(hex(trie.root_hash().bytes), hash);
     EXPECT_EQ(trie.size(), static_cast<uint64_t>(count));
     trie.checkpoint();
     EXPECT_EQ(hex(read_file(dir.path() / "root")), root);
@@ -691,7 +692,7 @@ TEST(LedgerObjectTrie, OpensATrieMachaSaved) {
   write_file(dir.path() / "nodes-0.bin", unhex(nodes_file_3));
   ObjectTrie trie(dir.path(), test::known_answer_key(), ObjectTrie::Options{}, quiet_logger());
   EXPECT_EQ(trie.size(), 3u);
-  EXPECT_EQ(hex(trie.root_hash()), root_hash_3);
+  EXPECT_EQ(hex(trie.root_hash().bytes), root_hash_3);
   for (const auto& change : held_ids(3)) EXPECT_EQ(trie.get(change.id), change.value);
   EXPECT_EQ(trie.stats().loads, 1u);
   // Opened by the same key only.

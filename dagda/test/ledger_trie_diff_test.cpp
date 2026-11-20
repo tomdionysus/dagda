@@ -26,6 +26,7 @@
 #include "dagda/ledger/object_trie.h"
 #include "dagda/ledger/trie_diff.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -245,7 +246,7 @@ TEST(LedgerTrieDiff, QuestionsAndAnswersSurviveTheWire) {
 // count, hash) each; records as a u32 count of answers, each a u32 count
 // then (id, u32 length, value) each.
 TEST(LedgerTrieDiff, WireFormsAreMachas) {
-  using dannan::identity::hex;
+  using dannan::encoding::hex;
   TrieQuestion question;
   question.kind = TrieQuestionKind::records;
   question.at.bytes.fill(0xab);
@@ -254,19 +255,19 @@ TEST(LedgerTrieDiff, WireFormsAreMachas) {
   prefix.bytes[0] = 0x12;
   prefix.bytes[1] = 0x34;
   question.prefixes = {ObjectTrie::Prefix{}, prefix};
-  EXPECT_EQ(hex(encode_trie_question(question)), std::string("02") + "00" + hex(question.at) + "00000002" + "00" + "021234");
+  EXPECT_EQ(hex(encode_trie_question(question)), std::string("02") + "00" + hex(question.at.bytes) + "00000002" + "00" + "021234");
 
   Hash256 hash;
   hash.bytes.fill(0x01);
-  EXPECT_EQ(hex(encode_trie_root({0x0102, hash})), "0000000000000102" + hex(hash));
+  EXPECT_EQ(hex(encode_trie_root({0x0102, hash})), "0000000000000102" + hex(hash.bytes));
 
   std::vector<ObjectTrie::Children> children(1);
   children[0][3] = {7, hash};
-  EXPECT_EQ(hex(encode_trie_children(children)), "00000001" + std::string("0001") + "03" + "0000000000000007" + hex(hash));
+  EXPECT_EQ(hex(encode_trie_children(children)), "00000001" + std::string("0001") + "03" + "0000000000000007" + hex(hash.bytes));
 
   std::vector<std::vector<ObjectTrie::Record>> records(1);
   records[0] = {{numbered_id(1), Bytes{0xee}}};
-  EXPECT_EQ(hex(encode_trie_records(records)), "00000001" + std::string("00000001") + hex(numbered_id(1)) + "00000001" + "ee");
+  EXPECT_EQ(hex(encode_trie_records(records)), "00000001" + std::string("00000001") + hex(numbered_id(1).bytes) + "00000001" + "ee");
 }
 
 }  // namespace

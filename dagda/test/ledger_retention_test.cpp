@@ -46,6 +46,7 @@
 #include "dagda/store/object_id.h"
 #include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -54,7 +55,7 @@ namespace dagda::ledger {
 namespace {
 
 using contract::RetentionClass;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using test::known_answer_key;
 using test::quiet_logger;
 
@@ -63,7 +64,7 @@ constexpr auto control = RetentionClass::control;
 
 RetentionStore open_store(const std::filesystem::path& state) { return RetentionStore(state, known_answer_key(), quiet_logger()); }
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 Bytes read_file(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
@@ -596,10 +597,10 @@ TEST(LedgerRetention, ReplaysAClaimsLogMachaWroteAndCheckpointsMachasBytes) {
   EXPECT_EQ(std::filesystem::file_size(root / "ledger-data" / "nodes-0.bin"), unhex(known_data_nodes).size());
   EXPECT_EQ(std::filesystem::file_size(root / "ledger-control" / "nodes-0.bin"), unhex(known_control_nodes).size());
   ObjectTrie tree(root / "ledger-data", known_answer_key(), ObjectTrie::Options{}, quiet_logger());
-  EXPECT_EQ(hex(tree.root_hash()), known_data_hash);
+  EXPECT_EQ(hex(tree.root_hash().bytes), known_data_hash);
   EXPECT_EQ(tree.get(id(2)), unhex(known_data_value));
   ObjectTrie control_tree(root / "ledger-control", known_answer_key(), ObjectTrie::Options{}, quiet_logger());
-  EXPECT_EQ(hex(control_tree.root_hash()), known_control_hash);
+  EXPECT_EQ(hex(control_tree.root_hash().bytes), known_control_hash);
   EXPECT_EQ(control_tree.get(id(9)), unhex(known_control_value));
 }
 

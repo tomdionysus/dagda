@@ -8,7 +8,8 @@
 # One step of GitHub CI, on Debian 13 as the nodes have it. Dannan comes from its
 # public repository at the tag Dagda pins (DANNAN_TAG), built and installed into
 # a prefix of its own, library only, under the same compiler and sanitizer as the
-# step. Macha's fixtures are not on GitHub, so the cases that read them skip.
+# step: DANNAN_SANITIZE, Dannan's one switch, which Dagda honours by the same name.
+# Macha's fixtures are not on GitHub, so the cases that read them skip.
 #
 #   tools/ci.sh check     the header block on every source file, and clang-format
 #   tools/ci.sh release   GCC Release, warnings as errors, the whole suite
@@ -24,7 +25,7 @@
 set -eu
 
 STEP=${1:?usage: tools/ci.sh check|release|asan|tsan}
-DANNAN_TAG=${DANNAN_TAG:-0.9.2}
+DANNAN_TAG=${DANNAN_TAG:-0.10.0}
 JOBS=${JOBS:-$(nproc)}
 ROOT=$(pwd)
 WORK=$ROOT/build-ci
@@ -81,27 +82,21 @@ case "$STEP" in
     suite
     ;;
   asan)
-    flags="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g"
-    link="-fsanitize=address,undefined"
     # Every library a sanitizer build links is built with that sanitizer (the
     # maintainer, 2026-11-20): Dannan too, or only Dagda's own code is checked.
-    dannan RelWithDebInfo "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$link" "-DCMAKE_SHARED_LINKER_FLAGS=$link"
+    dannan RelWithDebInfo -DDANNAN_SANITIZE=address
     # GCC 14's std::regex raises -Wmaybe-uninitialized under the sanitizers (the
     # 14 known warnings of every ASan gate), so warnings are not errors here.
-    dagda RelWithDebInfo -DDAGDA_WARNINGS_AS_ERRORS=OFF "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=$link" \
-      "-DCMAKE_SHARED_LINKER_FLAGS=$link"
+    dagda RelWithDebInfo -DDAGDA_WARNINGS_AS_ERRORS=OFF -DDANNAN_SANITIZE=address
     instrumented __asan_
     suite env ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
     ;;
   tsan)
-    flags="-fsanitize=thread -fno-omit-frame-pointer -g"
     clang="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++"
     # shellcheck disable=SC2086
-    dannan RelWithDebInfo $clang "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread" \
-      "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread"
+    dannan RelWithDebInfo $clang -DDANNAN_SANITIZE=thread
     # shellcheck disable=SC2086
-    dagda RelWithDebInfo $clang "-DCMAKE_CXX_FLAGS=$flags" "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread" \
-      "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread"
+    dagda RelWithDebInfo $clang -DDANNAN_SANITIZE=thread
     instrumented __tsan_
     # The two cases that hold more locks than the deadlock detector tracks run
     # alone with it off, as the release gates do.

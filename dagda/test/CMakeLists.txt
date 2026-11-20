@@ -23,6 +23,7 @@ add_executable(dagda_tests
   domain_domain_id_test.cpp
   domain_storage_key_test.cpp
   domain_wrap_test.cpp
+  fuzz_smoke_test.cpp
   heads_census_test.cpp
   heads_exchange_test.cpp
   heads_reconcile_test.cpp
@@ -103,6 +104,9 @@ add_executable(dagda_tests
   store_write_behind_test.cpp
 )
 target_link_libraries(dagda_tests PRIVATE dagda dagda_test_fixtures GTest::gtest_main dagda_warnings)
+# The fuzz targets' objects, linked whole so every static registration is kept, for the
+# smoke test (dagda/fuzz/).
+target_link_libraries(dagda_tests PRIVATE dagda_fuzz_targets)
 # The count of calls for stable storage interposes on libdagda's: dyld takes an
 # interposing table only from a library, ELF from the executable first.
 # A forked child's exit, counting only its own sanitizer reports.

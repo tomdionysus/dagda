@@ -17,6 +17,7 @@
 #include "dagda/heads/replica.h"
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::heads {
@@ -236,7 +237,7 @@ TEST(HeadsGenesis, TheConstantIsMachasOnMachasSpace) {
   const auto machas = genesis_record(macha_payload);
   EXPECT_EQ(machas.generation, 1U);
   EXPECT_EQ(machas.previous, Hash256{});
-  EXPECT_EQ(dannan::identity::hex(machas.hash), "87ad4c58cd1ccdd1326698d186eeb0ce54e5bf0cb8b1829b688a54584b6d7f06");
+  EXPECT_EQ(dannan::encoding::hex(machas.hash.bytes), "87ad4c58cd1ccdd1326698d186eeb0ce54e5bf0cb8b1829b688a54584b6d7f06");
   EXPECT_TRUE(valid_record(machas));
 
   ReplicaBed bed;

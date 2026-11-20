@@ -17,6 +17,7 @@
 
 #include "dagda/contract/stopping.h"
 #include "dagda/store/messages.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/node_id.h"
 #include "dannan/membership/node_record.h"
 #include "dannan/placement/placement.h"
@@ -47,7 +48,7 @@ uint64_t microseconds_since(const dannan::contract::TimeSource& time, dannan::co
 }
 
 std::string default_advert(std::string_view what, const SpaceId& space) {
-  return "dagda/heads/" + std::string(what) + "/" + dannan::identity::hex(space.bytes);
+  return "dagda/heads/" + std::string(what) + "/" + dannan::encoding::hex(space.bytes);
 }
 
 Exchange::Services resolved(Exchange::Services services) {
@@ -92,14 +93,8 @@ Exchange::Exchange(Services services)
 Exchange::~Exchange() { stop(); }
 
 dannan::sched::RetryPolicy Exchange::retry_policy() const noexcept {
-  dannan::sched::RetryPolicy policy;
-  policy.initial_backoff = _options.retry_backoff;
-  policy.max_backoff = _options.retry_backoff_most;
-  // Never parked: no failure budget, no failing-duration backstop.
-  policy.max_failures_in_window = std::numeric_limits<size_t>::max();
-  policy.failure_window = std::chrono::milliseconds(1);
-  policy.max_failing_duration = std::chrono::milliseconds(0);
-  return policy;
+  // Never parked: repair is retried for as long as there is demand.
+  return dannan::sched::RetryPolicy::unbounded(_options.retry_backoff, _options.retry_backoff_most);
 }
 
 std::chrono::milliseconds Exchange::waited_backoff() const noexcept { return std::max(_retry.current_backoff(), _options.retry_backoff); }
@@ -383,19 +378,19 @@ size_t Exchange::repair_unreconstructable_heads(FrameType frame, const TreePause
       try {
         auto reply = reply_of(call(owner, _options.numbers.get_history_record, addressed(message::encode_hash(hash)), frame));
         if (reply.type != _options.numbers.history_entry_reply) {
-          _logger.debug("metadata head repair: " + owner.host + " cannot serve hash=" + dannan::identity::hex(hash.bytes));
+          _logger.debug("metadata head repair: " + owner.host + " cannot serve hash=" + dannan::encoding::hex(hash.bytes));
           continue;
         }
         const auto entry = decode_history_entry(reply.payload);
         if (entry.hash != hash || entry.body != HistoryEntry::Body::full) {
-          _logger.warn("metadata head repair: " + owner.host + " returned a mismatched record for hash=" + dannan::identity::hex(hash.bytes));
+          _logger.warn("metadata head repair: " + owner.host + " returned a mismatched record for hash=" + dannan::encoding::hex(hash.bytes));
           continue;
         }
         if (!local.reanchor_history(entry)) {
-          _logger.warn("metadata head repair: record from " + owner.host + " rejected locally hash=" + dannan::identity::hex(hash.bytes));
+          _logger.warn("metadata head repair: record from " + owner.host + " rejected locally hash=" + dannan::encoding::hex(hash.bytes));
           continue;
         }
-        _logger.info("metadata accepted head repaired from peer " + owner.host + " hash=" + dannan::identity::hex(hash.bytes) +
+        _logger.info("metadata accepted head repaired from peer " + owner.host + " hash=" + dannan::encoding::hex(hash.bytes) +
                      " generation=" + std::to_string(entry.generation));
         done = true;
         break;
@@ -745,7 +740,7 @@ Record Exchange::read_group(const std::vector<Peer>& nodes, FrameType frame, con
         Lock lock(_unacceptable_mutex);
         _unacceptable_until[hash] = _time.now() + unacceptable_cooldown;
       }
-      _logger.warn("ignoring metadata head without a valid acceptance certificate hash=" + dannan::identity::hex(hash.bytes));
+      _logger.warn("ignoring metadata head without a valid acceptance certificate hash=" + dannan::encoding::hex(hash.bytes));
     } else {
       {
         Lock lock(_unacceptable_mutex);

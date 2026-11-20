@@ -146,7 +146,7 @@ TEST(HeadsCensus, FollowEqualsWalkAfterAnySequence) {
     expect_counts_entries(bed, entries);
     expect_as_walked(bed, tree, root, store);
   }
-  EXPECT_FALSE(bed.sink->saw("walking it again"));
+  EXPECT_FALSE(test::saw(*bed.sink, "walking it again"));
 }
 
 // C34: counts that do not match the trees refuse the change, and the census walks.
@@ -163,7 +163,7 @@ TEST(HeadsCensus, ARefusedChangeWalks) {
   entries["a/all/group 0/part 2/item 1"] = touched;
   const auto after = tree.build(entries, store);
   bed.census.count(after, store);
-  EXPECT_TRUE(bed.sink->saw("census did not match the tree"));
+  EXPECT_TRUE(test::saw(*bed.sink, "census did not match the tree"));
   expect_counts_entries(bed, entries);
   expect_as_walked(bed, tree, after, store);
 }
@@ -177,7 +177,7 @@ TEST(HeadsCensus, AnUnreadableTreeWalks) {
   Bed bed(tree);
   bed.counts.reset(test::fake_object(1), {}, {}, {});
   bed.census.count(root, store);
-  EXPECT_TRUE(bed.sink->saw("census cannot follow the tree"));
+  EXPECT_TRUE(test::saw(*bed.sink, "census cannot follow the tree"));
   expect_counts_entries(bed, entries);
 
   // But a tree that cannot be walked either throws, and installs nothing.
@@ -244,7 +244,7 @@ TEST(HeadsCensus, AFollowReadsOnlyWhatDiffers) {
   bed.census.count(after, store);
   EXPECT_LT(store.reads() * 8, walk_reads);
   EXPECT_LE(store.reads(), 8 * stats.depth);
-  EXPECT_FALSE(bed.sink->saw("walking it again"));
+  EXPECT_FALSE(test::saw(*bed.sink, "walking it again"));
   expect_as_walked(bed, tree, after, store);
 }
 
@@ -283,7 +283,7 @@ TEST(HeadsCensus, ASharedChildGoesWithItsLastReference) {
   bed.census.count(root, store);
   EXPECT_EQ(count_of(bed.counts.views().nodes, references.children.front()), 0u);
   EXPECT_EQ(count_of(bed.counts.views().extents, references.data.front()), 0u);
-  EXPECT_FALSE(bed.sink->saw("walking it again"));
+  EXPECT_FALSE(test::saw(*bed.sink, "walking it again"));
 }
 
 // The stop: as Macha's census_count rethrows it (filesystem.cpp at 9a08846), neither a
@@ -307,7 +307,7 @@ TEST(HeadsCensus, AStopPassesThroughAndLeavesTheCountsWhereTheyWere) {
   const auto after = tree.build(entries, store);
   EXPECT_THROW(bed.census.count(after, store, stop), contract::MaintenanceStopping);
   EXPECT_EQ(bed.counts.root(), std::optional(before));
-  EXPECT_FALSE(bed.sink->saw("walking it again"));
+  EXPECT_FALSE(test::saw(*bed.sink, "walking it again"));
   // A pause per difference.
   pauses = 0;
   bed.census.count(after, store, [&] { ++pauses; });

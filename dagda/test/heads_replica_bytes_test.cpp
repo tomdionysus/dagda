@@ -45,14 +45,15 @@
 #include "dagda/heads/replica.h"
 #include "dagda/heads/space.h"
 #include "dagda/test/fixtures/heads.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::heads {
 namespace {
 
-using dannan::identity::hex;
-using dannan::identity::unhex;
+using dannan::encoding::hex;
+using dannan::encoding::unhex;
 using dannan::net::Reader;
 using dannan::net::Writer;
 
@@ -217,7 +218,7 @@ std::vector<Frame> walk_frames(const domain::StorageKey& key, std::span<const ui
     if (frame.entry.body == HistoryEntry::Body::full) {
       EXPECT_EQ(record_hash(frame.entry.generation, frame.entry.previous, frame.entry.payload), frame.entry.hash) << "offset " << offset;
       if (frame.entry.generation == 1) {
-        EXPECT_EQ(hex(frame.entry.hash), genesis_hash);
+        EXPECT_EQ(hex(frame.entry.hash.bytes), genesis_hash);
       }
     }
     out.push_back(std::move(frame));
@@ -256,11 +257,11 @@ void expect_matches_dump(const std::vector<Frame>& frames, const std::filesystem
     ASSERT_LT(at, frames.size()) << line;
     const auto& frame = frames[at++];
     std::ostringstream expected;
-    expected << "offset=" << frame.offset << " gen=" << frame.entry.generation << " hash=" << hex(frame.entry.hash).substr(0, 16)
-             << " prev=" << hex(frame.entry.previous).substr(0, 16) << " prev_known=" << (frame.entry.previous_known ? 1 : 0)
+    expected << "offset=" << frame.offset << " gen=" << frame.entry.generation << " hash=" << hex(frame.entry.hash.bytes).substr(0, 16)
+             << " prev=" << hex(frame.entry.previous.bytes).substr(0, 16) << " prev_known=" << (frame.entry.previous_known ? 1 : 0)
              << " body=" << (frame.entry.body == HistoryEntry::Body::full ? "full" : "delta") << " payload=" << frame.entry.payload.size()
              << " merge_parents=" << frame.entry.merge_parents.size();
-    for (const auto& parent : frame.entry.merge_parents) expected << " mp=" << hex(parent).substr(0, 16);
+    for (const auto& parent : frame.entry.merge_parents) expected << " mp=" << hex(parent.bytes).substr(0, 16);
     EXPECT_EQ(line, expected.str());
   }
   EXPECT_EQ(at, frames.size());
@@ -539,7 +540,7 @@ TEST(HeadsReplicaBytes, BothFixtureSeedsOpen) {
     const auto file = read_file(root / (std::string("cache-") + node) / "metadata/current.meta");
     const auto seed = decode_record(open_file(*key, seed_magic, seed_magic, file));
     EXPECT_EQ(seed.generation, 9U);
-    EXPECT_EQ(hex(seed.hash).substr(0, 16), "f2d9a033310a2912");
+    EXPECT_EQ(hex(seed.hash.bytes).substr(0, 16), "f2d9a033310a2912");
   }
 }
 
@@ -718,7 +719,7 @@ TEST(HeadsReplicaBytes, AMachaNodeInRecoveryOpensStillInRecovery) {
   EXPECT_EQ(frames[0].entry.generation, 9U);
   EXPECT_EQ(frames[0].entry.body, HistoryEntry::Body::full);
   EXPECT_FALSE(frames[0].entry.previous_known);
-  EXPECT_EQ(hex(frames[0].entry.hash).substr(0, 16), "28597164ce6669b2");
+  EXPECT_EQ(hex(frames[0].entry.hash.bytes).substr(0, 16), "28597164ce6669b2");
 
   // What was set aside: the flipped checkpoint keeps its damage, the rest still opens.
   EXPECT_ANY_THROW((void)open_file(*key, checkpoint_magic, checkpoint_magic, files.at("checkpoint.meta" + stamp)));
@@ -783,15 +784,15 @@ TEST(HeadsReplicaBytes, TwoAcceptedHeadsAtAGenerationStayTwo) {
   EXPECT_EQ(heads[0].generation, 4U);
   EXPECT_EQ(heads[1].generation, 4U);
   std::set<std::string> prefixes;
-  for (const auto& head : heads) prefixes.insert(hex(head.hash).substr(0, 8));
+  for (const auto& head : heads) prefixes.insert(hex(head.hash.bytes).substr(0, 8));
   EXPECT_EQ(prefixes, (std::set<std::string>{"095a7813", "3dfada38"}));
-  EXPECT_EQ(hex(replica->committed().hash).substr(0, 8), "3dfada38");
+  EXPECT_EQ(hex(replica->committed().hash.bytes).substr(0, 8), "3dfada38");
   EXPECT_FALSE(replica->recovery_required());
   EXPECT_FALSE(replica->history_is_ancestor(heads[0].hash, heads[1].hash));
   EXPECT_FALSE(replica->history_is_ancestor(heads[1].hash, heads[0].hash));
   const auto base = replica->history_common_ancestor(heads[0].hash, heads[1].hash);
   ASSERT_TRUE(base.has_value());
-  EXPECT_EQ(hex(*base).substr(0, 8), "e33439ac");
+  EXPECT_EQ(hex(base->bytes).substr(0, 8), "e33439ac");
 }
 
 // The six kinds of damage Macha's test does to a frame.

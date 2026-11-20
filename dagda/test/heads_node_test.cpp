@@ -33,6 +33,7 @@
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/heads_space.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/test/fixtures/gate.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
@@ -454,9 +455,9 @@ TEST(NodeHeads, ACommitIsPublishedOnlyOnceItsObjectsAreClaimed) {
   EXPECT_EQ(space.replica().committed().hash, head.hash);
   EXPECT_FALSE(neutral_tree().lookup(*head_of(*space.current()).root, "phantom", *reader));
   EXPECT_EQ(claims.claim_objects(contract::RetentionClass::data), 1U);
-  EXPECT_TRUE(a.log().saw("metadata retention barrier"));
-  EXPECT_TRUE(a.log().saw("data_objects=1"));
-  EXPECT_TRUE(a.log().saw("outcome=data-unheld"));
+  EXPECT_TRUE(test::saw(a.log(), "metadata retention barrier"));
+  EXPECT_TRUE(test::saw(a.log(), "data_objects=1"));
+  EXPECT_TRUE(test::saw(a.log(), "outcome=data-unheld"));
 }
 
 // H22: DATA "on a node present": a peer holds the object, so the commit stands, and
@@ -501,7 +502,7 @@ TEST(NodeHeads, ARestartReplaysThroughTheControlStoreAndTheSeedRecovers) {
                .record;
   const auto id = a.api().heads().id_of("test/neutral");
   const auto directory = heads::space_directory(a.state(), id);
-  const auto seed_file = a.options().cache.path / "metadata" / (dannan::identity::hex(id.bytes) + ".meta");
+  const auto seed_file = a.options().cache.path / "metadata" / (dannan::encoding::hex(id.bytes) + ".meta");
   EXPECT_TRUE(std::filesystem::exists(seed_file));
   // Each commit that moves the committed record is remembered as it happens.
   heads::CacheSeed seed(a.cache(), a.dagda_node().options().key, a.dagda_node().options().domain.id, test::neutral_seed_magic, test::quiet_logger());

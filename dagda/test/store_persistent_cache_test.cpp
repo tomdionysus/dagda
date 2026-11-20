@@ -223,7 +223,7 @@ TEST(StorePersistentCache, AMissingOrCorruptCacheIsDiscardedAndRebuilt) {
   EXPECT_FALSE(off.enabled());
   EXPECT_FALSE(off.put(object_id(a), a));
   EXPECT_FALSE(off.get(object_id(a)).has_value());
-  EXPECT_TRUE(bed.sink->saw("persistent cache disabled"));
+  EXPECT_TRUE(test::saw(*bed.sink, "persistent cache disabled"));
 }
 
 }  // namespace

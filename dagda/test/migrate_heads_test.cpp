@@ -48,13 +48,14 @@
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/macha_opaque.h"
 #include "dagda/test/fixtures/migrate.h"
+#include "dannan/encoding/base.h"
 #include "dannan/test/fixtures/child_process.h"
 
 namespace dagda::migrate {
 namespace {
 
 using namespace std::chrono_literals;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::net::Reader;
 using dannan::net::Writer;
 using heads::Magic;
@@ -99,7 +100,7 @@ struct HeadsBed {
   std::filesystem::path v18_dir() const { return state / "metadata"; }
   std::filesystem::path v19_dir() const { return heads::space_directory(state, machas_space()); }
   std::filesystem::path v18_seed() const { return cache / "metadata" / "current.meta"; }
-  std::filesystem::path v19_seed() const { return cache / "metadata" / (hex(machas_space()) + ".meta"); }
+  std::filesystem::path v19_seed() const { return cache / "metadata" / (hex(machas_space().bytes) + ".meta"); }
 
   void write_metadata(const std::map<std::string, Bytes>& files) const {
     for (const auto& [name, bytes] : files) {
@@ -259,8 +260,8 @@ struct Opened {
 };
 
 std::ostream& operator<<(std::ostream& out, const Opened& opened) {
-  return out << "committed " << hex(opened.committed) << " generation " << opened.generation << " certificates " << opened.certificates.size() << " history "
-             << opened.history_records << " recovery " << opened.recovery << " failure \"" << opened.failure << "\"";
+  return out << "committed " << hex(opened.committed.bytes) << " generation " << opened.generation << " certificates " << opened.certificates.size()
+             << " history " << opened.history_records << " recovery " << opened.recovery << " failure \"" << opened.failure << "\"";
 }
 
 heads::ReplicaOptions macha_options(const std::filesystem::path& directory, bool v19, const HeadsBed& bed, const std::shared_ptr<const heads::Codec>& codec) {
@@ -925,7 +926,7 @@ TEST(MigrateHeadsCompareDamage, ACertificateChanged) {
   ASSERT_EQ(certificates.size(), 1u);
   certificates[0].replicas.push_back(test::author(9));
   bed.reseal("heads.meta", mm::heads_magic, heads::encode_acceptance_set(certificates));
-  expect_names(bed.after_damage(), "metadata certificates: " + hex(certificates[0].hash) + " has changed");
+  expect_names(bed.after_damage(), "metadata certificates: " + hex(certificates[0].hash.bytes) + " has changed");
 }
 
 TEST(MigrateHeadsCompareDamage, ACertificateLost) {
@@ -933,8 +934,8 @@ TEST(MigrateHeadsCompareDamage, ACertificateLost) {
   const auto certificates = heads::decode_acceptance_set(bed.opened("heads.meta", mm::heads_magic));
   bed.reseal("heads.meta", mm::heads_magic, heads::encode_acceptance_set({}));
   const auto report = bed.after_damage();
-  expect_names(report, "metadata certificates: " + hex(certificates[0].hash) + " is lost");
-  expect_names(report, "metadata heads: " + hex(certificates[0].hash) + " is lost");
+  expect_names(report, "metadata certificates: " + hex(certificates[0].hash.bytes) + " is lost");
+  expect_names(report, "metadata heads: " + hex(certificates[0].hash.bytes) + " is lost");
 }
 
 TEST(MigrateHeadsCompareDamage, TheCheckpointChanged) {
@@ -961,7 +962,7 @@ TEST(MigrateHeadsCompareDamage, AHeadWhoseHistoryIsLost) {
   const auto report = bed.after_damage();
   expect_names(report, "frame is lost");
   const auto certificates = heads::decode_acceptance_set(bed.opened("heads.meta", mm::heads_magic));
-  expect_names(report, "metadata heads: " + hex(certificates[0].hash) + " has changed");
+  expect_names(report, "metadata heads: " + hex(certificates[0].hash.bytes) + " has changed");
 }
 
 TEST(MigrateHeadsCompareDamage, AJournalFrameLost) {
@@ -1146,7 +1147,7 @@ TEST(HeadsConformance, MachasFramesCertificatesAndBranchesAsOpaqueBytes) {
         EXPECT_EQ(heads::record_hash(entry.generation, entry.previous, entry.payload), entry.hash);
         // The constant is 0.93's (766617e); the older state-scratch began at the old one.
         if (entry.generation == 1 && std::string(real.fixture).starts_with("state-scratch-0.93.4")) {
-          EXPECT_EQ(hex(entry.hash), "87ad4c58cd1ccdd1326698d186eeb0ce54e5bf0cb8b1829b688a54584b6d7f06");
+          EXPECT_EQ(hex(entry.hash.bytes), "87ad4c58cd1ccdd1326698d186eeb0ce54e5bf0cb8b1829b688a54584b6d7f06");
         }
       }
       const std::string form(entry.payload.begin(), entry.payload.begin() + std::min<size_t>(8, entry.payload.size()));

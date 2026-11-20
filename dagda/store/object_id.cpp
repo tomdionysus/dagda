@@ -7,10 +7,12 @@
 
 #include "dagda/store/object_id.h"
 
+#include "dannan/encoding/base.h"
+
 namespace dagda::store {
 
 ObjectId object_id(std::span<const uint8_t> plaintext) { return dannan::identity::sha256(plaintext); }
 
-std::string to_string(const ObjectId& id) { return dannan::identity::hex(id.bytes); }
+std::string to_string(const ObjectId& id) { return dannan::encoding::hex(id.bytes); }
 
 }  // namespace dagda::store

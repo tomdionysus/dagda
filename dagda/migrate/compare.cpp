@@ -13,6 +13,7 @@
 #include "dagda/ledger/retention.h"
 #include "dagda/migrate/manifest.h"
 #include "dagda/migrate/manifest_format.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 
@@ -20,7 +21,7 @@ namespace dagda::migrate {
 namespace {
 
 using namespace manifest_format;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 
 // Hex of an id or other binary key; a text key as it is.
 std::string key_text(SectionKind kind, const Bytes& key) {

@@ -20,13 +20,14 @@
 
 #include "dagda/lease/lease_table.h"
 #include "dagda/test/fixtures/lease.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::lease {
 namespace {
 
 using dagda::test::node_of;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::net::Bytes;
 using dannan::net::DecodeError;
 using dannan::net::Reader;

@@ -32,6 +32,7 @@
 #include "dagda/heads/retirement.h"
 #include "dagda/heads/space.h"
 #include "dagda/test/fixtures/heads.h"
+#include "dannan/encoding/base.h"
 
 namespace dagda::test {
 
@@ -72,7 +73,7 @@ inline std::vector<GarbageBatch> neutral_batches(const NeutralHead& head) {
   std::vector<GarbageBatch> out;
   const auto& notes = head.notes.get();
   for (auto at = notes.lower_bound("batch/"); at != notes.end() && at->first.starts_with("batch/"); ++at) {
-    const auto unhexed = dannan::identity::unhex(at->first.substr(6));
+    const auto unhexed = dannan::encoding::unhex(at->first.substr(6));
     if (!unhexed || unhexed->size() != 32) throw DecodeError("bad neutral batch name");
     GarbageBatch batch;
     std::copy(unhexed->begin(), unhexed->end(), batch.id.bytes.begin());

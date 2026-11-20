@@ -25,6 +25,7 @@
 #include "dagda/store/object_id.h"
 #include "dagda/store/sealing.h"
 #include "dagda/test/fixtures/legacy_v18.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -32,9 +33,9 @@
 namespace dagda::migrate {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 Bytes bytes_of(std::string_view text) { return Bytes(text.begin(), text.end()); }
 

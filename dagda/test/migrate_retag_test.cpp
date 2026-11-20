@@ -17,12 +17,13 @@
 #include "dagda/store/sealing.h"
 #include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::migrate {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using store::Bytes;
 
 // The GCM specification's test case 13: an all-zero 256-bit key.

@@ -21,6 +21,7 @@
 #include "dagda/store/persistent_cache.h"
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/durable_file.h"
 
 namespace dagda::heads {
@@ -49,7 +50,7 @@ struct SeedBed {
   PersistentBlockCache cache{{root, 4, true}, bed.key, bed.services()};
   CacheSeed seed{cache, key, neutral_domain(), seed_magic, quiet_logger()};
 
-  std::filesystem::path file(const SpaceId& space = neutral_space()) const { return root / "metadata" / (dannan::identity::hex(space) + ".meta"); }
+  std::filesystem::path file(const SpaceId& space = neutral_space()) const { return root / "metadata" / (dannan::encoding::hex(space.bytes) + ".meta"); }
 };
 
 Record some_record(uint64_t generation = 5) { return record_of(generation, Hash256{{9}}, head_with({"seeded"})); }
@@ -208,7 +209,7 @@ TEST(HeadsSeed, OffMeansNeitherReadNorWritten) {
   const auto cache_root = bed.dir.path() / "cache";
   const auto key = test::key_of(51);
   const auto record = some_record();
-  const auto file = cache_root / "metadata" / (dannan::identity::hex(neutral_space()) + ".meta");
+  const auto file = cache_root / "metadata" / (dannan::encoding::hex(neutral_space().bytes) + ".meta");
 
   // Macha's prefer_metadata false: `seed` unset.
   CacheOptions options{cache_root, 4, false};
@@ -285,7 +286,7 @@ TEST(HeadsSeed, AMovedPlaceIsWrittenAgain) {
   const auto moved = bed.bed.dir.path() / "elsewhere";
   bed.cache.reconfigure({moved, 4, true});
   bed.seed.remember(neutral_space(), newer);
-  const auto moved_file = moved / "metadata" / (dannan::identity::hex(neutral_space()) + ".meta");
+  const auto moved_file = moved / "metadata" / (dannan::encoding::hex(neutral_space().bytes) + ".meta");
   ASSERT_TRUE(std::filesystem::exists(moved_file));
 
   // And when `opening` moves over the same path.

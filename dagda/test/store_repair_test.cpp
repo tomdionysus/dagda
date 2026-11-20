@@ -486,8 +486,9 @@ TEST(StoreRepair, APushOfALocalObjectThatWillNotReadIsWarnedWithItsTotal) {
   for (int step = 0; step < 8 && writer.store().repair_diagnostics().local_unreadable == 0; ++step)
     (void)landed_step(writer.store(), {inventory_of(live), {}, lacks_of({{peer.id(), {id}}}), {}}, 64ULL * 1024 * 1024);
   EXPECT_EQ(writer.store().repair_diagnostics().local_unreadable, 1u);
-  EXPECT_TRUE(writer.log().saw(dannan::status::LogLevel::warn, "repair found a local object it cannot read back object=" + to_string(id) +
-                                                                   " local_unreadable_total=1; the store listed it but the read failed"));
+  EXPECT_TRUE(test::saw(
+      writer.log(), dannan::status::LogLevel::warn,
+      "repair found a local object it cannot read back object=" + to_string(id) + " local_unreadable_total=1; the store listed it but the read failed"));
 }
 
 // test_repair_probes_without_credit_and_transfers_only_with_it: credit pays
@@ -1047,8 +1048,9 @@ TEST(StoreRepair, RepairPassesUnavailableAndCountsUnsourceable) {
   EXPECT_EQ(repeated.unsourceable_sample.size(), 1u);
   EXPECT_GE(repeated.pull_unsourceable, after.pull_unsourceable);
   // Macha's warning, once a minute (distributed_store.cpp:2377 at 98b816d).
-  EXPECT_TRUE(node.log().saw(dannan::status::LogLevel::warn, "repair cannot source an object this node should own object=" + to_string(missing) +
-                                                                 " unsourceable_total=1; the live namespace references it and no peer would supply it"));
+  EXPECT_TRUE(test::saw(node.log(), dannan::status::LogLevel::warn,
+                        "repair cannot source an object this node should own object=" + to_string(missing) +
+                            " unsourceable_total=1; the live namespace references it and no peer would supply it"));
 }
 
 // test_a_busy_peer_still_says_what_it_does_not_hold: a peer whose DATA

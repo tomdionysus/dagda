@@ -18,6 +18,7 @@
 #include <string>
 
 #include "dagda/domain/storage_key.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -25,7 +26,7 @@
 namespace dagda::domain {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 
 // A key file as an operator writes one: the line end is not part of it.
 constexpr char key_file[] = "dagda known-answer cluster key\r\n";

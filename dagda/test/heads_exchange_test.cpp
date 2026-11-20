@@ -37,6 +37,7 @@
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/heads_space.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/test/fixtures/gate.h"
 #include "dannan/test/fixtures/stepped_time.h"
 
@@ -690,7 +691,7 @@ TEST(HeadsExchange, AWriteCopiesAdvertChangeIsAMembershipEvent) {
   auto& a = cluster.add("a", joined(1));
   auto& b = cluster.add("b", joined(2));
   cluster.start_all();
-  const auto key = "dagda/heads/write-copies/" + dannan::identity::hex(a.api().heads().id_of(space_name).bytes);
+  const auto key = "dagda/heads/write-copies/" + dannan::encoding::hex(a.api().heads().id_of(space_name).bytes);
   ASSERT_TRUE(wait_until([&] {
     for (const auto& record : a.context().nodes().active())
       if (record.id == b.id() && record.advert_u64(key) == 2u) return true;
