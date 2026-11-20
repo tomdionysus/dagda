@@ -83,7 +83,7 @@ dannan_node.start();
 auto& store = node.context();
 store.require_version(dagda::context_version);
 dagda::WriteOptions write;
-write.ack_level = dagda::Durability::replicated;  // on disk on k nodes
+write.ack_level = dagda::Durability::replicated;  // on disk on a majority of the replication set
 store.objects().write(bytes, write, std::chrono::seconds(10), executor, [](dagda::WriteEvidence evidence) {
   // evidence.id, evidence.replicas (by node id), evidence.ticket
 });
