@@ -72,6 +72,13 @@ Per space, chosen at open:
   Status line, and never enters the head set. It is retried when the sender's offset is back in bounds.
 - A node whose own clock is out of bounds: `hlc().now()` throws, so a mutation is refused with that reason, never
   a wait. The collector treats the throw as "not matured" (D-2).
+- Agreed with Dannan:
+  - `admit()` returns `AdmitVerdict { admitted, ahead, self_out_of_bounds }` beside its text.
+    - `ahead`: refuse this commit, and retry it on Dagda's own backoff, since the refusal is transient and there
+      is no notice.
+    - `self_out_of_bounds`: this node cannot judge now. Retry, and refuse everything meanwhile.
+  - `hlc().now()` throws `ClockOutOfBounds` (a `std::runtime_error`) at once while this node is out of bounds;
+    caught apart from other errors.
 - Case 22: a commit stamped beyond the bound is refused at acceptance, and the heads of the nodes that accepted
   everything else still fold to the same commit.
 
