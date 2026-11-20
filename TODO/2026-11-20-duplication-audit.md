@@ -44,6 +44,19 @@ The rule does not forbid these. They are listed so nothing is mistaken for share
 - The counter map (D7, Lugh's back-off only so far).
 - The no-values AcceptorStore form (Mimir only; the maintainer asked).
 
+## 3b. Found by Dannan's searches (2026-11-20), checked here
+
+- **Dots, version clocks and group commit stay Dagda's.** No project outside Dagda and Macha keeps dots, and none
+  has a group commit (Mimir and Kvasir are memory-only; Lugh fsyncs each append in a store due for deletion).
+  Macha's `MetadataDot` should alias Dagda's.
+- **`dagda/store/cpu_pacing.h` duplicates Dannan's `dannan/sched/cpu_pacing.h`.** A diff of the two is 14 lines.
+  Used by `node.h:45`, `store/repair.h:24`, `store/cpu_pacing.cpp` and a test. Dagda should use Dannan's and delete
+  its own.
+- **Hand-written exponential backoffs** beside Dannan's `sched/retry.h`: `heads/exchange.cpp:1357-1358` (repair's
+  retry) and `store/availability.cpp:244` (the survey's retry). Dagda should use Dannan's.
+- **WriteBehind, ConvergenceDemand and ReplicaSelector** are copied in Macha. Dannan has proposed that Macha alias
+  Dagda's.
+
 ## 4. To check with Dannan (down)
 
 Dannan, 2026-11-20: both added to its own audit, answered from searches of Lir, Lugh, Louhi, Mimir and Kvasir, not
