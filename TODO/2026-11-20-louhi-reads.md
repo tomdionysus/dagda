@@ -76,7 +76,37 @@ Cases first:
 - A peer without the space is unheard and holds nothing back.
 - The notice is posted to the executor, never inline.
 
-Open for Tom: the advert holds the head identity, not the clock (recommended, because of the 1024-byte bound).
+Open for Tom: the advert holds the head identity, not the clock (recommended, because of the 1024-byte bound). Tom,
+2026-11-20: "Are other projects waiting for this also? What works for everyone?", so every hosted system and Dannan
+were asked.
+
+### What the other systems need (asked 2026-11-20)
+
+**Lugh** (from its P8 plan; P8 waits on Tom): yes.
+- Spaces: lugh/scope (every node), lugh/secrets (Lugh nodes only) and the sign-in back-off space. Not node_local
+  spaces, which cannot be behind.
+- What a lagging view gets wrong:
+  - genesis run on an empty scope;
+  - a uidNumber or gidNumber issued twice, or a duplicate name;
+  - a revoked or disabled session accepted on a node that can reach its peers and is merely behind.
+- Shape: per space, a query and a notice. The notice sets /ready once scope and secrets are caught up. The query
+  goes before allocating writes and before genesis. Lugh combines spaces itself.
+- Not caught up: /ready false; sign-in, token and bind answer 503; allocating writes and genesis are refused. Reads
+  of what the caller holds go ahead.
+- It must handle:
+  - Peers that do not open the space neither count nor hold back: compare only with peers advertising a head for it.
+  - **"No peers to compare" kept distinct from caught up**, at least as a count of peers compared. Otherwise a lone
+    node with stale data reports caught up.
+  - Recomputed on every active-set change, so a peer that leaves never blocks the answer for ever.
+  - An advertised head older than the peer's latest is fine, since covering it is enough.
+  - Three or four adverts per node.
+- The head-identity advert serves Lugh, given the "no peers" distinction.
+
+Consequence for the shape: the answer becomes three-valued, `caught_up`, `behind` (naming peers and heads) and
+`alone` (no peer advertises the space). It carries the count of peers compared, and `alone` is never folded into
+`caught_up`.
+
+Awaited: Lir, Kvasir, Mimir, Dannan (the advert budget, and whether one packed advert is better).
 
 ## 3. FetchContent beside a fetched Dannan
 
