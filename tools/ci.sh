@@ -16,6 +16,8 @@
 #   tools/ci.sh tsan      clang with TSan, Dannan under TSan too, the whole suite
 #   tools/ci.sh coverage  GCC Debug with --coverage, the whole suite, lcov over
 #                         dagda/ less its tests, to build-ci/coverage.info
+#   tools/ci.sh tidy      clang-tidy's bugprone-use-after-move over every compiled
+#                         file, library, tests and tools; any finding fails
 #
 # The gates of record still run on the Pi cluster (CLAUDE.md, "Tests"); this is
 # the public build's check.
@@ -91,6 +93,14 @@ case "$STEP" in
     two="DistributedStore.AControlGraphLargerThanTheConnectionBudgetStillPublishes:StoreDistributedStore.RetainDataBatchesALargePublicationWithinBoundedTime"
     suite env TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 sh -c "./dagda_tests --gtest_filter=-$two"
     suite env TSAN_OPTIONS=halt_on_error=1:detect_deadlocks=0 sh -c "./dagda_tests --gtest_filter=$two"
+    ;;
+  tidy)
+    # Argument order is unspecified, so a value moved into one argument and read in
+    # another breaks on some compilers only (Lugh's find, 2026-11-20).
+    dannan Release
+    dagda Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    run-clang-tidy -p "$WORK/dagda" -j "$JOBS" -quiet -checks='-*,bugprone-use-after-move' \
+      -warnings-as-errors='bugprone-use-after-move' -extra-arg=-Wno-unknown-warning-option
     ;;
   coverage)
     # Tom, 2026-11-20: about 100% coverage on all code. Measured over the library,

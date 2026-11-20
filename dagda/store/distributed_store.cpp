@@ -2338,7 +2338,10 @@ std::shared_ptr<DistributedStore::SharedFetch> DistributedStore::start_fetch(con
           }
         }
         if (opportunistic_persist) fetch->persist = true;
-        if (on_done) fetch->on_done.push_back(std::move(on_done));
+        // Copied, not moved: the move is the new fetch's below, so no path reads a
+        // moved-from callback (this branch leaves `fetch` set and that one runs only
+        // when it is not).
+        if (on_done) fetch->on_done.push_back(on_done);
       }
     }
     if (!fetch) {
