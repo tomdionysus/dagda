@@ -159,7 +159,15 @@ Awaited: Lir.
   - JWKS is a register map keyed by kid, written once and retired by tombstone or expiry, so last-writer by
     (Lamport, node id) is enough.
   - lugh/scope and lugh/secrets use Lugh's own merge, with its version in the value.
-- Lir: awaited.
+- **Lir** (2026-11-20; the maintainer ruled the same day that Lir is rewritten from scratch):
+  - (a) The ordering stamp: possibly. It hangs on Lir's open question to the maintainer, whether retained values and message
+    expiry are ordered by Dannan's `hlc()`. If so, Lir needs (a) with HlcStamp plus node id. Not to be built for Lir
+    until the maintainer answers; Lir will relay it.
+  - (b) The value-merge hook: no for retained, since MQTT's retained message is the last write by definition. Session
+    state is unknown until the rewrite's session design exists.
+
+So: (b) is not built (no second project). (a) waits on the maintainer's answer to Lir. If he rules hlc, Louhi and Lir both need
+the owner's stamp and it is built.
 
 ## 4. The durable AcceptorStore (the maintainer, 2026-11-20, confirmed in this session: the next release)
 
