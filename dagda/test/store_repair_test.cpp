@@ -3286,8 +3286,17 @@ TEST(StoreRepair, ATrieDiffPinIsDroppedAfterTwoMinutesUnused) {
   ASSERT_TRUE(cluster.converged());
   (void)local_objects(b, 10, 1024, 97);
   const auto peer = record_of(a, b.id());
+  // b's liveness probes run on the stepped clock too, so a step past their budget closes the
+  // route a call is on at once (Dannan's Client::await_ping), and that call fails with no
+  // reply: CI's flake, 124 ms for the whole case. Asked until answered, the question reaches
+  // b at the stepped time as one call would; a pin is touched only by a question it answers.
   const auto ask = [&](const ledger::TrieQuestion& question) {
-    return a.context().routes().call_and_wait(peer, message::trie_diff, ledger::encode_trie_question(question), FrameType::speculative, 5s);
+    CallOutcome answered;
+    EXPECT_TRUE(wait_until([&] {
+      answered = a.context().routes().call_and_wait(peer, message::trie_diff, ledger::encode_trie_question(question), FrameType::speculative, 5s);
+      return answered.reply.has_value();
+    }));
+    return answered;
   };
   const auto root = ask(ledger::TrieQuestion{});
   ASSERT_TRUE(root.reply && root.reply->type == message::trie_diff_reply);
