@@ -86,6 +86,12 @@ unless the board says so (`claims_list`).
    The maintainer, 2026-11-20 (relayed from Dannan's session):
    - **Q2:** D6 orders by (hlc stamp, node id).
    - **Q4:** no automatic removal of absent nodes; retirement is one operator command, cluster-wide.
+   - **Dannan 0.10.0 has started** (the maintainer's word, 2026-11-20).
+     - Order: 13 (contract vocabulary, the Fault enum, ack levels), 28 (logging for injection), 1 (in-memory
+       AcceptorStore), 17 (dannan::testing, with Dagda's nodes in the same world), then 6 (the clock rules and
+       `HlcClock::admit`, which D6's HLC form needs). Small items go in between, including
+       `RetryPolicy::unbounded`.
+     - Dagda pins 0.10.0 when it is tagged. The plan is `../dannan/TODO/2026-11-20-stack-plan.md`.
    - **Q6, settled:** where two projects need something and one already depends on the other, the lower one keeps
      it. So write_behind, convergence demand, replica selection, dots and clocks, and group commit stay in Dagda, and
      Macha uses Dagda's.
