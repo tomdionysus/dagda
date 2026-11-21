@@ -901,7 +901,10 @@ TEST(HeadsExchange, ANodeTruncatesItsHistoryWithItsPeerAwayAndThePeerConverges) 
   cluster.start_all();
   ASSERT_TRUE(wait_until([&] { return a.context().nodes().active().size() >= 2 && b.context().nodes().active().size() >= 2; }));
   ASSERT_TRUE(writes(a, "a"));
-  ASSERT_TRUE(sees(b, "a"));
+  // The founding holds "a" too, so the key cannot say b has this commit; the shared head does.
+  // Seen by key alone, b once wrote "b" on the founding, beside a's commit: two heads this
+  // space has no merge for, once in about 550 runs on one core.
+  ASSERT_TRUE(one_shared_head(a, b));
   ASSERT_TRUE(writes(b, "b"));
   ASSERT_TRUE(sees(a, "b")) << convergence_of(a, b);
   ASSERT_TRUE(one_shared_head(a, b));
@@ -964,7 +967,8 @@ TEST(HeadsExchange, AnUnreconstructableHeadIsRepairedLiveFromAPeer) {
   cluster.start_all();
   ASSERT_TRUE(wait_until([&] { return a.context().nodes().active().size() >= 2 && b.context().nodes().active().size() >= 2; }));
   ASSERT_TRUE(writes(a, "a"));
-  ASSERT_TRUE(sees(b, "a"));
+  // The founding holds "a" too: the shared head, not the key, says b has a's commit.
+  ASSERT_TRUE(one_shared_head(a, b));
 
   const auto certificates = replica_on(b).accepted_head_certificates();
   ASSERT_EQ(certificates.size(), 1u);
@@ -1101,7 +1105,9 @@ TEST(HeadsExchange, ANoticeMakesAViewStaleBeforeItsLifetimeEnds) {
   cluster.start_all();
   ASSERT_TRUE(wait_until([&] { return a.context().nodes().active().size() >= 2 && b.context().nodes().active().size() >= 2; }));
   ASSERT_TRUE(writes(a, "a"));
-  ASSERT_TRUE(sees(b, "a"));
+  // The founding holds "a" too: the shared head, not the key, says b has a's commit, so a
+  // late one cannot move the epoch the case measures.
+  ASSERT_TRUE(one_shared_head(a, b));
   const auto epoch = exchange_on(b).remote_epoch();
   write_key(a, "b");
   // The clock stands still, and the view moves.
