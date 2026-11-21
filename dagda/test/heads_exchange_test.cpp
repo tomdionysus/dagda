@@ -150,9 +150,16 @@ std::string convergence_of(ClusterNode& node, ClusterNode& peer) {
                     std::to_string(demand.runs_scheduled) + " scheduled / " + std::to_string(demand.runs_completed) + " completed, epochs " +
                     std::to_string(demand.requested_epoch) + " requested / " + std::to_string(demand.completed_epoch) + " completed, scheduled now " +
                     (demand.scheduled ? "yes" : "no") + "\n";
-  for (const auto& line : node.log().lines())
-    if (line.find("metadata") != std::string::npos || line.find("convergence") != std::string::npos || line.find("repair") != std::string::npos)
-      out += "  " + line + "\n";
+  for (auto* each : {&node, &peer}) {
+    out += each == &node ? "node's heads:" : "peer's heads:";
+    for (const auto& head : replica_on(*each).accepted_heads())
+      out += " gen " + std::to_string(head.generation) + " " + store::to_string(head.hash).substr(0, 12) + " <- " +
+             store::to_string(head.previous).substr(0, 12) + ";";
+    out += "\n";
+    for (const auto& line : each->log().lines())
+      if (line.find("metadata") != std::string::npos || line.find("convergence") != std::string::npos || line.find("repair") != std::string::npos)
+        out += (each == &node ? "  node: " : "  peer: ") + line + "\n";
+  }
   return out;
 }
 
