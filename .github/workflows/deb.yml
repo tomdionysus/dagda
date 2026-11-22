@@ -1,0 +1,74 @@
+#
+# Dagda - The Distributed Object Store
+#
+# Copyright (C) 2026 Tom Cully <mail@tomcully.com>
+# Licensed under the GNU GPLv3 - see <https://www.gnu.org/licenses/gpl-3.0.html>
+#
+# A release's Debian packages, built from its tag on x86-64 and on arm64, with
+# Dannan's packages from the tomcully.com apt repository. The tests run inside the
+# build, and lintian fails it on any error or warning. Pushed on a deb/<version>
+# branch; the packages are the run's artifacts.
+name: deb
+
+on:
+  push:
+    branches: ['deb/**']
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86-64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends dpkg-dev debhelper git ca-certificates lintian curl
+          curl -fsSLo /etc/apt/sources.list.d/tomcully.sources https://tomcully.com/apt/tomcully.sources
+          apt-get update
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tags, for the package's version
+
+      - name: Check out the release's tag
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git checkout --detach "refs/tags/${GITHUB_REF_NAME#deb/}"
+
+      # apt would take the newest Dannan, past the release's range: install the newest
+      # that debian/control admits first.
+      - name: Install build dependencies
+        run: |
+          # Build-Depends, the first of the two places the range is written.
+          low=$(sed -nE 's/^ libdannan-dev \(>= ([^)]+)\),?$/\1/p' debian/control | head -n 1)
+          high=$(sed -nE 's/^ libdannan-dev \(<< ([^)]+)\),?$/\1/p' debian/control | head -n 1)
+          dannan=$(apt-cache madison libdannan-dev | awk '{print $3}' | while read -r v; do
+            dpkg --compare-versions "$v" ge "$low" && dpkg --compare-versions "$v" lt "$high" && echo "$v"
+          done | sort -V | tail -n 1)
+          test -n "$dannan"
+          echo "Dannan $dannan, for >= $low and << $high"
+          apt-get install -y --no-install-recommends "libdannan-dev=$dannan"
+          apt-get build-dep -y ./
+
+      - name: Build
+        run: tools/build-deb.sh
+
+      - name: Lint
+        run: lintian --fail-on error,warning build-deb/*.changes
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: build-deb/*.deb
