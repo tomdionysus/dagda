@@ -105,6 +105,7 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _progress(services.progress),
       _logger(std::move(services.logger)),
       _wall(services.wall),
+      _buffers(std::move(services.buffers)),
       _files(files),
       _after_pack_append(std::move(options.after_pack_append)),
       _durability_domain(std::move(durability_domain)) {
@@ -633,13 +634,22 @@ Bytes LocalStore::open_loose(const ObjectId& id, std::span<const uint8_t> file) 
 
 LocalStore::SealedObject LocalStore::seal(const ObjectId& id, std::span<const uint8_t> data) const {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot seal");
-  auto sealed = seal_object(*_key, _sealing, id, data);
-  _seals.fetch_add(1, std::memory_order_relaxed);
   SealedObject out;
   out.plain_size = data.size();
-  out.nonce = sealed.nonce;
-  out.tag = sealed.tag;
-  out.ciphertext = std::move(sealed.ciphertext);
+  if (_buffers) {
+    // Into a buffer of the node's transfer pool, which the writer gives back.
+    out.ciphertext = _buffers->take(data.size());
+    out.ciphertext.resize(data.size());
+    const auto sealed = seal_object_into(*_key, _sealing, id, data, out.ciphertext);
+    out.nonce = sealed.nonce;
+    out.tag = sealed.tag;
+  } else {
+    auto sealed = seal_object(*_key, _sealing, id, data);
+    out.nonce = sealed.nonce;
+    out.tag = sealed.tag;
+    out.ciphertext = std::move(sealed.ciphertext);
+  }
+  _seals.fetch_add(1, std::memory_order_relaxed);
   return out;
 }
 
@@ -1047,6 +1057,14 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, std
   // caller's bytes when it gave them, which are opened again if the record is not
   // written, so the plaintext is the caller's once more.
   SealedObject sealed;
+  // A ciphertext sealed into the node's pool goes back to it however the write ends.
+  struct GiveBack {
+    const std::shared_ptr<dannan::sched::BufferPool>& pool;
+    Bytes& bytes;
+    ~GiveBack() {
+      if (pool) pool->give(std::move(bytes));
+    }
+  } give_back{_buffers, sealed.ciphertext};
   SealedRecord record;
   const bool in_place = !writable.empty();
   {

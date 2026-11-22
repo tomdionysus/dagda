@@ -68,6 +68,9 @@ Bytes open_object(const domain::StorageKey& key, const SealingScheme& scheme, co
 // one of another size than recorded is refused before anything is written.
 // Throws as the two above. Waits on nothing; thread-safe.
 dannan::identity::GcmSeal seal_object_in_place(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<uint8_t> bytes);
+// As seal_object, the ciphertext into `out`, of the plaintext's size and apart from it.
+dannan::identity::GcmSeal seal_object_into(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t> plaintext,
+                                           std::span<uint8_t> out);
 void open_object_in_place(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                           std::span<const uint8_t, 16> tag, std::span<uint8_t> bytes, uint64_t plain_size);
 

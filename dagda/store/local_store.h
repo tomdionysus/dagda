@@ -38,6 +38,7 @@
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/identity/node_identity.h"
+#include "dannan/sched/buffer_pool.h"
 #include "dannan/status/log.h"
 #include "dannan/status/observation.h"
 #include "dannan/supervise/startup.h"
@@ -190,6 +191,10 @@ class LocalStore final : public contract::ObjectStore {
     // Dates recorded on disk: a pack record's touched_ms, a loose object's
     // modification time; and the ages compared against them.
     const dannan::contract::WallClock& wall = dannan::contract::system_wall_clock();
+    // The node's transfer pool (Context::buffers): a put of bytes the store
+    // may not seal in place seals into one of its buffers and gives it back once
+    // written. None, and it allocates.
+    std::shared_ptr<dannan::sched::BufferPool> buffers = {};
   };
 
   struct Cursor {
@@ -486,6 +491,7 @@ class LocalStore final : public contract::ObjectStore {
   dannan::supervise::StartupProgress& _progress;
   const dannan::status::ScopedLogger _logger;
   const dannan::contract::WallClock& _wall;
+  const std::shared_ptr<dannan::sched::BufferPool> _buffers;
   // Object and pack file I/O; called only with _mutex released.
   LocalStoreFiles& _files;
   const std::function<void(const ObjectId&)> _after_pack_append;

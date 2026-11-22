@@ -88,21 +88,24 @@ bool refused_with(const CallOutcome& outcome, uint16_t status) {
 
 // The object in a get_object reply: checked against the id and its own
 // hash, then slid over its prefix to keep the allocation and the frame's
-// retained memory.
-ObjectData take_object_reply(dannan::net::Message message, const ObjectId& expected) {
+// retained memory. The reply's buffer is the caller's to give back to the
+// node's pool: the object gives it back when its last reader lets go, and a
+// reply refused here is given back at once.
+ObjectData take_object_reply(dannan::net::Message message, const ObjectId& expected, const std::shared_ptr<dannan::sched::BufferPool>& pool) {
+  auto object = std::make_shared<ObjectBuffer>();
+  object->pool = pool;
+  object->bytes = std::move(message.payload);
+  object->memory = std::move(message.memory);
   if (message.type != message::object_reply) throw std::runtime_error("remote object reply has the wrong message type");
-  dannan::net::Reader reader(message.payload);
+  dannan::net::Reader reader(object->bytes);
   const ObjectId returned{reader.fixed<32>()};
   const auto size = reader.u32();
   if (size > message::max_object_bytes || reader.remaining() != size) throw dannan::net::DecodeError("invalid remote object reply size");
   constexpr size_t prefix = 32 + 4;
-  const auto data = std::span<const uint8_t>(message.payload).subspan(prefix, size);
+  const auto data = std::span<const uint8_t>(object->bytes).subspan(prefix, size);
   if (returned != expected || object_id(data) != expected) throw std::runtime_error("remote integrity failure");
-  if (size) std::memmove(message.payload.data(), message.payload.data() + prefix, size);
-  message.payload.resize(size);
-  auto object = std::make_shared<ObjectBuffer>();
-  object->bytes = std::move(message.payload);
-  object->memory = std::move(message.memory);
+  if (size) std::memmove(object->bytes.data(), object->bytes.data() + prefix, size);
+  object->bytes.resize(size);
   return object;
 }
 
@@ -110,6 +113,23 @@ ObjectData buffer_of(Bytes bytes, dannan::sched::RetainedMemoryLedger::Lease lea
   auto object = std::make_shared<ObjectBuffer>();
   object->bytes = std::move(bytes);
   object->lease = std::move(lease);
+  return object;
+}
+
+// The local copy, read and opened in a buffer of the node's transfer pool, to
+// which it goes back when its last holder lets go; nothing if not held.
+std::shared_ptr<ObjectBuffer> read_local(const StoragePool& data, const std::shared_ptr<dannan::sched::BufferPool>& pool, const ObjectId& id) {
+  auto object = std::make_shared<ObjectBuffer>();
+  object->pool = pool;
+  const auto size = data.get_into(id, [&](uint64_t n) {
+    if (object->bytes.capacity() < n) {
+      pool->give(std::move(object->bytes));
+      object->bytes = pool->take(n);
+    }
+    object->bytes.resize(n);
+    return std::span<uint8_t>(object->bytes);
+  });
+  if (!size) return nullptr;
   return object;
 }
 
@@ -1143,7 +1163,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     }
     // A call runs on past the write while it moves, so a slow peer's answer still
     // reaches the ticket.
-    if (!payload) payload = message::encode_object(id, data, writer);
+    if (!payload) payload = message::encode_object(id, data, writer, _context.buffers()->take(data.size() + message::object_overhead));
     auto handle = _context.routes().call(
         node, type, *payload, options.frame, _options.object_transfer_call, _executor,
         [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); }, peer_call_watch());
@@ -1503,8 +1523,9 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
   // No lease here across the peer's admission: two nodes replicating to each
   // other would each wait on the other's slot.
   const auto started = Clock::now();
-  const auto outcome =
-      _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, _options.object_transfer_call, peer_call_watch());
+  const auto outcome = _context.routes().call_and_wait(
+      target, message::put_object, message::encode_object(id, data, std::nullopt, _context.buffers()->take(data.size() + message::object_overhead)), frame,
+      _options.object_transfer_call, peer_call_watch());
   const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
   if (ok) note_network(data.size(), Clock::now() - started);
   // Foreground bytes moved, as Macha's put_on notes them (ds:1345-1346 at f0597a4).
@@ -2002,18 +2023,17 @@ void DistributedStore::on_roster(const dannan::RosterChange& change) {
 }
 
 void DistributedStore::catch_up(const ObjectId& id, const NodeRecord& node) {
-  std::optional<Bytes> bytes = _data.get(id);
+  ObjectData bytes = read_local(_data, _context.buffers(), id);
   if (!bytes) {
     ReadOptions options;
     options.frame = FrameType::speculative;
-    auto read = read_impl(id, options);
-    if (read.object) bytes = read.object->bytes;
+    bytes = read_impl(id, options).object;
   }
   if (!bytes) {
     _logger.debug("catch-up found no copy id=" + to_string(id));
     return;
   }
-  if (put_on(node, id, *bytes, FrameType::speculative)) note_acknowledged(id, node.id);
+  if (put_on(node, id, bytes->bytes, FrameType::speculative)) note_acknowledged(id, node.id);
 }
 
 // ---- Prompt replication ----------------------------------------------------
@@ -2123,17 +2143,17 @@ void DistributedStore::prompt_replication_loop(std::stop_token stop) {
         }
         continue;
       }
-      std::optional<Bytes> data;
+      ObjectData data;
       {
         std::optional<DataAdmission> admitted;
         if (_options.prompt_read_admission) {
           admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
           if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
         }
-        data = _data.get(*id);
+        data = read_local(_data, _context.buffers(), *id);
       }
       if (!data) continue;
-      if (put_on(*destination, *id, *data, FrameType::speculative)) {
+      if (put_on(*destination, *id, data->bytes, FrameType::speculative)) {
         _prompt_copies.fetch_add(1, std::memory_order_relaxed);
         _context.events().notify(_storage_event);
         note_acknowledged(*id, destination->id);
@@ -2211,7 +2231,7 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
   const auto until = _time.now() + options.deadline;
   const auto past_deadline = [&] { return own_deadline && _time.now() >= until; };
   const auto wait = [&] { return own_deadline ? std::optional(std::chrono::ceil<std::chrono::milliseconds>(until - _time.now())) : no_caller_deadline; };
-  std::optional<Bytes> local;
+  std::shared_ptr<ObjectBuffer> local;
   std::optional<dannan::sched::RetainedMemoryLedger::Lease> local_memory;
   {
     const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
@@ -2220,13 +2240,14 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
     // it go (Macha's ds:1749-1753 at f0597a4).
     local_memory = read_memory(options, own_deadline, until);
     if (!local_memory) return {};
-    local = _data.get(id);
+    local = read_local(_data, _context.buffers(), id);
   }
   if (_options.read_trace) _options.read_trace("local");
   if (local) {
-    if (interactive) _activity.note(options.frame, local->size());
-    said("owned", local->size(), true);
-    return {buffer_of(std::move(*local), std::move(*local_memory)), ReadSource::local, _self, FetchAnswer::ok};
+    if (interactive) _activity.note(options.frame, local->bytes.size());
+    said("owned", local->bytes.size(), true);
+    local->lease = std::move(*local_memory);
+    return {std::move(local), ReadSource::local, _self, FetchAnswer::ok};
   }
   local_memory.reset();
   if (past_deadline()) return {};
@@ -2477,7 +2498,7 @@ void DistributedStore::fetched(const std::shared_ptr<SharedFetch>& fetch, const 
   bool absent = false;
   if (outcome.reply && outcome.reply->type == message::object_reply) {
     try {
-      data = take_object_reply(std::move(*outcome.reply), fetch->id);
+      data = take_object_reply(std::move(*outcome.reply), fetch->id, _context.buffers());
       // A fetch teaches the network estimate, as Macha's (ds:1427-1428 at f0597a4),
       // unless repair's window does.
       bool sample = false;
@@ -3475,11 +3496,16 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         if (!store) return;
         store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
         // The objects are stored from the reply itself, each sealed where it arrived:
-        // the reply, with its retained memory, is the only buffer of the extent.
+        // the reply, with its retained memory, is the only buffer of the extent, and it
+        // goes back to the node's pool once the last object in it is stored.
         std::shared_ptr<dannan::net::Message> reply;
         std::vector<message::FetchedView> objects;
         if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
-          reply = std::make_shared<dannan::net::Message>(std::move(*outcome.reply));
+          reply = std::shared_ptr<dannan::net::Message>(new dannan::net::Message(std::move(*outcome.reply)),
+                                                        [pool = store->_context.buffers()](dannan::net::Message* done) {
+                                                          pool->give(std::move(done->payload));
+                                                          delete done;
+                                                        });
           try {
             objects = message::decode_fetched_view(reply->payload, ids.size());
           } catch (const std::exception& error) {
@@ -3856,7 +3882,8 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       ++result.remote_operations;
       time_repair("push " + to_string(sending->id).substr(0, 8) + " asked " + std::to_string(bytes));
       _context.routes().call(
-          to, message::put_object, message::encode_object(sending->id, data), FrameType::speculative, _options.object_transfer_call, _executor,
+          to, message::put_object, message::encode_object(sending->id, data, std::nullopt, _context.buffers()->take(data.size() + message::object_overhead)),
+          FrameType::speculative, _options.object_transfer_call, _executor,
           [weak = std::weak_ptr<Shared>(_shared), plan = sending, id = sending->id, peer = to.id, host = to.host, bytes, seq, extent](CallOutcome outcome) {
             const auto shared = weak.lock();
             if (!shared) return;
@@ -3896,7 +3923,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       for (const auto& offer : offers)
         if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
       if (wanted.empty()) continue;
-      std::optional<Bytes> read;
+      ObjectData read;
       {
         const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
         if (!admitted) {
@@ -3904,7 +3931,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           planned = p;
           break;
         }
-        read = _data.get(plan.id);
+        read = read_local(_data, _context.buffers(), plan.id);
       }
       if (!read) {
         note_local_unreadable(plan.id);
@@ -3913,14 +3940,14 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       }
       // Credit pays for bytes put on the wire, never for finding out which are
       // needed.
-      const uint64_t object_bytes = read->size() * wanted.size();
+      const uint64_t object_bytes = read->bytes.size() * wanted.size();
       if (spent + object_bytes > byte_budget) {
         result.credit_limited = true;
         stop_all = true;
         planned = p;
         break;
       }
-      for (const auto* peer : wanted) send_now(plans[p], *peer, *read);
+      for (const auto* peer : wanted) send_now(plans[p], *peer, read->bytes);
       spent += object_bytes;
       result.credit_spent += object_bytes;
     }

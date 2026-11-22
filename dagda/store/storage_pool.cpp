@@ -404,7 +404,7 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
       local.ledger_key = _ledger_key;
       store = std::make_shared<LocalStore>(options.path, local, _key,
                                            LocalStore::Services{_services.threads, _services.observations, _services.progress,
-                                                                _services.logger.child("backend"), _services.time, _services.wall},
+                                                                _services.logger.child("backend"), _services.time, _services.wall, _services.buffers},
                                            LocalStoreMode::authoritative, durability_domain);
     } else {
       Lock lock(backend->mutex);

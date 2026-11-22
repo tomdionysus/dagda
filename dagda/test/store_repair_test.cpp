@@ -3045,10 +3045,25 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
 
   constexpr size_t rounds = 8;
   constexpr size_t per_round = 8;
-  const auto before = heap_now();
+  // The nodes' transfer pools keep blocks on purpose, each up to its bound, and reuse them: what
+  // they keep is counted apart, and the case is what is in use and held beyond them.
+  const auto pooled = [&] { return holder.context().buffers()->stats().held_bytes + joiner.context().buffers()->stats().held_bytes; };
+  const auto heap_beyond_pools = [&] {
+    auto heap = heap_now();
+    const auto kept = pooled();
+    heap.in_use -= std::min(heap.in_use, kept);
+    heap.held -= std::min(heap.held, kept);
+    return heap;
+  };
+  // Every round's objects are written first, so the rounds measure repair alone, not the
+  // case's own buffers of each object as it writes them.
+  std::vector<std::vector<ObjectId>> written;
+  for (size_t round = 0; round < rounds; ++round) written.push_back(local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round)));
+  const auto before = heap_beyond_pools();
   std::vector<Heap> after;
+  std::vector<uint64_t> kept;
   for (size_t round = 0; round < rounds; ++round) {
-    const auto live = local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round));
+    const auto& live = written[round];
     const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
     for (int step = 0; step < 50; ++step) {
       if (std::all_of(live.begin(), live.end(), [&](const auto& id) { return joiner.data().has(id); })) break;
@@ -3056,7 +3071,8 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
       (void)joiner.store().repair_drain(30s);
     }
     for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id)) << "round " << round;
-    after.push_back(heap_now());
+    after.push_back(heap_beyond_pools());
+    kept.push_back(pooled());
   }
   // Once a round's window drains, nothing it moved is in use, and the allocator holds no more
   // than a few extents beyond what it held before repair began: freed transfer buffers that
@@ -3064,12 +3080,21 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
   // (on 0.3.3: 2 MiB in use, 480 MiB held, after every round).
   constexpr uint64_t mib = 1024 * 1024;
   const auto line = [&](const Heap& heap) { return "in use " + std::to_string(heap.in_use / mib) + " MiB, held " + std::to_string(heap.held / mib) + " MiB;"; };
-  std::string figures = " before: " + line(before);
-  for (size_t i = 0; i < after.size(); ++i) figures += " round " + std::to_string(i) + ": " + line(after[i]);
+  std::string figures = " beyond the pools, before: " + line(before);
+  for (size_t i = 0; i < after.size(); ++i)
+    figures += " round " + std::to_string(i) + ": " + line(after[i]) + " pools " + std::to_string(kept[i] / mib) + " MiB;";
+  for (auto* node : {&holder, &joiner}) {
+    const auto stats = node->context().buffers()->stats();
+    figures += " pool: taken " + std::to_string(stats.taken) + " reused " + std::to_string(stats.reused) + " kept " + std::to_string(stats.kept) + " freed " +
+               std::to_string(stats.freed) + ";";
+  }
   RecordProperty("heap", figures);
-  for (const auto& round : after) {
-    EXPECT_LE(round.in_use, before.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
-    EXPECT_LE(round.held, before.held + 4 * size) << "freed transfer buffers the allocator keeps:" << figures;
+  // Two nodes at Dannan's default bound (NodeConfig::transfer_buffers_bound).
+  constexpr uint64_t bound = 2 * 256 * mib;
+  for (size_t i = 0; i < after.size(); ++i) {
+    EXPECT_LE(after[i].in_use, before.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
+    EXPECT_LE(after[i].held, before.held + 4 * size) << "freed transfer buffers the allocator keeps:" << figures;
+    EXPECT_LE(kept[i], bound) << "the pools past their bounds:" << figures;
   }
 }
 #endif

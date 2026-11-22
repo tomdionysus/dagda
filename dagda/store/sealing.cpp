@@ -34,6 +34,11 @@ dannan::identity::GcmSeal seal_object_in_place(const domain::StorageKey& key, co
   return dannan::identity::aes_gcm_seal_into(key.bytes(), bytes, bytes, scheme.associated_data(id));
 }
 
+dannan::identity::GcmSeal seal_object_into(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t> plaintext,
+                                           std::span<uint8_t> out) {
+  return dannan::identity::aes_gcm_seal_into(key.bytes(), plaintext, out, scheme.associated_data(id));
+}
+
 void open_object_in_place(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                           std::span<const uint8_t, 16> tag, std::span<uint8_t> bytes, uint64_t plain_size) {
   if (bytes.size() != plain_size) throw ObjectIntegrityError("object integrity failure");

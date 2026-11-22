@@ -65,10 +65,12 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
   refresh();
   for (const auto type : served()) {
     if (type == message::put_object || type == message::put_object_deferred) {
-      // The request is the handler's own, so the object is sealed where it arrived.
-      // It always answers at once.
+      // The request is the handler's own, so the object is sealed where it arrived, and
+      // its buffer goes back to the node's pool once stored. It always answers at once.
       _context.routes().bind_deferred(type, [this](const dannan::membership::NodeRecord& peer, FrameType frame, Message request, dannan::net::Answer&) {
-        return handle_put(peer, frame, request, request.payload);
+        auto handled = handle_put(peer, frame, request, request.payload);
+        _context.buffers()->give(std::move(request.payload));
+        return handled;
       });
       continue;
     }
@@ -283,14 +285,24 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       timing("admitted", 0);
       // Not found is final only when no offline backend could hold it.
       const bool every_backend = _data.every_backend_online();
-      // Read and opened in the reply itself: one buffer of the object's size.
+      // Read and opened in the reply itself: one buffer of the object's size, taken
+      // from the node's pool, to which Dannan gives it back once it is written.
+      const auto pool = _context.buffers();
       Bytes payload;
-      const auto size = _data.get_into(id, [&](uint64_t wanted) { return message::object_room(payload, id, wanted); });
+      const auto size = _data.get_into(id, [&](uint64_t wanted) {
+        if (payload.capacity() < 36 + wanted) {
+          pool->give(std::move(payload));
+          payload = pool->take(36 + wanted);
+        }
+        return message::object_room(payload, id, wanted);
+      });
       admitted.reset();
       timing("read", size.value_or(0));
-      if (!size)
+      if (!size) {
+        pool->give(std::move(payload));
         return every_backend && _data.every_backend_online() ? Handled::failed(404, "not_found", "object not found")
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
+      }
       _activity.note(frame, *size);
       return reply(message::object_reply, std::move(payload));
     }
@@ -309,8 +321,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       timing("admitted", 0);
       // Each object read and opened in the reply itself, which holds an extent at most
       // (a put refuses more): no buffer of an object's size besides.
-      Bytes payload;
-      payload.reserve(4 + 5 * ids.size() + extent);
+      Bytes payload = _context.buffers()->take(4 + 5 * ids.size() + extent);
       message::fetched_count(payload, static_cast<uint32_t>(ids.size()));
       uint64_t sent = 0;
       bool full = false;

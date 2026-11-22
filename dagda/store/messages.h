@@ -126,7 +126,13 @@ struct ObjectPayload {
   Bytes data;
   std::optional<WritePrincipal> principal;
 };
-Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt);
+// The most encode_object adds to an object's bytes: the id, the length, and a principal
+// of the longest id and prefix decode_principal takes. A buffer this much larger than the
+// object is never grown.
+inline constexpr size_t object_overhead = 32 + 4 + 1 + (4 + 4096) + (4 + 4096);
+// Written into `into` (its bytes replaced, its capacity kept): a buffer taken from the node's
+// transfer pool (Context::buffers), which Dannan gives back once the message is written.
+Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt, Bytes into = {});
 // Throws dannan::net::DecodeError past max_object_bytes.
 ObjectPayload decode_object(std::span<const uint8_t> payload);
 // The same, the bytes borrowed from `payload` rather than copied: an extent received is
