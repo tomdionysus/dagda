@@ -148,6 +148,10 @@ class StorageServer {
   void set_hosts_extents(bool hosts);
 
  private:
+  // put_object and put_object_deferred: sealed in `writable`, the request's own
+  // payload, when the request is the handler's to spend; empty, from a copy.
+  dannan::net::Handled handle_put(const dannan::membership::NodeRecord& peer, dannan::sched::FrameType frame, const dannan::net::Message& request,
+                                  std::span<uint8_t> writable);
   std::optional<DataAdmission> admit_data(dannan::sched::FrameType frame, uint64_t bytes, bool wait);
   std::optional<IoReserve::Slot> admit_control();
   // The refusal of a writer this node will not store for; nothing when it

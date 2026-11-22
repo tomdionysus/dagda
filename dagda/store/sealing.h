@@ -61,6 +61,16 @@ dannan::identity::SealedData seal_object(const domain::StorageKey& key, const Se
 Bytes open_object(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t, 12> nonce,
                   std::span<const uint8_t, 16> tag, std::span<const uint8_t> ciphertext, uint64_t plain_size);
 
+// As seal_object and open_object, where the bytes lie, so an extent costs no
+// second buffer of its size: seal_object_in_place leaves the ciphertext in
+// `bytes` and returns its nonce and tag; open_object_in_place leaves the
+// plaintext. A ciphertext that does not authenticate leaves `bytes` zeroed;
+// one of another size than recorded is refused before anything is written.
+// Throws as the two above. Waits on nothing; thread-safe.
+dannan::identity::GcmSeal seal_object_in_place(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<uint8_t> bytes);
+void open_object_in_place(const domain::StorageKey& key, const SealingScheme& scheme, const ObjectId& id, std::span<const uint8_t, 12> nonce,
+                          std::span<const uint8_t, 16> tag, std::span<uint8_t> bytes, uint64_t plain_size);
+
 // What a blind node verifies (requirement D3; plan 116): the ciphertext
 // digest, SHA-256 over nonce || tag || ciphertext, which a member computes
 // when it seals and binds to the id where it directs a blind node to hold

@@ -112,6 +112,26 @@ Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std
   return out;
 }
 
+namespace {
+
+// A blob's length, as Writer::bytes writes it.
+void put_length(Bytes& out, uint64_t size) {
+  if (size > 0xffffffffull) throw std::length_error("encoded blob too large");
+  for (int shift = 24; shift >= 0; shift -= 8) out.push_back(static_cast<uint8_t>(size >> shift));
+}
+
+}  // namespace
+
+std::span<uint8_t> object_room(Bytes& payload, const ObjectId& id, uint64_t size) {
+  payload.clear();
+  payload.reserve(id.bytes.size() + 4 + size);
+  payload.insert(payload.end(), id.bytes.begin(), id.bytes.end());
+  put_length(payload, size);
+  const auto start = payload.size();
+  payload.resize(start + size);
+  return std::span<uint8_t>(payload).subspan(start);
+}
+
 ObjectPayload decode_object(std::span<const uint8_t> payload) {
   Reader reader(payload);
   ObjectPayload out;
@@ -420,18 +440,41 @@ Bytes encode_fetched(const std::vector<FetchedObject>& objects) {
   return writer.take();
 }
 
+void fetched_count(Bytes& payload, uint32_t count) {
+  for (int shift = 24; shift >= 0; shift -= 8) payload.push_back(static_cast<uint8_t>(count >> shift));
+}
+
+void fetched_answer(Bytes& payload, Fetched as) { payload.push_back(static_cast<uint8_t>(as)); }
+
+std::span<uint8_t> fetched_room(Bytes& payload, size_t mark, uint64_t size) {
+  if (mark > payload.size()) throw std::logic_error("fetch reply mark past its end");
+  payload.resize(mark);
+  fetched_answer(payload, Fetched::sent);
+  put_length(payload, size);
+  const auto start = payload.size();
+  payload.resize(start + size);
+  return std::span<uint8_t>(payload).subspan(start);
+}
+
 std::vector<FetchedObject> decode_fetched(std::span<const uint8_t> payload, size_t expected) {
+  std::vector<FetchedObject> out;
+  out.reserve(expected);
+  for (const auto& view : decode_fetched_view(payload, expected)) out.push_back({view.as, Bytes(view.data.begin(), view.data.end())});
+  return out;
+}
+
+std::vector<FetchedView> decode_fetched_view(std::span<const uint8_t> payload, size_t expected) {
   Reader reader(payload);
   if (reader.u32() != expected) throw DecodeError("fetch reply count mismatch");
-  std::vector<FetchedObject> out;
+  std::vector<FetchedView> out;
   out.reserve(expected);
   for (size_t i = 0; i < expected; ++i) {
     const auto as = reader.u8();
     if (as > static_cast<uint8_t>(Fetched::left)) throw DecodeError("invalid fetch answer");
-    FetchedObject object;
+    FetchedView object;
     object.as = static_cast<Fetched>(as);
-    if (object.as == Fetched::sent) object.data = reader.bytes(max_object_bytes);
-    out.push_back(std::move(object));
+    if (object.as == Fetched::sent) object.data = reader.view_bytes(max_object_bytes);
+    out.push_back(object);
   }
   reader.finish();
   return out;

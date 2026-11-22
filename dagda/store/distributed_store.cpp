@@ -3474,10 +3474,14 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         auto* store = shared->store;
         if (!store) return;
         store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
-        std::vector<message::FetchedObject> objects;
+        // The objects are stored from the reply itself, each sealed where it arrived:
+        // the reply, with its retained memory, is the only buffer of the extent.
+        std::shared_ptr<dannan::net::Message> reply;
+        std::vector<message::FetchedView> objects;
         if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
+          reply = std::make_shared<dannan::net::Message>(std::move(*outcome.reply));
           try {
-            objects = message::decode_fetched(outcome.reply->payload, ids.size());
+            objects = message::decode_fetched_view(reply->payload, ids.size());
           } catch (const std::exception& error) {
             store->_logger.debug("repair fetch peer=" + peer.host + " error=" + error.what());
           }
@@ -3486,7 +3490,7 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         }
         uint64_t brought = 0;
         for (const auto& object : objects) brought += object.data.size();
-        auto job = [store, peer, ids, objects = std::move(objects), seq, extent, allowance, brought] {
+        auto job = [store, peer, ids, reply, objects = std::move(objects), seq, extent, allowance, brought] {
           std::vector<RepairLanded> landed;
           std::vector<ObjectId> left;
           bool stored = false;
@@ -3506,7 +3510,8 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
               item.again = true;
             } else if (i < objects.size() && objects[i].as == message::Fetched::sent && object_id(objects[i].data) == ids[i]) {
               if (const auto admitted = store->admit_data(FrameType::speculative, objects[i].data.size(), no_caller_deadline)) {
-                if (store->_data.put(ids[i], objects[i].data)) {
+                const auto at = static_cast<size_t>(objects[i].data.data() - reply->payload.data());
+                if (store->_data.put_in_place(ids[i], std::span<uint8_t>(reply->payload).subspan(at, objects[i].data.size()))) {
                   item.ok = true;
                   item.answer = FetchAnswer::ok;
                   item.bytes = objects[i].data.size();

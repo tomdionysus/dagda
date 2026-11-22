@@ -36,6 +36,10 @@ class LocalStoreFiles {
   // `size` bytes at `offset`, or none if the file is shorter. Throws if the
   // file cannot be opened or closed.
   virtual std::optional<Bytes> read_at(const std::filesystem::path&, uint64_t offset, size_t size) DANNAN_EXCLUDES(dannan::contract::no_io) = 0;
+  // As read_at, into the caller's buffer, so an extent read needs no second one:
+  // false if the file is shorter, `into` then holding what was read. This one
+  // goes through read_at, for a test's files; the device reads in place.
+  virtual bool read_at_into(const std::filesystem::path&, uint64_t offset, std::span<uint8_t> into) DANNAN_EXCLUDES(dannan::contract::no_io);
   // Appends head then body, creating the file. A throw may leave part of
   // them appended.
   virtual void append(const std::filesystem::path&, std::span<const uint8_t> head, std::span<const uint8_t> body) DANNAN_EXCLUDES(dannan::contract::no_io) = 0;
@@ -52,6 +56,7 @@ class PosixLocalStoreFiles final : public LocalStoreFiles {
   void install(const std::filesystem::path&, std::span<const uint8_t> head, std::span<const uint8_t> body) override DANNAN_EXCLUDES(dannan::contract::no_io);
   Bytes read(const std::filesystem::path&) override DANNAN_EXCLUDES(dannan::contract::no_io);
   std::optional<Bytes> read_at(const std::filesystem::path&, uint64_t offset, size_t size) override DANNAN_EXCLUDES(dannan::contract::no_io);
+  bool read_at_into(const std::filesystem::path&, uint64_t offset, std::span<uint8_t> into) override DANNAN_EXCLUDES(dannan::contract::no_io);
   void append(const std::filesystem::path&, std::span<const uint8_t> head, std::span<const uint8_t> body) override DANNAN_EXCLUDES(dannan::contract::no_io);
   bool truncate(const std::filesystem::path&, uint64_t size) override DANNAN_EXCLUDES(dannan::contract::no_io);
   std::vector<std::pair<std::filesystem::path, uint64_t>> list(const std::filesystem::path& dir) override DANNAN_EXCLUDES(dannan::contract::no_io);

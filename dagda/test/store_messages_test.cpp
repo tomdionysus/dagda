@@ -83,6 +83,51 @@ TEST(StoreMessages, AnObjectViewBorrowsThePayloadsBytes) {
   EXPECT_THROW(decode_object_view(truncated), dannan::net::DecodeError);
 }
 
+// An object reply laid out for its bytes to be read into it is encode_object's,
+// whatever the payload held before; the room is the reply's own bytes.
+TEST(StoreMessages, AnObjectRoomFilledIsTheEncodedObject) {
+  Bytes payload{1, 2, 3};
+  const auto room = object_room(payload, id_a, dagda_bytes.size());
+  ASSERT_EQ(room.size(), dagda_bytes.size());
+  EXPECT_EQ(room.data(), payload.data() + 32 + 4);
+  std::copy(dagda_bytes.begin(), dagda_bytes.end(), room.begin());
+  EXPECT_EQ(payload, encode_object(id_a, dagda_bytes));
+  EXPECT_EQ(object_room(payload, id_b, 0).size(), 0u);
+  EXPECT_EQ(payload, encode_object(id_b, Bytes{}));
+}
+
+// A fetch's reply built in place, an object's room made again where a copy did
+// not open, is encode_fetched's bytes.
+TEST(StoreMessages, AFetchReplyBuiltInPlaceIsTheEncodedReply) {
+  std::vector<FetchedObject> objects(5);
+  objects[0] = {Fetched::sent, Bytes{0xab, 0xcd}};
+  objects[1].as = Fetched::absent;
+  objects[2] = {Fetched::sent, Bytes{0x01, 0x02, 0x03}};
+  objects[3].as = Fetched::unavailable;
+  objects[4].as = Fetched::left;
+
+  Bytes payload;
+  fetched_count(payload, 5);
+  auto room = fetched_room(payload, payload.size(), 2);
+  std::copy(objects[0].data.begin(), objects[0].data.end(), room.begin());
+  fetched_answer(payload, Fetched::absent);
+  const auto mark = payload.size();
+  // A first copy of another size that did not open, then the copy that did.
+  room = fetched_room(payload, mark, 7);
+  std::fill(room.begin(), room.end(), 0xff);
+  room = fetched_room(payload, mark, 3);
+  std::copy(objects[2].data.begin(), objects[2].data.end(), room.begin());
+  // A room made and given up: the object is answered as not sent.
+  const auto given_up = payload.size();
+  (void)fetched_room(payload, given_up, 4);
+  payload.resize(given_up);
+  fetched_answer(payload, Fetched::unavailable);
+  fetched_answer(payload, Fetched::left);
+
+  EXPECT_EQ(payload, encode_fetched(objects));
+  EXPECT_THROW((void)fetched_room(payload, payload.size() + 1, 1), std::logic_error);
+}
+
 TEST(StoreMessages, ABoolReplyIsOneByte) {
   EXPECT_EQ(encode_bool(true), Bytes{1});
   EXPECT_EQ(encode_bool(false), Bytes{0});

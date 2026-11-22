@@ -93,13 +93,26 @@ Bytes PosixLocalStoreFiles::read(const std::filesystem::path& path) {
   return out;
 }
 
+bool LocalStoreFiles::read_at_into(const std::filesystem::path& path, uint64_t offset, std::span<uint8_t> into) {
+  const auto read = read_at(path, offset, into.size());
+  if (!read) return false;
+  std::copy(read->begin(), read->end(), into.begin());
+  return true;
+}
+
 std::optional<Bytes> PosixLocalStoreFiles::read_at(const std::filesystem::path& path, uint64_t offset, size_t size) {
+  std::optional<Bytes> out(std::in_place, size);
+  if (!read_at_into(path, offset, *out)) out.reset();
+  return out;
+}
+
+bool PosixLocalStoreFiles::read_at_into(const std::filesystem::path& path, uint64_t offset, std::span<uint8_t> into) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) throw std::runtime_error("cannot open pack: " + std::string(std::strerror(errno)));
-  std::optional<Bytes> out(std::in_place, size);
+  bool whole = true;
   size_t done = 0;
-  while (done < size) {
-    const auto n = ::pread(fd, out->data() + done, size - done, static_cast<off_t>(offset + done));
+  while (done < into.size()) {
+    const auto n = ::pread(fd, into.data() + done, into.size() - done, static_cast<off_t>(offset + done));
     if (n < 0) {
       if (errno == EINTR) continue;
       const auto error = std::string(std::strerror(errno));
@@ -107,13 +120,13 @@ std::optional<Bytes> PosixLocalStoreFiles::read_at(const std::filesystem::path& 
       throw std::runtime_error("cannot read pack: " + error);
     }
     if (n == 0) {
-      out.reset();
+      whole = false;
       break;
     }
     done += static_cast<size_t>(n);
   }
   if (::close(fd) != 0) throw std::runtime_error("cannot close pack: " + std::string(std::strerror(errno)));
-  return out;
+  return whole;
 }
 
 void PosixLocalStoreFiles::append(const std::filesystem::path& path, std::span<const uint8_t> head, std::span<const uint8_t> body) {

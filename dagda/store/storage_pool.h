@@ -208,6 +208,13 @@ class StoragePool final : public contract::ObjectStore {
   // Provisional: the ticket to await, from the backend that took it; nothing
   // if none would.
   std::optional<DurabilityTicket> put_deferred(const ObjectId& id, std::span<const uint8_t> data);
+  // As put and put_deferred, sealing the bytes where they lie
+  // (LocalStore::put_in_place): a backend that does not take them hands them
+  // back as plaintext for the next. Stored, they are spent. A deferred put whose
+  // backend went away or reopened while it wrote has spent them on that backend
+  // and gives no ticket, where put_deferred would try the next.
+  bool put_in_place(const ObjectId& id, std::span<uint8_t> data);
+  std::optional<DurabilityTicket> put_deferred_in_place(const ObjectId& id, std::span<uint8_t> data);
   // A record a member sealed, stored as it is on the first backend that
   // takes it (LocalStore::put_sealed); either role. Throws
   // std::invalid_argument for a record whose sizes disagree.
@@ -240,6 +247,11 @@ class StoragePool final : public contract::ObjectStore {
   // and the next backend asked. Throws std::logic_error on a blind pool,
   // which cannot open.
   std::optional<Bytes> get(const ObjectId& id) const;
+  // As get, into the caller's buffer (LocalStore::get_into): one buffer of the
+  // object's size for the whole read. The destination is asked again for each
+  // backend's copy after one that did not open; the size it returns is the
+  // object's. Its size, or nothing if no backend online holds it.
+  std::optional<uint64_t> get_into(const ObjectId& id, const LocalStore::Destination& into) const;
   bool has(const ObjectId& id) const override;
   // The union of every online backend's held trie, its identity the union's
   // root; incomplete while an online backend is being seeded. The removals
@@ -305,6 +317,9 @@ class StoragePool final : public contract::ObjectStore {
   ClaimLocks& claim_locks() const noexcept { return _claim_locks; }
 
  private:
+  // The puts, `writable` (empty, or `data` itself) sealed in place when given.
+  bool put_impl(const ObjectId& id, std::span<const uint8_t> data, std::span<uint8_t> writable);
+  std::optional<DurabilityTicket> put_deferred_impl(const ObjectId& id, std::span<const uint8_t> data, std::span<uint8_t> writable);
   // A read that did not finish says nothing about the object: it stays, and is
   // counted (storage.read_failures).
   void note_read_failure(const ObjectId& id, const std::filesystem::path& path, const std::exception& error) const;

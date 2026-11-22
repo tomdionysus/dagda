@@ -146,6 +146,56 @@ TEST(StoreSealing, OpenChecksTheSizeAndTheId) {
   EXPECT_THROW((void)open_object(key, v1, stranger, misnamed.nonce, misnamed.tag, misnamed.ciphertext, plain.size()), ObjectIntegrityError);
 }
 
+// In place, an object is the same AES-GCM as seal_object's, in the bytes it was
+// handed: the ciphertext where the plaintext was, then the plaintext again, the
+// size and the id checked as open_object checks them.
+TEST(StoreSealing, InPlaceSealsAndOpensWhereTheBytesLie) {
+  dannan::test::TempDir dir;
+  const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
+  const auto plain = pattern(4096, 8);
+  const auto id = object_id(plain);
+  auto bytes = plain;
+  const auto* where = bytes.data();
+  const auto seal = seal_object_in_place(key, v1, id, bytes);
+  EXPECT_EQ(bytes.data(), where);
+  EXPECT_NE(bytes, plain);
+  // Interchangeable with the allocating forms.
+  EXPECT_EQ(open_object(key, v1, id, seal.nonce, seal.tag, bytes, plain.size()), plain);
+  const auto sealed = seal_object(key, v1, id, plain);
+  auto copy = sealed.ciphertext;
+  open_object_in_place(key, v1, id, sealed.nonce, sealed.tag, copy, plain.size());
+  EXPECT_EQ(copy, plain);
+
+  open_object_in_place(key, v1, id, seal.nonce, seal.tag, bytes, plain.size());
+  EXPECT_EQ(bytes.data(), where);
+  EXPECT_EQ(bytes, plain);
+}
+
+// A ciphertext that does not open in place leaves no plaintext behind, and one
+// of another size than recorded is refused untouched.
+TEST(StoreSealing, InPlaceRefusesWhatOpenObjectRefuses) {
+  dannan::test::TempDir dir;
+  const auto key = domain::StorageKey::derive_v1(cluster_key(dir));
+  const auto plain = pattern(1000, 9);
+  const auto id = object_id(plain);
+  const auto sealed = seal_object(key, v1, id, plain);
+
+  auto other = id;
+  other.bytes[31] ^= 1;
+  auto bytes = sealed.ciphertext;
+  EXPECT_THROW(open_object_in_place(key, v1, other, sealed.nonce, sealed.tag, bytes, plain.size()), std::runtime_error);
+  EXPECT_EQ(bytes, Bytes(plain.size(), 0));
+
+  bytes = sealed.ciphertext;
+  EXPECT_THROW(open_object_in_place(key, v1, id, sealed.nonce, sealed.tag, bytes, plain.size() + 1), ObjectIntegrityError);
+  EXPECT_EQ(bytes, sealed.ciphertext);
+
+  const auto stranger = object_id(pattern(1000, 10));
+  const auto misnamed = seal_object(key, v1, stranger, plain);
+  bytes = misnamed.ciphertext;
+  EXPECT_THROW(open_object_in_place(key, v1, stranger, misnamed.nonce, misnamed.tag, bytes, plain.size()), ObjectIntegrityError);
+}
+
 // Another domain's key opens nothing.
 TEST(StoreSealing, AnotherKeyDoesNotOpen) {
   dannan::test::TempDir dir;

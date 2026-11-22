@@ -791,9 +791,12 @@ TEST(StoreLocalStore, PresenceIsKnownWithoutReadingObjects) {
 
     std::atomic_bool loose_read{false};
     std::atomic_bool packed_read{false};
-    files.before([&](InterposedLocalStoreFiles::Op op, const std::filesystem::path&) {
-      if (op == InterposedLocalStoreFiles::Op::read) loose_read = true;
-      if (op == InterposedLocalStoreFiles::Op::read_at) packed_read = true;
+    // Told apart by the file read: a loose object is read at its offsets as a
+    // pack is, so the operation alone does not say which.
+    files.before([&](InterposedLocalStoreFiles::Op op, const std::filesystem::path& path) {
+      if (op != InterposedLocalStoreFiles::Op::read && op != InterposedLocalStoreFiles::Op::read_at) return;
+      if (path.extension() == ".obj") loose_read = true;
+      if (path.extension() == ".pack") packed_read = true;
     });
     // The recorded device reads prove has() reads nothing, not just its
     // answer.
@@ -907,6 +910,97 @@ TEST(StoreLocalStore, AStoreTellsABadRecordFromAFailedRead) {
     EXPECT_EQ(threw(*store, object_id(corrupt)), Threw::corrupt);
     EXPECT_EQ(threw(*store, object_id(torn)), Threw::corrupt);
     EXPECT_EQ(threw(*store, object_id(unreadable)), Threw::other);
+  }
+}
+
+// An object is read into the caller's buffer and opened there, packed or loose:
+// the destination is asked once, for the object's size, and what it handed back
+// holds the plaintext. One not held never asks; one that does not open leaves
+// no plaintext behind, and says so as get does.
+TEST(StoreLocalStore, GetIntoOpensTheObjectInTheCallersBuffer) {
+  StoreBed bed;
+  const auto root = bed.dir.path() / "store";
+  auto store = bed.open(root, packed_options(64ULL * 1024 * 1024, 1024 * 1024));
+  const auto packed = pattern(64 * 1024, 0x41);
+  const auto loose = pattern(2 * 1024 * 1024, 0x42);
+  ASSERT_TRUE(store->put(object_id(packed), packed));
+  ASSERT_TRUE(store->put(object_id(loose), loose));
+  ASSERT_TRUE(store->is_packed(object_id(packed)));
+  ASSERT_FALSE(store->is_packed(object_id(loose)));
+
+  for (const auto* object : {&packed, &loose}) {
+    SCOPED_TRACE(object == &packed ? "packed" : "loose");
+    Bytes buffer;
+    std::vector<uint64_t> asked;
+    ASSERT_TRUE(store->get_into(object_id(*object), [&](uint64_t size) {
+      asked.push_back(size);
+      buffer.assign(size + 8, 0xee);
+      return std::span<uint8_t>(buffer).subspan(4, size);
+    }));
+    EXPECT_EQ(asked, std::vector<uint64_t>{object->size()});
+    EXPECT_TRUE(std::equal(object->begin(), object->end(), buffer.begin() + 4));
+    // Nothing written outside the room it was given.
+    EXPECT_EQ(buffer[3], 0xee);
+    EXPECT_EQ(buffer[4 + object->size()], 0xee);
+  }
+
+  bool asked = false;
+  EXPECT_FALSE(store->get_into(object_id(pattern(100, 0x43)), [&](uint64_t size) {
+    asked = true;
+    return std::span<uint8_t>(static_cast<uint8_t*>(nullptr), static_cast<size_t>(size));
+  }));
+  EXPECT_FALSE(asked);
+
+  corrupt_last_byte(store->object_path(object_id(loose)));
+  Bytes buffer;
+  EXPECT_THROW((void)store->get_into(object_id(loose),
+                                     [&](uint64_t size) {
+                                       buffer.assign(size, 0xee);
+                                       return std::span<uint8_t>(buffer);
+                                     }),
+               ObjectCorrupt);
+  EXPECT_EQ(buffer, Bytes(loose.size(), 0));
+}
+
+// A put in place seals the caller's bytes where they lie and writes them from
+// there, packed or loose: stored, they are spent; a write that fails hands them
+// back as the plaintext, for another store to take. An object held already is
+// re-affirmed with its bytes untouched.
+TEST(StoreLocalStore, APutInPlaceSealsTheCallersBytesAndHandsThemBackIfNotStored) {
+  StoreBed bed;
+  for (const bool packed : {false, true}) {
+    SCOPED_TRACE(packed ? "packed" : "loose");
+    InterposedLocalStoreFiles files;
+    const auto options = packed ? packed_options(64ULL * 1024 * 1024, 1024 * 1024) : LocalStoreOptions::loose_only(64ULL * 1024 * 1024);
+    auto store = bed.open(bed.dir.path() / (packed ? "packed" : "loose"), options, LocalStoreMode::authoritative, nullptr, files);
+    const size_t size = packed ? 64 * 1024 : 2 * 1024 * 1024;
+    const auto plain = pattern(size, packed ? 0x51 : 0x52);
+    const auto id = object_id(plain);
+
+    auto bytes = plain;
+    ASSERT_TRUE(store->put_in_place(id, bytes));
+    EXPECT_EQ(store->is_packed(id), packed);
+    EXPECT_NE(bytes, plain);
+    EXPECT_EQ(store->diagnostics().seals, 1u);
+    EXPECT_EQ(store->get(id), std::optional<Bytes>{plain});
+
+    const auto other = pattern(size, packed ? 0x53 : 0x54);
+    auto failing = other;
+    files.before([](InterposedLocalStoreFiles::Op op, const std::filesystem::path&) {
+      if (op == InterposedLocalStoreFiles::Op::install || op == InterposedLocalStoreFiles::Op::append) throw std::runtime_error("device failed");
+    });
+    EXPECT_THROW((void)store->put_in_place(object_id(other), failing), std::runtime_error);
+    EXPECT_EQ(failing, other);
+    files.before({});
+
+    auto deferred = other;
+    ASSERT_TRUE(store->put_deferred_in_place(object_id(other), deferred).has_value());
+    EXPECT_NE(deferred, other);
+    EXPECT_EQ(store->get(object_id(other)), std::optional<Bytes>{other});
+
+    auto held = plain;
+    EXPECT_TRUE(store->put_in_place(id, held));
+    EXPECT_EQ(held, plain);
   }
 }
 
