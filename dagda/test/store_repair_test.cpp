@@ -3045,6 +3045,7 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
 
   constexpr size_t rounds = 8;
   constexpr size_t per_round = 8;
+  const auto before = heap_now();
   std::vector<Heap> after;
   for (size_t round = 0; round < rounds; ++round) {
     const auto live = local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round));
@@ -3057,16 +3058,19 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
     for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id)) << "round " << round;
     after.push_back(heap_now());
   }
-  // The first rounds set the high-water mark; the later ones must not move it.
-  const auto& settled = after[1];
-  const auto& last = after.back();
+  // Once a round's window drains, nothing it moved is in use, and the allocator holds no more
+  // than a few extents beyond what it held before repair began: freed transfer buffers that
+  // stay in glibc's arenas are memory the node cannot use and the kernel cannot take back
+  // (on 0.3.3: 2 MiB in use, 480 MiB held, after every round).
   constexpr uint64_t mib = 1024 * 1024;
-  std::string figures;
-  for (size_t i = 0; i < after.size(); ++i)
-    figures +=
-        " round " + std::to_string(i) + ": in use " + std::to_string(after[i].in_use / mib) + " MiB, held " + std::to_string(after[i].held / mib) + " MiB;";
-  EXPECT_LE(last.in_use, settled.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
-  EXPECT_LE(last.held, settled.held + 64 * mib) << "the allocator holds more with every round:" << figures;
+  const auto line = [&](const Heap& heap) { return "in use " + std::to_string(heap.in_use / mib) + " MiB, held " + std::to_string(heap.held / mib) + " MiB;"; };
+  std::string figures = " before: " + line(before);
+  for (size_t i = 0; i < after.size(); ++i) figures += " round " + std::to_string(i) + ": " + line(after[i]);
+  RecordProperty("heap", figures);
+  for (const auto& round : after) {
+    EXPECT_LE(round.in_use, before.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
+    EXPECT_LE(round.held, before.held + 4 * size) << "freed transfer buffers the allocator keeps:" << figures;
+  }
 }
 #endif
 
