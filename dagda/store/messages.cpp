@@ -122,6 +122,16 @@ ObjectPayload decode_object(std::span<const uint8_t> payload) {
   return out;
 }
 
+ObjectView decode_object_view(std::span<const uint8_t> payload) {
+  Reader reader(payload);
+  ObjectView out;
+  out.id = read_id(reader);
+  out.data = reader.view_bytes(max_object_bytes);
+  if (reader.remaining()) out.principal = decode_principal(reader);
+  reader.finish();
+  return out;
+}
+
 Bytes encode_bool(bool value) { return Bytes{static_cast<uint8_t>(value ? 1 : 0)}; }
 
 bool decode_bool(std::span<const uint8_t> payload) {

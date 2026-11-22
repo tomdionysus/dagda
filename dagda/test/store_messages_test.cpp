@@ -69,6 +69,20 @@ TEST(StoreMessages, AnObjectIsItsIdThenItsBytesAsABlob) {
   EXPECT_THROW(decode_object(truncated), dannan::net::DecodeError);
 }
 
+// The view decodes the same object without copying it: its bytes are the payload's own.
+TEST(StoreMessages, AnObjectViewBorrowsThePayloadsBytes) {
+  const auto payload = encode_object(id_a, dagda_bytes, WritePrincipal{});
+  const auto view = decode_object_view(payload);
+  const auto copied = decode_object(payload);
+  EXPECT_EQ(view.id, id_a);
+  EXPECT_EQ(Bytes(view.data.begin(), view.data.end()), dagda_bytes);
+  EXPECT_EQ(view.data.data(), payload.data() + 32 + 4);
+  EXPECT_EQ(view.principal.has_value(), copied.principal.has_value());
+  auto truncated = encode_object(id_a, dagda_bytes);
+  truncated.pop_back();
+  EXPECT_THROW(decode_object_view(truncated), dannan::net::DecodeError);
+}
+
 TEST(StoreMessages, ABoolReplyIsOneByte) {
   EXPECT_EQ(encode_bool(true), Bytes{1});
   EXPECT_EQ(encode_bool(false), Bytes{0});
