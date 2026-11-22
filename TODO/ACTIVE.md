@@ -69,7 +69,10 @@ unless the board says so (`claims_list`).
      `StorageServer::handle` (get_object, get_objects) and `DistributedStore::put_on`;
    - every transfer buffer charged to the retained-memory ledger, and repair's window bounded by it, not by the link
      alone (a bound on what is live; not the retention fix);
-   - a case that holds a node's peak transfer bytes to its bound.
+   - a case that holds a node's peak transfer bytes to its bound; Dannan reviews it against its ledger
+     (`Context::budget()`: reserve, acquire with a deadline, the lease the charge);
+   - the README's "Running a node" links Dannan's docs/running.md on develop (`74aaae9`): move it to main once
+     Dannan releases it, and check it before any tag.
 3. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
    - the register map (D6);
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1;
