@@ -49,6 +49,9 @@
 
 #include <gtest/gtest.h>
 #include <unistd.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -3008,6 +3011,62 @@ TEST(StoreRepair, TheBurstIsBoundedWhateverTheLinksEstimate) {
   EXPECT_GT(earned.rate, 1e9) << "the case needs the absurd rate to stand";
   EXPECT_LE(earned.credit, 256ULL * 1024 * 1024) << "one step may read and hold the burst";
 }
+
+#if defined(__GLIBC__)
+// What the process's allocator says: bytes handed out and still in use, and bytes it holds
+// from the system (its arenas and the mappings of large blocks).
+struct Heap {
+  uint64_t in_use = 0;
+  uint64_t held = 0;
+};
+Heap heap_now() {
+  const auto info = mallinfo2();
+  return {info.uordblks + info.hblkhd, info.arena + info.hblkhd};
+}
+
+// Repair holds no memory once its window drains: every round moves new extents, and neither
+// what is in use nor what the allocator holds grows with the rounds (live-a, 2026-11-22: on
+// 0.3.3, with the estimate right, its resident memory grew with what repair moved, in glibc's
+// arenas and the main heap, past anything Macha counts).
+TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
+  Cluster cluster;
+  constexpr size_t size = 16 * 1024 * 1024;
+  const auto big = [] {
+    auto out = options(2, 1, 8ULL * 1024 * 1024 * 1024);
+    out.store.extent_size = size;
+    return out;
+  };
+  auto& holder = cluster.add("holder", big());
+  auto& joiner = cluster.add("joiner", big());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  constexpr size_t rounds = 8;
+  constexpr size_t per_round = 8;
+  std::vector<Heap> after;
+  for (size_t round = 0; round < rounds; ++round) {
+    const auto live = local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round));
+    const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+    for (int step = 0; step < 50; ++step) {
+      if (std::all_of(live.begin(), live.end(), [&](const auto& id) { return joiner.data().has(id); })) break;
+      (void)joiner.store().repair_step(lists, 1ULL << 30, wide);
+      (void)joiner.store().repair_drain(30s);
+    }
+    for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id)) << "round " << round;
+    after.push_back(heap_now());
+  }
+  // The first rounds set the high-water mark; the later ones must not move it.
+  const auto& settled = after[1];
+  const auto& last = after.back();
+  constexpr uint64_t mib = 1024 * 1024;
+  std::string figures;
+  for (size_t i = 0; i < after.size(); ++i)
+    figures +=
+        " round " + std::to_string(i) + ": in use " + std::to_string(after[i].in_use / mib) + " MiB, held " + std::to_string(after[i].held / mib) + " MiB;";
+  EXPECT_LE(last.in_use, settled.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
+  EXPECT_LE(last.held, settled.held + 64 * mib) << "the allocator holds more with every round:" << figures;
+}
+#endif
 
 // Small objects travel many to a message: a pull's size is not known until it lands, so
 // each fetch holds an extent of the window, and one fetch a holder carries up to an
