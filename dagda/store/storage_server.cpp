@@ -338,7 +338,8 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       return reply(message::control_object_reply, message::encode_object(id, *data));
     }
     if (type == message::put_object || type == message::put_object_deferred) {
-      auto object = message::decode_object(request.payload);
+      // Stored from the request's own bytes: no second buffer of an extent.
+      const auto object = message::decode_object_view(request.payload);
       if (object.data.size() > _options.extent_size) return Handled::failed(413, "too_large", "DATA object exceeds configured extent size");
       // Checked before the device is asked for anything: a refused writer
       // costs no admission.

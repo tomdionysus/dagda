@@ -129,6 +129,14 @@ struct ObjectPayload {
 Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt);
 // Throws dannan::net::DecodeError past max_object_bytes.
 ObjectPayload decode_object(std::span<const uint8_t> payload);
+// The same, the bytes borrowed from `payload` rather than copied: an extent received is
+// stored from the message that carried it, never from a second buffer of its size.
+struct ObjectView {
+  ObjectId id{};
+  std::span<const uint8_t> data;
+  std::optional<WritePrincipal> principal;
+};
+ObjectView decode_object_view(std::span<const uint8_t> payload);
 
 // bool_reply: one byte, 0 or 1.
 Bytes encode_bool(bool value);
