@@ -2946,6 +2946,69 @@ TEST(StoreRepair, TheLinksEstimateIsWhatTheWindowMovedNotOneTransfersShare) {
   EXPECT_GT(joiner.store().estimated_network_bps(), one * static_cast<double>(together) / 2) << "one transfer's share: " << one;
 }
 
+// A sample is never an extent over microseconds: bytes count over the time they were in
+// flight. live-a, 2026-11-21: transfers still in flight when a sample reset its span landed
+// together just after it, each a sample of an extent over almost no time, and the estimate
+// went from 10 MiB/s to 20 GiB/s; the burst, five seconds of it, let one step read until the
+// node was killed for memory. Here pulls are in flight under a wide window, the next step
+// shrinks the window to nothing, so every landing past an extent is a sample, and the holder
+// answers them all at once: the estimate stays near what they moved over the time they took.
+TEST(StoreRepair, TheLinksEstimateIsNeverAnExtentOverMicroseconds) {
+  dannan::test::Gate gets;
+  Cluster cluster;
+  constexpr size_t size = 4 * 1024 * 1024;
+  const auto four_mib = [] {
+    auto out = options(2);
+    out.store.extent_size = size;
+    return out;
+  };
+  auto& holder = cluster.add("holder", four_mib());
+  auto& joiner = cluster.add("joiner", four_mib());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const dannan::net::ServerLimits limits;
+  const size_t together = std::min<size_t>(6, limits.data_workers - limits.foreground_data_reserve);
+  ASSERT_GE(together, 3u);
+  const auto live = local_objects(holder, together, size, 119);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  ASSERT_EQ(joiner.store().estimated_network_bps(), 0.0);
+
+  dannan::test::GateOpener opener(gets);
+  holder.interpose(hold(message::get_object, gets));
+  constexpr auto held = 500ms;
+  const auto started = std::chrono::steady_clock::now();
+  (void)joiner.store().repair_step(lists, 64ULL * 1024 * 1024, wide);
+  ASSERT_TRUE(gets.wait_for_entries(together, 10s));
+  // The window shrinks while every pull is still in flight, as a slower link's would.
+  (void)joiner.store().repair_step(lists, 64ULL * 1024 * 1024, RepairWindow{1});
+  std::this_thread::sleep_for(held);
+  gets.open();
+  (void)joiner.store().repair_drain(30s);
+  const auto took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id));
+  const double moved = static_cast<double>(size * together) / took;
+  EXPECT_LE(joiner.store().estimated_network_bps(), 4 * moved) << "what the pulls moved over the time they took: " << moved << " B/s";
+}
+
+// The burst, and so what one step may read and hold, is bounded by memory whatever the
+// link's estimate says: an estimate wrong by a thousand times cannot make a step read more
+// than the window's bound (live-a's OOM, as above).
+TEST(StoreRepair, TheBurstIsBoundedWhateverTheLinksEstimate) {
+  Cluster cluster;
+  auto absurd = options(2);
+  absurd.repair.initial_bandwidth = 100ULL * 1024 * 1024 * 1024;
+  auto& node = cluster.add("node", absurd);
+  cluster.start_all();
+  ASSERT_EQ(node.store().estimated_network_bps(), 0.0);
+  // A minute at the absurd rate: the credit banks to the burst, so the burst is what shows.
+  auto& time = node.context().time().source();
+  (void)node.repair().earn_credit(time.now(), 60s);
+  const auto earned = node.repair().earn_credit(time.now(), 60s);
+  EXPECT_GT(earned.rate, 1e9) << "the case needs the absurd rate to stand";
+  EXPECT_LE(earned.credit, 256ULL * 1024 * 1024) << "one step may read and hold the burst";
+}
+
 // Small objects travel many to a message: a pull's size is not known until it lands, so
 // each fetch holds an extent of the window, and one fetch a holder carries up to an
 // extent of objects (get_objects). With a window of one extent, one turn fetches forty
