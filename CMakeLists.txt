@@ -27,8 +27,10 @@ option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer 
 # The network layer by minor, at least the patch Dagda was built and tested on: from 0.6.0 Dannan keeps its ABI across a
 # minor's patches (SONAME libdannan.so.0.10 from 0.10.0, SameMinorVersion), and only a new minor changes it: a request
 # for 0.9.2 would never find 0.10.0, nor the reverse. 0.10.0: the stack's first minor (CHANGELOG, "Adopting 0.10.0").
-# One number for the build and the installed package's config, which a consumer meets (test/package).
-set(DAGDA_DANNAN_MINIMUM 0.10.0)
+# 0.11.0: AES-GCM sealed and opened in place, and a reassembled message held at exactly its size (an extent served and
+# stored in one buffer). One number for the build and the installed package's config, which a consumer meets
+# (test/package).
+set(DAGDA_DANNAN_MINIMUM 0.11.0)
 find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
 
 # Dannan's one sanitizer switch, honoured by name for Dagda's own targets (Dannan's docs/building.md): `address` (ASan
