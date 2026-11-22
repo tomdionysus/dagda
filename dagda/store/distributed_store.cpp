@@ -605,11 +605,16 @@ struct DistributedStore::RepairState {
   bool drain_owed DANNAN_GUARDED_BY(window_mutex) = false;
   std::vector<RepairLanded> landed DANNAN_GUARDED_BY(window_mutex);
   // The link as repair's window sees it: the bytes landed since the window last left
-  // empty, or since the last sample. Transfers in a window share the link, so one
-  // transfer's bytes over its own time is only its share: the estimate is taught from
-  // these instead, when the window drains and at each window's worth moved.
+  // empty, over the time since. Transfers in a window share the link, so one transfer's
+  // bytes over its own time is only its share: the estimate is taught from these instead,
+  // when the window drains and at each window's worth moved. The span runs from the window
+  // leaving empty to its draining and is never cut short by a sample: a transfer still in
+  // flight at a sample travelled before it, so a sample of only what landed after it would
+  // be an extent over microseconds (live-a, 2026-11-21: 20 GiB/s taught on a 10 MiB/s link).
   std::chrono::steady_clock::time_point span_start DANNAN_GUARDED_BY(window_mutex){};
   uint64_t span_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
+  // span_bytes at the last sample: the next is a window's worth on.
+  uint64_t sampled_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
   // The owner's: transfers started, objects with one in flight (not started again
   // until it lands), and copies that did not arrive (sent again first; the pass is not
   // complete while there is one).
@@ -627,6 +632,7 @@ struct DistributedStore::RepairState {
     if (!in_flight) {
       span_start = std::chrono::steady_clock::now();
       span_bytes = 0;
+      sampled_bytes = 0;
     }
     in_flight += amount;
     if (in_flight * 2 > window) drain_owed = true;
@@ -650,12 +656,12 @@ struct DistributedStore::RepairState {
         out.drained = true;
       }
       span_bytes += moved;
-      if (span_bytes && (span_bytes >= std::max(window, extent) || !in_flight)) {
-        const auto now = std::chrono::steady_clock::now();
+      if (span_bytes > sampled_bytes && (span_bytes - sampled_bytes >= std::max(window, extent) || !in_flight)) {
+        // Everything landed since the window left empty, over the time since: never only
+        // what landed after the last sample.
         out.sample_bytes = span_bytes;
-        out.sample_time = now - span_start;
-        span_start = now;
-        span_bytes = 0;
+        out.sample_time = std::chrono::steady_clock::now() - span_start;
+        sampled_bytes = span_bytes;
       }
     }
     window_changed.notify_all();
@@ -3164,8 +3170,13 @@ void DistributedStore::note_network(uint64_t bytes, std::chrono::steady_clock::d
   // and the far end's write, not bandwidth.
   const auto seconds = std::chrono::duration<double>(elapsed).count();
   if (!bytes || seconds <= 0.0 || bytes < _options.extent_size / 2) return;
-  const double sample = static_cast<double>(bytes) / seconds;
+  // However a sample was taken, it cannot carry the estimate past a link this node could
+  // have, nor raise it more than fourfold at once: one bad sample is a slow rise, never a
+  // thousandfold jump (live-a, 2026-11-21: 10 MiB/s to 20 GiB/s in one step).
+  constexpr double ceiling = 10e9 / 8;  // 10 Gbit/s, in bytes a second
   const double old = _network_bps.load(std::memory_order_relaxed);
+  double sample = std::min(static_cast<double>(bytes) / seconds, ceiling);
+  if (old > 0.0) sample = std::min(sample, old * 4.0);
   _network_bps.store(old > 0.0 ? old * 0.80 + sample * 0.20 : sample, std::memory_order_relaxed);
 }
 
@@ -3701,11 +3712,6 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
 
   // ---- Pushing: copies to the owners that lack them.
   using Plan = RepairPlan;
-  struct Send {
-    std::shared_ptr<Plan> plan;
-    NodeRecord peer;
-    std::shared_ptr<const Bytes> data;
-  };
   // An owner that lacks a planned object, and what it said of the offer: none
   // when it could not answer.
   struct Offer {
@@ -3829,63 +3835,19 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       // No room: passed, and the copy stays short, as for a peer advertising none.
     }
 
-    // Only what is wanted is read and sent, an object at a time in order, until the
-    // credit or admission runs out.
-    std::vector<Send> sends;
-    size_t planned = plans.size();
-    for (size_t p = 0; p < plans.size(); ++p) {
-      auto& plan = *plans[p];
-      std::vector<const NodeRecord*> wanted;
-      for (const auto& offer : offers)
-        if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
-      if (wanted.empty()) continue;
-      std::optional<Bytes> read;
-      {
-        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-        if (!admitted) {
-          stop_all = true;
-          planned = p;
-          break;
-        }
-        read = _data.get(plan.id);
-      }
-      if (!read) {
-        note_local_unreadable(plan.id);
-        plan.unreadable = true;
-        continue;
-      }
-      const auto source = std::make_shared<const Bytes>(std::move(*read));
-      // Credit pays for bytes put on the wire, never for finding out which are
-      // needed.
-      const uint64_t object_bytes = source->size() * wanted.size();
-      if (spent + object_bytes > byte_budget) {
-        result.credit_limited = true;
-        stop_all = true;
-        planned = p;
-        break;
-      }
-      for (const auto* peer : wanted) sends.push_back({plans[p], *peer, source});
-      spent += object_bytes;
-      result.credit_spent += object_bytes;
-    }
-    // What was offered past here is offered again from here, and the peer's
-    // promise renewed.
-    plans.resize(planned);
-
-    // Every send goes out at once and none is waited for: each lands on the store's
-    // executor and is kept whatever repair's turn does meanwhile, and the next step
-    // applies it. The link is sampled from the window, not from each send.
-    for (const auto& send : sends) {
+    // A wanted copy goes out the moment its object is read, and none is waited for: each
+    // lands on the store's executor and is kept whatever repair's turn does meanwhile, and
+    // the next step applies it. The link is sampled from the window, not from each send.
+    const auto send_now = [&](const std::shared_ptr<Plan>& sending, const NodeRecord& to, const Bytes& data) {
       const auto seq = state.started++;
-      const uint64_t bytes = send.data->size();
+      const uint64_t bytes = data.size();
       state.enter(bytes);
-      ++send.plan->outstanding;
+      ++sending->outstanding;
       ++result.remote_operations;
-      time_repair("push " + to_string(send.plan->id).substr(0, 8) + " asked " + std::to_string(bytes));
+      time_repair("push " + to_string(sending->id).substr(0, 8) + " asked " + std::to_string(bytes));
       _context.routes().call(
-          send.peer, message::put_object, message::encode_object(send.plan->id, *send.data), FrameType::speculative, _options.object_transfer_call, _executor,
-          [weak = std::weak_ptr<Shared>(_shared), plan = send.plan, id = send.plan->id, peer = send.peer.id, host = send.peer.host, bytes, seq,
-           extent](CallOutcome outcome) {
+          to, message::put_object, message::encode_object(sending->id, data), FrameType::speculative, _options.object_transfer_call, _executor,
+          [weak = std::weak_ptr<Shared>(_shared), plan = sending, id = sending->id, peer = to.id, host = to.host, bytes, seq, extent](CallOutcome outcome) {
             const auto shared = weak.lock();
             if (!shared) return;
             ReadLock alive(shared->alive);
@@ -3911,7 +3873,50 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
             store->repair_landed(store->_repair->land(bytes, ok ? bytes : 0, extent, std::move(landed)));
           },
           peer_call_watch());
+    };
+
+    // Only what is wanted is read, an object at a time in order, and sent as it is read,
+    // until the credit or admission runs out. Read as it is sent: an object's bytes are
+    // let go once its sends hold their messages, so a step never holds every object it
+    // read at once (live-a's OOM, 2026-11-21: a step read its whole credit before sending).
+    size_t planned = plans.size();
+    for (size_t p = 0; p < plans.size(); ++p) {
+      auto& plan = *plans[p];
+      std::vector<const NodeRecord*> wanted;
+      for (const auto& offer : offers)
+        if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
+      if (wanted.empty()) continue;
+      std::optional<Bytes> read;
+      {
+        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+        if (!admitted) {
+          stop_all = true;
+          planned = p;
+          break;
+        }
+        read = _data.get(plan.id);
+      }
+      if (!read) {
+        note_local_unreadable(plan.id);
+        plan.unreadable = true;
+        continue;
+      }
+      // Credit pays for bytes put on the wire, never for finding out which are
+      // needed.
+      const uint64_t object_bytes = read->size() * wanted.size();
+      if (spent + object_bytes > byte_budget) {
+        result.credit_limited = true;
+        stop_all = true;
+        planned = p;
+        break;
+      }
+      for (const auto* peer : wanted) send_now(plans[p], *peer, *read);
+      spent += object_bytes;
+      result.credit_spent += object_bytes;
     }
+    // What was offered past here is offered again from here, and the peer's
+    // promise renewed.
+    plans.resize(planned);
 
     for (const auto& plan : plans) {
       if (plan->outstanding)

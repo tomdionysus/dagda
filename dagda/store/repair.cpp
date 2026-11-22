@@ -106,7 +106,11 @@ double Repair::bandwidth() const {
   return out;
 }
 
-uint64_t Repair::burst() const { return static_cast<uint64_t>(std::max(static_cast<double>(_options.extent_size), bandwidth() * 5.0)); }
+uint64_t Repair::burst() const {
+  const auto extent = static_cast<double>(_options.extent_size);
+  const auto bound = std::max(extent, static_cast<double>(_options.max_window_bytes));
+  return static_cast<uint64_t>(std::min(bound, std::max(extent, bandwidth() * 5.0)));
+}
 
 RepairCredit Repair::earn_credit(TimePoint now, std::optional<std::chrono::milliseconds> when_no_time_passed) {
   // Credit: the link's rate, banked to a burst. The whole of it while nothing of a higher
