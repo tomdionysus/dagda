@@ -47,8 +47,19 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git checkout --detach "refs/tags/${GITHUB_REF_NAME#deb/}"
 
+      # apt would take the newest Dannan, past the release's range: install the newest
+      # that debian/control admits first.
       - name: Install build dependencies
-        run: apt-get build-dep -y ./
+        run: |
+          low=$(sed -nE 's/^ libdannan-dev \(>= ([^)]+)\),?$/\1/p' debian/control)
+          high=$(sed -nE 's/^ libdannan-dev \(<< ([^)]+)\),?$/\1/p' debian/control)
+          dannan=$(apt-cache madison libdannan-dev | awk '{print $3}' | while read -r v; do
+            dpkg --compare-versions "$v" ge "$low" && dpkg --compare-versions "$v" lt "$high" && echo "$v"
+          done | sort -V | tail -n 1)
+          test -n "$dannan"
+          echo "Dannan $dannan, for >= $low and << $high"
+          apt-get install -y --no-install-recommends "libdannan-dev=$dannan"
+          apt-get build-dep -y ./
 
       - name: Build
         run: tools/build-deb.sh
