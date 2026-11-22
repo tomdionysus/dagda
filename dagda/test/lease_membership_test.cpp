@@ -73,6 +73,8 @@ class RosterNodes final : public dannan::Nodes {
   std::optional<dannan::net::Purpose> path(const dannan::identity::NodeId&, dannan::net::Lane) const override { return std::nullopt; }
   std::optional<std::chrono::milliseconds> latency(const dannan::identity::NodeId&) const override { return std::nullopt; }
   std::map<dannan::identity::NodeId, std::chrono::milliseconds> latencies() const override { return {}; }
+  std::optional<std::chrono::milliseconds> clock_offset(const dannan::identity::NodeId&) const override { return std::nullopt; }
+  bool clock_in_bounds() const override { return true; }
   std::vector<dannan::membership::IdentityReset> identity_resets() const override { return {}; }
   bool apply_identity_reset(const dannan::membership::IdentityReset&) override { return false; }
   void propagate_identity_reset(const dannan::membership::IdentityReset&, std::chrono::milliseconds) override {}
