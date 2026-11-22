@@ -51,8 +51,9 @@ jobs:
       # that debian/control admits first.
       - name: Install build dependencies
         run: |
-          low=$(sed -nE 's/^ libdannan-dev \(>= ([^)]+)\),?$/\1/p' debian/control)
-          high=$(sed -nE 's/^ libdannan-dev \(<< ([^)]+)\),?$/\1/p' debian/control)
+          # Build-Depends, the first of the two places the range is written.
+          low=$(sed -nE 's/^ libdannan-dev \(>= ([^)]+)\),?$/\1/p' debian/control | head -n 1)
+          high=$(sed -nE 's/^ libdannan-dev \(<< ([^)]+)\),?$/\1/p' debian/control | head -n 1)
           dannan=$(apt-cache madison libdannan-dev | awk '{print $3}' | while read -r v; do
             dpkg --compare-versions "$v" ge "$low" && dpkg --compare-versions "$v" lt "$high" && echo "$v"
           done | sort -V | tail -n 1)
