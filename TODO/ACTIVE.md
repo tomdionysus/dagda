@@ -60,19 +60,17 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **live-a's OOM (2026-11-21, Macha 0.95.1 on Dagda 0.3.2)**, first: glibc arenas retaining freed 4-16 MiB transfer
-   buffers (read-only smaps on live-a: the anonymous memory is 64 MiB-aligned arena heaps, no standalone buffer
-   mappings). The fix is the stack's allocator policy in each binary's unit (`MALLOC_MMAP_THRESHOLD_=1048576`, Dannan's
-   docs); Dagda's part:
+2. **live-a's OOM (2026-11-21, Macha 0.95.1 on Dagda 0.3.2)**: fixed in 0.3.3 (`62f9d7d`, tagged 2026-11-22):
+   repair's link estimate misread a thousandfold and its burst let one step read ~100 GiB. Port it to develop
+   first. No allocator setting is a requirement (the maintainer, 2026-11-22: "yes drop that in the docs"; live-a on
+   0.3.3 with none held 0.97 to 1.20 GB through 76 GB of repair). Still Dagda's, as fewer copies, not as the fix:
    - a served object decrypted straight into its reply (`open_object` into the span after `encode_object`'s header in
      the `Writer` the reply owns; Dannan's advice, no new API): its plaintext and its encode copy go, in
      `StorageServer::handle` (get_object, get_objects) and `DistributedStore::put_on`;
    - every transfer buffer charged to the retained-memory ledger, and repair's window bounded by it, not by the link
      alone (a bound on what is live; not the retention fix);
    - a case that holds a node's peak transfer bytes to its bound; Dannan reviews it against its ledger
-     (`Context::budget()`: reserve, acquire with a deadline, the lease the charge);
-   - the README's "Running a node" links Dannan's docs/running.md on develop (`74aaae9`): move it to main once
-     Dannan releases it, and check it before any tag.
+     (`Context::budget()`: reserve, acquire with a deadline, the lease the charge).
 3. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
    - the register map (D6);
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1;

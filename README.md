@@ -93,15 +93,6 @@ A ticket outlives the call: `wait(ticket, deadline, ...)` reports again when the
 copies land. The contract is versioned; a hosted system built against another version is
 refused.
 
-### Running a node
-
-Dagda moves objects in buffers of an extent, 4 to 16 MiB. glibc's allocator keeps freed
-buffers that size in its per-thread arenas unless its mmap threshold is fixed, so the
-systemd unit of the binary that runs a node sets
-`Environment=MALLOC_MMAP_THRESHOLD_=1048576`. The rule, its reasons and how to check a node
-are Dannan's, for the whole stack:
-[docs/running.md](https://github.com/tomdionysus/dannan/blob/develop/docs/running.md).
-
 ### Migrating a Macha node
 
 `dagda-migrate` moves a Macha node's layout v18 store to Dagda's layout in place, without
