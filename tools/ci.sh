@@ -25,7 +25,7 @@
 set -eu
 
 STEP=${1:?usage: tools/ci.sh check|release|asan|tsan}
-DANNAN_TAG=${DANNAN_TAG:-0.10.0}
+DANNAN_TAG=${DANNAN_TAG:-0.11.1}
 JOBS=${JOBS:-$(nproc)}
 ROOT=$(pwd)
 WORK=$ROOT/build-ci

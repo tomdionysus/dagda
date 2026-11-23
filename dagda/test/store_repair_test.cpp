@@ -3017,6 +3017,29 @@ TEST(StoreRepair, TheBurstIsBoundedWhateverTheLinksEstimate) {
   EXPECT_LE(earned.credit, 256ULL * 1024 * 1024) << "one step may read and hold the burst";
 }
 
+// Repair's window fits inside the node's transfer pool, with room for a few extents beyond it
+// (a reassembly, a reply being written, a sealed copy): at its peak every buffer it moves can go
+// back to the pool, and none is freed to glibc for the bound, where per-thread arenas keep it
+// (the 20-round memory case, 2026-11-23: a 256 MiB window in a 256 MiB pool freed six 16 MiB
+// blocks; at 192 MiB, one).
+TEST(StoreRepair, TheWindowFitsInsideTheNodesTransferPool) {
+  Cluster cluster;
+  auto absurd = options(2);
+  absurd.repair.initial_bandwidth = 100ULL * 1024 * 1024 * 1024;
+  absurd.repair.max_window_bytes = 1ULL << 40;
+  auto& node = cluster.add("node", absurd);
+  cluster.start_all();
+  // Repair's extent is the store's (node.cpp).
+  const uint64_t store_extent = absurd.store.extent_size;
+  const auto pool = node.context().buffers()->bound();
+  ASSERT_GT(pool, 8 * store_extent) << "the case needs a node with a pool";
+  auto& time = node.context().time().source();
+  (void)node.repair().earn_credit(time.now(), 60s);
+  const auto earned = node.repair().earn_credit(time.now(), 60s);
+  EXPECT_LE(earned.credit, pool - 4 * store_extent);
+  EXPECT_GE(earned.credit, store_extent);
+}
+
 #if defined(__GLIBC__)
 // What the process's allocator says: bytes handed out and still in use, and bytes it holds
 // from the system (its arenas and the mappings of large blocks).

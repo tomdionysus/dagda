@@ -25,12 +25,12 @@ option(DAGDA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DAGDA_BUILD_FUZZING "Build each fuzz target as its own binary (libFuzzer where the compiler has it)" OFF)
 
 # The network layer by minor, at least the patch Dagda was built and tested on: from 0.6.0 Dannan keeps its ABI across a
-# minor's patches (SONAME libdannan.so.0.10 from 0.10.0, SameMinorVersion), and only a new minor changes it: a request
-# for 0.9.2 would never find 0.10.0, nor the reverse. 0.10.0: the stack's first minor (CHANGELOG, "Adopting 0.10.0").
-# 0.11.0: AES-GCM sealed and opened in place, and a reassembled message held at exactly its size (an extent served and
-# stored in one buffer). One number for the build and the installed package's config, which a consumer meets
-# (test/package).
-set(DAGDA_DANNAN_MINIMUM 0.11.0)
+# minor's patches (SONAME libdannan.so.0.11 from 0.11.0, SameMinorVersion), and only a new minor changes it: a request
+# for 0.10.0 would never find 0.11.0, nor the reverse. 0.11.0: AES-GCM sealed and opened in place, a reassembled message
+# held at exactly its size, and the node's transfer-buffer pool (an extent served and stored in one buffer, reused).
+# 0.11.1: every payload Dannan drops goes back to the pool, and the pool's bound, which repair's window stays under.
+# One number for the build and the installed package's config, which a consumer meets (test/package).
+set(DAGDA_DANNAN_MINIMUM 0.11.1)
 find_package(dannan ${DAGDA_DANNAN_MINIMUM} CONFIG REQUIRED)
 
 # Dannan's one sanitizer switch, honoured by name for Dagda's own targets (Dannan's docs/building.md): `address` (ASan

@@ -108,7 +108,11 @@ double Repair::bandwidth() const {
 
 uint64_t Repair::burst() const {
   const auto extent = static_cast<double>(_options.extent_size);
-  const auto bound = std::max(extent, static_cast<double>(_options.max_window_bytes));
+  auto window = static_cast<double>(_options.max_window_bytes);
+  // Under the node's transfer pool, with room for four extents beyond the window: a pool of no
+  // bound (a test's own Context) holds nothing and sets no cap.
+  if (const auto pool = static_cast<double>(_context.buffers()->bound()); pool > 0) window = std::min(window, pool - 4.0 * extent);
+  const auto bound = std::max(extent, window);
   return static_cast<uint64_t>(std::min(bound, std::max(extent, bandwidth() * 5.0)));
 }
 
