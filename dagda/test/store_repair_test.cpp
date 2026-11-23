@@ -51,6 +51,9 @@
 #include <unistd.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
+
+#include <cstdio>
+#include <cstdlib>
 #endif
 
 #include <algorithm>
@@ -3026,6 +3029,19 @@ Heap heap_now() {
   return {info.uordblks + info.hblkhd, info.arena + info.hblkhd};
 }
 
+// With DAGDA_MALLOC_INFO naming a file, glibc's own account of each arena (malloc_info's
+// XML: its heaps, and its free chunks by size) is appended to it under `label`, for a
+// hunt of what an arena keeps.
+void malloc_info_to_env_file(const std::string& label) {
+  const char* path = std::getenv("DAGDA_MALLOC_INFO");
+  if (!path || !*path) return;
+  if (FILE* out = std::fopen(path, "a")) {
+    std::fprintf(out, "<!-- %s -->\n", label.c_str());
+    (void)malloc_info(0, out);
+    std::fclose(out);
+  }
+}
+
 // Repair holds no memory once its window drains: every round moves new extents, and neither
 // what is in use nor what the allocator holds grows with the rounds (live-a, 2026-11-22: on
 // 0.3.3, with the estimate right, its resident memory grew with what repair moved, in glibc's
@@ -3060,6 +3076,7 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
   std::vector<std::vector<ObjectId>> written;
   for (size_t round = 0; round < rounds; ++round) written.push_back(local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round)));
   const auto before = heap_beyond_pools();
+  malloc_info_to_env_file("before");
   std::vector<Heap> after;
   std::vector<uint64_t> kept;
   for (size_t round = 0; round < rounds; ++round) {
@@ -3073,6 +3090,7 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
     for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id)) << "round " << round;
     after.push_back(heap_beyond_pools());
     kept.push_back(pooled());
+    malloc_info_to_env_file("round " + std::to_string(round));
   }
   // Once a round's window drains, nothing it moved is in use, and the allocator holds no more
   // than a few extents beyond what it held before repair began: freed transfer buffers that
@@ -3086,7 +3104,8 @@ TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
   for (auto* node : {&holder, &joiner}) {
     const auto stats = node->context().buffers()->stats();
     figures += " pool: taken " + std::to_string(stats.taken) + " reused " + std::to_string(stats.reused) + " kept " + std::to_string(stats.kept) + " freed " +
-               std::to_string(stats.freed) + ";";
+               std::to_string(stats.freed) + " (small " + std::to_string(stats.freed_small) + ", bound " + std::to_string(stats.freed_bound) + ", ledger " +
+               std::to_string(stats.freed_ledger) + ", detached " + std::to_string(stats.freed_detached) + ");";
   }
   RecordProperty("heap", figures);
   // Two nodes at Dannan's default bound (NodeConfig::transfer_buffers_bound).
