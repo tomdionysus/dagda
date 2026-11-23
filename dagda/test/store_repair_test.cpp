@@ -221,8 +221,12 @@ test::TestProvider referring_to(std::vector<ObjectId> ids) {
 // Each node publishes what `provider` refers to, then runs its maintenance
 // passes until `done` (step 7b: the node's own passes, which its thread runs
 // when on; no provider stays registered, so its collector removes nothing).
+// The bound is a ceiling, never a wait: a node's first pass also runs the held
+// ledgers' verify on its banked credit, which under ASan takes about ten seconds a
+// node (3.6 s for the whole partition-heal case plain, 32-37 s under ASan, its 30 s
+// bound then failing 3 runs in 5; 2026-11-23).
 bool converge(const std::vector<ClusterNode*>& nodes, test::TestProvider& provider, const std::function<bool()>& done,
-              std::chrono::milliseconds bound = std::chrono::seconds(30)) {
+              std::chrono::milliseconds bound = std::chrono::seconds(90)) {
   for (auto* node : nodes) node->publish_inventory(provider);
   return wait_until(
       [&] {
