@@ -81,13 +81,21 @@ unless the board says so (`claims_list`).
 3. **The next release, 0.5.0** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating
    session. It goes ahead of every other item: several projects wait on it (the coordinator, at the maintainer's
    request, 2026-11-23). In order of who waits:
-   - the register map (D6), public: in 0.4.0 its code is built and its header installed (`767e83d`,
-     `dagda/heads/register_map.h`), but it is not in the hosted contract and its stamp is the Lamport stand-in
-     behind a seam. Left: the hlc stamp on Dannan's `HlcClock::admit` (in Dannan since 0.10.0, so nothing
-     upstream blocks it), ordered by (hlc stamp, node id); its spaces opened in a release; the contract surface
-     (a `Context` accessor, the contract version raised). Waiting: Lir (retained messages, a gate of its 0.3.0),
-     Lugh P8.2-P8.4, Louhi item 3, Mimir checkpoints, AthenaSIP (with walk_from; its heal step takes the last by
-     the same order);
+   - **first: the repair flake** `StoreRepair.RepairConvergesAfterAPartitionHeals`, found by D6's ASan gate and
+     already in 0.4.0 (its ASan build fails it 3 times in 5 alone): 3.6 s plain, 32-37 s under ASan, against a
+     30 s bound. A tenfold slowdown points at a wait in repair, not ASan's cost alone; being timed by phase;
+   - the register map (D6), public: **on develop** (`00e0a9f`, 2026-11-23; full suite, TSan and ASan clean bar
+     the flake above, which is not D6's): the hlc stamp admitted by its highest at acceptance, `Context::registers()`,
+     contract version 3. Left for 0.5.0: get and list at a named head (Louhi, 2026-11-23: a host loads at the head
+     it then chains notices from); confirming a register space opened through `registers()` names its objects to
+     the collector (Lir's retained payloads over 64 KiB as objects in `refs`); the docs. Waiting: Lir (retained
+     messages, a gate of its 0.3.0), Lugh P8.2-P8.4, Louhi item 3, Mimir checkpoints (its stage 5), AthenaSIP (with
+     walk_from; its heal step takes the last by the same order);
+   - a SimNodes fixture (the maintainer's ruling via Lir, 2026-11-23: functional runs now, exact replay later): a
+     `dagda::Node` opened in `SimNodes::host(i, node, lost)`, its state under the node's `state_path`, cleared on a
+     store-lost restart, closed in `SimNodes::stopping`, its types registered in `prepare` from Dannan 0.12.0.
+     Lir's tests wait on it. Later work, not 0.5.0: Dagda's own threads and disk onto the world's schedule and
+     `test::sim::Disk`, so a seed replays exactly;
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1. Waiting: Lir (wills, client-id
      uniqueness, its other 0.3.0 gate), Macha (torrent claims, the catalogue scanner, the sweeper), AthenaSIP's
      trunk lease (its one compare-and-set);
