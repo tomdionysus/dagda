@@ -91,6 +91,10 @@ unless the board says so (`claims_list`).
      the collector (Lir's retained payloads over 64 KiB as objects in `refs`); the docs. Waiting: Lir (retained
      messages, a gate of its 0.3.0), Lugh P8.2-P8.4, Louhi item 3, Mimir checkpoints (its stage 5), AthenaSIP (with
      walk_from; its heal step takes the last by the same order);
+   - **the pin: Dannan 0.12.0** (tagged 2026-11-23, main `b9a5609`): the fixture below registers Dagda's types in
+     `SimNodes::prepare`, new in 0.12.0, and its readiness and health let the store push its check
+     (`dagda.spaces`). Consumers repin once, onto Dagda 0.5.0 with Dannan 0.12.0. The notifying TimeSource (the
+     TSan stalls) is taken up after 0.5.0's core;
    - a SimNodes fixture (the maintainer's ruling via Lir, 2026-11-23: functional runs now, exact replay later): a
      `dagda::Node` opened in `SimNodes::host(i, node, lost)`, its state under the node's `state_path`, cleared on a
      store-lost restart, closed in `SimNodes::stopping`, its types registered in `prepare` from Dannan 0.12.0.
