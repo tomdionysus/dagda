@@ -98,7 +98,9 @@ unless the board says so (`claims_list`).
      `test::sim::Disk`, so a seed replays exactly;
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1. Waiting: Lir (wills, client-id
      uniqueness, its other 0.3.0 gate), Macha (torrent claims, the catalogue scanner, the sweeper), AthenaSIP's
-     trunk lease (its one compare-and-set);
+     trunk lease (its one compare-and-set), Manannan 0.5.0 (one fenced registrar writer per domain; its release
+     waits on D6 and D5, `../manannan/TODO/2026-11-23-clustered-dns-spec.md`). The 0.5.0 docs carry a worked
+     example of a register write fenced by the writer's lease epoch;
    - the AcceptorStore: durable, beside Dannan's `agree::MemoryStore` under its interface. Kvasir waits on it
      (2026-11-20): its commit path runs on `MemoryStore` meanwhile, and swaps to Dagda's store and puts its
      manifests on the register map once it lands. Send Kvasir the design and the date when they exist;
@@ -108,6 +110,9 @@ unless the board says so (`claims_list`).
      placement (Lir, Lugh, Kvasir) and contract v2 (Mimir stage 5). AthenaSIP's requirements per shape
      (`../athenasip/TODO/2026-11-23-dagda-requirements.md`) add a second user to TTL, sum-merged counters and the
      time-scanned log;
+   - a secret openable only by a lease's current holder (Manannan's registrar credential, 2026-11-23): wrapped to
+     the holder's certificate on takeover and from the last holder away, the domain catalogue's key wrapping; the
+     shape proposed to Manannan before it is built. Per-node secrets are covered today by node-local spaces;
    - reads and listings;
    - FetchContent;
    - config (the maintainer, 2026-11-20): YAML is the source of truth; flags and environment variables
