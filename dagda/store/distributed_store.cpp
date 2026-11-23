@@ -3516,7 +3516,7 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         }
         uint64_t brought = 0;
         for (const auto& object : objects) brought += object.data.size();
-        auto job = [store, peer, ids, reply, objects = std::move(objects), seq, extent, allowance, brought] {
+        auto job = [store, peer, ids, reply = std::move(reply), objects = std::move(objects), seq, extent, allowance, brought]() mutable {
           std::vector<RepairLanded> landed;
           std::vector<ObjectId> left;
           bool stored = false;
@@ -3553,6 +3553,10 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
           }
           if (stored) store->_context.events().notify(store->_storage_event);
           store->time_repair("fetch " + std::to_string(seq) + " stored");
+          // The reply goes back to the pool before its extent leaves the window, so a
+          // drained window holds no buffer of it.
+          objects.clear();
+          reply.reset();
           if (left.empty()) {
             store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
             return;
@@ -4021,7 +4025,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           auto* store = shared->store;
           if (!store) return;
           store->time_repair("pull " + to_string(id).substr(0, 8) + " answered " + std::to_string(data ? data->bytes.size() : 0));
-          auto job = [store, id, seq, extent, data = std::move(data), answer] {
+          auto job = [store, id, seq, extent, data = std::move(data), answer]() mutable {
             RepairLanded landed;
             landed.seq = seq;
             landed.id = id;
@@ -4043,7 +4047,11 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               }
             }
             store->time_repair("pull " + to_string(id).substr(0, 8) + " stored " + (landed.ok ? "1" : "0"));
-            store->repair_landed(store->_repair->land(extent, data ? data->bytes.size() : 0, extent, std::move(landed)));
+            // Its buffer goes back to the pool (as its last reader here) before its extent
+            // leaves the window, so a drained window holds no buffer of it.
+            const uint64_t brought = data ? data->bytes.size() : 0;
+            data.reset();
+            store->repair_landed(store->_repair->land(extent, brought, extent, std::move(landed)));
           };
           // The store going: what has not been stored is lost, and the next survey lists
           // it again.
