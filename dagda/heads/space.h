@@ -313,6 +313,11 @@ struct SpaceSpec {
   std::function<std::optional<State>(const State&)> reconfigure;
   // Told of every head as it becomes the one reads are at.
   std::function<void(const State&)> on_head;
+  // Judges a head a peer offers before it is accepted here (D6's HLC admission): nothing to
+  // admit it, or why not. Called where a peer's head enters (its push, the survey's import),
+  // never in the merge and never for this node's own commits; a refused head stays out of
+  // the head set and is offered again later. None: every head is admitted.
+  std::function<std::optional<std::string>(const State& offered, const NodeId& peer)> admit;
   // Generation 2 from nothing, on the deterministic founder: the state the owner was
   // configured with, its tree written through `nodes`. A function of that alone, so
   // founders configured alike build one commit. None: this node forms no space.
@@ -429,6 +434,16 @@ class Space {
   uint64_t current_revision() const noexcept { return _available_revision.load(std::memory_order_acquire); }
   HeadsReport heads() const;
   HeadFields fields(const SpaceView& view) const { return _spec.codec->head_fields(view.state); }
+  // The view of a head this node holds, a notice's before or after. Throws HeadsNotReady for
+  // one it does not hold. Waits on what materializing it reads.
+  SpaceView view_of(const HeadIdentity& head) const;
+  // A node store to read this space's tree through, as its own reads do: a node not yet
+  // here is asked of a peer, so a read through it waits as entries_waits.
+  std::unique_ptr<TreeNodeStore> reader() const { return _services.read_nodes(); }
+  // The owner's judgement of the head `hash` a peer offers (SpaceSpec::admit): nothing to
+  // admit it, or why not. A head whose state cannot be had here is left to acceptance, which
+  // refuses it. Waits on what materializing it reads.
+  std::optional<std::string> admit(const Hash256& hash, const NodeId& peer) const;
   // Whether `view` holds the commit `dot` names (CommitOutcome::dot). The shared view moves
   // forward by generation, not by cause: with several heads, current() and converged() can
   // stand on a head that lacks a commit this node has already made, until a fold carries

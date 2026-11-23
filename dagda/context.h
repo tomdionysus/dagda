@@ -12,7 +12,9 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,6 +23,7 @@
 
 #include "dagda/contract/claim_store.h"
 #include "dagda/domain/domain.h"
+#include "dagda/heads/register_map.h"
 #include "dagda/heads/space.h"
 #include "dagda/heads/spaces.h"
 #include "dagda/lease/keeper.h"
@@ -62,7 +65,9 @@ class Node;
 // The contract's version. A hosted system states the version it was built
 // against (check_version, require_version): this one, or the frozen one served
 // beside it; anything else is refused.
-inline constexpr uint32_t context_version = 2;
+// 3: registers() (D6, 0.5.0). Each version only adds to the one before, so every version
+// from the frozen one up is served: 1 (Macha's port), 2 and 3.
+inline constexpr uint32_t context_version = 3;
 inline constexpr uint32_t context_version_frozen = 1;
 
 // A version check's evidence: what the system was built against, what this
@@ -163,6 +168,39 @@ struct HeadWatch {
 struct HeadChanges {
   bool finished = false;
   dannan::sched::Page<std::string, std::string> page;
+  std::string why;
+};
+
+// What a register commit came to (D6): the mutation's evidence, and each key's new version
+// for the next conditional write. A conditional write refused on this node's view commits
+// nothing: `conflict` names the key, `found` the register its parent held (none when
+// absent), and `mutation.why` the reason.
+struct RegisterEvidence {
+  MutationEvidence mutation;
+  std::map<std::string, heads::RegisterVersion> written;
+  std::optional<std::string> conflict;
+  std::optional<heads::Register> found;
+};
+
+// A register read (D6). `finished`: it could happen, and `value` is what it found, none
+// for nothing; otherwise `why` says why not, or that the deadline passed.
+struct RegisterRead {
+  bool finished = false;
+  std::optional<heads::Register> value;
+  std::string why;
+};
+
+// A page of live registers under a prefix (D6), with `finished` and `why` as a read's.
+struct RegisterList {
+  bool finished = false;
+  dannan::sched::Page<std::pair<std::string, heads::Register>, std::string> page;
+  std::string why;
+};
+
+// A page of the keys whose registers differ between two heads (D6), both sides.
+struct RegisterChanges {
+  bool finished = false;
+  dannan::sched::Page<heads::RegisterChange, std::string> page;
   std::string why;
 };
 
@@ -420,6 +458,65 @@ class Context {
     Node& _node;
   };
 
+  // The register map (D6, TODO/2026-11-20-register-map.md): Dagda's own owner of a head
+  // space, so a hosted system opens one rather than writing a codec, a merge and a mutation.
+  // A key maps to a register ordered by (stamp, node id), the greater winning per key. A space
+  // opened with StampKind::hlc (the default here) stamps by this node's hybrid clock and
+  // admits a peer's head by its highest stamp; RegisterOptions::hlc is filled with the node's
+  // clock. Watches are heads().watch on the space's id. Every call has a deadline and posts to
+  // the caller's executor; the forms without one wait for it.
+  class Registers {
+   public:
+    using Opened = std::function<void(SpaceOpened)>;
+    using Committed = std::function<void(RegisterEvidence)>;
+    using Read = std::function<void(RegisterRead)>;
+    using Listed = std::function<void(RegisterList)>;
+    using Changed = std::function<void(RegisterChanges)>;
+
+    // The options a hosted system opens a register space with: HLC stamps by default.
+    static heads::RegisterOptions defaults();
+
+    // Opens or joins `name`; a head recording other options is refused, saying so.
+    void open(std::string name, heads::RegisterOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Opened done);
+    SpaceOpened open(std::string name, heads::RegisterOptions options, std::chrono::milliseconds deadline);
+
+    // The ops in one commit, all or nothing (Heads::mutate_waits).
+    void commit(const heads::SpaceId& space, std::vector<heads::RegisterOp> ops, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                Committed done);
+    RegisterEvidence commit(const heads::SpaceId& space, std::vector<heads::RegisterOp> ops, std::chrono::milliseconds deadline);
+
+    // At the space's current view (Space::entries_waits): get answers none for a tombstone or an
+    // expired register, get_register a tombstone with its flag.
+    void get(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Read done);
+    RegisterRead get(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline);
+    void get_register(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Read done);
+    RegisterRead get_register(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline);
+    // Live registers under `prefix` after `from`, one budget operation per key visited.
+    void list(const heads::SpaceId& space, std::string prefix, dannan::sched::Cursor<std::string> from, size_t operations, std::chrono::milliseconds deadline,
+              boost::asio::any_io_executor executor, Listed done);
+    RegisterList list(const heads::SpaceId& space, std::string prefix, dannan::sched::Cursor<std::string> from, size_t operations,
+                      std::chrono::milliseconds deadline);
+    // The keys under `prefix` whose registers differ between two heads this node holds (a
+    // notice's before and after), over the tree's diff, so it costs the change.
+    void changed(const heads::SpaceId& space, heads::HeadIdentity before, heads::HeadIdentity after, std::string prefix,
+                 dannan::sched::Cursor<std::string> from, size_t operations, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                 Changed done);
+    RegisterChanges changed(const heads::SpaceId& space, heads::HeadIdentity before, heads::HeadIdentity after, std::string prefix,
+                            dannan::sched::Cursor<std::string> from, size_t operations, std::chrono::milliseconds deadline);
+
+    // The expiry clock, wall nanoseconds: what an owner computes time left against.
+    int64_t now() const noexcept;
+
+   private:
+    friend class Context;
+    explicit Registers(Node& node) : _node(node) {}
+    // The map `space` was opened with here, or none with `why` saying so.
+    std::shared_ptr<const heads::RegisterMap> map_of(const heads::SpaceId& space, std::string& why) const;
+    Node& _node;
+    mutable std::mutex _maps_mutex;
+    std::map<heads::SpaceId, std::shared_ptr<const heads::RegisterMap>> _maps;
+  };
+
   // A write's ticket, after the write has returned: status() waits on
   // nothing (nothing for a ticket forgotten); wait() completes when it
   // settles, wait_complete() when no member is pending at all, each at the
@@ -547,6 +644,7 @@ class Context {
   Claims& claims() noexcept { return _claims; }
   Leases& leases() noexcept { return _leases; }
   Heads& heads() noexcept { return _heads; }
+  Registers& registers() noexcept { return _registers; }
   Tickets& tickets() noexcept { return _tickets; }
   Activity& activity() noexcept { return _activity; }
   Control& control() noexcept { return _control; }
@@ -558,6 +656,7 @@ class Context {
   Claims _claims;
   Leases _leases;
   Heads _heads;
+  Registers _registers;
   Tickets _tickets;
   Activity _activity;
   Control _control;

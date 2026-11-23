@@ -326,6 +326,9 @@ dannan::net::Handled Spaces::handle(const dannan::membership::NodeRecord& peer, 
     auto* exchange = addressed_to(acceptance.space);
     if (!exchange) return not_open();
     if (const auto why = exchange->scope_refusal(peer.id)) return Handled::failed(403, "scope_refused", *why);
+    // The owner's admission of a peer's head (D6's HLC): refused with its reason, which the
+    // offering peer records and offers again later.
+    if (const auto why = exchange->space().admit(acceptance.form.hash, peer.id)) return Handled::failed(409, "not_admitted", *why);
     return yes_no(exchange->space().accept(acceptance.form));
   }
   if (type == n.notice) {

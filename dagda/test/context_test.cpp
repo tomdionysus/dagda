@@ -34,15 +34,17 @@ namespace {
 using test::Cluster;
 using test::ClusterNodeOptions;
 
-// Version 2 is served from slice 1, and version 1, frozen at 0.1.4, beside it (the maintainer,
-// 2026-11-13, "Ruled" 3): a system built against either is accepted, any other refused.
+// Version 3 (registers(), 0.5.0) is served, and every version before it down to version 1,
+// frozen at 0.1.4 (the maintainer, 2026-11-13, "Ruled" 3), since each only adds to the one
+// before: a system built against any of them is accepted, any other refused.
 TEST(Context, TheVersionCheckRefusesAMismatch) {
   Cluster cluster;
   auto& a = cluster.add("a");
   a.start();
   auto& api = a.api();
-  EXPECT_EQ(api.version(), 2u);
+  EXPECT_EQ(api.version(), 3u);
   EXPECT_EQ(api.version(), context_version);
+  EXPECT_TRUE(api.check_version(2).accepted);
   const auto same = api.check_version(context_version);
   EXPECT_TRUE(same.accepted);
   EXPECT_TRUE(same.why.empty());
@@ -54,7 +56,7 @@ TEST(Context, TheVersionCheckRefusesAMismatch) {
   EXPECT_FALSE(other.accepted);
   EXPECT_EQ(other.built_against, context_version + 1);
   EXPECT_EQ(other.served, context_version);
-  EXPECT_NE(other.why.find("version 3 was asked for"), std::string::npos) << other.why;
+  EXPECT_NE(other.why.find("version 4 was asked for"), std::string::npos) << other.why;
   EXPECT_NO_THROW(api.require_version(context_version));
   EXPECT_NO_THROW(api.require_version(context_version_frozen));
   EXPECT_THROW(api.require_version(0), ContextVersionMismatch);
@@ -403,6 +405,81 @@ TEST(Context, VersionTwoGivesTheLogicalCapacityAsMachasStatfs) {
     const auto capacity = d.api().objects().logical_capacity();
     return capacity.total == d.data().limit() && capacity.used == std::min(d.data().limit(), d.data().used());
   }));
+}
+
+// D6's case 25: the register map through the contract on a two-node cluster. A space opened
+// on both nodes (HLC by default), a commit naming each key's version, the read and the list at
+// the current view, a stale conditional write answered with the register found and nothing
+// committed, the change between two heads with both sides, and the commit reaching the other
+// node through acceptance, its HLC stamp admitted there.
+TEST(Context, RegistersOpenCommitReadAndConflictOnATwoNodeCluster) {
+  Cluster cluster;
+  auto& a = cluster.add("a");
+  auto& b = cluster.add("b");
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const auto deadline = std::chrono::milliseconds(10000);
+  const auto bytes = [](std::string_view text) { return store::Bytes(text.begin(), text.end()); };
+
+  const auto on_a = a.api().registers().open("test/registers", Context::Registers::defaults(), deadline);
+  ASSERT_TRUE(on_a.opened) << on_a.why;
+  const auto on_b = b.api().registers().open("test/registers", Context::Registers::defaults(), deadline);
+  ASSERT_TRUE(on_b.opened) << on_b.why;
+  ASSERT_EQ(on_a.space, on_b.space);
+  const auto space = on_a.space;
+
+  // An opened space has no decoded head until a read or a commit stands on one.
+  const auto before = a.api().heads().read(space, HeadRead::converged, deadline).view;
+  ASSERT_TRUE(before);
+  const auto put = a.api().registers().commit(space, {heads::RegisterOp::put("k", bytes("v")), heads::RegisterOp::put("other", bytes("o"))}, deadline);
+  ASSERT_TRUE(put.mutation.finished) << put.mutation.why;
+  ASSERT_EQ(put.written.size(), 2u);
+  const auto version = put.written.at("k");
+  EXPECT_EQ(version.node, a.id());
+  EXPECT_GT(dannan::contract::HlcStamp{version.stamp}.unix_ms(), 0u) << "an HLC stamp carries wall milliseconds";
+
+  const auto read = a.api().registers().get(space, "k", deadline);
+  ASSERT_TRUE(read.finished) << read.why;
+  ASSERT_TRUE(read.value);
+  EXPECT_EQ(read.value->value, bytes("v"));
+  EXPECT_EQ(read.value->version(), version);
+  EXPECT_FALSE(a.api().registers().get(space, "absent", deadline).value);
+
+  const auto listed = a.api().registers().list(space, "", {}, 100, deadline);
+  ASSERT_TRUE(listed.finished) << listed.why;
+  EXPECT_EQ(listed.page.items.size(), 2u);
+
+  // Expecting the key absent: refused on this node's view, the register found, nothing committed.
+  const auto refused = a.api().registers().commit(space, {heads::RegisterOp::put("k", bytes("w"), {}, {}, heads::RegisterExpect::absent())}, deadline);
+  EXPECT_FALSE(refused.mutation.finished);
+  ASSERT_TRUE(refused.conflict);
+  EXPECT_EQ(*refused.conflict, "k");
+  ASSERT_TRUE(refused.found);
+  EXPECT_EQ(refused.found->version(), version);
+  EXPECT_EQ(a.api().registers().get(space, "k", deadline).value->value, bytes("v"));
+
+  // The change from before the commit to now names both keys, with both sides.
+  const auto after = a.api().heads().current(space).view;
+  ASSERT_TRUE(after);
+  const auto changes = a.api().registers().changed(space, {before->generation, before->hash}, {after->generation, after->hash}, "", {}, 100, deadline);
+  ASSERT_TRUE(changes.finished) << changes.why;
+  ASSERT_EQ(changes.page.items.size(), 2u);
+  EXPECT_FALSE(changes.page.items[0].before);
+  EXPECT_TRUE(changes.page.items[0].after);
+
+  // The other node takes the commit through acceptance, its stamp admitted.
+  EXPECT_TRUE(test::wait_until([&] {
+    (void)b.api().heads().read(space, HeadRead::converged, deadline);
+    const auto there = b.api().registers().get(space, "k", deadline);
+    return there.finished && there.value && there.value->version() == version;
+  })) << "b never held a's register";
+
+  // A space never opened through registers() is named as such.
+  heads::SpaceId unknown{};
+  unknown.bytes.fill(0x33);
+  const auto none = a.api().registers().get(unknown, "k", deadline);
+  EXPECT_FALSE(none.finished);
+  EXPECT_FALSE(none.why.empty());
 }
 
 }  // namespace

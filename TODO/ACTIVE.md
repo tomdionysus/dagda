@@ -61,10 +61,23 @@ unless the board says so (`claims_list`).
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
 2. **0.4.0, tagged 2026-11-23** (main `e90b0ba`, on Dannan 0.11.1; the maintainer's "Yes do it"). Macha told it
-   needs Dannan 0.11.1 and no allocator setting (2026-11-23). Left: the debs, arm64 from the tag in a trixie
-   container on a Pi, amd64 by the `deb/0.4.0` workflow once Dannan 0.11.1's debs are on the apt server (the
-   maintainer uploads), both to `../tomcully-apt/incoming/dagda/0.4.0/` for signing. Not blocking: repair's
-   single-object pull seals into a pooled copy (`ObjectData` is shared and const, so not in place).
+   needs Dannan 0.11.1 and no allocator setting (2026-11-23). arm64 debs built from the tag and published by the
+   maintainer; amd64 from the `deb/0.4.0` workflow, to `../tomcully-apt/incoming/dagda/0.4.0/` for signing. Not
+   blocking: repair's single-object pull seals into a pooled copy (`ObjectData` is shared and const, so not in place).
+   **Documentation (the maintainer's ruling, 2026-11-23, relayed by the coordinator): a gate and a backfill.**
+   - **The gate:** no release is tagged without documentation for everything it adds or changes. 0.5.0 ships with
+     full docs for `Context::registers()`, the register map and the leases (about a day's slip, accepted).
+   - **The form:** a doc comment on every public declaration (what it does, parameters, return, errors and
+     outcomes, threading, ownership and lifetime, deadlines), rendered by Doxygen as a build tool only (a `docs`
+     target, warnings as errors in CI, so an undocumented public symbol fails it); Markdown concept guides in
+     `docs/` with the why as well as the what: the model (objects, spaces, heads and their orders), the register
+     map and its (stamp, node id) order, leases and epoch fencing, durability levels, repair, contract versions.
+   - **Examples:** real programs under `examples/`, built in CI and run as tests, quoted by the docs so they cannot
+     go stale: a hosted system opening a space; writing and reading objects; a register map with get, commit, list
+     and changed; taking and fencing a lease; handling durability and outcomes. No identifying data in any.
+   - **Order:** (a) the machinery: Doxyfile and `docs` target, the CI job, `examples/` built and run; (b) 0.5.0's
+     own docs, with D5; (c) the backfill, most-used first: `Context` and the contract versions, objects and spaces,
+     heads, durability and AckLevel, repair, the lease surface that exists today.
 3. **The next release, 0.5.0** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating
    session. It goes ahead of every other item: several projects wait on it (the coordinator, at the maintainer's
    request, 2026-11-23). In order of who waits:
@@ -238,7 +251,14 @@ merge can collapse it.
   - Claim on the board first (`claims_list`, then `claim_take` with only the cores the job's `-j` uses and an honest
     end). No claim is held without a live process (the maintainer): release the moment a job ends or fails.
   - nice 19 and ionice idle.
-  - When none is free, `claim-board wait <hosts> --cores N --job ... --for 90m` as a background command; never poll.
+  - **No preferred node** (the maintainer, 2026-11-23): take whichever Pi has the cores free now. Never queue for
+    one because it holds a warm tree or an earlier build: copy the tree there and build from scratch, installing
+    any missing tool or -dev package (1 core, `nice -n 19 apt-get install -y`, a board note naming it and the Pi).
+    Only a job that must run on one machine (a service there, or TSan with clang 19 on jupiter) names it, in the
+    claim's job text.
+  - Read a claim's outcome before starting its job; a take can be refused (the queue, a reservation).
+  - When no machine has the cores, `claim-board wait --any --cores N --job ... --for 90m` as a background command;
+    never poll.
 - **Where things are on the Pis** (wiped to bare OS 2026-11-18; toolchains back: GCC 14, clang 19, cmake, ninja,
   Boost 1.83, OpenSSL, GoogleTest 1.16):
   - `/root/dagda-031` on node-d (plain and ASan) and node-a (TSan): 0.3.1's gate, each with its Dannan 0.9.2 prefix

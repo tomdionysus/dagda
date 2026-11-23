@@ -388,24 +388,23 @@ namespace {
 
 // ---- The stamp seam ---------------------------------------------------------
 
-// What a write's stamp is. Lamport only, until Dannan's HlcClock::admit is released.
-class RegisterStamp {
- public:
-  virtual ~RegisterStamp() = default;
-  // The stamp every register of one commit on `parent` takes.
-  virtual uint64_t next(const RegisterHead& parent, const MutationContext& context) const = 0;
-};
+// The stamp every register of one commit on `parent` takes: always above the highest stamp
+// the parent's map has carried, so a node's next write is above everything it has seen.
+// Lamport: one more. HLC: the node's hybrid clock, kept above it; while the clock is out of
+// bounds its now() throws ClockOutOfBounds, refusing the mutation with that reason.
+uint64_t next_stamp(const RegisterHead& parent, dannan::contract::HlcClock* hlc) {
+  if (!hlc) return parent.lamport + 1;
+  return std::max(hlc->now().value, parent.lamport + 1);
+}
 
-// One more than the highest stamp the parent's map has carried, so a node's next write is
-// above everything it has seen.
-class LamportStamp final : public RegisterStamp {
- public:
-  uint64_t next(const RegisterHead& parent, const MutationContext&) const override { return parent.lamport + 1; }
-};
-
-const RegisterStamp& lamport_stamp() {
-  static const LamportStamp stamp;
-  return stamp;
+// A peer's head admitted by its highest stamp (Dannan, 2026-11-23: within max_ahead for the
+// highest is within it for all, and merging it moves this clock past every stamp it carries).
+std::optional<std::string> admit_head(dannan::contract::HlcClock& hlc, const State& offered, const NodeId& peer) {
+  const auto& head = head_cast(offered);
+  if (head.floor == 0 || head.lamport == 0) return std::nullopt;
+  auto admission = hlc.admit(dannan::contract::HlcStamp{head.lamport}, to_string(peer));
+  if (admission.admitted()) return std::nullopt;
+  return std::string("register stamp not admitted (") + dannan::contract::admit_verdict_name(admission.verdict) + "): " + admission.reason;
 }
 
 // ---- The codec --------------------------------------------------------------
@@ -552,13 +551,14 @@ class RegisterMerge final : public Merge {
 class RegisterMutation final : public Mutation {
  public:
   RegisterMutation(const State& parent, std::shared_ptr<const RegisterTree> tree, RegisterForm form, std::shared_ptr<const std::vector<RegisterOp>> ops,
-                   std::shared_ptr<RegisterWritten> written)
+                   std::shared_ptr<RegisterWritten> written, dannan::contract::HlcClock* hlc)
       : _parent(head_cast(parent)),
         _next(std::make_shared<RegisterHead>(_parent)),
         _tree(std::move(tree)),
         _form(form),
         _ops(std::move(ops)),
-        _written(std::move(written)) {
+        _written(std::move(written)),
+        _hlc(form.stamp == StampKind::hlc ? hlc : nullptr) {
     _delta.lamport = _parent.lamport;
   }
 
@@ -590,7 +590,7 @@ class RegisterMutation final : public Mutation {
 
   void stamp(const MutationContext& context) override {
     if (_ops->empty()) return;
-    const auto next_stamp = lamport_stamp().next(_parent, context);
+    const auto stamp_now = next_stamp(_parent, _hlc);
     if (_written) _written->versions.clear();
     for (const auto& op : *_ops) {
       Register value;
@@ -600,14 +600,14 @@ class RegisterMutation final : public Mutation {
         value.refs = op.refs;
         value.expires_ns = op.expires_ns;
       }
-      value.stamp = next_stamp;
+      value.stamp = stamp_now;
       value.node = context.dot.author;
       value.written_ns = context.now_ns;
       if (_written) _written->versions[op.key] = value.version();
       _delta.upsert[op.key] = std::move(value);
     }
-    _next->lamport = next_stamp;
-    _delta.lamport = next_stamp;
+    _next->lamport = stamp_now;
+    _delta.lamport = stamp_now;
   }
 
   void advance_clock(const MutationContext& context) override {
@@ -676,6 +676,8 @@ class RegisterMutation final : public Mutation {
   const RegisterForm _form;
   const std::shared_ptr<const std::vector<RegisterOp>> _ops;
   const std::shared_ptr<RegisterWritten> _written;
+  // The node's clock for an hlc space; none for Lamport.
+  dannan::contract::HlcClock* const _hlc;
   std::map<std::string, std::optional<Register>> _parents;
   RegisterDelta _delta;
 };
@@ -715,10 +717,9 @@ RegisterConflict::RegisterConflict(std::string key, std::optional<Register> foun
 
 RegisterMap::RegisterMap(RegisterOptions options, const dannan::contract::WallClock& wall, const dannan::contract::TimeSource& time)
     : _options(std::move(options)), _wall(wall), _time(time) {
-  if (_options.form.stamp == StampKind::hlc)
+  if (_options.form.stamp == StampKind::hlc && !_options.hlc)
     throw RegisterRefused(
-        "register map stamp kind hlc waits on Dannan's HlcClock::admit, which Dannan 0.10.0 does not have: a peer's stamp must be admitted at acceptance "
-        "before it is applied");
+        "a register map of stamp kind hlc needs the node's HlcClock (RegisterOptions::hlc): it stamps by it and admits a peer's head through it");
   if (_options.form.tombstone_wins && _options.form.tombstones.kind != TombstonePolicy::Kind::never)
     throw std::invalid_argument("tombstone_wins is a rule of TombstonePolicy::never: a window would drop the tombstone that wins");
   if (_options.form.tombstones.kind == TombstonePolicy::Kind::window && _options.form.tombstones.window.count() <= 0)
@@ -756,6 +757,9 @@ SpaceSpec RegisterMap::spec(std::string name) const {
     head->root = tree->build(entries, nodes);
     return head;
   };
+  // A peer's head is admitted by its highest stamp where it is offered, never in the merge.
+  if (_options.form.stamp == StampKind::hlc)
+    spec.admit = [hlc = _options.hlc](const State& offered, const NodeId& peer) { return admit_head(*hlc, offered, peer); };
   return spec;
 }
 
@@ -768,8 +772,8 @@ SpaceSpec RegisterMap::spec(std::string name, RegisterOptions options) {
 MutationFactory RegisterMap::mutation(std::vector<RegisterOp> ops, std::shared_ptr<RegisterWritten> written) const {
   for (const auto& op : ops) check_bounds(op);
   auto shared = std::make_shared<const std::vector<RegisterOp>>(std::move(ops));
-  return [tree = _tree, form = _options.form, shared, written](const State& parent) -> std::unique_ptr<Mutation> {
-    return std::make_unique<RegisterMutation>(parent, tree, form, shared, written);
+  return [tree = _tree, form = _options.form, shared, written, hlc = _options.hlc](const State& parent) -> std::unique_ptr<Mutation> {
+    return std::make_unique<RegisterMutation>(parent, tree, form, shared, written, hlc);
   };
 }
 

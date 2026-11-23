@@ -21,6 +21,7 @@
 #include "dagda/heads/codec.h"
 #include "dagda/heads/space.h"
 #include "dagda/heads/tree.h"
+#include "dannan/contract/hlc.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/sched/walk.h"
 
@@ -30,8 +31,9 @@
 // of two heads is the greater register per key and nothing else.
 namespace dagda::heads {
 
-// The stamp seam. Lamport stands in for the cases until Dannan's HlcClock::admit is
-// released; no space is opened on it in a release.
+// The stamp seam. HLC (the maintainer, Q2): the node's hybrid clock, a peer's head admitted
+// by its highest stamp through HlcClock::admit at acceptance. Lamport: a counter, for the
+// cases and for a space with no clock; no space is opened on it in a release.
 enum class StampKind : uint8_t { lamport = 1, hlc = 2 };
 
 // The three-systems design's window: Dannan's forget_after, the exchange's garbage_grace.
@@ -86,6 +88,9 @@ struct RegisterOptions {
   // The founding entries' values, written with stamp zero and no node.
   std::map<std::string, Bytes> founding;
   Policy policy;
+  // The node's hybrid clock (Context::hlc), which an hlc space stamps by and admits a peer's
+  // head through; it outlives the map. Required for StampKind::hlc, unused for Lamport.
+  dannan::contract::HlcClock* hlc = nullptr;
 };
 
 // The head as the codec decodes it.
@@ -96,7 +101,8 @@ struct RegisterHead {
   std::vector<Hash256> merge_parents;
   std::optional<ObjectId> root;
   RegisterForm form;
-  // The highest stamp any register in the map has carried: Lamport's next is one more.
+  // The highest stamp any register in the map has carried, of either kind: Lamport's next is
+  // one more, an HLC stamp is kept above it, and a peer's head is admitted by it.
   uint64_t lamport = 0;
   bool operator==(const RegisterHead&) const = default;
 };
@@ -176,8 +182,7 @@ class RegisterMap {
   static constexpr size_t value_max_bytes = 64 * 1024;
   static constexpr size_t refs_max = 4096;
 
-  // Throws RegisterRefused for StampKind::hlc: HlcClock::admit is not in Dannan 0.10.0, and
-  // a peer's stamp must pass it at acceptance before any is applied. `wall` judges expiry
+  // Throws RegisterRefused for StampKind::hlc with no clock in the options. `wall` judges expiry
   // (SpaceServices::wall on a node), `time` a read's budget deadline; both outlive this.
   explicit RegisterMap(RegisterOptions options, const dannan::contract::WallClock& wall = dannan::contract::system_wall_clock(),
                        const dannan::contract::TimeSource& time = dannan::contract::steady_time_source());

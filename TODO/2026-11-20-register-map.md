@@ -185,6 +185,39 @@ leaf is under the inline size.
   exposes it (`RegisterMap::now()`), so an owner computes "time left" on the same clock.
 - For HLC, it is the HLC's physical time.
 
+## Going public: 0.5.0 (2026-11-23)
+
+Built in 0.4.0 (`767e83d`) but not public: no `Context` part reaches it, and its stamp is the Lamport stand-in.
+`HlcClock::admit` shipped in Dannan 0.10.0, so the HLC form is unblocked. 0.5.0 ships D6 public with D5 (the
+coordinator, at the maintainer's request, 2026-11-23). What is added:
+
+**The HLC stamp.**
+- A space opened `StampKind::hlc` stamps every register a mutation writes with this node's `hlc().now()`, kept
+  above the highest stamp in the parent's map (the head's `lamport` field becomes that highest stamp for either
+  kind), so a write after a fold still beats everything it saw. `now()` throwing `ClockOutOfBounds` refuses the
+  mutation with that reason, never a wait.
+- Admission: the head records its highest stamp, so one `admit(highest, peer)` judges a peer's commit; if the
+  highest is within `max_ahead`, every stamp in it is. It runs where a peer's head is offered for acceptance (a
+  per-space admission hook on `SpaceSpec`, which the register map fills), never in the merge. A refusal
+  (`ahead`, `self_out_of_bounds`) keeps the commit out of the head set, says why in the evidence and Status, and
+  the exchange tries it again on its backoff. A fold of two admitted heads is not admitted again.
+- HLC is the default kind for a space opened through the contract. Lamport stays for the cases.
+
+**The contract part, `Context::registers()`** (contract version 3; version 2 still served beside it):
+- `open(name, RegisterOptions, deadline)`: opens or joins the space by its `RegisterMap::spec`; a head recording
+  other options is refused (case 15).
+- `commit(space, ops, deadline) -> MutationEvidence` with each key's new `RegisterVersion` (Louhi 2); a stale
+  `expect` answers the conflict and the register found, nothing committed.
+- `get`, `get_register`, `list(prefix, cursor, budget)`, `changed(before, after, prefix, cursor, budget)` at the
+  space's current view, or at a view a notice named; `now()` for expiry.
+- Watches are `heads().watch` on the space's id, as for any space.
+- Every call waits as `Heads`' do, with a deadline, and posts to the caller's executor.
+
+**Cases added:** 22 (a commit stamped beyond `max_ahead` is refused at acceptance, the rest still fold to one
+commit), 23 (a node out of bounds refuses a mutation with the reason and admits nothing), 24 (a write after
+receiving a peer's stamp is above it), 25 (the contract part end to end on a cluster: open, commit, get, list,
+changed, a conflict).
+
 ## Order of work
 
 `feature/register-map`, off `develop`, test first. Cases 1-15 fail first on a Pi, then the code. Then the whole

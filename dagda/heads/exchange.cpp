@@ -733,14 +733,26 @@ Record Exchange::read_group(const std::vector<Peer>& nodes, FrameType frame, con
       imported = import_history_from_peer(owner, hash, frame, pause) || imported;
     }
     if (!imported) continue;
+    // The owner's admission of a peer's head (D6's HLC), judged against the peer that holds it:
+    // refused, it waits out the cooldown as an unacceptable head does, with its reason.
+    std::optional<std::string> refused;
+    for (const auto& owner : head.owners) {
+      if (owner.id == self()) continue;
+      refused = _space->admit(hash, owner.id);
+      break;
+    }
     bool accepted = false;
-    for (const auto& certificate : head.certificates) accepted = _space->accept(certificate) || accepted;
+    if (!refused)
+      for (const auto& certificate : head.certificates) accepted = _space->accept(certificate) || accepted;
     if (!accepted) {
       {
         Lock lock(_unacceptable_mutex);
         _unacceptable_until[hash] = _time.now() + unacceptable_cooldown;
       }
-      _logger.warn("ignoring metadata head without a valid acceptance certificate hash=" + dannan::encoding::hex(hash.bytes));
+      if (refused)
+        _logger.warn("not admitting metadata head hash=" + dannan::encoding::hex(hash.bytes) + ": " + *refused);
+      else
+        _logger.warn("ignoring metadata head without a valid acceptance certificate hash=" + dannan::encoding::hex(hash.bytes));
     } else {
       {
         Lock lock(_unacceptable_mutex);

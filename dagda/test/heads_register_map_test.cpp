@@ -62,12 +62,14 @@ struct BenchNode {
 // and the reconciler call of the owner, in their order, and nothing else.
 struct Bench {
   dannan::test::SteppedWall wall;
-  MemoryTreeNodeStore store;
+  MemoryTreeNodeStore own_store;
+  // Its own, or another bench's: two nodes with their own clocks over one store.
+  MemoryTreeNodeStore& store;
   RegisterMap map;
   Record founded;
   State founded_state;
 
-  explicit Bench(RegisterOptions options = {}) : map(std::move(options), wall) {
+  explicit Bench(RegisterOptions options = {}, MemoryTreeNodeStore* shared = nullptr) : store(shared ? *shared : own_store), map(std::move(options), wall) {
     const auto genesis = genesis_record(map.codec()->genesis());
     founded_state = map.spec("test/registers").founding(store);
     founded = test::make_record(2, genesis.hash, map.codec()->encode_full(founded_state));
@@ -483,7 +485,7 @@ TEST(HeadsRegisterMap, TheOptionsAreRecordedInTheHeadAndAnotherOpeningIsRefused)
   EXPECT_EQ(RegisterMap::head_of(bed.view()).form.stamp, StampKind::lamport);
   EXPECT_FALSE(bed.map.refusal(bed.view()));
 
-  // This build issues no HLC stamp: refused at open, with its reason.
+  // An HLC space with no clock to stamp by: refused at open, with its reason.
   RegisterOptions hlc;
   hlc.form.stamp = StampKind::hlc;
   EXPECT_THROW((void)RegisterMap{hlc}, RegisterRefused);
@@ -656,11 +658,116 @@ TEST(HeadsRegisterMap, FourThousandRefsRoundTripAndTheBoundsAreRefusedAtPut) {
   EXPECT_THROW((void)RegisterOp::put("k", text("v"), refs), std::invalid_argument);
 }
 
-// 22. A commit stamped beyond the bound is refused at acceptance, and the heads of the nodes
-// that accepted everything else still fold to the same commit. Waits on Dannan's
-// HlcClock::admit in a release (Dannan 0.10.0 has none): the HLC stamp kind is refused at open
-// until then, so there is nothing to admit.
-TEST(HeadsRegisterMap, DISABLED_ACommitStampedBeyondTheBoundIsRefusedAtAcceptance) { GTEST_SKIP() << "waits on Dannan's HlcClock::admit"; }
+// ---- The HLC stamp (going public, 0.5.0) -------------------------------------------------
+
+// A durable ceiling held in memory, for a clock the case owns.
+struct MemoryCeiling final : dannan::contract::HlcCeiling {
+  uint64_t value = 0;
+  uint64_t load() override { return value; }
+  void raise(uint64_t unix_ms) override { value = unix_ms; }
+};
+
+// One node's hybrid clock on a wall the case moves.
+struct NodeClock {
+  dannan::test::SteppedWall wall;
+  MemoryCeiling ceiling;
+  dannan::contract::HybridClock clock;
+  explicit NodeClock(uint64_t start_ms) : wall(start_ms), clock(wall, ceiling, std::chrono::seconds(5)) {}
+};
+
+RegisterOptions hlc_options(dannan::contract::HlcClock& clock) {
+  RegisterOptions options;
+  options.form.stamp = StampKind::hlc;
+  options.hlc = &clock;
+  return options;
+}
+
+// 22. A commit stamped beyond the bound is refused at acceptance, with the reason, and admitted
+// once this node's wall has caught up: the head is judged by its highest stamp, never in the
+// merge.
+TEST(HeadsRegisterMap, ACommitStampedBeyondTheBoundIsRefusedAtAcceptance) {
+  constexpr uint64_t start = 1793700000000ull;
+  NodeClock ahead(start + 60'000);
+  NodeClock here(start);
+  Bench on_a(hlc_options(ahead.clock));
+  auto a = on_a.node(1);
+  (void)on_a.commit(a, {RegisterOp::put("k", text("from the future"))});
+  const auto stamp = RegisterMap::head_of(a.state).lamport;
+  EXPECT_GE(dannan::contract::HlcStamp{stamp}.unix_ms(), start + 60'000);
+
+  const RegisterMap at_b(hlc_options(here.clock));
+  const auto spec = at_b.spec("test/registers");
+  ASSERT_TRUE(spec.admit) << "an HLC space admits a peer's head";
+  const auto refused = spec.admit(a.state, author(1));
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("ahead"), std::string::npos) << *refused;
+  // Nothing was merged into this clock by the refusal.
+  EXPECT_LT(here.clock.now().unix_ms(), start + 60'000);
+
+  here.wall.advance(std::chrono::milliseconds(60'000));
+  EXPECT_FALSE(spec.admit(a.state, author(1)));
+  // A Lamport space admits everything: it has no clock to judge by.
+  EXPECT_FALSE(RegisterMap::spec("test/lamport", {}).admit);
+}
+
+// 23. A node whose clock is out of bounds against its peers refuses a mutation with that
+// reason, never waiting, and admits no peer's head meanwhile.
+TEST(HeadsRegisterMap, ANodeOutOfBoundsRefusesAMutationAndAdmitsNothing) {
+  NodeClock here(1793700000000ull);
+  Bench bench(hlc_options(here.clock));
+  auto a = bench.node(1);
+  auto peer = bench.node(2);
+  (void)bench.commit(peer, {RegisterOp::put("k", text("v"))});
+  here.clock.set_out_of_bounds(true);
+  EXPECT_THROW((void)bench.commit(a, {RegisterOp::put("k", text("w"))}), dannan::contract::ClockOutOfBounds);
+  const auto refused = bench.map.spec("test/registers").admit(peer.state, author(2));
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("self_out_of_bounds"), std::string::npos) << *refused;
+  here.clock.set_out_of_bounds(false);
+  EXPECT_FALSE(bench.map.spec("test/registers").admit(peer.state, author(2)));
+  EXPECT_NO_THROW((void)bench.commit(a, {RegisterOp::put("k", text("w"))}));
+}
+
+// 24. A write after admitting a peer's head is above every stamp in it, though this node's own
+// wall is behind: admission moved the clock, and a stamp is kept above the parent's highest.
+TEST(HeadsRegisterMap, AWriteAfterAdmittingAPeersHeadIsAboveIt) {
+  constexpr uint64_t start = 1793700000000ull;
+  NodeClock on_a(start + 3'000);
+  NodeClock on_b(start);
+  Bench a_bench(hlc_options(on_a.clock));
+  Bench b_bench(hlc_options(on_b.clock), &a_bench.store);
+  auto a = a_bench.node(1);
+  (void)a_bench.commit(a, {RegisterOp::put("k", text("from a"))});
+  const auto a_stamp = RegisterMap::head_of(a.state).lamport;
+  ASSERT_FALSE(b_bench.map.spec("test/registers").admit(a.state, author(1)));
+  auto b = b_bench.node(2);
+  b.record = a.record;
+  b.state = a.state;
+  const auto written = b_bench.commit(b, {RegisterOp::put("k", text("from b"))}).versions.at("k");
+  EXPECT_GT(written.stamp, a_stamp);
+  const auto held = b_bench.map.get(b.view(), "k", b_bench.store);
+  ASSERT_TRUE(held);
+  EXPECT_EQ(held->value, text("from b"));
+  // A Lamport parent's highest stamp still bounds an HLC write from below.
+  EXPECT_GT(written.stamp, RegisterMap::head_of(b_bench.founded_state).lamport);
+}
+
+// Space::admit runs the owner's judgement on the head a hash names, and admits what it cannot
+// materialise, leaving acceptance to refuse it.
+TEST(HeadsRegisterMap, ASpaceAdmitsByItsOwnersJudgement) {
+  NodeClock here(1793700000000ull);
+  MapBed bed(hlc_options(here.clock));
+  // The founding carries no stamp, so there is nothing to judge until a write.
+  EXPECT_FALSE(bed.space->admit(bed.space->replica().committed().hash, author(9)));
+  (void)bed.map.commit(*bed.space, {RegisterOp::put("k", text("v"))});
+  const auto committed = bed.space->replica().committed();
+  EXPECT_FALSE(bed.space->admit(committed.hash, author(9)));
+  here.clock.set_out_of_bounds(true);
+  EXPECT_TRUE(bed.space->admit(committed.hash, author(9)));
+  Hash256 unknown{};
+  unknown.bytes.fill(0x5a);
+  EXPECT_FALSE(bed.space->admit(unknown, author(9)));
+}
 
 }  // namespace
 }  // namespace dagda::heads

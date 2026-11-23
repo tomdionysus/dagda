@@ -537,6 +537,17 @@ void Space::accept_locally(const Record& record, std::span<const uint8_t> delta,
   if (!accept(acceptance)) throw std::runtime_error("local metadata acceptance persistence failed");
 }
 
+std::optional<std::string> Space::admit(const Hash256& hash, const NodeId& peer) const {
+  if (!_spec.admit) return std::nullopt;
+  std::optional<State> state;
+  try {
+    if (const auto held = _replica->materialized(hash)) state = held->state;
+  } catch (const std::exception&) {
+  }
+  if (!state) return std::nullopt;
+  return _spec.admit(*state, peer);
+}
+
 bool Space::accept(const Acceptance& acceptance) {
   const auto before = _replica->committed_identity();
   bool heads_changed = false;
@@ -620,6 +631,13 @@ std::optional<ObjectId> Space::root_of(const HeadIdentity& head) const {
   if (!held || held->record.generation != head.generation)
     throw HeadsNotReady("heads::Space::changed: this node does not hold the head at generation " + std::to_string(head.generation));
   return _spec.codec->head_fields(held->state).root;
+}
+
+SpaceView Space::view_of(const HeadIdentity& head) const {
+  const auto held = _replica->materialized(head.hash);
+  if (!held || held->record.generation != head.generation)
+    throw HeadsNotReady("heads::Space::view_of: this node does not hold the head at generation " + std::to_string(head.generation));
+  return {held->record.generation, 0, held->record.hash, held->state};
 }
 
 void Space::owe(Record head, std::optional<OwedClaims> claims) {

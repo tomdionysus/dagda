@@ -83,7 +83,16 @@ std::optional<WriteEvidence> known(WriteEvidence evidence) {
 // ---- Version ----------------------------------------------------------------
 
 Context::Context(Node& node)
-    : _domains(node), _objects(node), _claims(node), _leases(node), _heads(node), _tickets(node), _activity(node), _control(node), _devices(node) {}
+    : _domains(node),
+      _objects(node),
+      _claims(node),
+      _leases(node),
+      _heads(node),
+      _registers(node),
+      _tickets(node),
+      _activity(node),
+      _control(node),
+      _devices(node) {}
 
 uint32_t Context::version() const noexcept { return context_version; }
 
@@ -91,10 +100,10 @@ VersionCheck Context::check_version(uint32_t built_against) const noexcept {
   VersionCheck out;
   out.built_against = built_against;
   out.served = context_version;
-  out.accepted = built_against == context_version || built_against == context_version_frozen;
+  out.accepted = built_against >= context_version_frozen && built_against <= context_version;
   if (!out.accepted)
-    out.why = "dagda::Context version " + std::to_string(built_against) + " was asked for and this library serves version " + std::to_string(context_version) +
-              ", and version " + std::to_string(context_version_frozen) + " beside it: rebuild the hosted system against this Dagda";
+    out.why = "dagda::Context version " + std::to_string(built_against) + " was asked for and this library serves versions " +
+              std::to_string(context_version_frozen) + " to " + std::to_string(context_version) + ": rebuild the hosted system against this Dagda";
   return out;
 }
 
@@ -413,6 +422,247 @@ MutationEvidence Context::Heads::mutate_delta(const heads::SpaceId& space, heads
   check_deadline(deadline);
   return await<MutationEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, Committed done) {
     mutate_delta(space, std::move(mutation), deadline, std::move(executor), std::move(done), identity, retries, work);
+  });
+}
+
+// ---- Registers --------------------------------------------------------------
+
+heads::RegisterOptions Context::Registers::defaults() {
+  heads::RegisterOptions options;
+  options.form.stamp = heads::StampKind::hlc;
+  return options;
+}
+
+int64_t Context::Registers::now() const noexcept { return static_cast<int64_t>(_node.options().wall->unix_ms()) * 1'000'000; }
+
+std::shared_ptr<const heads::RegisterMap> Context::Registers::map_of(const heads::SpaceId& space, std::string& why) const {
+  std::lock_guard lock(_maps_mutex);
+  const auto found = _maps.find(space);
+  if (found == _maps.end()) {
+    why = "no register space of that id was opened here through registers()";
+    return nullptr;
+  }
+  return found->second;
+}
+
+void Context::Registers::open(std::string name, heads::RegisterOptions options, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                              Opened done) {
+  check_deadline(deadline);
+  if (options.form.stamp == heads::StampKind::hlc && !options.hlc) options.hlc = &_node.dannan().hlc();
+  std::shared_ptr<const heads::RegisterMap> map;
+  try {
+    map = std::make_shared<const heads::RegisterMap>(std::move(options), *_node.options().wall);
+  } catch (const std::exception& error) {
+    SpaceOpened refused;
+    refused.why = error.what();
+    boost::asio::post(executor, [done = std::move(done), refused] { done(refused); });
+    return;
+  }
+  const auto id = heads::space_id(_node.options().domain.id, name);
+  auto spec = map->spec(std::move(name));
+  // Kept before the open lands, so a commit racing the completion finds its map; a second open
+  // of the same space with other options is refused by the head, never by this table.
+  {
+    std::lock_guard lock(_maps_mutex);
+    _maps.try_emplace(id, map);
+  }
+  SpaceOpened base;
+  base.space = id;
+  auto late = base;
+  late.why = "the deadline passed with the open still running; it may yet land, and opening again says so";
+  auto refused = base;
+  refused.why = _node.spaces() ? node_stopping : heads_off;
+  auto shared_spec = std::make_shared<heads::SpaceSpec>(std::move(spec));
+  run_on_spaces<SpaceOpened>(_node, deadline, std::move(executor), std::move(done), std::move(late), std::move(refused), [node = &_node, base, shared_spec] {
+    auto out = base;
+    try {
+      auto& space = node->spaces()->open(std::move(*shared_spec));
+      out.generation = space.replica().generation();
+      out.opened = true;
+    } catch (const std::exception& error) {
+      out.why = error.what();
+    }
+    return out;
+  });
+}
+
+SpaceOpened Context::Registers::open(std::string name, heads::RegisterOptions options, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<SpaceOpened>(_node, deadline, [&](boost::asio::any_io_executor executor, Opened done) {
+    open(std::move(name), std::move(options), deadline, std::move(executor), std::move(done));
+  });
+}
+
+void Context::Registers::commit(const heads::SpaceId& space, std::vector<heads::RegisterOp> ops, std::chrono::milliseconds deadline,
+                                boost::asio::any_io_executor executor, Committed done) {
+  check_deadline(deadline);
+  RegisterEvidence late;
+  late.mutation.why = "the deadline passed with the commit still running; it may yet land";
+  RegisterEvidence refused;
+  refused.mutation.why = _node.spaces() ? node_stopping : heads_off;
+  std::string why;
+  auto map = map_of(space, why);
+  if (!map) {
+    RegisterEvidence unknown;
+    unknown.mutation.why = why;
+    boost::asio::post(executor, [done = std::move(done), unknown] { done(unknown); });
+    return;
+  }
+  run_on_spaces<RegisterEvidence>(_node, deadline, std::move(executor), std::move(done), std::move(late), std::move(refused),
+                                  [node = &_node, space, map, ops = std::move(ops)]() mutable {
+                                    RegisterEvidence out;
+                                    auto* found = node->spaces()->find(space);
+                                    if (!found) {
+                                      out.mutation.why = space_not_open;
+                                      return out;
+                                    }
+                                    try {
+                                      auto committed = map->commit(*found, std::move(ops));
+                                      out.mutation.outcome = std::move(committed.outcome);
+                                      out.mutation.finished = true;
+                                      out.written = std::move(committed.written);
+                                    } catch (const heads::RegisterConflict& conflict) {
+                                      out.conflict = conflict.key();
+                                      out.found = conflict.found();
+                                      out.mutation.why = conflict.what();
+                                    } catch (const contract::MaintenanceStopping& stopping) {
+                                      out.mutation.stopped = true;
+                                      out.mutation.why = stopping.what();
+                                    } catch (const std::exception& error) {
+                                      out.mutation.why = error.what();
+                                    }
+                                    return out;
+                                  });
+}
+
+RegisterEvidence Context::Registers::commit(const heads::SpaceId& space, std::vector<heads::RegisterOp> ops, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RegisterEvidence>(_node, deadline, [&](boost::asio::any_io_executor executor, Committed done) {
+    commit(space, std::move(ops), deadline, std::move(executor), std::move(done));
+  });
+}
+
+namespace {
+
+// Runs a register read at the space's current view on the spaces' thread, as Registers'
+// reads do: `read` is given the map, the view and a node store to read through.
+template <class T>
+void register_read(Node& node, const heads::SpaceId& space, std::shared_ptr<const heads::RegisterMap> map, std::string why_unknown,
+                   std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, std::function<void(T)> done,
+                   std::function<void(T&, const heads::RegisterMap&, const heads::SpaceView&, const heads::Space&, const heads::TreeNodeStore&)> read) {
+  if (!map) {
+    T unknown;
+    unknown.why = std::move(why_unknown);
+    boost::asio::post(executor, [done = std::move(done), unknown] { done(unknown); });
+    return;
+  }
+  T late;
+  late.why = "the deadline passed with the read still running";
+  T refused;
+  refused.why = node.spaces() ? node_stopping : heads_off;
+  run_on_spaces<T>(node, deadline, std::move(executor), std::move(done), std::move(late), std::move(refused),
+                   [node = &node, space, map, read = std::move(read)] {
+                     T out;
+                     auto* found = node->spaces()->find(space);
+                     if (!found) {
+                       out.why = space_not_open;
+                       return out;
+                     }
+                     try {
+                       const auto view = found->current();
+                       if (!view) {
+                         out.why = "no head of this space is decoded here yet";
+                         return out;
+                       }
+                       const auto reader = found->reader();
+                       read(out, *map, *view, *found, *reader);
+                       out.finished = true;
+                     } catch (const std::exception& error) {
+                       out.why = error.what();
+                     }
+                     return out;
+                   });
+}
+
+}  // namespace
+
+void Context::Registers::get(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                             Read done) {
+  check_deadline(deadline);
+  std::string why;
+  auto map = map_of(space, why);
+  register_read<RegisterRead>(_node, space, std::move(map), std::move(why), deadline, std::move(executor), std::move(done),
+                              [key = std::move(key)](RegisterRead& out, const heads::RegisterMap& registers, const heads::SpaceView& view, const heads::Space&,
+                                                     const heads::TreeNodeStore& nodes) { out.value = registers.get(view, key, nodes); });
+}
+
+RegisterRead Context::Registers::get(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RegisterRead>(
+      _node, deadline, [&](boost::asio::any_io_executor executor, Read done) { get(space, std::move(key), deadline, std::move(executor), std::move(done)); });
+}
+
+void Context::Registers::get_register(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline, boost::asio::any_io_executor executor,
+                                      Read done) {
+  check_deadline(deadline);
+  std::string why;
+  auto map = map_of(space, why);
+  register_read<RegisterRead>(_node, space, std::move(map), std::move(why), deadline, std::move(executor), std::move(done),
+                              [key = std::move(key)](RegisterRead& out, const heads::RegisterMap& registers, const heads::SpaceView& view, const heads::Space&,
+                                                     const heads::TreeNodeStore& nodes) { out.value = registers.get_register(view, key, nodes); });
+}
+
+RegisterRead Context::Registers::get_register(const heads::SpaceId& space, std::string key, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RegisterRead>(_node, deadline, [&](boost::asio::any_io_executor executor, Read done) {
+    get_register(space, std::move(key), deadline, std::move(executor), std::move(done));
+  });
+}
+
+void Context::Registers::list(const heads::SpaceId& space, std::string prefix, dannan::sched::Cursor<std::string> from, size_t operations,
+                              std::chrono::milliseconds deadline, boost::asio::any_io_executor executor, Listed done) {
+  check_deadline(deadline);
+  std::string why;
+  auto map = map_of(space, why);
+  register_read<RegisterList>(
+      _node, space, std::move(map), std::move(why), deadline, std::move(executor), std::move(done),
+      [prefix = std::move(prefix), from = std::move(from), operations, deadline, node = &_node](
+          RegisterList& out, const heads::RegisterMap& registers, const heads::SpaceView& view, const heads::Space&, const heads::TreeNodeStore& nodes) {
+        dannan::sched::Budget budget;
+        budget.operations(operations).deadline(node->dannan().time().source().now() + deadline);
+        out.page = registers.list(view, prefix, from, budget, nodes);
+      });
+}
+
+RegisterList Context::Registers::list(const heads::SpaceId& space, std::string prefix, dannan::sched::Cursor<std::string> from, size_t operations,
+                                      std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RegisterList>(_node, deadline, [&](boost::asio::any_io_executor executor, Listed done) {
+    list(space, std::move(prefix), std::move(from), operations, deadline, std::move(executor), std::move(done));
+  });
+}
+
+void Context::Registers::changed(const heads::SpaceId& space, heads::HeadIdentity before, heads::HeadIdentity after, std::string prefix,
+                                 dannan::sched::Cursor<std::string> from, size_t operations, std::chrono::milliseconds deadline,
+                                 boost::asio::any_io_executor executor, Changed done) {
+  check_deadline(deadline);
+  std::string why;
+  auto map = map_of(space, why);
+  register_read<RegisterChanges>(
+      _node, space, std::move(map), std::move(why), deadline, std::move(executor), std::move(done),
+      [before, after, prefix = std::move(prefix), from = std::move(from), operations, deadline, node = &_node](
+          RegisterChanges& out, const heads::RegisterMap& registers, const heads::SpaceView&, const heads::Space& found, const heads::TreeNodeStore& nodes) {
+        dannan::sched::Budget budget;
+        budget.operations(operations).deadline(node->dannan().time().source().now() + deadline);
+        out.page = registers.changed(found.view_of(before), found.view_of(after), prefix, from, budget, nodes);
+      });
+}
+
+RegisterChanges Context::Registers::changed(const heads::SpaceId& space, heads::HeadIdentity before, heads::HeadIdentity after, std::string prefix,
+                                            dannan::sched::Cursor<std::string> from, size_t operations, std::chrono::milliseconds deadline) {
+  check_deadline(deadline);
+  return await<RegisterChanges>(_node, deadline, [&](boost::asio::any_io_executor executor, Changed done) {
+    changed(space, before, after, std::move(prefix), std::move(from), operations, deadline, std::move(executor), std::move(done));
   });
 }
 
