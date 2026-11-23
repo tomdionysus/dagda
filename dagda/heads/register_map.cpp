@@ -717,7 +717,7 @@ RegisterMap::RegisterMap(RegisterOptions options, const dannan::contract::WallCl
     : _options(std::move(options)), _wall(wall), _time(time) {
   if (_options.form.stamp == StampKind::hlc)
     throw RegisterRefused(
-        "register map stamp kind hlc waits on Dannan's HlcClock::admit, which Dannan 0.9.2 does not have: a peer's stamp must be admitted at acceptance "
+        "register map stamp kind hlc waits on Dannan's HlcClock::admit, which Dannan 0.10.0 does not have: a peer's stamp must be admitted at acceptance "
         "before it is applied");
   if (_options.form.tombstone_wins && _options.form.tombstones.kind != TombstonePolicy::Kind::never)
     throw std::invalid_argument("tombstone_wins is a rule of TombstonePolicy::never: a window would drop the tombstone that wins");

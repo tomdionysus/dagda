@@ -44,6 +44,7 @@
 #include "dagda/test/fixtures/ledger.h"
 #include "dagda/test/fixtures/legacy_v18.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/argon2.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
@@ -53,7 +54,7 @@ namespace dagda::test::v18 {
 
 using namespace std::chrono_literals;
 using namespace store::local_format;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::NodeId;
 using migrate::MigrationOptions;
 using migrate::MigrationReport;
@@ -99,7 +100,7 @@ inline constexpr char migrated_marker[] =
 inline constexpr char cluster_key_text[] = "dagda known-answer cluster key\r\n";
 inline const SealingScheme v1 = SealingScheme::v19(domain::domain_v1);
 
-inline Bytes unhex(std::string_view text) { return dannan::identity::unhex(std::string(text)).value(); }
+inline Bytes unhex(std::string_view text) { return dannan::encoding::unhex(text).value(); }
 
 inline Bytes bytes_of(std::string_view text) { return Bytes(text.begin(), text.end()); }
 

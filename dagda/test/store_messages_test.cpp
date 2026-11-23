@@ -18,15 +18,16 @@
 
 #include "dagda/ledger/trie_diff.h"
 #include "dagda/store/messages.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/routes.h"
 
 namespace dagda::store::message {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 const Bytes dagda_bytes{'d', 'a', 'g', 'd', 'a'};
 const Bytes macha_bytes{'m', 'a', 'c', 'h', 'a'};

@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "dagda/store/placement.h"
-#include "dannan/identity/crypto.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/node_id.h"
 #include "dannan/placement/placement.h"
 
@@ -65,7 +65,7 @@ TEST(StorePlacementVectors, DataOrderIsMachasOnEveryVector) {
     } else if (kind == "key") {
       std::string hex;
       fields >> hex;
-      key = dannan::identity::unhex(hex).value();
+      key = dannan::encoding::unhex(hex).value();
     } else if (kind == "order" || kind == "rendezvous") {
       size_t replicas = 0;
       fields >> replicas;
@@ -79,7 +79,7 @@ TEST(StorePlacementVectors, DataOrderIsMachasOnEveryVector) {
         for (const auto& record : dannan::placement::rendezvous(key, nodes, replicas)) got.push_back(record.id);
         ++rendezvous;
       }
-      EXPECT_EQ(got, expected) << kind << " " << name << " R=" << replicas << " key " << dannan::identity::hex(key);
+      EXPECT_EQ(got, expected) << kind << " " << name << " R=" << replicas << " key " << dannan::encoding::hex(key);
     } else {
       ADD_FAILURE() << "unknown line: " << line;
     }

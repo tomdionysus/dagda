@@ -25,6 +25,7 @@
 #include "dagda/domain/storage_key.h"
 #include "dagda/store/object_id.h"
 #include "dagda/store/sealing.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -32,9 +33,9 @@
 namespace dagda::store {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 
-Bytes unhex(const std::string& text) { return dannan::identity::unhex(text).value(); }
+Bytes unhex(const std::string& text) { return dannan::encoding::unhex(text).value(); }
 
 Bytes bytes_of(std::string_view text) { return Bytes(text.begin(), text.end()); }
 
@@ -269,10 +270,10 @@ TEST(StoreSealing, TheBlindDigestIsOverTheSealedBytes) {
   const auto tag = unhex(v19_tag_hex);
   const auto ciphertext = unhex(ciphertext_hex);
   const auto digest = blind_digest(std::span<const uint8_t, 12>(nonce.data(), 12), std::span<const uint8_t, 16>(tag.data(), 16), ciphertext);
-  EXPECT_EQ(hex(digest), "f064d825139550fb2b3cdf6da6a11fa6b01312a855d23760188d07fb512d1c24");
+  EXPECT_EQ(hex(digest.bytes), "f064d825139550fb2b3cdf6da6a11fa6b01312a855d23760188d07fb512d1c24");
   auto other = ciphertext;
   other[0] ^= 1;
-  EXPECT_NE(hex(blind_digest(std::span<const uint8_t, 12>(nonce.data(), 12), std::span<const uint8_t, 16>(tag.data(), 16), other)), hex(digest));
+  EXPECT_NE(hex(blind_digest(std::span<const uint8_t, 12>(nonce.data(), 12), std::span<const uint8_t, 16>(tag.data(), 16), other).bytes), hex(digest.bytes));
 }
 
 // The primitive under both is standard AES-256-GCM with a 96-bit nonce: the

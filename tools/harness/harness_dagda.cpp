@@ -200,7 +200,7 @@ void recovery_open(const std::filesystem::path& kept, const harness::Report& rep
   std::atomic<bool> stop{false};
   std::thread watch([&] {
     while (!stop.load()) {
-      if (a.log().saw("node data storage ready")) {
+      if (dagda::test::saw(a.log(), "node data storage ready")) {
         out.data_open = harness::Clock::now() - started;
         return;
       }

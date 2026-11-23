@@ -34,13 +34,14 @@
 #include "dagda/store/state_layout.h"
 #include "dagda/store/storage_pool.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::store {
 namespace {
 
 using namespace std::chrono_literals;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::NodeId;
 using test::object_path;
 using test::pattern;
@@ -156,8 +157,8 @@ TEST(StoreLayoutV19, AV18DiskIsRefusedNamingTheMigrationAndAV19DiskStaysItsDomai
     auto pool = pool_of(bed, state, v18, sealing, bed.key);
     EXPECT_EQ(pool->online_backends(), 0u);
     EXPECT_TRUE(pool->degraded());
-    EXPECT_TRUE(bed.sink->saw("layout v18 (Macha's) is not opened by the store"));
-    EXPECT_TRUE(bed.sink->saw("dagda-migrate --state " + state.string()));
+    EXPECT_TRUE(test::saw(*bed.sink, "layout v18 (Macha's) is not opened by the store"));
+    EXPECT_TRUE(test::saw(*bed.sink, "dagda-migrate --state " + state.string()));
     EXPECT_EQ(read_file(v18 / ".macha.backend"), v18_marker);
     EXPECT_FALSE(std::filesystem::exists(backend_identity_path(state, v18)));
   }
@@ -165,7 +166,7 @@ TEST(StoreLayoutV19, AV18DiskIsRefusedNamingTheMigrationAndAV19DiskStaysItsDomai
   {
     auto pool = pool_of(bed, bed.dir.path() / "state-w", v19, SealingScheme::v19(other_domain()), bed.key);
     EXPECT_EQ(pool->online_backends(), 0u);
-    EXPECT_TRUE(bed.sink->saw(std::string("backend belongs to domain ") + domain_hex));
+    EXPECT_TRUE(test::saw(*bed.sink, std::string("backend belongs to domain ") + domain_hex));
   }
   EXPECT_EQ(read_file(v19 / ".macha.backend"), v19_marker);
   // In its own pool again: online, unchanged.
@@ -218,7 +219,7 @@ TEST(StoreLayoutV19, AV19DiskIsRefusedWithoutItsKeyUnlessOpenedBlind) {
     auto pool = pool_of(bed, state, disk, sealing, key_filled(7), filled(0xab), domain::Role::member, own);
     EXPECT_EQ(pool->online_backends(), 0u);
     EXPECT_TRUE(pool->degraded());
-    EXPECT_TRUE(bed.sink->saw("backend key check failed"));
+    EXPECT_TRUE(test::saw(*bed.sink, "backend key check failed"));
   }
   // Blind: no domain key, the held ledger under the node's own.
   {
@@ -330,8 +331,8 @@ TEST(StoreLayoutV19, AMemberProbesItsKeyOnABlindAdoptedBackend) {
     auto wrong = pool_of(bed, state, disk, sealing, key_filled(7), filled(2));
     EXPECT_EQ(wrong->online_backends(), 0u);
     EXPECT_TRUE(wrong->degraded());
-    EXPECT_TRUE(bed.sink->saw("backend key probe failed"));
-    EXPECT_TRUE(bed.sink->saw("record " + to_string(id) + " does not open under this node's key"));
+    EXPECT_TRUE(test::saw(*bed.sink, "backend key probe failed"));
+    EXPECT_TRUE(test::saw(*bed.sink, "record " + to_string(id) + " does not open under this node's key"));
   }
   // Nothing discarded, nothing rewritten.
   EXPECT_TRUE(std::filesystem::exists(object_path(disk, id)));
@@ -348,7 +349,7 @@ TEST(StoreLayoutV19, AMemberProbesItsKeyOnABlindAdoptedBackend) {
     // The marker refuses the wrong key now, before any probe.
     auto wrong = pool_of(bed, state, disk, sealing, key_filled(7), filled(2));
     EXPECT_EQ(wrong->online_backends(), 0u);
-    EXPECT_TRUE(bed.sink->saw("backend key check failed"));
+    EXPECT_TRUE(test::saw(*bed.sink, "backend key check failed"));
   }
 }
 
@@ -378,7 +379,7 @@ TEST(StoreLayoutV19, ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked) {
     ASSERT_TRUE(unchecked->put_sealed(id, sealed));
     EXPECT_FALSE(unchecked->get(id).has_value());
     EXPECT_TRUE(unchecked->has(id));
-    EXPECT_TRUE(bed.sink->saw("kept (key unchecked)"));
+    EXPECT_TRUE(test::saw(*bed.sink, "kept (key unchecked)"));
     const auto scrubbed = unchecked->scrub_step(0, 0);
     EXPECT_TRUE(scrubbed.complete);
     EXPECT_TRUE(unchecked->has(id));
@@ -390,7 +391,7 @@ TEST(StoreLayoutV19, ACopyThatDoesNotOpenIsKeptUntilTheKeyIsChecked) {
   ASSERT_TRUE(checked->put(id, data));
   test::corrupt_object(checked_disk, id);
   EXPECT_FALSE(checked->get(id).has_value());
-  EXPECT_TRUE(bed.sink->saw("discarding corrupt local object " + to_string(id)));
+  EXPECT_TRUE(test::saw(*bed.sink, "discarding corrupt local object " + to_string(id)));
   EXPECT_FALSE(checked->has(id));
 }
 

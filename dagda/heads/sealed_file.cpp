@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::heads {
@@ -43,7 +44,7 @@ SpaceId space_id(const domain::DomainId& domain, std::string_view name) {
   return dannan::identity::sha256(input);
 }
 
-std::filesystem::path space_directory(const std::filesystem::path& state, const SpaceId& space) { return state / "heads" / dannan::identity::hex(space); }
+std::filesystem::path space_directory(const std::filesystem::path& state, const SpaceId& space) { return state / "heads" / dannan::encoding::hex(space.bytes); }
 
 std::filesystem::path machas_metadata_directory(const std::filesystem::path& state) { return state / "metadata"; }
 

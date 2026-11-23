@@ -154,9 +154,9 @@ TEST(StoreDataWork, AWaitWithNoDeadlineFailsAfterAWholeWindowWithNoRelease) {
   const auto stats = arbiter.stats();
   EXPECT_EQ(stats.no_progress_failures, 1u);
   EXPECT_EQ(stats.cancelled_waits, 0u);
-  EXPECT_TRUE(
-      sink->saw("credit: DATA credit wait abandoned after 120000 ms with no release anywhere: class=loader bytes=1024 used=1024/4194304 "
-                "lower_active=1/1 waiting_viewers=0 waiting_loaders=0"));
+  EXPECT_TRUE(test::saw(*sink,
+                        "credit: DATA credit wait abandoned after 120000 ms with no release anywhere: class=loader bytes=1024 used=1024/4194304 "
+                        "lower_active=1/1 waiting_viewers=0 waiting_loaders=0"));
   held.reset();
   EXPECT_TRUE(admit_data(&arbiter, nullptr, FrameType::loader, 1024, no_caller_deadline).has_value());
 }
@@ -183,7 +183,7 @@ TEST(StoreDataWork, ACallersOwnDeadlineIsNotReArmedByARelease) {
   EXPECT_FALSE(waiter.get().has_value());
   EXPECT_EQ(arbiter.stats().cancelled_waits, 1u);
   EXPECT_EQ(arbiter.stats().no_progress_failures, 0u);
-  EXPECT_FALSE(sink->saw("abandoned"));
+  EXPECT_FALSE(test::saw(*sink, "abandoned"));
 }
 
 // Macha's zero waits for ever; Dagda's arbiter refuses zero, and a facade passes
@@ -209,7 +209,7 @@ TEST(StoreDataWork, AHundredYearWindowDoesNotOverflow) {
   ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
   EXPECT_FALSE(waiter.get().has_value());
   EXPECT_EQ(arbiter.stats().no_progress_failures, 1u);
-  EXPECT_TRUE(sink->saw("abandoned after 3153600000000 ms"));
+  EXPECT_TRUE(test::saw(*sink, "abandoned after 3153600000000 ms"));
 }
 
 // Macha has no reserve. Where a node has one, a request with no deadline waits

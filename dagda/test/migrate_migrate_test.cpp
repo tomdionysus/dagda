@@ -57,6 +57,7 @@
 #include "dagda/test/fixtures/legacy_v18.h"
 #include "dagda/test/fixtures/migrate.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/argon2.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
@@ -68,7 +69,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using namespace test::v18;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::NodeId;
 using store::object_id;
 using test::pattern;
@@ -709,7 +710,7 @@ TEST(MigrateState, ACrashMidWayLeavesADiskASecondRunFinishes) {
     options.ledger_key = v18.node_local();
     store::StoragePool pool(v18.state, v18.node, NodeId::random(), options, bed.key, bed.pool_services());
     EXPECT_EQ(pool.online_backends(), 0u);
-    EXPECT_TRUE(bed.sink->saw("dagda-migrate --state " + v18.state.string()));
+    EXPECT_TRUE(test::saw(*bed.sink, "dagda-migrate --state " + v18.state.string()));
   }
   EXPECT_THROW(store::open_state_layout(v18.state, v1), std::runtime_error);
 
@@ -842,7 +843,7 @@ TEST(MigrateTool, DagdaMigrateRunsTheMigration) {
   {
     const auto [code, output] = run({"--version"}, "version.log");
     EXPECT_EQ(code, std::optional<int>(0));
-    EXPECT_EQ(output.substr(0, 6), "0.3.2 ");
+    EXPECT_EQ(output.substr(0, 6), "0.4.0 ");
   }
   {
     const auto [code, output] = run({}, "usage.log");

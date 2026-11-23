@@ -35,18 +35,6 @@ constexpr std::array<uint8_t, 8> pack_aad{'D', 'G', 'N', 'P', 'A', 'C', 'K', '1'
 constexpr uint64_t frame_overhead = 4 + 12 + 16;
 constexpr size_t binding_bytes = sizeof(ObjectId{}.bytes);
 
-void sync_directory(const std::filesystem::path& directory) {
-  const int fd = ::open(directory.c_str(), O_RDONLY);
-  if (fd < 0) throw std::runtime_error("cannot open " + directory.string() + " to sync it: " + std::strerror(errno));
-  int rc;
-  do {
-    rc = ::fsync(fd);
-  } while (rc != 0 && errno == EINTR);
-  const auto error = errno;
-  ::close(fd);
-  if (rc != 0) throw std::runtime_error("cannot sync " + directory.string() + ": " + std::strerror(error));
-}
-
 }  // namespace
 
 NodePack::NodePack(std::filesystem::path directory, std::shared_ptr<const domain::StorageKey> key, Bytes aad, dannan::status::ScopedLogger logger)
@@ -137,7 +125,7 @@ NodePack::Compaction NodePack::compact(const std::set<ObjectId>& live) {
   if (!std::filesystem::exists(beside)) std::ofstream(beside, std::ios::binary).close();
   _journal.reset();
   std::filesystem::rename(beside, path);
-  sync_directory(_directory);
+  dannan::identity::durable_sync_directory(_directory);
   replay_locked();
   out.bytes_after = _journal->bytes();
   return out;

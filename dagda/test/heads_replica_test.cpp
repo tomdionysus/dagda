@@ -2420,9 +2420,9 @@ TEST(HeadsReplica, AFailedReadOfHistoryCutsNothing) {
       ASSERT_GE(now.size(), before.size());
       EXPECT_TRUE(std::equal(before.begin(), before.end(), now.begin()));
       EXPECT_FALSE(any_file_starts_with(bed.path(name), "history.log.corrupt."));
-      EXPECT_TRUE(sink->saw("metadata history read failed"));
-      EXPECT_TRUE(sink->saw("nothing cut"));
-      EXPECT_FALSE(sink->saw("metadata history recovered"));
+      EXPECT_TRUE(test::saw(*sink, "metadata history read failed"));
+      EXPECT_TRUE(test::saw(*sink, "nothing cut"));
+      EXPECT_FALSE(test::saw(*sink, "metadata history recovered"));
       EXPECT_FALSE(replica.recovery_required());
       for (size_t i = 0; i < read_before; ++i) EXPECT_TRUE(replica.history_entry(chain[i].hash).has_value()) << i;
       for (size_t i = read_before; i < chain.size() - 1; ++i) EXPECT_FALSE(replica.history_entry(chain[i].hash).has_value()) << i;
@@ -2493,8 +2493,8 @@ TEST(HeadsReplica, ATornHistoryTailSaysWhyAndNeverReachesTheSeed) {
     options.logger = test::logger_into(sink);
     options.recovery_seed = bed.genesis();
     Replica replica(std::move(options));
-    EXPECT_TRUE(sink->saw(tail.reason));
-    EXPECT_FALSE(sink->saw("record too large"));
+    EXPECT_TRUE(test::saw(*sink, tail.reason));
+    EXPECT_FALSE(test::saw(*sink, "record too large"));
     EXPECT_EQ(std::filesystem::file_size(history), kept);
     EXPECT_TRUE(any_file_starts_with(bed.path(name), "history.log.corrupt."));
     EXPECT_FALSE(replica.recovery_required());
@@ -2534,7 +2534,7 @@ TEST(HeadsReplica, ATornHistoryTailSaysWhyAndNeverReachesTheSeed) {
   EXPECT_FALSE(replica.recovery_required());
   EXPECT_FALSE(std::filesystem::exists(bed.path() / "recovery.required"));
   EXPECT_EQ(replica.committed().hash, second.hash);
-  EXPECT_TRUE(sink->saw("offset=" + std::to_string(second_frame) + ": frame does not authenticate"));
+  EXPECT_TRUE(test::saw(*sink, "offset=" + std::to_string(second_frame) + ": frame does not authenticate"));
   EXPECT_GT(std::filesystem::file_size(history), third_frame);
 }
 
@@ -2647,7 +2647,7 @@ TEST(HeadsReplica, ATornHistoryTailOverTheLimitIsCutAndNotKept) {
   Replica replica(std::move(options));
   EXPECT_EQ(std::filesystem::file_size(history), kept);
   EXPECT_FALSE(any_file_starts_with(bed.path(), "history.log.corrupt."));
-  EXPECT_TRUE(sink->saw("<discarded: over quarantine limit>"));
+  EXPECT_TRUE(test::saw(*sink, "<discarded: over quarantine limit>"));
   EXPECT_EQ(replica.committed().hash, record.hash);
 }
 

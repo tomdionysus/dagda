@@ -176,7 +176,7 @@ class RegisterMap {
   static constexpr size_t value_max_bytes = 64 * 1024;
   static constexpr size_t refs_max = 4096;
 
-  // Throws RegisterRefused for StampKind::hlc: HlcClock::admit is not in Dannan 0.9.2, and
+  // Throws RegisterRefused for StampKind::hlc: HlcClock::admit is not in Dannan 0.10.0, and
   // a peer's stamp must pass it at acceptance before any is applied. `wall` judges expiry
   // (SpaceServices::wall on a node), `time` a read's budget deadline; both outlive this.
   explicit RegisterMap(RegisterOptions options, const dannan::contract::WallClock& wall = dannan::contract::system_wall_clock(),

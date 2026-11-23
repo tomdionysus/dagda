@@ -34,6 +34,7 @@
 #include "dagda/test/fixtures/legacy_v18.h"
 #include "dagda/test/fixtures/migrate.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/durable_file.h"
 #include "dannan/identity/node_identity.h"
 #include "dannan/test/fixtures/child_process.h"
@@ -836,7 +837,7 @@ TEST(MigrateComparePass, APassWritesNothingUnderAnyStore) {
   const auto listing = [&] {
     std::map<std::filesystem::path, std::string> out;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(bed.v18.root)) {
-      out[entry.path()] = entry.is_regular_file() ? hex(dannan::identity::sha256(legacy::read_file(entry.path()))) : std::string("dir");
+      out[entry.path()] = entry.is_regular_file() ? hex(dannan::identity::sha256(legacy::read_file(entry.path())).bytes) : std::string("dir");
     }
     return out;
   };

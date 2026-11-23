@@ -37,9 +37,11 @@
 #include "dagda/store/sealing.h"
 #include "dagda/store/state_layout.h"
 #include "dagda/store/storage_pool.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/node_identity.h"
 #include "dannan/net/codec.h"
+#include "dannan/storage/file_system.h"
 
 namespace dagda::migrate {
 
@@ -741,7 +743,8 @@ Header Pass::make_header() {
     header.stores.push_back(store.label);
     std::error_code ec;
     const auto accounting = store.root / ".macha.accounting";
-    header.accounting_digests.push_back(std::filesystem::exists(accounting, ec) ? dannan::identity::hex(sha256(read_file(accounting))) : std::string("none"));
+    header.accounting_digests.push_back(std::filesystem::exists(accounting, ec) ? dannan::encoding::hex(sha256(read_file(accounting)).bytes)
+                                                                                : std::string("none"));
   }
   return header;
 }
@@ -888,7 +891,7 @@ void Pass::read_loose(Store& store, ManifestFile& file) {
     if (found == store.loose.end() || found->key != key) return std::nullopt;
     return static_cast<size_t>(found - store.loose.begin());
   };
-  LooseJournal journal(_partial.string() + ".loose-" + dannan::identity::hex(dannan::identity::sha256(bytes_of(store.label))).substr(0, 16));
+  LooseJournal journal(_partial.string() + ".loose-" + dannan::encoding::hex(dannan::identity::sha256(bytes_of(store.label)).bytes).substr(0, 16));
   std::vector<std::optional<LooseValue>> values(store.loose.size());
   if (_resumed) {
     for (const auto& [key, encoded] : journal.take_over()) {
@@ -1551,11 +1554,8 @@ void Pass::run(const std::filesystem::path& manifest) {
   _locks.check_none_appeared();
   if (_temporaries) say("temporaries not compared: " + std::to_string(_temporaries));
   std::filesystem::rename(partial, manifest);
-  const int dir = ::open(where.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (dir >= 0) {
-    (void)::fsync(dir);
-    ::close(dir);
-  }
+  // Best effort, as before: the manifest is whole either way, and a run that finds it gone writes it again.
+  (void)dannan::storage::posix_file_system().sync_directory(where.parent_path());
   _summary.manifest_bytes = std::filesystem::file_size(manifest);
 }
 

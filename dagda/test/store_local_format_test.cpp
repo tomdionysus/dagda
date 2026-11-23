@@ -29,16 +29,17 @@
 #include "dagda/store/local_store.h"
 #include "dagda/store/sealing.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::store {
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using namespace local_format;
 using test::StoreBed;
 
-Bytes unhex(std::string_view text) { return dannan::identity::unhex(std::string(text)).value(); }
+Bytes unhex(std::string_view text) { return dannan::encoding::unhex(text).value(); }
 
 constexpr std::string_view plaintext = "An object Macha sealed under its own id.";
 constexpr char object_hex[] = "3e2d0f89b0b998fb97c9c3972a6f50791847d4cd70101c3910f971c77d43a4f8";

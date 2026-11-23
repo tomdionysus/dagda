@@ -57,7 +57,7 @@ constexpr DiskServiceMonitor::Thresholds defaults{25ms, 120ms, 300, 150, 1000};
 
 dannan::status::ScopedLogger quiet() { return dannan::status::ScopedLogger(std::make_shared<RecordingSink>(), "pressure"); }
 
-size_t count(RecordingSink& sink, std::string_view what) {
+size_t count(const RecordingSink& sink, std::string_view what) {
   const auto lines = sink.lines();
   return static_cast<size_t>(std::count_if(lines.begin(), lines.end(), [&](const auto& line) { return line.find(what) != std::string::npos; }));
 }
@@ -85,7 +85,8 @@ TEST(StoreIoPressure, OnsetAndReleaseAreEachLoggedOnce) {
   auto capture = std::make_shared<RecordingSink>();
   DiskServiceMonitor monitor(dannan::status::ScopedLogger(capture, "pressure"), defaults);
   for (int i = 0; i < 20; ++i) monitor.note(100ms, 4 * 1024 * 1024);
-  EXPECT_EQ(count(*capture, "pressure"), 0u);
+  // Nothing at all: every record here is under the scope "pressure".
+  EXPECT_EQ(capture->text(), "");
 
   for (int i = 0; i < 20; ++i) monitor.note(3000ms, 4 * 1024 * 1024);
   EXPECT_TRUE(monitor.pressured());

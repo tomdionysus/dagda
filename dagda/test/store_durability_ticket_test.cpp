@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "dagda/store/durability_ticket.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 
@@ -54,7 +55,7 @@ TEST(StoreDurabilityTicket, NamesOnlyTheProcessDomainAndIncarnationThatIssuedIt)
 TEST(StoreDurabilityTicket, EncodesAsProtocol23) {
   dannan::net::Writer writer;
   encode(writer, sample());
-  EXPECT_EQ(dannan::identity::hex(writer.data()),
+  EXPECT_EQ(dannan::encoding::hex(writer.data()),
             "000102030405060708090a0b0c0d0e0f"
             "0000000000000001"
             "0102030405060708"

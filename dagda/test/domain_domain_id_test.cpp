@@ -12,6 +12,7 @@
 
 #include "dagda/domain/domain.h"
 #include "dagda/domain/domain_id.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::domain {
@@ -27,7 +28,7 @@ dannan::identity::NodeId node_of(uint8_t first) {
 TEST(DomainId, DomainV1IsFixedAndWellKnown) {
   EXPECT_EQ(to_string(domain_v1), "827b07101d79d9d84a433d8e9cb262ca");
   const auto hash = dannan::identity::sha256({reinterpret_cast<const uint8_t*>("dagda/domain/v1"), 15});
-  EXPECT_EQ(dannan::identity::hex(hash).substr(0, 32), to_string(domain_v1));
+  EXPECT_EQ(dannan::encoding::hex(hash.bytes).substr(0, 32), to_string(domain_v1));
 }
 
 // The first sixteen bytes of SHA-256("dagda/node-local/1" || node id): one

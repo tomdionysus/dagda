@@ -28,6 +28,7 @@
 
 #include "dagda/ledger/unreferenced_since.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -130,7 +131,7 @@ TEST(LedgerUnreferencedSince, SightingsSurviveARestart) {
   auto sink = std::make_shared<test::RecordingSink>();
   UnreferencedSince seen(path, key(), test::logger_into(sink));
   EXPECT_EQ(seen.size(), 0u);
-  EXPECT_TRUE(sink->saw("unreferenced-since: ignoring"));
+  EXPECT_TRUE(test::saw(*sink, "unreferenced-since: ignoring"));
 }
 
 // Macha: test_the_sightings_codec_round_trips_and_refuses_damage.
@@ -178,7 +179,7 @@ TEST(LedgerUnreferencedSince, TheSightingsCodecRoundTripsAndRefusesDamage) {
 // writes the table in the clear.
 TEST(LedgerUnreferencedSince, TheFileIsTheTableSealedUnderTheNodeLocalKey) {
   const std::map<ObjectId, uint64_t> sightings{{id(9), 1'234'567}, {id(1), 7}};
-  const auto expected = dannan::identity::unhex(
+  const auto expected = dannan::encoding::unhex(
                             "00000001"
                             "0000000000000002"
                             "0100000000000000000000000000000000000000000000000000000000000000"
@@ -206,7 +207,7 @@ TEST(LedgerUnreferencedSince, TheFileIsTheTableSealedUnderTheNodeLocalKey) {
   auto sink = std::make_shared<test::RecordingSink>();
   UnreferencedSince other(path, test::key_of(0x11), test::logger_into(sink));
   EXPECT_EQ(other.size(), 0u);
-  EXPECT_TRUE(sink->saw("unreferenced-since: ignoring"));
+  EXPECT_TRUE(test::saw(*sink, "unreferenced-since: ignoring"));
   EXPECT_THROW(UnreferencedSince(path, nullptr, quiet()), std::invalid_argument);
 }
 

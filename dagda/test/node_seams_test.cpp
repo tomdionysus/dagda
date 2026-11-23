@@ -349,10 +349,10 @@ TEST(NodeSeams, ASlowStageIsLoggedInMachasWords) {
   const dannan::status::ScopedLogger logger(sink, "test");
   const auto now = dannan::contract::Clock::now();
   store::log_slow_stage(logger, "quick", now);
-  EXPECT_FALSE(sink->saw("quick"));
+  EXPECT_FALSE(test::saw(*sink, "quick"));
   store::log_slow_stage(logger, "network-repair", now - std::chrono::milliseconds(60), "bytes=7");
-  EXPECT_TRUE(sink->saw("DIAG maintenance-stage stage=network-repair elapsed_ms="));
-  EXPECT_TRUE(sink->saw(" bytes=7"));
+  EXPECT_TRUE(test::saw(*sink, "DIAG maintenance-stage stage=network-repair elapsed_ms="));
+  EXPECT_TRUE(test::saw(*sink, " bytes=7"));
 }
 
 std::optional<dannan::status::Surface::Value> published(ClusterNode& node, const std::string& name) {

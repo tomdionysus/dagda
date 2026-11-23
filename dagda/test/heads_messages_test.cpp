@@ -43,6 +43,7 @@
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/heads_space.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/routes.h"
@@ -52,8 +53,8 @@ namespace dagda::heads {
 namespace {
 
 using namespace std::chrono_literals;
-using dannan::identity::hex;
-using dannan::identity::unhex;
+using dannan::encoding::hex;
+using dannan::encoding::unhex;
 using dannan::net::Lane;
 using dannan::net::Reader;
 using dannan::net::RouteTable;

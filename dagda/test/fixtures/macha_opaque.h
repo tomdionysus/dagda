@@ -26,6 +26,7 @@
 #include "dagda/domain/storage_key.h"
 #include "dagda/heads/codec.h"
 #include "dagda/heads/record.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
@@ -67,7 +68,7 @@ inline std::map<std::string, Bytes> read_checked_in(const std::string& name) {
   while (std::getline(in, line)) {
     if (line.empty() || line[0] == '#') continue;
     const auto gap = line.find(' ');
-    const auto value = dannan::identity::unhex(line.substr(gap + 1));
+    const auto value = dannan::encoding::unhex(line.substr(gap + 1));
     if (!value) throw std::runtime_error("bad hex in " + name);
     out[line.substr(0, gap)] = *value;
   }

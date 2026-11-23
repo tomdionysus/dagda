@@ -658,7 +658,7 @@ TEST(HeadsRegisterMap, FourThousandRefsRoundTripAndTheBoundsAreRefusedAtPut) {
 
 // 22. A commit stamped beyond the bound is refused at acceptance, and the heads of the nodes
 // that accepted everything else still fold to the same commit. Waits on Dannan's
-// HlcClock::admit in a release (Dannan 0.9.2 has none): the HLC stamp kind is refused at open
+// HlcClock::admit in a release (Dannan 0.10.0 has none): the HLC stamp kind is refused at open
 // until then, so there is nothing to admit.
 TEST(HeadsRegisterMap, DISABLED_ACommitStampedBeyondTheBoundIsRefusedAtAcceptance) { GTEST_SKIP() << "waits on Dannan's HlcClock::admit"; }
 

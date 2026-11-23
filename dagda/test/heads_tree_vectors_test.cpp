@@ -40,6 +40,7 @@
 #include "dagda/migrate/legacy_v18.h"
 #include "dagda/store/local_format.h"
 #include "dagda/test/fixtures/json.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/cluster_key.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -47,8 +48,8 @@
 namespace dagda::heads {
 namespace {
 
-using dannan::identity::hex;
-using dannan::identity::unhex;
+using dannan::encoding::hex;
+using dannan::encoding::unhex;
 using test::Json;
 
 // A leaf record's value as a layout and nothing more: a head of a known length, with
@@ -203,7 +204,7 @@ std::vector<ObjectId> ids_of(const Json& list) {
 
 std::string hex_of(const std::vector<ObjectId>& ids) {
   std::string out;
-  for (const auto& id : ids) out += hex(id) + "\n";
+  for (const auto& id : ids) out += hex(id.bytes) + "\n";
   return out;
 }
 
@@ -288,7 +289,7 @@ TEST_P(HeadsTreeVectors, ReproducesEveryNodeMachaWrote) {
   ASSERT_EQ(keys, input);
 
   MemoryTreeNodeStore store;
-  ASSERT_EQ(hex(tree.build(entries, store)), vector["root"].string());
+  ASSERT_EQ(hex(tree.build(entries, store).bytes), vector["root"].string());
   expect_written(store.written(), vector["nodes"], store);
   EXPECT_EQ(store.written().size(), vector["nodes_written"].u64());
   expect_stats(tree.stats(root, store), vector["stats"]);
@@ -312,7 +313,7 @@ TEST_P(HeadsTreeVectors, ReproducesEveryNodeMachaWrote) {
 
   auto at = root;
   for (const auto& step : vector["updates"].array()) {
-    ASSERT_EQ(hex(at), step["root_before"].string()) << step["name"].string();
+    ASSERT_EQ(hex(at.bytes), step["root_before"].string()) << step["name"].string();
     const auto after = id_of(step["root_after"].string());
     OpaqueTree::Changes changes;
     for (const auto& change : step["changes"].array()) {
@@ -327,7 +328,7 @@ TEST_P(HeadsTreeVectors, ReproducesEveryNodeMachaWrote) {
     }
     store.forget_written();
     at = tree.update(at, store, changes);
-    ASSERT_EQ(hex(at), step["root_after"].string()) << step["name"].string();
+    ASSERT_EQ(hex(at.bytes), step["root_after"].string()) << step["name"].string();
     expect_written(store.written(), step["nodes"], store);
     expect_stats(tree.stats(at, store), step["stats_after"]);
 
@@ -403,7 +404,7 @@ TEST(HeadsTreeState, TheScratchFixturesRootIsReachedByteForByte) {
     const auto space = line.find(' ');
     const auto id = line.substr(0, space);
     const auto bytes = unhex(line.substr(space + 1)).value();
-    ASSERT_EQ(hex(store::object_id(bytes)), id);
+    ASSERT_EQ(hex(store::object_id(bytes).bytes), id);
     reference.put_at(id_of(id), bytes);
     expected[id] = line.substr(space + 1);
   }
@@ -420,9 +421,9 @@ TEST(HeadsTreeState, TheScratchFixturesRootIsReachedByteForByte) {
   EXPECT_EQ(stats.largest_node_bytes, 622u);
 
   MemoryTreeNodeStore store;
-  EXPECT_EQ(hex(tree.build(tree.read(root, reference), store)), scratch_root);
+  EXPECT_EQ(hex(tree.build(tree.read(root, reference), store).bytes), scratch_root);
   EXPECT_EQ(store.written().size(), 3u);
-  for (const auto& id : store.written()) EXPECT_EQ(hex(*store.get(id)), expected.at(hex(id)));
+  for (const auto& id : store.written()) EXPECT_EQ(hex(*store.get(id)), expected.at(hex(id.bytes)));
 }
 
 // What the fixture's store holds, opened as Macha's store opened it: v18's associated
@@ -485,12 +486,12 @@ TEST(HeadsTreeState, EveryTreeNodeInTheSealedStoreIsMadeAgain) {
       entries = tree.read(id, held);
     } catch (const DecodeError&) {
       // A branch over a node since collected: not a thing to make again.
-      ASSERT_TRUE(branch) << hex(id);
+      ASSERT_TRUE(branch) << hex(id.bytes);
       ++partial;
       continue;
     }
     MemoryTreeNodeStore fresh;
-    EXPECT_EQ(hex(tree.build(entries, fresh)), hex(id));
+    EXPECT_EQ(hex(tree.build(entries, fresh).bytes), hex(id.bytes));
     EXPECT_EQ(hex(*fresh.get(id)), hex(bytes));
     (leaf ? leaves : branches)++;
   }
@@ -517,7 +518,7 @@ TEST(HeadsTreeState, ARealRetirementBatchOpensAndIsMadeAgain) {
     MemoryTreeNodeStore written;
     const auto batch = write_retirement_batch(written, magic, content.retired_at_ns, content.ids);
     ASSERT_TRUE(batch);
-    EXPECT_EQ(hex(batch->id), hex(id));
+    EXPECT_EQ(hex(batch->id.bytes), hex(id.bytes));
     EXPECT_EQ(batch->count, content.ids.size());
   }
   EXPECT_EQ(batches, 1u);

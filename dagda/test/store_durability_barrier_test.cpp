@@ -156,9 +156,9 @@ TEST(StoreDurabilityBarrier, AStaleProcessEpochIsRefused) {
   EXPECT_EQ(refusal->status, 409);
   EXPECT_EQ(refusal->code, "epoch_changed");
   // Macha's line (storage_server.cpp:310 at 98b816d).
-  EXPECT_TRUE(server.log().saw(dannan::status::LogLevel::debug,
-                               "object durability barrier refused: epoch changed expected=" + dannan::identity::to_string(stale.epoch).substr(0, 8) +
-                                   " current=" + dannan::identity::to_string(ticket.epoch).substr(0, 8) + " domain="));
+  EXPECT_TRUE(test::saw(server.log(), dannan::status::LogLevel::debug,
+                        "object durability barrier refused: epoch changed expected=" + dannan::identity::to_string(stale.epoch).substr(0, 8) +
+                            " current=" + dannan::identity::to_string(ticket.epoch).substr(0, 8) + " domain="));
 
   EXPECT_TRUE(answered_ok(wire.barrier(ticket)));
 }
@@ -320,7 +320,7 @@ TEST(StoreDurabilityBarrier, TicketsStillWaitingAreBoundedByTheirCeiling) {
   EXPECT_FALSE(a.store().status(tickets[0]).has_value());
   EXPECT_FALSE(a.store().status(tickets[1]).has_value());
   for (size_t i = 2; i < tickets.size(); ++i) EXPECT_TRUE(a.store().status(tickets[i]).has_value()) << i;
-  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "deferred write tickets over their ceiling"));
+  EXPECT_TRUE(test::saw(a.log(), dannan::status::LogLevel::warn, "deferred write tickets over their ceiling"));
 }
 
 // Many deferred writes, one peer: one barrier call, at the highest generation
@@ -481,11 +481,12 @@ TEST(StoreDurabilityBarrier, ARestartedPeerIsProbedOnceWithEveryIdThatNamedIt) {
   // :761 at 98b816d): the peer answers from disk, this node says what it re-derived,
   // and the copy the peer lost leaves its write short.
   using dannan::status::LogLevel;
-  EXPECT_TRUE(b.log().saw(LogLevel::info,
-                          "object durability re-derived after epoch change present=5/6 expected=" + dannan::identity::to_string(old_epoch).substr(0, 8) +
-                              " current=" + dannan::identity::to_string(epoch).substr(0, 8)));
-  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=5 absent=1 peers=1"));
-  EXPECT_TRUE(a.log().saw(LogLevel::debug, "object durability quorum unavailable id=" + to_string(before.back().id) + " required=2 durable=1 transient=no"));
+  EXPECT_TRUE(test::saw(b.log(), LogLevel::info,
+                        "object durability re-derived after epoch change present=5/6 expected=" + dannan::identity::to_string(old_epoch).substr(0, 8) +
+                            " current=" + dannan::identity::to_string(epoch).substr(0, 8)));
+  EXPECT_TRUE(test::saw(a.log(), LogLevel::info, "object durability re-derived after incarnation change reasserted=5 absent=1 peers=1"));
+  EXPECT_TRUE(
+      test::saw(a.log(), LogLevel::debug, "object durability quorum unavailable id=" + to_string(before.back().id) + " required=2 durable=1 transient=no"));
 }
 
 // Macha's distributed_store.cpp:580 at 98b816d: a local barrier that fails is warned
@@ -508,7 +509,7 @@ TEST(StoreDurabilityBarrier, ALocalBarrierThatFailsIsWarnedOf) {
   const auto evidence = a.store().wait(written.ticket, 10s);
   ASSERT_TRUE(evidence);
   EXPECT_FALSE(evidence->met);
-  EXPECT_TRUE(a.log().saw(dannan::status::LogLevel::warn, "local storage durability barrier failed: "));
+  EXPECT_TRUE(test::saw(a.log(), dannan::status::LogLevel::warn, "local storage durability barrier failed: "));
   // Definitive, and typed: put it again.
   ASSERT_NE(evidence->on(a.id()), nullptr);
   EXPECT_EQ(evidence->on(a.id())->state, ReplicaState::refused);
@@ -645,8 +646,8 @@ TEST(StoreDurabilityBarrier, AnUnmetBarrierThroughTheContractIsLoggedAsMachaLogs
   ASSERT_TRUE(evidence);
   EXPECT_FALSE(evidence->met);
   using dannan::status::LogLevel;
-  EXPECT_TRUE(a.log().saw(LogLevel::debug, "object durability quorum unavailable id=" + to_string(written.id) + " required=1 durable=0 transient=no"));
-  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=0 absent=1 peers=0"));
+  EXPECT_TRUE(test::saw(a.log(), LogLevel::debug, "object durability quorum unavailable id=" + to_string(written.id) + " required=1 durable=0 transient=no"));
+  EXPECT_TRUE(test::saw(a.log(), LogLevel::info, "object durability re-derived after incarnation change reasserted=0 absent=1 peers=0"));
 }
 
 // One barrier round that probes two restarted peers says so on one line with the
@@ -681,8 +682,8 @@ TEST(StoreDurabilityBarrier, ARoundThatProbesTwoPeersSaysSoOnOneLine) {
       30s));
   for (const auto& one : evidence) EXPECT_TRUE(one.met);
   using dannan::status::LogLevel;
-  EXPECT_TRUE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=8 absent=0 peers=2"));
-  EXPECT_FALSE(a.log().saw(LogLevel::info, "object durability re-derived after incarnation change reasserted=4 absent=0 peers=1"));
+  EXPECT_TRUE(test::saw(a.log(), LogLevel::info, "object durability re-derived after incarnation change reasserted=8 absent=0 peers=2"));
+  EXPECT_FALSE(test::saw(a.log(), LogLevel::info, "object durability re-derived after incarnation change reasserted=4 absent=0 peers=1"));
 }
 
 // Macha's write quorum line says result=1 for any write that landed a copy and was not

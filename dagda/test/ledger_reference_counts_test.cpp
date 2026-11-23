@@ -24,6 +24,7 @@
 
 #include "dagda/ledger/reference_counts.h"
 #include "dagda/test/fixtures/ledger.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/net/codec.h"
 #include "dannan/test/fixtures/temp_dir.h"
@@ -95,7 +96,7 @@ TEST(LedgerReferenceCounts, FollowAndSurviveARestart) {
 TEST(LedgerReferenceCounts, TheStateIsLayoutV18s) {
   const auto root = store::object_id(
       Bytes{'d', 'a', 'g', 'd', 'a', ' ', 'r', 'e', 'f', 'e', 'r', 'e', 'n', 'c', 'e', ' ', 'c', 'o', 'u', 'n', 't', 's', ' ', 'r', 'o', 'o', 't'});
-  ASSERT_EQ(dannan::identity::hex(root), "940a17e39138cf491e51a75332cbd7c4cf46d1286f4e7247df8b62b8b9a3b737");
+  ASSERT_EQ(dannan::encoding::hex(root.bytes), "940a17e39138cf491e51a75332cbd7c4cf46d1286f4e7247df8b62b8b9a3b737");
   constexpr char clean[] = "4d524546303030310101940a17e39138cf491e51a75332cbd7c4cf46d1286f4e7247df8b62b8b9a3b73700000000000000010000000000000001";
   dannan::test::TempDir dir;
   ObjectId a{};
@@ -103,14 +104,14 @@ TEST(LedgerReferenceCounts, TheStateIsLayoutV18s) {
   {
     ReferenceCounts counts(dir.path(), key_of(3), 1 << 20, quiet_logger());
     counts.reset(root, {a, a}, {}, {1, 1});
-    EXPECT_EQ(dannan::identity::hex(counts.views().extents.get(a).value()), "0000000000000002");
+    EXPECT_EQ(dannan::encoding::hex(counts.views().extents.get(a).value()), "0000000000000002");
   }
   std::ifstream in(dir.path() / "state", std::ios::binary);
   const Bytes written{std::istreambuf_iterator<char>(in), {}};
-  EXPECT_EQ(dannan::identity::hex(written), clean);
+  EXPECT_EQ(dannan::encoding::hex(written), clean);
 
   dannan::test::TempDir other;
-  const auto bytes = dannan::identity::unhex(clean).value();
+  const auto bytes = dannan::encoding::unhex(clean).value();
   std::ofstream(other.path() / "state", std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
   ReferenceCounts opened(other.path(), key_of(3), 1 << 20, quiet_logger());
   EXPECT_EQ(opened.root(), std::optional(root));

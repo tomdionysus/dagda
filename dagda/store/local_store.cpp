@@ -23,6 +23,8 @@
 
 #include "dagda/store/local_format.h"
 #include "dagda/store/sealing.h"
+#include "dannan/encoding/base.h"
+#include "dannan/storage/file_system.h"
 
 namespace dagda::store {
 namespace {
@@ -285,13 +287,9 @@ void LocalStore::persist_accounting(uint64_t used, uint8_t operation, const Obje
 }
 
 void LocalStore::sync_directory(const std::filesystem::path& directory) {
-  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) return;
-  int rc;
-  do {
-    rc = ::fsync(fd);
-  } while (rc != 0 && errno == EINTR);
-  ::close(fd);
+  // Best effort, as before: a directory that will not open is not counted, and a failed sync is left to the next barrier.
+  const auto synced = dannan::storage::posix_file_system().sync_directory(directory);
+  if (!synced && synced.error().operation == "open directory") return;
   _own_syncs.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1278,7 +1276,7 @@ std::optional<ObjectId> LocalStore::next_object(Cursor& cursor, bool& exhausted)
     if (!entry.is_regular_file(type_error) || type_error) continue;
     const auto name = entry.path().filename().string();
     if (name.size() != 68 || name.compare(64, 4, ".obj") != 0) continue;
-    const auto bytes = dannan::identity::unhex(name.substr(0, 64));
+    const auto bytes = dannan::encoding::unhex(name.substr(0, 64));
     if (!bytes || bytes->size() != 32) continue;
     ObjectId id;
     std::copy(bytes->begin(), bytes->end(), id.bytes.begin());

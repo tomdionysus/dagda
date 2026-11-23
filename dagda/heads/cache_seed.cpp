@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/durable_file.h"
 
@@ -21,7 +22,7 @@ namespace dagda::heads {
 namespace {
 
 std::filesystem::path seed_path(const store::PersistentBlockCache::SeedPlace& place, const SpaceId& space) {
-  return place.directory / (dannan::identity::hex(space) + ".meta");
+  return place.directory / (dannan::encoding::hex(space.bytes) + ".meta");
 }
 
 }  // namespace

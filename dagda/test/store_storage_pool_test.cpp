@@ -195,7 +195,7 @@ TEST(StoreStoragePool, TheBackendMarkerIsLayoutV19sAndMachasIsRefused) {
 
   auto pool = bed.pool(state, {{fresh, 64 * mib, 0}, {migrated, 64 * mib, 0}, {machas, 64 * mib, 0}}, 500ms, node);
   EXPECT_EQ(pool->online_backends(), 2u);
-  EXPECT_TRUE(bed.sink->saw("dagda-migrate --state " + state.string()));
+  EXPECT_TRUE(test::saw(*bed.sink, "dagda-migrate --state " + state.string()));
 
   const auto read = [](const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);

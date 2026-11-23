@@ -10,19 +10,20 @@
 #include <algorithm>
 #include <string_view>
 
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::domain {
 
 std::optional<DomainId> DomainId::parse(const std::string& text) {
-  const auto bytes = dannan::identity::unhex(text);
+  const auto bytes = dannan::encoding::unhex(text);
   if (!bytes || bytes->size() != 16) return std::nullopt;
   DomainId out;
   std::copy(bytes->begin(), bytes->end(), out.bytes.begin());
   return out;
 }
 
-std::string to_string(const DomainId& id) { return dannan::identity::hex(id.bytes); }
+std::string to_string(const DomainId& id) { return dannan::encoding::hex(id.bytes); }
 
 DomainId node_local_domain(const dannan::identity::NodeId& node) {
   constexpr std::string_view label = "dagda/node-local/1";

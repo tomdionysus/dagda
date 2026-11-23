@@ -31,6 +31,7 @@
 #include "dagda/heads/space.h"
 #include "dagda/test/fixtures/heads.h"
 #include "dagda/test/fixtures/heads_space.h"
+#include "dannan/encoding/base.h"
 
 namespace dagda::test {
 
@@ -96,7 +97,7 @@ inline std::vector<NeutralConflict> neutral_conflicts(const NeutralHead& head) {
     conflict.installed = at->first.substr(first + 1, second - first - 1);
     conflict.alternative = at->first.substr(second + 1);
     for (size_t i = 0; i + 64 <= at->second.size(); i += 64) {
-      const auto unhexed = dannan::identity::unhex(at->second.substr(i, 64));
+      const auto unhexed = dannan::encoding::unhex(at->second.substr(i, 64));
       if (!unhexed || unhexed->size() != 32) throw DecodeError("bad neutral conflict reference");
       ObjectId id;
       std::copy(unhexed->begin(), unhexed->end(), id.bytes.begin());

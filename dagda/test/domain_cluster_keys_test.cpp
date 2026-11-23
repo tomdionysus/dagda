@@ -21,13 +21,14 @@
 #include "dagda/store/sealing.h"
 #include "dagda/test/fixtures/cluster.h"
 #include "dagda/test/fixtures/store.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 
 namespace dagda::domain {
 namespace {
 
 using namespace std::chrono_literals;
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using test::Cluster;
 using test::ClusterNode;
 using test::pattern;

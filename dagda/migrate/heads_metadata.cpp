@@ -22,6 +22,7 @@
 
 #include "dagda/heads/record.h"
 #include "dagda/migrate/retag.h"
+#include "dannan/encoding/base.h"
 #include "dannan/identity/crypto.h"
 #include "dannan/identity/durable_file.h"
 #include "dannan/net/codec.h"
@@ -34,7 +35,7 @@ heads::ReplicaMagics macha_metadata::magics() {
 
 namespace {
 
-using dannan::identity::hex;
+using dannan::encoding::hex;
 using dannan::identity::sha256;
 using dannan::net::Reader;
 using dannan::net::Writer;
@@ -58,19 +59,7 @@ Bytes read_file(const std::filesystem::path& path) {
   return out;
 }
 
-std::string digest_text(std::span<const uint8_t> bytes) { return std::to_string(bytes.size()) + " bytes sha256 " + hex(sha256(bytes)); }
-
-void sync_directory(const std::filesystem::path& path) {
-  const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) throw std::runtime_error("cannot open " + path.string() + ": " + std::strerror(errno));
-  int rc;
-  do {
-    rc = ::fsync(fd);
-  } while (rc != 0 && errno == EINTR);
-  const auto error = errno;
-  ::close(fd);
-  if (rc != 0) throw std::runtime_error("cannot sync " + path.string() + ": " + std::strerror(error));
-}
+std::string digest_text(std::span<const uint8_t> bytes) { return std::to_string(bytes.size()) + " bytes sha256 " + hex(sha256(bytes).bytes); }
 
 class Fd {
  public:
@@ -442,7 +431,7 @@ void HeadsPass::rewrite_frames(const FramesPlan& plan) {
     walk_frames(temporary, _domain_key, {to_aad}, [&](const FrameSpan& span, const Bytes*) { after.push_back({span.kind, span.offset, span.length}); });
     if (before != after) throw std::runtime_error(plan.path.string() + " would not read under the new layout as it read under the old: left as it was");
     std::filesystem::rename(temporary, plan.path);
-    sync_directory(plan.path.parent_path());
+    dannan::identity::durable_sync_directory(plan.path.parent_path());
   } catch (...) {
     std::error_code ignored;
     std::filesystem::remove(temporary, ignored);
@@ -498,17 +487,17 @@ void HeadsPass::move_seed() {
 void HeadsPass::move_directory() {
   const auto parent = _to_dir.parent_path();
   std::filesystem::create_directories(parent);
-  sync_directory(parent.parent_path());
+  dannan::identity::durable_sync_directory(parent.parent_path());
   std::filesystem::rename(_from_dir, _to_dir);
-  sync_directory(parent);
-  sync_directory(_from_dir.parent_path());
+  dannan::identity::durable_sync_directory(parent);
+  dannan::identity::durable_sync_directory(_from_dir.parent_path());
   if (_options.reverse) {
     // Going back leaves no empty heads/ for Macha to find.
     std::error_code ec;
     const auto heads_root = _from_dir.parent_path();
     if (std::filesystem::is_directory(heads_root, ec) && std::filesystem::is_empty(heads_root, ec)) {
       std::filesystem::remove(heads_root, ec);
-      if (!ec) sync_directory(heads_root.parent_path());
+      if (!ec) dannan::identity::durable_sync_directory(heads_root.parent_path());
     }
   }
 }
@@ -516,7 +505,7 @@ void HeadsPass::move_directory() {
 void HeadsPass::run() {
   plan();
   const bool write = !_options.dry_run;
-  _report.heads_space = _options.space_name + " " + hex(_places.space);
+  _report.heads_space = _options.space_name + " " + hex(_places.space.bytes);
   _report.metadata_peak_extra_bytes = std::max(_report.metadata_peak_extra_bytes, _peak);
 
   // The seed, beside the cache: written at its new name, then the old removed.
@@ -527,7 +516,7 @@ void HeadsPass::run() {
     step(_options, _report);
     if (write) {
       std::filesystem::remove(_from_seed);
-      sync_directory(_from_seed.parent_path());
+      dannan::identity::durable_sync_directory(_from_seed.parent_path());
     }
     step(_options, _report);
   } else if (_seed_from == Form::neither) {
@@ -593,7 +582,7 @@ struct Indexed {
   bool full = false;
 };
 
-std::string hash_text(const heads::Hash256& hash) { return hex(hash); }
+std::string hash_text(const heads::Hash256& hash) { return hex(hash.bytes); }
 
 std::string zero_padded(uint64_t value) {
   std::string text = std::to_string(value);
@@ -694,7 +683,7 @@ HeadsPlaces heads_places(const std::filesystem::path& state, const std::filesyst
   out.v19_directory = heads::space_directory(state, out.space);
   if (!cache.empty()) {
     out.v18_seed = heads::machas_metadata_seed(cache);
-    out.v19_seed = cache / "metadata" / (hex(out.space) + ".meta");
+    out.v19_seed = cache / "metadata" / (hex(out.space.bytes) + ".meta");
   }
   return out;
 }
@@ -793,7 +782,7 @@ bool heads_metadata_pending(const std::filesystem::path& state, const std::files
 }
 
 HeadsMetadataReader::HeadsMetadataReader(std::string space_name)
-    : _space_name(std::move(space_name)), _space_hex(hex(heads::space_id(domain::domain_v1, _space_name))) {}
+    : _space_name(std::move(space_name)), _space_hex(hex(heads::space_id(domain::domain_v1, _space_name).bytes)) {}
 
 bool HeadsMetadataReader::covers(const std::filesystem::path&, const std::filesystem::path& relative) const {
   auto part = relative.begin();

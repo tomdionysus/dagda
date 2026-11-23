@@ -50,16 +50,21 @@ which discipline it follows.
 ## Building and testing
 
 Dagda links an installed Dannan of the pinned minor, at least the pinned patch
-(`find_package(dannan 0.9.2 CONFIG)`; Dannan keeps its ABI across a minor's
+(`find_package(dannan 0.10.0 CONFIG)`; Dannan keeps its ABI across a minor's
 patches, and only within a minor). Once per checkout, build the pinned tag into
 `build/deps/`:
 
 ```
-git clone --branch 0.9.2 --depth 1 https://github.com/tomdionysus/dannan.git build/deps/dannan-0.9.2
-cmake -S build/deps/dannan-0.9.2 -B build/deps/dannan-0.9.2-build -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.9.2-build -j8 && cmake --install build/deps/dannan-0.9.2-build
+git clone --branch 0.10.0 --depth 1 https://github.com/tomdionysus/dannan.git build/deps/dannan-0.10.0
+cmake -S build/deps/dannan-0.10.0 -B build/deps/dannan-0.10.0-build -DCMAKE_BUILD_TYPE=Release \
+  -DDANNAN_BUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
+cmake --build build/deps/dannan-0.10.0-build -j8 && cmake --install build/deps/dannan-0.10.0-build
 ```
+
+A sanitizer build builds that Dannan with the same sanitizer, into a prefix of its own, and
+configures Dagda with it too: `-DDANNAN_SANITIZE=address` (ASan with UBSan) or `thread`
+(TSan) on both. Never link a plain or packaged Dannan into a sanitizer build; check each
+library with `nm -D` for `__asan_` or `__tsan_` symbols, as `tools/ci.sh` does.
 
 Then:
 

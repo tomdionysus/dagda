@@ -989,7 +989,8 @@ TEST(DistributedStore, AnOpportunisticCopyIsDroppedWhenSpeculativeMemoryIsShort)
   ASSERT_EQ(reader.store().get(id, playback), bytes);
   reader.store().wait_local_copies_settled();
   EXPECT_FALSE(reader.cache().has(id));
-  EXPECT_TRUE(reader.log().saw(dannan::status::LogLevel::debug, "opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory"));
+  EXPECT_TRUE(
+      test::saw(reader.log(), dannan::status::LogLevel::debug, "opportunistic persistence skipped object=" + to_string(id) + " reason=retained_memory"));
 
   // With room again, the next fetch is kept.
   held.clear();
