@@ -66,6 +66,13 @@ struct RepairOptions {
   // also the window of transfers a turn keeps in flight (the repair redesign, stage 4,
   // where the 16-call count a step went).
   size_t extent_size = 16 * 1024 * 1024;
+  // The burst's bound in bytes, whatever the link's estimate: what one step may read and
+  // hold, so a wrong estimate costs no more memory than this (live-a's OOM, 2026-11-21: an
+  // estimate of 20 GiB/s made a five-second burst of 100 GiB). A host sets it from its memory
+  // budget; at least an extent. It is also held under the node's transfer pool's bound
+  // (Context::buffers) less four extents, so every buffer the window moves can go back to the
+  // pool rather than be freed to glibc.
+  uint64_t max_window_bytes = 256ULL * 1024 * 1024;
   // The clock repair's credit and share run on. None: the node's. An owner's
   // pass on its own clock gives it, as Macha's trace fixtures move its pass's
   // time while reachability stays on real time.

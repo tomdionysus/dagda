@@ -105,6 +105,7 @@ LocalStore::LocalStore(std::filesystem::path root, LocalStoreOptions options, st
       _progress(services.progress),
       _logger(std::move(services.logger)),
       _wall(services.wall),
+      _buffers(std::move(services.buffers)),
       _files(files),
       _after_pack_append(std::move(options.after_pack_append)),
       _durability_domain(std::move(durability_domain)) {
@@ -427,7 +428,7 @@ void LocalStore::select_active_pack_locked(uint64_t next_record_size) {
   }
 }
 
-bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, const SealedObject* sealed, uint64_t touched_ms, PackEntry* entry,
+bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, const SealedRecord* sealed, uint64_t touched_ms, PackEntry* entry,
                                            uint64_t* record_size, Lock& lock) {
   PackHeader header;
   header.type = type;
@@ -516,8 +517,14 @@ bool LocalStore::append_pack_record_locked(uint8_t type, const ObjectId& id, con
 }
 
 std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& lock) const {
+  std::optional<Bytes> plain;
+  if (!get_packed_locked(id, [&](uint64_t size) { return std::span<uint8_t>(plain.emplace(size)); }, lock)) return std::nullopt;
+  return plain;
+}
+
+bool LocalStore::get_packed_locked(const ObjectId& id, const Destination& into, Lock& lock) const {
   const auto found = _packed.find(id);
-  if (found == _packed.end()) return std::nullopt;
+  if (found == _packed.end()) return false;
   const auto entry = found->second;
   ++_active_pack_readers[entry.file];
 
@@ -530,13 +537,15 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
     if (--active->second == 0) _active_pack_readers.erase(active);
     _pack_readers_cv.notify_all();
   };
-  Bytes plain;
   try {
     Unlocked unlocked(lock, _mutex);
-    const auto payload = _files.read_at(entry.file, entry.payload_offset, static_cast<size_t>(entry.payload_size));
-    if (!payload) throw std::runtime_error("short packed object read");
+    // The ciphertext is as long as the plaintext: a record saying otherwise is not the object.
+    if (entry.payload_size != entry.plain_size) throw ObjectCorrupt("object integrity failure");
+    const auto bytes = into(entry.plain_size);
+    if (bytes.size() != entry.plain_size) throw std::logic_error("a read's destination is not the object's size");
+    if (!_files.read_at_into(entry.file, entry.payload_offset, bytes)) throw std::runtime_error("short packed object read");
     try {
-      plain = open_object(*_key, _sealing, id, entry.nonce, entry.tag, *payload, entry.plain_size);
+      open_object_in_place(*_key, _sealing, id, entry.nonce, entry.tag, bytes, entry.plain_size);
     } catch (const std::runtime_error& error) {
       throw ObjectCorrupt(error.what());
     }
@@ -545,7 +554,37 @@ std::optional<Bytes> LocalStore::get_packed_locked(const ObjectId& id, Lock& loc
     throw;
   }
   release_reader();
-  return plain;
+  return true;
+}
+
+bool LocalStore::get_loose(const ObjectId& id, const std::filesystem::path& file, const Destination& into) const {
+  std::error_code sized;
+  const auto file_size = std::filesystem::file_size(file, sized);
+  if (sized) {
+    if (!std::filesystem::exists(file)) return false;
+    throw std::runtime_error("cannot size object: " + sized.message());
+  }
+  if (file_size == 0 && prune_empty_loose(id, file)) return false;
+  // The header, then the ciphertext read where the plaintext is wanted and opened there. A
+  // device that fails throws as it is; only bytes that are not the object are corrupt.
+  const auto head = _files.read_at(file, 0, std::min<uint64_t>(file_size, local_format::loose_header_size));
+  if (!head) throw std::runtime_error("short object read");
+  local_format::LooseObject loose;
+  try {
+    loose = local_format::decode_loose(*head);
+  } catch (const std::runtime_error& error) {
+    throw ObjectCorrupt(error.what());
+  }
+  if (loose.plain_size != file_size - local_format::loose_header_size) throw ObjectCorrupt("object integrity failure");
+  const auto bytes = into(loose.plain_size);
+  if (bytes.size() != loose.plain_size) throw std::logic_error("a read's destination is not the object's size");
+  if (!_files.read_at_into(file, local_format::loose_header_size, bytes)) throw std::runtime_error("short object read");
+  try {
+    open_object_in_place(*_key, _sealing, id, loose.nonce, loose.tag, bytes, loose.plain_size);
+  } catch (const std::runtime_error& error) {
+    throw ObjectCorrupt(error.what());
+  }
+  return true;
 }
 
 std::optional<LocalStore::SealedObject> LocalStore::get_sealed_locked(const ObjectId& id, Lock& lock) const {
@@ -595,13 +634,22 @@ Bytes LocalStore::open_loose(const ObjectId& id, std::span<const uint8_t> file) 
 
 LocalStore::SealedObject LocalStore::seal(const ObjectId& id, std::span<const uint8_t> data) const {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only and cannot seal");
-  auto sealed = seal_object(*_key, _sealing, id, data);
-  _seals.fetch_add(1, std::memory_order_relaxed);
   SealedObject out;
   out.plain_size = data.size();
-  out.nonce = sealed.nonce;
-  out.tag = sealed.tag;
-  out.ciphertext = std::move(sealed.ciphertext);
+  if (_buffers) {
+    // Into a buffer of the node's transfer pool, which the writer gives back.
+    out.ciphertext = _buffers->take(data.size());
+    out.ciphertext.resize(data.size());
+    const auto sealed = seal_object_into(*_key, _sealing, id, data, out.ciphertext);
+    out.nonce = sealed.nonce;
+    out.tag = sealed.tag;
+  } else {
+    auto sealed = seal_object(*_key, _sealing, id, data);
+    out.nonce = sealed.nonce;
+    out.tag = sealed.tag;
+    out.ciphertext = std::move(sealed.ciphertext);
+  }
+  _seals.fetch_add(1, std::memory_order_relaxed);
   return out;
 }
 
@@ -740,7 +788,7 @@ void LocalStore::rebuild_pack_index(bool truncate_incomplete_tail) {
   }
 }
 
-bool LocalStore::put_loose_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+bool LocalStore::put_loose_locked(const ObjectId& id, const SealedRecord& sealed, uint64_t& generation, Lock& lock) {
   // Reserve capacity and mark accounting dirty under _mutex, then install
   // under the object's lock only.
   const uint64_t need = loose_header_size + sealed.ciphertext.size();
@@ -804,7 +852,7 @@ bool LocalStore::put_loose_locked(const ObjectId& id, const SealedObject& sealed
   }
 }
 
-bool LocalStore::put_packed_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+bool LocalStore::put_packed_locked(const ObjectId& id, const SealedRecord& sealed, uint64_t& generation, Lock& lock) {
   const uint64_t need = pack_header_size + sealed.ciphertext.size();
   if (!physical_space_available_locked(need)) return false;
   const bool ephemeral = _mode == LocalStoreMode::ephemeral;
@@ -857,7 +905,7 @@ bool LocalStore::put_packed_locked(const ObjectId& id, const SealedObject& seale
   return true;
 }
 
-bool LocalStore::store_sealed_locked(const ObjectId& id, const SealedObject& sealed, uint64_t& generation, Lock& lock) {
+bool LocalStore::store_sealed_locked(const ObjectId& id, const SealedRecord& sealed, uint64_t& generation, Lock& lock) {
   const bool pack = _pack_threshold && sealed.plain_size <= _pack_threshold;
   return pack ? put_packed_locked(id, sealed, generation, lock) : put_loose_locked(id, sealed, generation, lock);
 }
@@ -879,7 +927,7 @@ bool LocalStore::put_sealed(const ObjectId& id, const SealedObject& sealed) {
   }
   if (loose_exists) return true;
   uint64_t generation = 0;
-  if (!store_sealed_locked(id, sealed, generation, lock)) return false;
+  if (!store_sealed_locked(id, record_of(sealed), generation, lock)) return false;
   lock.unlock();
   if (generation) _durability_domain->await_durable(generation, DurabilityUrgency::immediate);
   // As put: once the held ledger is seeded it answers has(), so the record
@@ -900,8 +948,11 @@ std::optional<dannan::identity::Hash256> LocalStore::held_digest(const ObjectId&
   return blind_digest(sealed->nonce, sealed->tag, sealed->ciphertext);
 }
 
-bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, WriteDurability durability, uint64_t* deferred_generation) {
+bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, std::span<uint8_t> writable, WriteDurability durability,
+                          uint64_t* deferred_generation) {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only: put_sealed");
+  if (!writable.empty() && (writable.data() != data.data() || writable.size() != data.size()))
+    throw std::logic_error("a put sealed in place is sealed in its own bytes");
   if (object_id(data) != id) throw std::runtime_error("object hash mismatch");
   await_accounting();
   ObjectLock object_guard(_object_locks.mutex(id));
@@ -1002,15 +1053,46 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
   // for room seals nothing, so a pool at capacity does not encrypt every write once a
   // backend it spills through. The ciphertext is the plaintext's size.
   if (!physical_space_available_locked((pack ? pack_header_size : loose_header_size) + data.size())) return false;
-  // Sealed under the object's lock with the index free, as the install is.
+  // Sealed under the object's lock with the index free, as the install is: in the
+  // caller's bytes when it gave them, which are opened again if the record is not
+  // written, so the plaintext is the caller's once more.
   SealedObject sealed;
+  // A ciphertext sealed into the node's pool goes back to it however the write ends.
+  struct GiveBack {
+    const std::shared_ptr<dannan::sched::BufferPool>& pool;
+    Bytes& bytes;
+    ~GiveBack() {
+      if (pool) pool->give(std::move(bytes));
+    }
+  } give_back{_buffers, sealed.ciphertext};
+  SealedRecord record;
+  const bool in_place = !writable.empty();
   {
     Unlocked unlocked(lock, _mutex);
-    sealed = seal(id, data);
+    if (in_place) {
+      const auto sealed_here = seal_object_in_place(*_key, _sealing, id, writable);
+      _seals.fetch_add(1, std::memory_order_relaxed);
+      record = {writable.size(), sealed_here.nonce, sealed_here.tag, writable};
+    } else {
+      sealed = seal(id, data);
+      record = record_of(sealed);
+    }
   }
+  const auto unseal = [&] {
+    if (in_place) open_object_in_place(*_key, _sealing, id, record.nonce, record.tag, writable, record.plain_size);
+  };
   uint64_t generation = 0;
-  const bool stored = pack ? put_packed_locked(id, sealed, generation, lock) : put_loose_locked(id, sealed, generation, lock);
-  if (!stored) return false;
+  bool stored = false;
+  try {
+    stored = pack ? put_packed_locked(id, record, generation, lock) : put_loose_locked(id, record, generation, lock);
+  } catch (...) {
+    unseal();
+    throw;
+  }
+  if (!stored) {
+    unseal();
+    return false;
+  }
   if (deferred_generation) *deferred_generation = generation;
   if (durability == WriteDurability::immediate && generation) {
     lock.unlock();
@@ -1020,21 +1102,19 @@ bool LocalStore::put_impl(const ObjectId& id, std::span<const uint8_t> data, Wri
 }
 
 std::optional<Bytes> LocalStore::get(const ObjectId& id) const {
+  std::optional<Bytes> plain;
+  if (!get_into(id, [&](uint64_t size) { return std::span<uint8_t>(plain.emplace(size)); })) return std::nullopt;
+  return plain;
+}
+
+bool LocalStore::get_into(const ObjectId& id, const Destination& into) const {
   if (_role != domain::Role::member) throw std::logic_error("a blind store holds ciphertext only: get_sealed");
   ObjectLock object_guard(_object_locks.mutex(id));
   Lock lock(_mutex);
-  if (_packed.contains(id)) return get_packed_locked(id, lock);
+  if (_packed.contains(id)) return get_packed_locked(id, into, lock);
   const auto file = path(id);
   lock.unlock();
-  if (!std::filesystem::exists(file)) return std::nullopt;
-  const auto encoded = _files.read(file);
-  if (encoded.empty() && prune_empty_loose(id, file)) return std::nullopt;
-  Bytes plain;
-  try {
-    plain = open_loose(id, encoded);
-  } catch (const std::runtime_error& error) {
-    throw ObjectCorrupt(error.what());
-  }
+  if (!get_loose(id, file, into)) return false;
   if (const auto stamp = loose_stamp(file)) {
     lock.lock();
     remember_verified_loose_locked(id, *stamp);
@@ -1045,7 +1125,7 @@ std::optional<Bytes> LocalStore::get(const ObjectId& id) const {
     lock.unlock();
     if (unlisted) flush_ledger();
   }
-  return plain;
+  return true;
 }
 
 std::optional<bool> LocalStore::presence_from_index(const ObjectId& id) const {
@@ -1165,14 +1245,28 @@ bool LocalStore::remove_locked(const ObjectId& id, Lock& lock) {
 }
 
 bool LocalStore::put(const ObjectId& id, std::span<const uint8_t> data) {
-  const auto stored = put_impl(id, data, WriteDurability::immediate, nullptr);
+  const auto stored = put_impl(id, data, {}, WriteDurability::immediate, nullptr);
   flush_ledger();
   return stored;
 }
 
 std::optional<uint64_t> LocalStore::put_deferred(const ObjectId& id, std::span<const uint8_t> data) {
   uint64_t generation = 0;
-  const auto stored = put_impl(id, data, WriteDurability::deferred, &generation);
+  const auto stored = put_impl(id, data, {}, WriteDurability::deferred, &generation);
+  flush_ledger();
+  if (!stored) return std::nullopt;
+  return generation;
+}
+
+bool LocalStore::put_in_place(const ObjectId& id, std::span<uint8_t> data) {
+  const auto stored = put_impl(id, data, data, WriteDurability::immediate, nullptr);
+  flush_ledger();
+  return stored;
+}
+
+std::optional<uint64_t> LocalStore::put_deferred_in_place(const ObjectId& id, std::span<uint8_t> data) {
+  uint64_t generation = 0;
+  const auto stored = put_impl(id, data, data, WriteDurability::deferred, &generation);
   flush_ledger();
   if (!stored) return std::nullopt;
   return generation;

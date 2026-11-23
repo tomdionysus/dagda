@@ -50,15 +50,15 @@ which discipline it follows.
 ## Building and testing
 
 Dagda links an installed Dannan of the pinned minor, at least the pinned patch
-(`find_package(dannan 0.10.0 CONFIG)`; Dannan keeps its ABI across a minor's
+(`find_package(dannan 0.11.1 CONFIG)`; Dannan keeps its ABI across a minor's
 patches, and only within a minor). Once per checkout, build the pinned tag into
 `build/deps/`:
 
 ```
-git clone --branch 0.10.0 --depth 1 https://github.com/tomdionysus/dannan.git build/deps/dannan-0.10.0
-cmake -S build/deps/dannan-0.10.0 -B build/deps/dannan-0.10.0-build -DCMAKE_BUILD_TYPE=Release \
+git clone --branch 0.11.1 --depth 1 https://github.com/tomdionysus/dannan.git build/deps/dannan-0.11.1
+cmake -S build/deps/dannan-0.11.1 -B build/deps/dannan-0.11.1-build -DCMAKE_BUILD_TYPE=Release \
   -DDANNAN_BUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX=$PWD/build/deps/prefix
-cmake --build build/deps/dannan-0.10.0-build -j8 && cmake --install build/deps/dannan-0.10.0-build
+cmake --build build/deps/dannan-0.11.1-build -j8 && cmake --install build/deps/dannan-0.11.1-build
 ```
 
 A sanitizer build builds that Dannan with the same sanitizer, into a prefix of its own, and

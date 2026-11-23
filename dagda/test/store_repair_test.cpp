@@ -49,6 +49,12 @@
 
 #include <gtest/gtest.h>
 #include <unistd.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -2947,6 +2953,193 @@ TEST(StoreRepair, TheLinksEstimateIsWhatTheWindowMovedNotOneTransfersShare) {
   const double one = static_cast<double>(size) / std::chrono::duration<double>(held).count();
   EXPECT_GT(joiner.store().estimated_network_bps(), one * static_cast<double>(together) / 2) << "one transfer's share: " << one;
 }
+
+// A sample is never an extent over microseconds: bytes count over the time they were in
+// flight. live-a, 2026-11-21: transfers still in flight when a sample reset its span landed
+// together just after it, each a sample of an extent over almost no time, and the estimate
+// went from 10 MiB/s to 20 GiB/s; the burst, five seconds of it, let one step read until the
+// node was killed for memory. Here pulls are in flight under a wide window, the next step
+// shrinks the window to nothing, so every landing past an extent is a sample, and the holder
+// answers them all at once: the estimate stays near what they moved over the time they took.
+TEST(StoreRepair, TheLinksEstimateIsNeverAnExtentOverMicroseconds) {
+  dannan::test::Gate gets;
+  Cluster cluster;
+  constexpr size_t size = 4 * 1024 * 1024;
+  const auto four_mib = [] {
+    auto out = options(2);
+    out.store.extent_size = size;
+    return out;
+  };
+  auto& holder = cluster.add("holder", four_mib());
+  auto& joiner = cluster.add("joiner", four_mib());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+  const dannan::net::ServerLimits limits;
+  const size_t together = std::min<size_t>(6, limits.data_workers - limits.foreground_data_reserve);
+  ASSERT_GE(together, 3u);
+  const auto live = local_objects(holder, together, size, 119);
+  for (const auto& id : live) ASSERT_TRUE(joiner.store().should_own(id));
+  const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+  ASSERT_EQ(joiner.store().estimated_network_bps(), 0.0);
+
+  dannan::test::GateOpener opener(gets);
+  holder.interpose(hold(message::get_object, gets));
+  constexpr auto held = 500ms;
+  const auto started = std::chrono::steady_clock::now();
+  (void)joiner.store().repair_step(lists, 64ULL * 1024 * 1024, wide);
+  ASSERT_TRUE(gets.wait_for_entries(together, 10s));
+  // The window shrinks while every pull is still in flight, as a slower link's would.
+  (void)joiner.store().repair_step(lists, 64ULL * 1024 * 1024, RepairWindow{1});
+  std::this_thread::sleep_for(held);
+  gets.open();
+  (void)joiner.store().repair_drain(30s);
+  const auto took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id));
+  const double moved = static_cast<double>(size * together) / took;
+  EXPECT_LE(joiner.store().estimated_network_bps(), 4 * moved) << "what the pulls moved over the time they took: " << moved << " B/s";
+}
+
+// The burst, and so what one step may read and hold, is bounded by memory whatever the
+// link's estimate says: an estimate wrong by a thousand times cannot make a step read more
+// than the window's bound (live-a's OOM, as above).
+TEST(StoreRepair, TheBurstIsBoundedWhateverTheLinksEstimate) {
+  Cluster cluster;
+  auto absurd = options(2);
+  absurd.repair.initial_bandwidth = 100ULL * 1024 * 1024 * 1024;
+  auto& node = cluster.add("node", absurd);
+  cluster.start_all();
+  ASSERT_EQ(node.store().estimated_network_bps(), 0.0);
+  // A minute at the absurd rate: the credit banks to the burst, so the burst is what shows.
+  auto& time = node.context().time().source();
+  (void)node.repair().earn_credit(time.now(), 60s);
+  const auto earned = node.repair().earn_credit(time.now(), 60s);
+  EXPECT_GT(earned.rate, 1e9) << "the case needs the absurd rate to stand";
+  EXPECT_LE(earned.credit, 256ULL * 1024 * 1024) << "one step may read and hold the burst";
+}
+
+// Repair's window fits inside the node's transfer pool, with room for a few extents beyond it
+// (a reassembly, a reply being written, a sealed copy): at its peak every buffer it moves can go
+// back to the pool, and none is freed to glibc for the bound, where per-thread arenas keep it
+// (the 20-round memory case, 2026-11-23: a 256 MiB window in a 256 MiB pool freed six 16 MiB
+// blocks; at 192 MiB, one).
+TEST(StoreRepair, TheWindowFitsInsideTheNodesTransferPool) {
+  Cluster cluster;
+  auto absurd = options(2);
+  absurd.repair.initial_bandwidth = 100ULL * 1024 * 1024 * 1024;
+  absurd.repair.max_window_bytes = 1ULL << 40;
+  auto& node = cluster.add("node", absurd);
+  cluster.start_all();
+  // Repair's extent is the store's (node.cpp).
+  const uint64_t store_extent = absurd.store.extent_size;
+  const auto pool = node.context().buffers()->bound();
+  ASSERT_GT(pool, 8 * store_extent) << "the case needs a node with a pool";
+  auto& time = node.context().time().source();
+  (void)node.repair().earn_credit(time.now(), 60s);
+  const auto earned = node.repair().earn_credit(time.now(), 60s);
+  EXPECT_LE(earned.credit, pool - 4 * store_extent);
+  EXPECT_GE(earned.credit, store_extent);
+}
+
+#if defined(__GLIBC__)
+// What the process's allocator says: bytes handed out and still in use, and bytes it holds
+// from the system (its arenas and the mappings of large blocks).
+struct Heap {
+  uint64_t in_use = 0;
+  uint64_t held = 0;
+};
+Heap heap_now() {
+  const auto info = mallinfo2();
+  return {info.uordblks + info.hblkhd, info.arena + info.hblkhd};
+}
+
+// With DAGDA_MALLOC_INFO naming a file, glibc's own account of each arena (malloc_info's
+// XML: its heaps, and its free chunks by size) is appended to it under `label`, for a
+// hunt of what an arena keeps.
+void malloc_info_to_env_file(const std::string& label) {
+  const char* path = std::getenv("DAGDA_MALLOC_INFO");
+  if (!path || !*path) return;
+  if (FILE* out = std::fopen(path, "a")) {
+    std::fprintf(out, "<!-- %s -->\n", label.c_str());
+    (void)malloc_info(0, out);
+    std::fclose(out);
+  }
+}
+
+// Repair holds no memory once its window drains: every round moves new extents, and neither
+// what is in use nor what the allocator holds grows with the rounds (live-a, 2026-11-22: on
+// 0.3.3, with the estimate right, its resident memory grew with what repair moved, in glibc's
+// arenas and the main heap, past anything Macha counts).
+TEST(StoreRepair, RepairHoldsNoMemoryOnceItsWindowDrains) {
+  Cluster cluster;
+  constexpr size_t size = 16 * 1024 * 1024;
+  const auto big = [] {
+    auto out = options(2, 1, 8ULL * 1024 * 1024 * 1024);
+    out.store.extent_size = size;
+    return out;
+  };
+  auto& holder = cluster.add("holder", big());
+  auto& joiner = cluster.add("joiner", big());
+  cluster.start_all();
+  ASSERT_TRUE(cluster.converged());
+
+  constexpr size_t rounds = 8;
+  constexpr size_t per_round = 8;
+  // The nodes' transfer pools keep blocks on purpose, each up to its bound, and reuse them: what
+  // they keep is counted apart, and the case is what is in use and held beyond them.
+  const auto pooled = [&] { return holder.context().buffers()->stats().held_bytes + joiner.context().buffers()->stats().held_bytes; };
+  const auto heap_beyond_pools = [&] {
+    auto heap = heap_now();
+    const auto kept = pooled();
+    heap.in_use -= std::min(heap.in_use, kept);
+    heap.held -= std::min(heap.held, kept);
+    return heap;
+  };
+  // Every round's objects are written first, so the rounds measure repair alone, not the
+  // case's own buffers of each object as it writes them.
+  std::vector<std::vector<ObjectId>> written;
+  for (size_t round = 0; round < rounds; ++round) written.push_back(local_objects(holder, per_round, size, static_cast<uint8_t>(40 + round)));
+  const auto before = heap_beyond_pools();
+  malloc_info_to_env_file("before");
+  std::vector<Heap> after;
+  std::vector<uint64_t> kept;
+  for (size_t round = 0; round < rounds; ++round) {
+    const auto& live = written[round];
+    const RepairLists lists{inventory_of(live), list_of(live), lacks_of({{holder.id(), {}}}), {}, holds_of({{holder.id(), live}})};
+    for (int step = 0; step < 50; ++step) {
+      if (std::all_of(live.begin(), live.end(), [&](const auto& id) { return joiner.data().has(id); })) break;
+      (void)joiner.store().repair_step(lists, 1ULL << 30, wide);
+      (void)joiner.store().repair_drain(30s);
+    }
+    for (const auto& id : live) ASSERT_TRUE(joiner.data().has(id)) << "round " << round;
+    after.push_back(heap_beyond_pools());
+    kept.push_back(pooled());
+    malloc_info_to_env_file("round " + std::to_string(round));
+  }
+  // Once a round's window drains, nothing it moved is in use, and the allocator holds no more
+  // than a few extents beyond what it held before repair began: freed transfer buffers that
+  // stay in glibc's arenas are memory the node cannot use and the kernel cannot take back
+  // (on 0.3.3: 2 MiB in use, 480 MiB held, after every round).
+  constexpr uint64_t mib = 1024 * 1024;
+  const auto line = [&](const Heap& heap) { return "in use " + std::to_string(heap.in_use / mib) + " MiB, held " + std::to_string(heap.held / mib) + " MiB;"; };
+  std::string figures = " beyond the pools, before: " + line(before);
+  for (size_t i = 0; i < after.size(); ++i)
+    figures += " round " + std::to_string(i) + ": " + line(after[i]) + " pools " + std::to_string(kept[i] / mib) + " MiB;";
+  for (auto* node : {&holder, &joiner}) {
+    const auto stats = node->context().buffers()->stats();
+    figures += " pool: taken " + std::to_string(stats.taken) + " reused " + std::to_string(stats.reused) + " kept " + std::to_string(stats.kept) + " freed " +
+               std::to_string(stats.freed) + " (small " + std::to_string(stats.freed_small) + ", bound " + std::to_string(stats.freed_bound) + ", ledger " +
+               std::to_string(stats.freed_ledger) + ", detached " + std::to_string(stats.freed_detached) + ");";
+  }
+  RecordProperty("heap", figures);
+  // Two nodes at Dannan's default bound (NodeConfig::transfer_buffers_bound).
+  constexpr uint64_t bound = 2 * 256 * mib;
+  for (size_t i = 0; i < after.size(); ++i) {
+    EXPECT_LE(after[i].in_use, before.in_use + 16 * mib) << "repair's bytes still in use after its window drained:" << figures;
+    EXPECT_LE(after[i].held, before.held + 4 * size) << "freed transfer buffers the allocator keeps:" << figures;
+    EXPECT_LE(kept[i], bound) << "the pools past their bounds:" << figures;
+  }
+}
+#endif
 
 // Small objects travel many to a message: a pull's size is not known until it lands, so
 // each fetch holds an extent of the window, and one fetch a holder carries up to an

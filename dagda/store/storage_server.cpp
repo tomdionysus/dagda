@@ -63,9 +63,20 @@ StorageServer::StorageServer(dannan::Context& context, Stores stores, StorageSer
       _activity(stores.activity ? *stores.activity : context.activity()),
       _hosts_extents(options.hosts_extents) {
   refresh();
-  for (const auto type : served())
+  for (const auto type : served()) {
+    if (type == message::put_object || type == message::put_object_deferred) {
+      // The request is the handler's own, so the object is sealed where it arrived, and
+      // its buffer goes back to the node's pool once stored. It always answers at once.
+      _context.routes().bind_deferred(type, [this](const dannan::membership::NodeRecord& peer, FrameType frame, Message request, dannan::net::Answer&) {
+        auto handled = handle_put(peer, frame, request, request.payload);
+        _context.buffers()->give(std::move(request.payload));
+        return handled;
+      });
+      continue;
+    }
     _context.routes().bind(
         type, [this](const dannan::membership::NodeRecord& peer, FrameType frame, const Message& request) { return handle(peer, frame, request); });
+  }
   _refresher = std::jthread([this](std::stop_token stop) { _context.threads().loop("dagda.storage-refresh", stop, [this, stop] { refresh_loop(stop); }); });
 }
 
@@ -274,14 +285,26 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       timing("admitted", 0);
       // Not found is final only when no offline backend could hold it.
       const bool every_backend = _data.every_backend_online();
-      auto data = _data.get(id);
+      // Read and opened in the reply itself: one buffer of the object's size, taken
+      // from the node's pool, to which Dannan gives it back once it is written.
+      const auto pool = _context.buffers();
+      Bytes payload;
+      const auto size = _data.get_into(id, [&](uint64_t wanted) {
+        if (payload.capacity() < 36 + wanted) {
+          pool->give(std::move(payload));
+          payload = pool->take(36 + wanted);
+        }
+        return message::object_room(payload, id, wanted);
+      });
       admitted.reset();
-      timing("read", data ? data->size() : 0);
-      if (!data)
+      timing("read", size.value_or(0));
+      if (!size) {
+        pool->give(std::move(payload));
         return every_backend && _data.every_backend_online() ? Handled::failed(404, "not_found", "object not found")
                                                              : Handled::failed(503, "storage_unavailable", "object not found on the backends online");
-      _activity.note(frame, data->size());
-      return reply(message::object_reply, message::encode_object(id, *data));
+      }
+      _activity.note(frame, *size);
+      return reply(message::object_reply, std::move(payload));
     }
     if (type == message::get_objects) {
       // Repair's fetch of many: one admission of an extent, then the objects in order
@@ -296,35 +319,41 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       auto admitted = admit_data(frame, extent, true);
       if (!admitted) return gave_up();
       timing("admitted", 0);
-      std::vector<message::FetchedObject> objects(ids.size());
+      // Each object read and opened in the reply itself, which holds an extent at most
+      // (a put refuses more): no buffer of an object's size besides.
+      Bytes payload = _context.buffers()->take(4 + 5 * ids.size() + extent);
+      message::fetched_count(payload, static_cast<uint32_t>(ids.size()));
       uint64_t sent = 0;
       bool full = false;
       for (size_t i = 0; i < ids.size(); ++i) {
-        auto& object = objects[i];
-        if (full) continue;
+        if (full) {
+          message::fetched_answer(payload, message::Fetched::left);
+          continue;
+        }
         // Not found is final only when no offline backend could hold it.
         const bool every_backend = _data.every_backend_online();
         if (!_data.has(ids[i])) {
-          object.as = every_backend && _data.every_backend_online() ? message::Fetched::absent : message::Fetched::unavailable;
+          message::fetched_answer(payload, every_backend && _data.every_backend_online() ? message::Fetched::absent : message::Fetched::unavailable);
           continue;
         }
         if (sent && sent + _data.payload_size(ids[i]) > extent) {
           full = true;
+          message::fetched_answer(payload, message::Fetched::left);
           continue;
         }
-        auto data = _data.get(ids[i]);
-        if (!data) {
-          object.as = message::Fetched::unavailable;
+        const auto mark = payload.size();
+        const auto size = _data.get_into(ids[i], [&](uint64_t wanted) { return message::fetched_room(payload, mark, wanted); });
+        if (!size) {
+          payload.resize(mark);
+          message::fetched_answer(payload, message::Fetched::unavailable);
           continue;
         }
-        sent += data->size();
-        object.as = message::Fetched::sent;
-        object.data = std::move(*data);
+        sent += *size;
       }
       admitted.reset();
       _activity.note(frame, sent);
       timing("read", sent);
-      return reply(message::get_objects_reply, message::encode_fetched(objects));
+      return reply(message::get_objects_reply, std::move(payload));
     }
     if (type == message::get_control_object) {
       const auto id = message::decode_id(request.payload);
@@ -337,30 +366,7 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
       if (!data) return Handled::failed(404, "not_found", "control object not found");
       return reply(message::control_object_reply, message::encode_object(id, *data));
     }
-    if (type == message::put_object || type == message::put_object_deferred) {
-      auto object = message::decode_object(request.payload);
-      if (object.data.size() > _options.extent_size) return Handled::failed(413, "too_large", "DATA object exceeds configured extent size");
-      // Checked before the device is asked for anything: a refused writer
-      // costs no admission.
-      if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
-      const auto admitted = admit_data(frame, object.data.size(), true);
-      if (!admitted) return gave_up();
-      _activity.note(frame, object.data.size());
-      if (!_data.has(object.id)) _context.events().notify(_storage_event);
-      if (type == message::put_object_deferred) {
-        // Bound to this process and the backend incarnation that took it: a
-        // later barrier for a covered generation waits on nothing.
-        const auto ticket = _data.put_deferred(object.id, object.data);
-        if (!ticket) return Handled::failed(507, "storage_full", "storage limit reached");
-        if (_offers) _offers->arrived(object.id);
-        advertise();
-        return reply(dannan::net::message::ok, message::encode_ticket(*ticket));
-      }
-      if (!_data.put(object.id, object.data)) return Handled::failed(507, "storage_full", "storage limit reached");
-      if (_offers) _offers->arrived(object.id);
-      advertise();
-      return Handled::processed();
-    }
+    if (type == message::put_object || type == message::put_object_deferred) return handle_put(peer, frame, request, {});
     if (type == message::put_control_object) {
       const auto object = message::decode_object(request.payload);
       if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
@@ -465,6 +471,41 @@ Handled StorageServer::handle(const dannan::membership::NodeRecord& peer, FrameT
     return Handled::failed(400, "invalid_request", error.what());
   }
   return Handled::unrecognised();
+}
+
+Handled StorageServer::handle_put(const dannan::membership::NodeRecord& peer, FrameType frame, const Message& request, std::span<uint8_t> writable) {
+  const auto type = request.type;
+  try {
+    // Stored from the request's own bytes, and sealed in them when the request is
+    // this handler's to spend: no second buffer of an extent.
+    const auto object = message::decode_object_view(request.payload);
+    if (object.data.size() > _options.extent_size) return Handled::failed(413, "too_large", "DATA object exceeds configured extent size");
+    std::span<uint8_t> bytes;
+    if (!writable.empty()) bytes = writable.subspan(static_cast<size_t>(object.data.data() - request.payload.data()), object.data.size());
+    // Checked before the device is asked for anything: a refused writer
+    // costs no admission.
+    if (auto refused = scope_refusal(peer, object.principal)) return std::move(*refused);
+    const auto admitted = admit_data(frame, object.data.size(), true);
+    if (!admitted) return gave_up();
+    _activity.note(frame, object.data.size());
+    if (!_data.has(object.id)) _context.events().notify(_storage_event);
+    if (type == message::put_object_deferred) {
+      // Bound to this process and the backend incarnation that took it: a
+      // later barrier for a covered generation waits on nothing.
+      const auto ticket = bytes.empty() ? _data.put_deferred(object.id, object.data) : _data.put_deferred_in_place(object.id, bytes);
+      if (!ticket) return Handled::failed(507, "storage_full", "storage limit reached");
+      if (_offers) _offers->arrived(object.id);
+      advertise();
+      return reply(dannan::net::message::ok, message::encode_ticket(*ticket));
+    }
+    if (!(bytes.empty() ? _data.put(object.id, object.data) : _data.put_in_place(object.id, bytes)))
+      return Handled::failed(507, "storage_full", "storage limit reached");
+    if (_offers) _offers->arrived(object.id);
+    advertise();
+    return Handled::processed();
+  } catch (const dannan::net::DecodeError& error) {
+    return Handled::failed(400, "invalid_request", error.what());
+  }
 }
 
 }  // namespace dagda::store

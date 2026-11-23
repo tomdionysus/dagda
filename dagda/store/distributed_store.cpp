@@ -88,21 +88,24 @@ bool refused_with(const CallOutcome& outcome, uint16_t status) {
 
 // The object in a get_object reply: checked against the id and its own
 // hash, then slid over its prefix to keep the allocation and the frame's
-// retained memory.
-ObjectData take_object_reply(dannan::net::Message message, const ObjectId& expected) {
+// retained memory. The reply's buffer is the caller's to give back to the
+// node's pool: the object gives it back when its last reader lets go, and a
+// reply refused here is given back at once.
+ObjectData take_object_reply(dannan::net::Message message, const ObjectId& expected, const std::shared_ptr<dannan::sched::BufferPool>& pool) {
+  auto object = std::make_shared<ObjectBuffer>();
+  object->pool = pool;
+  object->bytes = std::move(message.payload);
+  object->memory = std::move(message.memory);
   if (message.type != message::object_reply) throw std::runtime_error("remote object reply has the wrong message type");
-  dannan::net::Reader reader(message.payload);
+  dannan::net::Reader reader(object->bytes);
   const ObjectId returned{reader.fixed<32>()};
   const auto size = reader.u32();
   if (size > message::max_object_bytes || reader.remaining() != size) throw dannan::net::DecodeError("invalid remote object reply size");
   constexpr size_t prefix = 32 + 4;
-  const auto data = std::span<const uint8_t>(message.payload).subspan(prefix, size);
+  const auto data = std::span<const uint8_t>(object->bytes).subspan(prefix, size);
   if (returned != expected || object_id(data) != expected) throw std::runtime_error("remote integrity failure");
-  if (size) std::memmove(message.payload.data(), message.payload.data() + prefix, size);
-  message.payload.resize(size);
-  auto object = std::make_shared<ObjectBuffer>();
-  object->bytes = std::move(message.payload);
-  object->memory = std::move(message.memory);
+  if (size) std::memmove(object->bytes.data(), object->bytes.data() + prefix, size);
+  object->bytes.resize(size);
   return object;
 }
 
@@ -110,6 +113,23 @@ ObjectData buffer_of(Bytes bytes, dannan::sched::RetainedMemoryLedger::Lease lea
   auto object = std::make_shared<ObjectBuffer>();
   object->bytes = std::move(bytes);
   object->lease = std::move(lease);
+  return object;
+}
+
+// The local copy, read and opened in a buffer of the node's transfer pool, to
+// which it goes back when its last holder lets go; nothing if not held.
+std::shared_ptr<ObjectBuffer> read_local(const StoragePool& data, const std::shared_ptr<dannan::sched::BufferPool>& pool, const ObjectId& id) {
+  auto object = std::make_shared<ObjectBuffer>();
+  object->pool = pool;
+  const auto size = data.get_into(id, [&](uint64_t n) {
+    if (object->bytes.capacity() < n) {
+      pool->give(std::move(object->bytes));
+      object->bytes = pool->take(n);
+    }
+    object->bytes.resize(n);
+    return std::span<uint8_t>(object->bytes);
+  });
+  if (!size) return nullptr;
   return object;
 }
 
@@ -604,11 +624,16 @@ struct DistributedStore::RepairState {
   bool drain_owed DANNAN_GUARDED_BY(window_mutex) = false;
   std::vector<RepairLanded> landed DANNAN_GUARDED_BY(window_mutex);
   // The link as repair's window sees it: the bytes landed since the window last left
-  // empty, or since the last sample. Transfers in a window share the link, so one
-  // transfer's bytes over its own time is only its share: the estimate is taught from
-  // these instead, when the window drains and at each window's worth moved.
+  // empty, over the time since. Transfers in a window share the link, so one transfer's
+  // bytes over its own time is only its share: the estimate is taught from these instead,
+  // when the window drains and at each window's worth moved. The span runs from the window
+  // leaving empty to its draining and is never cut short by a sample: a transfer still in
+  // flight at a sample travelled before it, so a sample of only what landed after it would
+  // be an extent over microseconds (live-a, 2026-11-21: 20 GiB/s taught on a 10 MiB/s link).
   std::chrono::steady_clock::time_point span_start DANNAN_GUARDED_BY(window_mutex){};
   uint64_t span_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
+  // span_bytes at the last sample: the next is a window's worth on.
+  uint64_t sampled_bytes DANNAN_GUARDED_BY(window_mutex) = 0;
   // Teaches the link's estimate a sample: called under window_mutex, in the same step that
   // lowers in_flight, so whoever sees the window drained sees the sample taught. It must
   // take no lock (the store's note_network touches one atomic). Set once, before repair.
@@ -630,6 +655,7 @@ struct DistributedStore::RepairState {
     if (!in_flight) {
       span_start = std::chrono::steady_clock::now();
       span_bytes = 0;
+      sampled_bytes = 0;
     }
     in_flight += amount;
     if (in_flight * 2 > window) drain_owed = true;
@@ -653,11 +679,11 @@ struct DistributedStore::RepairState {
         out.drained = true;
       }
       span_bytes += moved;
-      if (span_bytes && (span_bytes >= std::max(window, extent) || !in_flight)) {
-        const auto now = std::chrono::steady_clock::now();
-        if (teach) teach(span_bytes, now - span_start);
-        span_start = now;
-        span_bytes = 0;
+      if (span_bytes > sampled_bytes && (span_bytes - sampled_bytes >= std::max(window, extent) || !in_flight)) {
+        // Everything landed since the window left empty, over the time since: never only
+        // what landed after the last sample.
+        if (teach) teach(span_bytes, std::chrono::steady_clock::now() - span_start);
+        sampled_bytes = span_bytes;
       }
     }
     window_changed.notify_all();
@@ -1137,7 +1163,7 @@ WriteEvidence DistributedStore::run_write(const ObjectId& id, std::span<const ui
     }
     // A call runs on past the write while it moves, so a slow peer's answer still
     // reaches the ticket.
-    if (!payload) payload = message::encode_object(id, data, writer);
+    if (!payload) payload = message::encode_object(id, data, writer, _context.buffers()->take(data.size() + message::object_overhead));
     auto handle = _context.routes().call(
         node, type, *payload, options.frame, _options.object_transfer_call, _executor,
         [run, index](CallOutcome outcome) { run->complete(index, std::move(outcome)); }, peer_call_watch());
@@ -1497,8 +1523,9 @@ bool DistributedStore::put_on(const NodeRecord& target, const ObjectId& id, std:
   // No lease here across the peer's admission: two nodes replicating to each
   // other would each wait on the other's slot.
   const auto started = Clock::now();
-  const auto outcome =
-      _context.routes().call_and_wait(target, message::put_object, message::encode_object(id, data), frame, _options.object_transfer_call, peer_call_watch());
+  const auto outcome = _context.routes().call_and_wait(
+      target, message::put_object, message::encode_object(id, data, std::nullopt, _context.buffers()->take(data.size() + message::object_overhead)), frame,
+      _options.object_transfer_call, peer_call_watch());
   const bool ok = outcome.reply && outcome.reply->type == dannan::net::message::ok;
   if (ok) note_network(data.size(), Clock::now() - started);
   // Foreground bytes moved, as Macha's put_on notes them (ds:1345-1346 at f0597a4).
@@ -1996,18 +2023,17 @@ void DistributedStore::on_roster(const dannan::RosterChange& change) {
 }
 
 void DistributedStore::catch_up(const ObjectId& id, const NodeRecord& node) {
-  std::optional<Bytes> bytes = _data.get(id);
+  ObjectData bytes = read_local(_data, _context.buffers(), id);
   if (!bytes) {
     ReadOptions options;
     options.frame = FrameType::speculative;
-    auto read = read_impl(id, options);
-    if (read.object) bytes = read.object->bytes;
+    bytes = read_impl(id, options).object;
   }
   if (!bytes) {
     _logger.debug("catch-up found no copy id=" + to_string(id));
     return;
   }
-  if (put_on(node, id, *bytes, FrameType::speculative)) note_acknowledged(id, node.id);
+  if (put_on(node, id, bytes->bytes, FrameType::speculative)) note_acknowledged(id, node.id);
 }
 
 // ---- Prompt replication ----------------------------------------------------
@@ -2117,17 +2143,17 @@ void DistributedStore::prompt_replication_loop(std::stop_token stop) {
         }
         continue;
       }
-      std::optional<Bytes> data;
+      ObjectData data;
       {
         std::optional<DataAdmission> admitted;
         if (_options.prompt_read_admission) {
           admitted = admit_data(FrameType::speculative, _options.extent_size, no_caller_deadline);
           if (!admitted) throw std::runtime_error("DATA resource admission busy or stopping");
         }
-        data = _data.get(*id);
+        data = read_local(_data, _context.buffers(), *id);
       }
       if (!data) continue;
-      if (put_on(*destination, *id, *data, FrameType::speculative)) {
+      if (put_on(*destination, *id, data->bytes, FrameType::speculative)) {
         _prompt_copies.fetch_add(1, std::memory_order_relaxed);
         _context.events().notify(_storage_event);
         note_acknowledged(*id, destination->id);
@@ -2205,7 +2231,7 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
   const auto until = _time.now() + options.deadline;
   const auto past_deadline = [&] { return own_deadline && _time.now() >= until; };
   const auto wait = [&] { return own_deadline ? std::optional(std::chrono::ceil<std::chrono::milliseconds>(until - _time.now())) : no_caller_deadline; };
-  std::optional<Bytes> local;
+  std::shared_ptr<ObjectBuffer> local;
   std::optional<dannan::sched::RetainedMemoryLedger::Lease> local_memory;
   {
     const auto admitted = admit_data(options.frame, _options.extent_size, wait(), options.cancelled.get());
@@ -2214,13 +2240,14 @@ ReadResult DistributedStore::read_stages(const ObjectId& id, const ReadOptions& 
     // it go (Macha's ds:1749-1753 at f0597a4).
     local_memory = read_memory(options, own_deadline, until);
     if (!local_memory) return {};
-    local = _data.get(id);
+    local = read_local(_data, _context.buffers(), id);
   }
   if (_options.read_trace) _options.read_trace("local");
   if (local) {
-    if (interactive) _activity.note(options.frame, local->size());
-    said("owned", local->size(), true);
-    return {buffer_of(std::move(*local), std::move(*local_memory)), ReadSource::local, _self, FetchAnswer::ok};
+    if (interactive) _activity.note(options.frame, local->bytes.size());
+    said("owned", local->bytes.size(), true);
+    local->lease = std::move(*local_memory);
+    return {std::move(local), ReadSource::local, _self, FetchAnswer::ok};
   }
   local_memory.reset();
   if (past_deadline()) return {};
@@ -2471,7 +2498,7 @@ void DistributedStore::fetched(const std::shared_ptr<SharedFetch>& fetch, const 
   bool absent = false;
   if (outcome.reply && outcome.reply->type == message::object_reply) {
     try {
-      data = take_object_reply(std::move(*outcome.reply), fetch->id);
+      data = take_object_reply(std::move(*outcome.reply), fetch->id, _context.buffers());
       // A fetch teaches the network estimate, as Macha's (ds:1427-1428 at f0597a4),
       // unless repair's window does.
       bool sample = false;
@@ -3170,8 +3197,13 @@ void DistributedStore::note_network(uint64_t bytes, std::chrono::steady_clock::d
   // and the far end's write, not bandwidth.
   const auto seconds = std::chrono::duration<double>(elapsed).count();
   if (!bytes || seconds <= 0.0 || bytes < _options.extent_size / 2) return;
-  const double sample = static_cast<double>(bytes) / seconds;
+  // However a sample was taken, it cannot carry the estimate past a link this node could
+  // have, nor raise it more than fourfold at once: one bad sample is a slow rise, never a
+  // thousandfold jump (live-a, 2026-11-21: 10 MiB/s to 20 GiB/s in one step).
+  constexpr double ceiling = 10e9 / 8;  // 10 Gbit/s, in bytes a second
   const double old = _network_bps.load(std::memory_order_relaxed);
+  double sample = std::min(static_cast<double>(bytes) / seconds, ceiling);
+  if (old > 0.0) sample = std::min(sample, old * 4.0);
   _network_bps.store(old > 0.0 ? old * 0.80 + sample * 0.20 : sample, std::memory_order_relaxed);
 }
 
@@ -3463,10 +3495,19 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         auto* store = shared->store;
         if (!store) return;
         store->time_repair("fetch " + std::to_string(seq) + " answered " + std::to_string(outcome.reply ? outcome.reply->payload.size() : 0));
-        std::vector<message::FetchedObject> objects;
+        // The objects are stored from the reply itself, each sealed where it arrived:
+        // the reply, with its retained memory, is the only buffer of the extent, and it
+        // goes back to the node's pool once the last object in it is stored.
+        std::shared_ptr<dannan::net::Message> reply;
+        std::vector<message::FetchedView> objects;
         if (outcome.reply && outcome.reply->type == message::get_objects_reply) {
+          reply = std::shared_ptr<dannan::net::Message>(new dannan::net::Message(std::move(*outcome.reply)),
+                                                        [pool = store->_context.buffers()](dannan::net::Message* done) {
+                                                          pool->give(std::move(done->payload));
+                                                          delete done;
+                                                        });
           try {
-            objects = message::decode_fetched(outcome.reply->payload, ids.size());
+            objects = message::decode_fetched_view(reply->payload, ids.size());
           } catch (const std::exception& error) {
             store->_logger.debug("repair fetch peer=" + peer.host + " error=" + error.what());
           }
@@ -3475,7 +3516,7 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
         }
         uint64_t brought = 0;
         for (const auto& object : objects) brought += object.data.size();
-        auto job = [store, peer, ids, objects = std::move(objects), seq, extent, allowance, brought] {
+        auto job = [store, peer, ids, reply = std::move(reply), objects = std::move(objects), seq, extent, allowance, brought]() mutable {
           std::vector<RepairLanded> landed;
           std::vector<ObjectId> left;
           bool stored = false;
@@ -3495,7 +3536,8 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
               item.again = true;
             } else if (i < objects.size() && objects[i].as == message::Fetched::sent && object_id(objects[i].data) == ids[i]) {
               if (const auto admitted = store->admit_data(FrameType::speculative, objects[i].data.size(), no_caller_deadline)) {
-                if (store->_data.put(ids[i], objects[i].data)) {
+                const auto at = static_cast<size_t>(objects[i].data.data() - reply->payload.data());
+                if (store->_data.put_in_place(ids[i], std::span<uint8_t>(reply->payload).subspan(at, objects[i].data.size()))) {
                   item.ok = true;
                   item.answer = FetchAnswer::ok;
                   item.bytes = objects[i].data.size();
@@ -3511,6 +3553,10 @@ void DistributedStore::fetch_many_from(NodeRecord peer, std::vector<ObjectId> id
           }
           if (stored) store->_context.events().notify(store->_storage_event);
           store->time_repair("fetch " + std::to_string(seq) + " stored");
+          // The reply goes back to the pool before its extent leaves the window, so a
+          // drained window holds no buffer of it.
+          objects.clear();
+          reply.reset();
           if (left.empty()) {
             store->repair_landed(store->_repair->land_all(extent, brought, extent, std::move(landed)));
             return;
@@ -3706,11 +3752,6 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
 
   // ---- Pushing: copies to the owners that lack them.
   using Plan = RepairPlan;
-  struct Send {
-    std::shared_ptr<Plan> plan;
-    NodeRecord peer;
-    std::shared_ptr<const Bytes> data;
-  };
   // An owner that lacks a planned object, and what it said of the offer: none
   // when it could not answer.
   struct Offer {
@@ -3834,63 +3875,20 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
       // No room: passed, and the copy stays short, as for a peer advertising none.
     }
 
-    // Only what is wanted is read and sent, an object at a time in order, until the
-    // credit or admission runs out.
-    std::vector<Send> sends;
-    size_t planned = plans.size();
-    for (size_t p = 0; p < plans.size(); ++p) {
-      auto& plan = *plans[p];
-      std::vector<const NodeRecord*> wanted;
-      for (const auto& offer : offers)
-        if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
-      if (wanted.empty()) continue;
-      std::optional<Bytes> read;
-      {
-        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
-        if (!admitted) {
-          stop_all = true;
-          planned = p;
-          break;
-        }
-        read = _data.get(plan.id);
-      }
-      if (!read) {
-        note_local_unreadable(plan.id);
-        plan.unreadable = true;
-        continue;
-      }
-      const auto source = std::make_shared<const Bytes>(std::move(*read));
-      // Credit pays for bytes put on the wire, never for finding out which are
-      // needed.
-      const uint64_t object_bytes = source->size() * wanted.size();
-      if (spent + object_bytes > byte_budget) {
-        result.credit_limited = true;
-        stop_all = true;
-        planned = p;
-        break;
-      }
-      for (const auto* peer : wanted) sends.push_back({plans[p], *peer, source});
-      spent += object_bytes;
-      result.credit_spent += object_bytes;
-    }
-    // What was offered past here is offered again from here, and the peer's
-    // promise renewed.
-    plans.resize(planned);
-
-    // Every send goes out at once and none is waited for: each lands on the store's
-    // executor and is kept whatever repair's turn does meanwhile, and the next step
-    // applies it. The link is sampled from the window, not from each send.
-    for (const auto& send : sends) {
+    // A wanted copy goes out the moment its object is read, and none is waited for: each
+    // lands on the store's executor and is kept whatever repair's turn does meanwhile, and
+    // the next step applies it. The link is sampled from the window, not from each send.
+    const auto send_now = [&](const std::shared_ptr<Plan>& sending, const NodeRecord& to, const Bytes& data) {
       const auto seq = state.started++;
-      const uint64_t bytes = send.data->size();
+      const uint64_t bytes = data.size();
       state.enter(bytes);
-      ++send.plan->outstanding;
+      ++sending->outstanding;
       ++result.remote_operations;
-      time_repair("push " + to_string(send.plan->id).substr(0, 8) + " asked " + std::to_string(bytes));
+      time_repair("push " + to_string(sending->id).substr(0, 8) + " asked " + std::to_string(bytes));
       _context.routes().call(
-          send.peer, message::put_object, message::encode_object(send.plan->id, *send.data), FrameType::speculative, _options.object_transfer_call, _executor,
-          [weak = std::weak_ptr<Shared>(_shared), plan = send.plan, id = send.plan->id, peer = send.peer.id, host = send.peer.host, bytes, seq,
-           extent](CallOutcome outcome) {
+          to, message::put_object, message::encode_object(sending->id, data, std::nullopt, _context.buffers()->take(data.size() + message::object_overhead)),
+          FrameType::speculative, _options.object_transfer_call, _executor,
+          [weak = std::weak_ptr<Shared>(_shared), plan = sending, id = sending->id, peer = to.id, host = to.host, bytes, seq, extent](CallOutcome outcome) {
             const auto shared = weak.lock();
             if (!shared) return;
             ReadLock alive(shared->alive);
@@ -3916,7 +3914,50 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
             store->repair_landed(store->_repair->land(bytes, ok ? bytes : 0, extent, std::move(landed)));
           },
           peer_call_watch());
+    };
+
+    // Only what is wanted is read, an object at a time in order, and sent as it is read,
+    // until the credit or admission runs out. Read as it is sent: an object's bytes are
+    // let go once its sends hold their messages, so a step never holds every object it
+    // read at once (live-a's OOM, 2026-11-21: a step read its whole credit before sending).
+    size_t planned = plans.size();
+    for (size_t p = 0; p < plans.size(); ++p) {
+      auto& plan = *plans[p];
+      std::vector<const NodeRecord*> wanted;
+      for (const auto& offer : offers)
+        if (offer.plan == plans[p] && offer.answer == message::OfferAnswer::wanted) wanted.push_back(&offer.peer);
+      if (wanted.empty()) continue;
+      ObjectData read;
+      {
+        const auto admitted = admit_data(FrameType::speculative, extent, no_caller_deadline);
+        if (!admitted) {
+          stop_all = true;
+          planned = p;
+          break;
+        }
+        read = read_local(_data, _context.buffers(), plan.id);
+      }
+      if (!read) {
+        note_local_unreadable(plan.id);
+        plan.unreadable = true;
+        continue;
+      }
+      // Credit pays for bytes put on the wire, never for finding out which are
+      // needed.
+      const uint64_t object_bytes = read->bytes.size() * wanted.size();
+      if (spent + object_bytes > byte_budget) {
+        result.credit_limited = true;
+        stop_all = true;
+        planned = p;
+        break;
+      }
+      for (const auto* peer : wanted) send_now(plans[p], *peer, read->bytes);
+      spent += object_bytes;
+      result.credit_spent += object_bytes;
     }
+    // What was offered past here is offered again from here, and the peer's
+    // promise renewed.
+    plans.resize(planned);
 
     for (const auto& plan : plans) {
       if (plan->outstanding)
@@ -3984,7 +4025,7 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
           auto* store = shared->store;
           if (!store) return;
           store->time_repair("pull " + to_string(id).substr(0, 8) + " answered " + std::to_string(data ? data->bytes.size() : 0));
-          auto job = [store, id, seq, extent, data = std::move(data), answer] {
+          auto job = [store, id, seq, extent, data = std::move(data), answer]() mutable {
             RepairLanded landed;
             landed.seq = seq;
             landed.id = id;
@@ -4006,7 +4047,11 @@ RepairResult DistributedStore::repair_step(const RepairLists& lists, uint64_t by
               }
             }
             store->time_repair("pull " + to_string(id).substr(0, 8) + " stored " + (landed.ok ? "1" : "0"));
-            store->repair_landed(store->_repair->land(extent, data ? data->bytes.size() : 0, extent, std::move(landed)));
+            // Its buffer goes back to the pool (as its last reader here) before its extent
+            // leaves the window, so a drained window holds no buffer of it.
+            const uint64_t brought = data ? data->bytes.size() : 0;
+            data.reset();
+            store->repair_landed(store->_repair->land(extent, brought, extent, std::move(landed)));
           };
           // The store going: what has not been stored is lost, and the next survey lists
           // it again.

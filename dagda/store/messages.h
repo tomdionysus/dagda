@@ -126,9 +126,27 @@ struct ObjectPayload {
   Bytes data;
   std::optional<WritePrincipal> principal;
 };
-Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt);
+// The most encode_object adds to an object's bytes: the id, the length, and a principal
+// of the longest id and prefix decode_principal takes. A buffer this much larger than the
+// object is never grown.
+inline constexpr size_t object_overhead = 32 + 4 + 1 + (4 + 4096) + (4 + 4096);
+// Written into `into` (its bytes replaced, its capacity kept): a buffer taken from the node's
+// transfer pool (Context::buffers), which Dannan gives back once the message is written.
+Bytes encode_object(const ObjectId& id, std::span<const uint8_t> data, const std::optional<WritePrincipal>& principal = std::nullopt, Bytes into = {});
 // Throws dannan::net::DecodeError past max_object_bytes.
 ObjectPayload decode_object(std::span<const uint8_t> payload);
+// The same, the bytes borrowed from `payload` rather than copied: an extent received is
+// stored from the message that carried it, never from a second buffer of its size.
+struct ObjectView {
+  ObjectId id{};
+  std::span<const uint8_t> data;
+  std::optional<WritePrincipal> principal;
+};
+ObjectView decode_object_view(std::span<const uint8_t> payload);
+// object_reply laid out for its bytes to be read straight into it: `payload` is
+// made the id and the length with room for `size` bytes, and the room is
+// returned for the caller to fill. Filled, it is encode_object(id, data).
+std::span<uint8_t> object_room(Bytes& payload, const ObjectId& id, uint64_t size);
 
 // bool_reply: one byte, 0 or 1.
 Bytes encode_bool(bool value);
@@ -247,8 +265,25 @@ struct FetchedObject {
   Bytes data;
 };
 Bytes encode_fetched(const std::vector<FetchedObject>& objects);
+// The same reply built in place, each object read straight into it: the count
+// first, then per id asked either fetched_answer for one not sent or
+// fetched_room for one sent. fetched_room cuts `payload` back to `mark` (its
+// size before this object), writes the sent byte and the length with room for
+// `size` bytes, and returns the room for the caller to fill; asked again for
+// the same object it starts again from `mark`. Built in order, it is
+// encode_fetched's bytes.
+void fetched_count(Bytes& payload, uint32_t count);
+void fetched_answer(Bytes& payload, Fetched as);
+std::span<uint8_t> fetched_room(Bytes& payload, size_t mark, uint64_t size);
 // Throws dannan::net::DecodeError unless it answers `expected` ids, each with one of
 // the four answers, none past max_object_bytes, and only a sent one with bytes.
 std::vector<FetchedObject> decode_fetched(std::span<const uint8_t> payload, size_t expected);
+// The same, each object's bytes borrowed from `payload` rather than copied: a
+// fetch of an extent is stored from the reply that carried it.
+struct FetchedView {
+  Fetched as = Fetched::left;
+  std::span<const uint8_t> data;
+};
+std::vector<FetchedView> decode_fetched_view(std::span<const uint8_t> payload, size_t expected);
 
 }  // namespace dagda::store::message

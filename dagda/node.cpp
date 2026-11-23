@@ -248,8 +248,8 @@ void Node::open() {
 
   const auto services = [&](std::string scope) {
     auto& progress = _options.startup_progress ? *_options.startup_progress : _progress;
-    return store::LocalStore::Services{_context.threads(),       _context.observations(), progress, _context.logger(std::move(scope)),
-                                       _context.time().source(), *_options.wall};
+    return store::LocalStore::Services{_context.threads(),       _context.observations(), progress,          _context.logger(std::move(scope)),
+                                       _context.time().source(), *_options.wall,          _context.buffers()};
   };
   const auto cache_bytes = _options.ledger_cache_bytes;
   const auto& self = _context.identity();

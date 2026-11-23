@@ -210,6 +210,12 @@ struct ObjectBuffer {
   Bytes bytes;
   dannan::net::MemoryHold memory;
   dannan::sched::RetainedMemoryLedger::Lease lease;
+  // The node's transfer pool the bytes go back to when the last reader lets
+  // go (Context::buffers); none, and they are freed.
+  std::shared_ptr<dannan::sched::BufferPool> pool;
+  ~ObjectBuffer() {
+    if (pool) pool->give(std::move(bytes));
+  }
 };
 using ObjectData = std::shared_ptr<const ObjectBuffer>;
 

@@ -404,7 +404,7 @@ bool StoragePool::activate(const std::shared_ptr<Backend>& backend) {
       local.ledger_key = _ledger_key;
       store = std::make_shared<LocalStore>(options.path, local, _key,
                                            LocalStore::Services{_services.threads, _services.observations, _services.progress,
-                                                                _services.logger.child("backend"), _services.time, _services.wall},
+                                                                _services.logger.child("backend"), _services.time, _services.wall, _services.buffers},
                                            LocalStoreMode::authoritative, durability_domain);
     } else {
       Lock lock(backend->mutex);
@@ -558,7 +558,15 @@ std::vector<std::shared_ptr<StoragePool::Backend>> StoragePool::ranked(const Obj
   return out;
 }
 
-bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
+bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) { return put_impl(id, data, {}); }
+
+bool StoragePool::put_in_place(const ObjectId& id, std::span<uint8_t> data) { return put_impl(id, data, data); }
+
+std::optional<DurabilityTicket> StoragePool::put_deferred(const ObjectId& id, std::span<const uint8_t> data) { return put_deferred_impl(id, data, {}); }
+
+std::optional<DurabilityTicket> StoragePool::put_deferred_in_place(const ObjectId& id, std::span<uint8_t> data) { return put_deferred_impl(id, data, data); }
+
+bool StoragePool::put_impl(const ObjectId& id, std::span<const uint8_t> data, std::span<uint8_t> writable) {
   if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: put_sealed");
   for (const auto& backend : ranked(id)) {
     std::shared_ptr<LocalStore> store;
@@ -577,7 +585,7 @@ bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
       bool stored = false;
       {
         DiskServiceTimer timer(&_service_monitor, data.size(), _services.time);
-        stored = store->put(id, data);
+        stored = writable.empty() ? store->put(id, data) : store->put_in_place(id, writable);
       }
       if (stored) return true;
     } catch (const std::exception& error) {
@@ -588,7 +596,7 @@ bool StoragePool::put(const ObjectId& id, std::span<const uint8_t> data) {
   return false;
 }
 
-std::optional<DurabilityTicket> StoragePool::put_deferred(const ObjectId& id, std::span<const uint8_t> data) {
+std::optional<DurabilityTicket> StoragePool::put_deferred_impl(const ObjectId& id, std::span<const uint8_t> data, std::span<uint8_t> writable) {
   if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: put_sealed");
   // The provisional write path: a deferred write puts every extent here.
   for (const auto& backend : ranked(id)) {
@@ -608,19 +616,22 @@ std::optional<DurabilityTicket> StoragePool::put_deferred(const ObjectId& id, st
       std::optional<uint64_t> generation;
       {
         DiskServiceTimer timer(&_service_monitor, data.size(), _services.time);
-        generation = store->put_deferred(id, data);
+        generation = writable.empty() ? store->put_deferred(id, data) : store->put_deferred_in_place(id, writable);
       }
       if (!generation) continue;
 
       // The ticket names the exact backend incarnation that took the object.
       // If it went away or reopened while the put was in progress, the new
       // incarnation must not satisfy the old publication merely because it
-      // shares a filesystem.
+      // shares a filesystem. Sealed in place, the bytes are spent on it: no
+      // other backend can take them.
       {
         Lock lock(backend->mutex);
         if (!backend->online || backend->store != store || backend->instance_id != backend_instance || !backend->durability_domain ||
-            backend->durability_domain->id() != domain)
+            backend->durability_domain->id() != domain) {
+          if (!writable.empty()) return std::nullopt;
           continue;
+        }
       }
       return DurabilityTicket{_epoch, domain, *generation, backend_instance};
     } catch (const std::exception& error) {
@@ -773,6 +784,12 @@ void StoragePool::note_read_failure(const ObjectId& id, const std::filesystem::p
 }
 
 std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
+  std::optional<Bytes> plain;
+  if (!get_into(id, [&](uint64_t size) { return std::span<uint8_t>(plain.emplace(size)); })) return std::nullopt;
+  return plain;
+}
+
+std::optional<uint64_t> StoragePool::get_into(const ObjectId& id, const LocalStore::Destination& into) const {
   // A blind pool cannot open what it holds; a get is a programming error,
   // never a discarded object.
   if (_role != domain::Role::member) throw std::logic_error("a blind pool holds ciphertext only: get_sealed");
@@ -790,20 +807,27 @@ std::optional<Bytes> StoragePool::get(const ObjectId& id) const {
     try {
       if (!store->has(id)) continue;
       const auto started = dannan::contract::Clock::now();
-      std::optional<Bytes> data;
+      std::optional<uint64_t> size;
       {
         DiskServiceTimer timer(&_service_monitor, 0, _services.time);
-        data = store->get(id);
-        // The sample's expectation depends on size; without it every read is
-        // judged against the fixed overhead alone.
-        timer.note_bytes(data ? data->size() : 0);
+        if (store->get_into(id, [&](uint64_t wanted) {
+              size = wanted;
+              return into(wanted);
+            })) {
+          // The sample's expectation depends on size; without it every read is
+          // judged against the fixed overhead alone.
+          timer.note_bytes(*size);
+        } else {
+          size.reset();
+          timer.note_bytes(0);
+        }
       }
       const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(dannan::contract::Clock::now() - started);
       if (_services.logger.enabled(dannan::status::LogLevel::all))
-        _services.logger.trace("DIAG backend-get path=" + path.string() + " id=" + to_string(id) + " result=" + std::to_string(data ? 1 : 0) +
-                               " bytes=" + std::to_string(data ? data->size() : 0) + " ms=" + std::to_string(elapsed.count()));
-      observe_get(data ? data->size() : 0, static_cast<uint64_t>(elapsed.count()));
-      return data;
+        _services.logger.trace("DIAG backend-get path=" + path.string() + " id=" + to_string(id) + " result=" + std::to_string(size ? 1 : 0) +
+                               " bytes=" + std::to_string(size.value_or(0)) + " ms=" + std::to_string(elapsed.count()));
+      observe_get(size.value_or(0), static_cast<uint64_t>(elapsed.count()));
+      return size;
     } catch (const ObjectCorrupt& error) {
       // Corrupt content is an object failure, not a backend failure, once the
       // key is known to be the disk's; before that it may be the key.

@@ -38,6 +38,7 @@
 #include "dannan/contract/thread_safety.h"
 #include "dannan/contract/time_source.h"
 #include "dannan/identity/node_identity.h"
+#include "dannan/sched/buffer_pool.h"
 #include "dannan/status/log.h"
 #include "dannan/status/observation.h"
 #include "dannan/supervise/startup.h"
@@ -190,6 +191,10 @@ class LocalStore final : public contract::ObjectStore {
     // Dates recorded on disk: a pack record's touched_ms, a loose object's
     // modification time; and the ages compared against them.
     const dannan::contract::WallClock& wall = dannan::contract::system_wall_clock();
+    // The node's transfer pool (Context::buffers): a put of bytes the store
+    // may not seal in place seals into one of its buffers and gives it back once
+    // written. None, and it allocates.
+    std::shared_ptr<dannan::sched::BufferPool> buffers = {};
   };
 
   struct Cursor {
@@ -237,6 +242,12 @@ class LocalStore final : public contract::ObjectStore {
   // As put, durable once the returned generation is (0: already durable);
   // nothing if admission refused it.
   std::optional<uint64_t> put_deferred(const ObjectId&, std::span<const uint8_t>);
+  // As put and put_deferred, sealing the bytes where they lie, so a write costs
+  // no second buffer of the object's size. Stored: the bytes are spent, the
+  // ciphertext or, for an object held already, the plaintext untouched. Not
+  // stored, or a throw: they are the plaintext again, for another store to take.
+  bool put_in_place(const ObjectId&, std::span<uint8_t>);
+  std::optional<uint64_t> put_deferred_in_place(const ObjectId&, std::span<uint8_t>);
   // Stores a record a member sealed, as it is, under either role: strict,
   // true once durable, false if admission refused it; true at once for an
   // object already held. The id is taken to name the plaintext; a blind
@@ -262,6 +273,15 @@ class LocalStore final : public contract::ObjectStore {
   // open, and std::logic_error on a blind store, which cannot open. Waits on
   // the device under the object's lock.
   std::optional<Bytes> get(const ObjectId&) const;
+  // Where get_into opens an object: given its plaintext's size, a span of
+  // exactly that size in the caller's buffer. Called with no lock held.
+  using Destination = std::function<std::span<uint8_t>(uint64_t size)>;
+  // As get, into the caller's buffer: the ciphertext is read there and opened
+  // in place, so a read costs one buffer of the object's size, not three.
+  // False if not held, the destination never asked. Throws as get, the
+  // destination's bytes then zeroed or unspecified, never the plaintext of
+  // anything that did not open to the id.
+  bool get_into(const ObjectId&, const Destination&) const;
   // True once a put has installed the object; false while it is being
   // written and after a remove. Once seeded or warm it waits only on the
   // index mutex and the ledger and touches no DATA device; before then a miss
@@ -383,7 +403,19 @@ class LocalStore final : public contract::ObjectStore {
   // Releases _mutex across the marker write.
   void ensure_accounting_dirty(dannan::contract::Lock&) DANNAN_REQUIRES(_mutex);
   void reap_durable_generations_locked() DANNAN_REQUIRES(_mutex);
-  bool put_impl(const ObjectId&, std::span<const uint8_t>, WriteDurability, uint64_t*) DANNAN_EXCLUDES(_mutex, _pack_io_mutex);
+  // A sealed record as it is written, its ciphertext wherever it lies: a
+  // SealedObject's own, or a buffer sealed in place.
+  struct SealedRecord {
+    uint64_t plain_size = 0;
+    std::array<uint8_t, 12> nonce{};
+    std::array<uint8_t, 16> tag{};
+    std::span<const uint8_t> ciphertext;
+  };
+  static SealedRecord record_of(const SealedObject& sealed) noexcept { return {sealed.plain_size, sealed.nonce, sealed.tag, sealed.ciphertext}; }
+  // `writable`, empty or `data` itself, is sealed in place when given
+  // (put_in_place's contract).
+  bool put_impl(const ObjectId&, std::span<const uint8_t> data, std::span<uint8_t> writable, WriteDurability, uint64_t*)
+      DANNAN_EXCLUDES(_mutex, _pack_io_mutex);
   // Seals under the store's scheme. The caller holds the object's lock and
   // not _mutex.
   SealedObject seal(const ObjectId&, std::span<const uint8_t>) const;
@@ -393,12 +425,12 @@ class LocalStore final : public contract::ObjectStore {
   // record by its plaintext size; `generation` is the durability generation
   // to await (0 when none). Called with the object's lock and _mutex held,
   // the object known absent.
-  bool store_sealed_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+  bool store_sealed_locked(const ObjectId&, const SealedRecord&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
       DANNAN_EXCLUDES(_pack_io_mutex);
   // Store a new object; _mutex is released across the I/O.
-  bool put_loose_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+  bool put_loose_locked(const ObjectId&, const SealedRecord&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
       DANNAN_EXCLUDES(_pack_io_mutex);
-  bool put_packed_locked(const ObjectId&, const SealedObject&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
+  bool put_packed_locked(const ObjectId&, const SealedRecord&, uint64_t& generation, dannan::contract::Lock&) DANNAN_REQUIRES(_mutex)
       DANNAN_EXCLUDES(_pack_io_mutex);
   // The record held, unopened: a packed one's payload read at its entry, a
   // loose one's file decoded. Called with the object's lock and _mutex held;
@@ -409,12 +441,14 @@ class LocalStore final : public contract::ObjectStore {
   // Constructor only, before any other thread exists, so it takes no lock.
   void rebuild_pack_index(bool truncate_incomplete_tail) DANNAN_NO_THREAD_SAFETY_ANALYSIS;
   // Releases _mutex across the read.
+  bool get_packed_locked(const ObjectId&, const Destination&, dannan::contract::Lock&) const DANNAN_REQUIRES(_mutex);
   std::optional<Bytes> get_packed_locked(const ObjectId&, dannan::contract::Lock&) const DANNAN_REQUIRES(_mutex);
+  bool get_loose(const ObjectId&, const std::filesystem::path&, const Destination&) const DANNAN_EXCLUDES(_mutex);
   // Opens a loose object's file bytes: integrity-checked plaintext.
   Bytes open_loose(const ObjectId&, std::span<const uint8_t> file) const;
   // Releases _mutex and takes _pack_io_mutex across the append. A put
   // record carries the sealed object; a tombstone and a touch carry none.
-  bool append_pack_record_locked(uint8_t type, const ObjectId&, const SealedObject*, uint64_t touched_ms, PackEntry*, uint64_t* record_size,
+  bool append_pack_record_locked(uint8_t type, const ObjectId&, const SealedRecord*, uint64_t touched_ms, PackEntry*, uint64_t* record_size,
                                  dannan::contract::Lock&) DANNAN_REQUIRES(_mutex) DANNAN_EXCLUDES(_pack_io_mutex);
   void select_active_pack_locked(uint64_t next_record_size) DANNAN_REQUIRES(_pack_io_mutex);
   // Releases _mutex (keeping _pack_io_mutex) across the compaction I/O.
@@ -457,6 +491,7 @@ class LocalStore final : public contract::ObjectStore {
   dannan::supervise::StartupProgress& _progress;
   const dannan::status::ScopedLogger _logger;
   const dannan::contract::WallClock& _wall;
+  const std::shared_ptr<dannan::sched::BufferPool> _buffers;
   // Object and pack file I/O; called only with _mutex released.
   LocalStoreFiles& _files;
   const std::function<void(const ObjectId&)> _after_pack_append;
