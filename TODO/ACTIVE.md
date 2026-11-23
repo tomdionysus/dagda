@@ -60,28 +60,11 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **live-a's OOM (2026-11-21, Macha 0.95.1 on Dagda 0.3.2)**: fixed in 0.3.3 (`62f9d7d`, tagged 2026-11-22):
-   repair's link estimate misread a thousandfold and its burst let one step read ~100 GiB. Port it to develop
-   first. No allocator setting is a requirement (the maintainer, 2026-11-22: "yes drop that in the docs"; live-a on
-   0.3.3 with none held 0.97 to 1.20 GB through 76 GB of repair, later about 1.5 GB). No 0.3.4: the retention fix
-   folds into 0.4.0 (the maintainer, 2026-11-22: "No point in a release just for the sake of it. fold it in"), and
-   `feature/repair-bound` (the port, its cases, and `StoreRepair.RepairHoldsNoMemoryOnceItsWindowDrains`, red) is held
-   unsquashed until Dannan 0.11.0 is tagged (the maintainer's choice, 2026-11-22). Where it stands:
-   - done on `feature/single-buffer` (`abee703`, on the 0.4.0 branch, built against Dannan's in-place AES-GCM,
-     develop `dfca9bd`): an extent served is read and opened in its reply, one pushed is sealed in its request, one
-     pulled in the `get_objects` reply that carried it. Unit cases green; the memory case still red, unchanged (glibc
-     held 7 MiB before, 342 to about 530 MiB after rounds, 2 to 3 MiB in use), so these copies were not the cause;
-   - the cause (heaptrack, 2026-11-22): Dannan's `MessageAssembler::push` grows each message by doubling with no
-     reserve, so a 16 MiB + 36 B extent reply ends in a 32 MiB block after a 1-2-4-8-16 MiB chain (64 such chains
-     for the case's 64 extents); 252 of a 321 MiB peak was there. Dannan's, in 0.11.0, no wire change: fragments
-     joined once into a buffer of exactly the message's size (case `Assembler.AFinishedMessageHoldsExactlyItsSize`).
-     Then the memory case again under heaptrack, and the pool asked for only if it is still red (the maintainer,
-     2026-11-22);
-   - left: repair's single-object pull still seals a copy (`ObjectData` is shared and const, so not in place);
-   - every transfer buffer charged to the retained-memory ledger, and repair's window bounded by it, not by the link
-     alone (a bound on what is live; not the retention fix);
-   - a case that holds a node's peak transfer bytes to its bound; Dannan reviews it against its ledger
-     (`Context::budget()`: reserve, acquire with a deadline, the lease the charge).
+2. **0.4.0** (live-a's OOM and its retention, done on develop 2026-11-23, `3500d4d` and `0c51c71`; COMPLETED.md):
+   the 0.4.0 debs, the final pass and the tag, on the maintainer's word; then Macha told 0.4.0 needs Dannan 0.11.1
+   and no allocator setting. Left from the hunt, not blocking: repair's single-object pull seals into a pooled copy
+   (`ObjectData` is shared and const, so not in place); AthenaSIP's requirements per shape (2026-11-23,
+   `../athenasip/TODO/2026-11-23-dagda-requirements.md`) go into the stack's part A.
 3. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
    - the register map (D6);
    - head-backed leases (D5) on it, which closes the special-roles audit's D-1;

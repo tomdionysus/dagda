@@ -3,6 +3,28 @@
 The record. Items move here from `ACTIVE.md` as they land, with what
 shipped and the gate counts.
 
+## 2026-11-23: live-a's OOM and its retention, on Dannan 0.11.1 (develop `3500d4d`, `0c51c71`)
+
+0.3.3 (tagged 2026-11-22) fixed the OOM: repair's link estimate was misread a thousandfold and its burst let a
+step read ~100 GiB. Live-a on 0.3.3 then grew in glibc's arenas with what repair moved (about 1.5 GB). The case
+`StoreRepair.RepairHoldsNoMemoryOnceItsWindowDrains` (8 rounds of 8 extents of 16 MiB, mallinfo2) held 400 to 600
+MiB with 2 MiB in use. Found and fixed in turn, each measured on a Pi:
+- Dagda's copies: an extent is served and stored in one buffer (Dannan 0.11.0's in-place AES-GCM). No change alone.
+- Dannan's reassembly grew each message by doubling (a 32 MiB block per 16 MiB reply; heaptrack): exact size in
+  0.11.0. No change alone.
+- glibc's sliding mmap threshold keeps freed 16 MiB blocks in per-thread arenas (proven with the threshold pinned):
+  Dannan's transfer-buffer pool (0.11.0), which every Dagda object path now takes from and gives to. 402-621 MiB
+  fell to 41-168 MiB beyond the pools.
+- Dannan's outbound queue dropped refused and cancelled replies to free() (an LD_PRELOAD malloc/free trace; gdb
+  too slow, no uprobes on the Pi kernel): given back in 0.11.1.
+- Repair's 256 MiB window in a 256 MiB pool freed blocks for the bound: the window now stays under the pool's
+  bound less four extents (`TheWindowFitsInsideTheNodesTransferPool`; `BufferPool::bound()`, 0.11.1).
+The maintainer chose to keep hunting rather than accept ~130 MiB left under four arenas (2026-11-23). Gates on
+`feature/single-buffer` `546d9fd`, Dannan 0.11.1, arm64 Pis: the memory case green at 8 and 20 rounds; full suite
+1210 ran, 1207 passed, 3 skipped; ASan+UBSan (GCC) 1210 ran, 1207 passed, 3 skipped, no reports (14 warnings, all
+GCC's std_function.h false positives); TSan (clang 19, Dannan's installed suppressions) 1208 ran, 1205 passed, 3
+skipped, and the two deadlock-detector cases alone 2 of 2, no reports.
+
 ## 2026-11-19 (night): the short file; 0.3.2 tagged
 
 A two-node cutover rehearsal (Macha 0.94.2, then 0.95.0 on Dagda 0.3.1) committed a large file short with no
