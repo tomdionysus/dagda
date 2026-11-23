@@ -60,19 +60,33 @@ unless the board says so (`claims_list`).
 ## Next (in order)
 
 1. **Any failure Macha's suite or its rehearsals find in Dagda**, first.
-2. **0.4.0** (live-a's OOM and its retention, done on develop 2026-11-23, `3500d4d` and `0c51c71`; COMPLETED.md):
-   the 0.4.0 debs, the final pass and the tag, on the maintainer's word; then Macha told 0.4.0 needs Dannan 0.11.1
-   and no allocator setting. Left from the hunt, not blocking: repair's single-object pull seals into a pooled copy
-   (`ObjectData` is shared and const, so not in place); AthenaSIP's requirements per shape (2026-11-23,
-   `../athenasip/TODO/2026-11-23-dagda-requirements.md`) go into the stack's part A.
-3. **The next release** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating session:
-   - the register map (D6);
-   - head-backed leases (D5) on it, which closes the special-roles audit's D-1;
+2. **0.4.0, tagged 2026-11-23** (main `e90b0ba`, on Dannan 0.11.1; the maintainer's "Yes do it"). Macha told it
+   needs Dannan 0.11.1 and no allocator setting (2026-11-23). Left: the debs, arm64 from the tag in a trixie
+   container on a Pi, amd64 by the `deb/0.4.0` workflow once Dannan 0.11.1's debs are on the apt server (the
+   maintainer uploads), both to `../tomcully-apt/incoming/dagda/0.4.0/` for signing. Not blocking: repair's
+   single-object pull seals into a pooled copy (`ObjectData` is shared and const, so not in place).
+3. **The next release, 0.5.0** (Decisions, 2026-11-20), test first, in this order, agreed through the coordinating
+   session. It goes ahead of every other item: several projects wait on it (the coordinator, at the maintainer's
+   request, 2026-11-23). In order of who waits:
+   - the register map (D6), public: in 0.4.0 its code is built and its header installed (`767e83d`,
+     `dagda/heads/register_map.h`), but it is not in the hosted contract and its stamp is the Lamport stand-in
+     behind a seam. Left: the hlc stamp on Dannan's `HlcClock::admit` (in Dannan since 0.10.0, so nothing
+     upstream blocks it), ordered by (hlc stamp, node id); its spaces opened in a release; the contract surface
+     (a `Context` accessor, the contract version raised). Waiting: Lir (retained messages, a gate of its 0.3.0),
+     Lugh P8.2-P8.4, Louhi item 3, Mimir checkpoints, AthenaSIP (with walk_from; its heal step takes the last by
+     the same order);
+   - head-backed leases (D5) on it, which closes the special-roles audit's D-1. Waiting: Lir (wills, client-id
+     uniqueness, its other 0.3.0 gate), Macha (torrent claims, the catalogue scanner, the sweeper), AthenaSIP's
+     trunk lease (its one compare-and-set);
    - the AcceptorStore: durable, beside Dannan's `agree::MemoryStore` under its interface. Kvasir waits on it
      (2026-11-20): its commit path runs on `MemoryStore` meanwhile, and swaps to Dagda's store and puts its
      manifests on the register map once it lands. Send Kvasir the design and the date when they exist;
      Kvasir pins the release that carries it;
-   - the caught-up signal;
+   - the caught-up signal. Waiting: Lir (CONNACK, retained reads), Lugh P8.1 and P8.3, Louhi;
+   - then D9 logs (Lir QoS 1/2, Lugh P8.7, AthenaSIP's call records, a log keyed by time, newest first), D1/D2
+     placement (Lir, Lugh, Kvasir) and contract v2 (Mimir stage 5). AthenaSIP's requirements per shape
+     (`../athenasip/TODO/2026-11-23-dagda-requirements.md`) add a second user to TTL, sum-merged counters and the
+     time-scanned log;
    - reads and listings;
    - FetchContent;
    - config (the maintainer, 2026-11-20): YAML is the source of truth; flags and environment variables
@@ -110,9 +124,9 @@ unless the board says so (`claims_list`).
        `HlcClock::admit`, which D6's HLC form needs). Small items go in between, including
        `RetryPolicy::unbounded`.
      - Dagda pins 0.10.0 when it is tagged. The plan is `../dannan/TODO/2026-11-20-stack-plan.md`.
-     - Next repin, Dannan 0.10.2 (feature/0.10.2, `911901d`, awaiting its gate): `test::SteppedTime(poll)` replaces
-       the cluster fixture's `CoarseTime` (`SteppedTime(250ms)`); the scheduler's ordered and background marks
-       exception-safe. 0.10.1 changed nothing Dagda uses, so 0.4.0 stays on 0.10.0.
+     - Superseded: 0.4.0 shipped on Dannan 0.11.1 (in-place AES-GCM, exact-size reassembly, the transfer pool,
+       dropped payloads given back, the pool's bound). Still to take from 0.10.2 on: `test::SteppedTime(poll)` for
+       the cluster fixture's `CoarseTime`.
      - **Adopting 0.10.0 (Dagda 0.4.0), read against Dannan's CHANGELOG** (the maintainer, 2026-11-20: on a new
        dependency version, re-examine our own code for what it now replaces). Source compiles unchanged by the
        header diff; the pin (`DAGDA_DANNAN_MINIMUM`, the installed config, `debian/control`) is the one forced
@@ -155,9 +169,10 @@ unless the board says so (`claims_list`).
      Macha uses Dagda's.
 
    D6's stamp kind was the one open choice; for hlc, Dannan's `HlcClock::admit` (a stamp
-   with `merged=false` is refused, never applied). That arrives in Dannan's next minor, which has not started: the maintainer
-   told Dannan, "Stop here until I have answered all the issues for other agents." So D6 is built against Dannan
-   0.9.2 with the stamp behind one seam, and the hlc form waits for that minor.
+   with `merged=false` is refused, never applied). D6 was built against Dannan 0.9.2 with the stamp behind one seam
+   (Lamport stands in, and no space is opened on it in a release). `HlcClock::admit` shipped in Dannan 0.10.0
+   (with the clock probes and `clock_in_bounds`), and 0.4.0 is on 0.11.1, so the hlc form is unblocked: it is the
+   first step of 0.5.0 (Next, 3).
 
    Audits: `TODO/2026-11-20-duplication-audit.md`, `TODO/2026-11-20-special-roles-audit.md`.
    `feature/dannan-reuse` (`97a079e`): Dannan's CPU pacing and RetryState replace Dagda's copies.
