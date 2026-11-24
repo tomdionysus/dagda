@@ -116,7 +116,9 @@ unless the board says so (`claims_list`).
      time-scanned log;
    - a secret openable only by a lease's current holder (Manannan's registrar credential, 2026-11-23): wrapped to
      the holder's certificate on takeover and from the last holder away, the domain catalogue's key wrapping; the
-     shape proposed to Manannan before it is built. Per-node secrets are covered today by node-local spaces;
+     shape proposed to Manannan before it is built. Per-node secrets are covered today by node-local spaces.
+     **Manannan waits on it** (its owner's choice, 2026-11-24: no interim per-node registrar credential): its
+     registrar plugins and its 0.5.0 release depend on it, so it comes first after Dagda 0.5.0's agreed order;
    - reads and listings;
    - FetchContent;
    - config (the maintainer, 2026-11-20): YAML is the source of truth; flags and environment variables
